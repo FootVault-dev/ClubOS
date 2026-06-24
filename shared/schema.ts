@@ -299,6 +299,10 @@ export const registrations = pgTable("registrations", {
   // name typed at registration. The leagueTeam row is materialised on payment.
   leagueDivisionId: integer("league_division_id").references(() => leagueDivisions.id, { onDelete: "set null" }),
   teamName: text("team_name"),
+  // Multi-team "stack & save" orders: every team registered in one checkout
+  // shares this group id and a single deposit PaymentIntent. Null for a normal
+  // single-team registration.
+  registrationGroupId: text("registration_group_id"),
   // Instalment state (paymentMode = 'installment'): deposit now + off-session
   // balance charge on balanceDueDate. balanceStatus drives the balance cron.
   depositCents: integer("deposit_cents"),

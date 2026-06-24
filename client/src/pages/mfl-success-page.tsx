@@ -75,15 +75,21 @@ export default function MflSuccessPage() {
             </div>
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">You're in! 🎉</h1>
-              <p className="mt-2" style={{ color: BRAND.muted }}>{reg?.teamName ? `${reg.teamName} is locked into Term 3.` : "Your team is locked into Term 3."}</p>
+              <p className="mt-2" style={{ color: BRAND.muted }}>{(reg?.teamCount ?? 1) > 1 ? `Your ${reg.teamCount} teams are locked into Term 3.` : (reg?.teamName ? `${reg.teamName} is locked into Term 3.` : "Your team is locked into Term 3.")}</p>
             </div>
 
             {reg && (
               <div className="rounded-2xl p-6 text-left space-y-3" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
                 <h3 className="text-[11px] uppercase tracking-[0.12em] font-bold" style={{ color: BRAND.gold }}>Registration summary</h3>
-                <Row label="Team" value={reg.teamName || "—"} />
-                {reg.divisionName && <Row label="Night" value={reg.divisionName} />}
-                <Row label="Booking no." value={`#${reg.id}`} />
+                {(reg.teamCount ?? 1) > 1 && Array.isArray(reg.teams) ? (
+                  reg.teams.map((t: any) => <Row key={t.id} label={t.teamName || `Team #${t.id}`} value={t.divisionName || "—"} />)
+                ) : (
+                  <>
+                    <Row label="Team" value={reg.teamName || "—"} />
+                    {reg.divisionName && <Row label="Night" value={reg.divisionName} />}
+                  </>
+                )}
+                <Row label="Booking no." value={(reg.teamCount ?? 1) > 1 ? `${reg.teamCount} teams` : `#${reg.id}`} />
                 {reg.paymentMode === "deposit_weekly" && reg.balanceStatus !== "paid" ? (
                   <>
                     <Row label="Deposit paid" value={`${formatCurrency(reg.depositCents || 0, { fromCents: true })} NZD`} gold />

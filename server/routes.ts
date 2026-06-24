@@ -17,6 +17,7 @@ import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueBalancePa
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
 import { cellsOverlap } from "@shared/field-cells";
+import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
 import multer from "multer";
@@ -8137,6 +8138,18 @@ export async function registerRoutes(
         if (regType === "league_balance" && registrationId) {
           // MFL instalment balance collected.
           await handleLeagueBalanceSuccess(registrationId, paymentIntent.id);
+        } else if (regType === "league_team") {
+          // MFL team deposit. A multi-team "stack & save" order shares one
+          // deposit PI across several registrations — materialise every one.
+          // Each handlePaymentSuccess is idempotent (confirmed-guard + unique
+          // leagueTeam.registrationId), so this is safe on webhook retries.
+          const group = await storage.getRegistrationsByStripePaymentIntent(paymentIntent.id);
+          const targets = group.length > 0
+            ? group
+            : (registrationId ? [await storage.getRegistration(registrationId)] : []);
+          for (const r of targets) {
+            if (r) await handlePaymentSuccess(r.id, paymentIntent.id, paymentIntent.metadata);
+          }
         } else if (registrationId) {
           await handlePaymentSuccess(registrationId, paymentIntent.id, paymentIntent.metadata);
         }
@@ -8341,6 +8354,14 @@ export async function registerRoutes(
         }
         const pi = await retrievePaymentIntent(reg.stripePaymentIntentId);
         if (pi.status === "succeeded") {
+          // MFL multi-team order: one deposit PI → several registrations. The
+          // client confirms with the primary id; materialise the whole group.
+          if (pi.metadata?.registrationType === "league_team") {
+            const group = await storage.getRegistrationsByStripePaymentIntent(pi.id);
+            const targets = group.length > 0 ? group : [reg];
+            for (const r of targets) await handlePaymentSuccess(r.id, pi.id, pi.metadata as any);
+            return res.json({ ok: true });
+          }
           const metaRegistrationId = pi.metadata?.registrationId;
           if (metaRegistrationId && parseInt(metaRegistrationId) !== reg.id) {
             return res.status(403).json({ message: "Registration mismatch" });
@@ -10094,6 +10115,143 @@ export async function registerRoutes(
     return program;
   }
 
+  // Resolve typed discount codes (+ the auto MULTITEAM code when 2+ teams) into
+  // validated pricing rules for the MFL org. Eligibility (status / dates /
+  // maxTotalUses) is checked HERE; the additive stacking math lives in the pure
+  // shared module. Returns the rules to apply, the underlying records (keyed by
+  // canonical code, for usage recording), and any rejected typed codes.
+  async function resolveLeagueDiscounts(codes: string[], teamCount: number, now: Date): Promise<{
+    rules: DiscountRule[]; records: Record<string, any>; rejected: string[];
+  }> {
+    const records: Record<string, any> = {};
+    const rules: DiscountRule[] = [];
+    const rejected: string[] = [];
+    const seen = new Set<string>();
+    const wanted: string[] = [];
+
+    for (const raw of (Array.isArray(codes) ? codes : [])) {
+      const code = String(raw || "").trim();
+      if (!code) continue;
+      const key = code.toUpperCase();
+      if (seen.has(key)) continue;
+      // MULTITEAM is auto-only — never honour it as a typed code (so it can't be
+      // applied to a single-team order via a hand-crafted request).
+      if (key === "MULTITEAM") continue;
+      seen.add(key);
+      wanted.push(code);
+    }
+    // Auto multi-team discount when the order has 2+ teams (not a typed code).
+    if (teamCount >= 2 && !seen.has("MULTITEAM")) { wanted.push("MULTITEAM"); seen.add("MULTITEAM"); }
+
+    for (const code of wanted) {
+      const isAuto = code.toUpperCase() === "MULTITEAM";
+      const d = await storage.getDiscountByCode(code, MFL_ORG_ID);
+      if (!d || !d.code || d.status === "disabled") { if (!isAuto) rejected.push(code); continue; }
+      const dCode: string = d.code;
+      const startOk = !d.startDate || new Date(d.startDate) <= now;
+      const endOk = !d.endDate || new Date(d.endDate) >= now;
+      const usageOk = !d.maxTotalUses || (d.timesUsed ?? 0) < d.maxTotalUses;
+      if (!(startOk && endOk && usageOk)) { if (!isAuto) rejected.push(code); continue; }
+      records[dCode] = d;
+      rules.push({
+        code: dCode,
+        label: d.title || dCode,
+        valueType: (d.valueType === "fixed_amount" || d.valueType === "fixed") ? "fixed" : "percentage",
+        value: Number(d.value),
+        combinesWithOrder: !!d.combinesWithOrder,
+      });
+    }
+    return { rules, records, rejected };
+  }
+
+  // Build per-team line items + subtotal for a chosen division (+ its upsells +
+  // any program late fee). Pure read; shared by validate + register.
+  async function buildLeagueTeamSubtotal(program: any, division: any, upsells: any[], pastDeadline: boolean): Promise<{
+    subtotalCents: number; lineItems: { productType: string; priceCents: number; label: string }[];
+  }> {
+    const baseCents = division.teamCostCents || 0;
+    let subtotalCents = baseCents;
+    const lineItems = [{ productType: "team_fee", priceCents: baseCents, label: `${division.name} — team entry` }];
+    const upsellDefs: any[] = Array.isArray((program as any).upsellsJson) ? (program as any).upsellsJson : [];
+    for (const u of (Array.isArray(upsells) ? upsells : [])) {
+      const def = upsellDefs.find((d) => d.type === u);
+      if (def && def.priceCents > 0) {
+        subtotalCents += def.priceCents;
+        lineItems.push({ productType: def.type, priceCents: def.priceCents, label: def.label });
+      }
+    }
+    const lateFeeCents = (program as any).lateFeeCents || 0;
+    if (pastDeadline && lateFeeCents > 0) {
+      subtotalCents += lateFeeCents;
+      lineItems.push({ productType: "late_fee", priceCents: lateFeeCents, label: "Late registration fee" });
+    }
+    return { subtotalCents, lineItems };
+  }
+
+  // Live, read-only pricing preview for the register page — no DB writes. Mirrors
+  // the authoritative math in /register so the customer sees the exact stacked
+  // total (incl. auto multi-team) before paying.
+  app.post("/api/public/league/validate-discounts", async (req, res) => {
+    try {
+      const { slug, teams = [], codes = [] } = req.body || {};
+      const program = await getMflRegistrationProgram(slug);
+      if (!program) return res.status(404).json({ message: "League not found" });
+
+      const now = new Date();
+      const deadline = (program as any).earlyBirdDeadline as string | null;
+      const pastDeadline = deadline ? new Date(deadline + "T23:59:59") < now : false;
+
+      const teamList = Array.isArray(teams) && teams.length > 0 ? teams : [{ divisionId: req.body.divisionId, upsells: req.body.upsells || [] }];
+      const perTeamSubtotals: number[] = [];
+      for (const t of teamList) {
+        const division = await storage.getLeagueDivision(parseInt(String(t.divisionId)));
+        if (!division || ((program as any).leagueCompetitionId && division.competitionId !== (program as any).leagueCompetitionId)) {
+          return res.status(400).json({ message: "Invalid division" });
+        }
+        const { subtotalCents } = await buildLeagueTeamSubtotal(program, division, t.upsells || [], pastDeadline);
+        perTeamSubtotals.push(subtotalCents);
+      }
+      const orderSubtotal = perTeamSubtotals.reduce((a, b) => a + b, 0);
+
+      const { rules, rejected } = await resolveLeagueDiscounts(codes, teamList.length, now);
+      const { discountLines, discountTotalCents } = computeOrderDiscount(orderSubtotal, rules);
+
+      // Per-team distribution + payment math so the page can show the exact
+      // combined deposit due now and the combined weekly charge. Honour the
+      // customer's pay-in-full vs deposit+weekly choice.
+      const programDeposit = (program as any).depositCents as number | null;
+      const paymentPlan = ((program as any).paymentPlan as string) || "installment";
+      const numWeeks = ((program as any).numWeeklyPayments as number) || 8;
+      const wantsFull = String(req.body.paymentChoice || "").toLowerCase() === "full";
+      const teamDiscounts = distributeDiscountAcrossTeams(perTeamSubtotals, discountTotalCents);
+      let depositDueCents = 0;
+      let weeklyAmountCents = 0;
+      let weeksTotal: number | null = null;
+      let anyWeekly = false;
+      for (let i = 0; i < perTeamSubtotals.length; i++) {
+        const pay = computeTeamPayment(perTeamSubtotals[i] - teamDiscounts[i], wantsFull ? null : programDeposit, wantsFull ? "upfront" : paymentPlan, numWeeks);
+        depositDueCents += pay.depositCents;
+        weeklyAmountCents += pay.weeklyAmountCents || 0;
+        if (pay.isWeeklyPlan) { anyWeekly = true; weeksTotal = pay.weeksTotal; }
+      }
+
+      res.json({
+        subtotalCents: orderSubtotal,
+        discountLines: discountLines.map((l) => ({ code: l.code, label: l.label, valueType: l.valueType, value: l.value, amountCents: l.amountCents })),
+        multiTeamApplied: teamList.length >= 2 && discountLines.some((l) => l.code.toUpperCase() === "MULTITEAM"),
+        discountTotalCents,
+        totalCents: orderSubtotal - discountTotalCents,
+        depositDueCents,
+        weeklyAmountCents: anyWeekly ? weeklyAmountCents : 0,
+        weeksTotal,
+        paymentMode: anyWeekly ? "deposit_weekly" : "upfront",
+        payInFull: wantsFull,
+        rejectedCodes: rejected,
+        teamCount: teamList.length,
+      });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
   // List the active 'league_team' offerings for the MFL org — used by the MFL
   // landing root when no specific slug is given (e.g. join.minifootball.co.nz).
   app.get("/api/public/league/register", async (_req, res) => {
@@ -10168,27 +10326,65 @@ export async function registerRoutes(
   // on file for the later balance charge). All prices re-validated server-side.
   app.post("/api/public/league/register", async (req, res) => {
     try {
-      const { captain, teamName, slug, divisionId, upsells = [], discountCode,
+      const { captain, slug, discountCode, discountCodes,
         utmSource, utmMedium, utmCampaign, fbclid, fbp, fbc, userAgent, leadEventId } = req.body;
 
-      if (!captain?.email || !captain?.firstName || !teamName || !slug || !divisionId) {
+      // Accept the multi-team `teams: [{teamName, divisionId, upsells}]` shape,
+      // and stay back-compatible with the single-team `{teamName, divisionId,
+      // upsells}` body. The codes can come as `discountCodes[]` or a single
+      // `discountCode`.
+      const rawTeams: any[] = Array.isArray(req.body.teams) && req.body.teams.length > 0
+        ? req.body.teams
+        : [{ teamName: req.body.teamName, divisionId: req.body.divisionId, upsells: req.body.upsells || [] }];
+
+      if (!captain?.email || !captain?.firstName || !slug) {
         return res.status(400).json({ message: "Missing required fields" });
+      }
+      if (rawTeams.length === 0 || rawTeams.length > 12) {
+        return res.status(400).json({ message: "Please register between 1 and 12 teams" });
+      }
+      for (const t of rawTeams) {
+        if (!t.teamName || !t.divisionId) return res.status(400).json({ message: "Each team needs a name and a night" });
       }
 
       const program = await getMflRegistrationProgram(slug);
       if (!program) return res.status(404).json({ message: "League not found" });
 
-      const division = await storage.getLeagueDivision(parseInt(String(divisionId)));
-      if (!division || ((program as any).leagueCompetitionId && division.competitionId !== (program as any).leagueCompetitionId)) {
-        return res.status(400).json({ message: "Invalid division" });
+      const codes: string[] = Array.isArray(discountCodes)
+        ? discountCodes
+        : (discountCode ? [discountCode] : []);
+
+      const now = new Date();
+      const deadline = (program as any).earlyBirdDeadline as string | null;
+      const pastDeadline = deadline ? new Date(deadline + "T23:59:59") < now : false;
+
+      // Validate every team's division + capacity. Capacity counts existing
+      // active teams PLUS earlier teams in THIS order that target the same night.
+      const usedInOrder: Record<number, number> = {};
+      const teamsResolved: { team: any; division: any; subtotalCents: number; lineItems: any[] }[] = [];
+      for (const t of rawTeams) {
+        const division = await storage.getLeagueDivision(parseInt(String(t.divisionId)));
+        if (!division || ((program as any).leagueCompetitionId && division.competitionId !== (program as any).leagueCompetitionId)) {
+          return res.status(400).json({ message: "Invalid division" });
+        }
+        if (division.maxTeams != null) {
+          const existing = await storage.getLeagueTeams(MFL_ORG_ID, division.competitionId);
+          const count = existing.filter((x) => x.divisionId === division.id && x.active).length + (usedInOrder[division.id] || 0);
+          if (count >= division.maxTeams) return res.status(409).json({ message: `${division.name} is full` });
+        }
+        usedInOrder[division.id] = (usedInOrder[division.id] || 0) + 1;
+        const { subtotalCents, lineItems } = await buildLeagueTeamSubtotal(program, division, t.upsells || [], pastDeadline);
+        teamsResolved.push({ team: t, division, subtotalCents, lineItems });
       }
 
-      // Capacity guard (atomic-ish — re-checked at registration time).
-      if (division.maxTeams != null) {
-        const teams = await storage.getLeagueTeams(MFL_ORG_ID, division.competitionId);
-        const count = teams.filter((t) => t.divisionId === division.id && t.active).length;
-        if (count >= division.maxTeams) return res.status(409).json({ message: "This league night is full" });
-      }
+      // Order-level discounts: typed codes (STUDENT / EARLYBIRD) + auto MULTITEAM
+      // when 2+ teams. Stacked additively, capped, then distributed back across
+      // the teams proportionally so each team's own deposit/weekly math is exact.
+      const orderSubtotal = teamsResolved.reduce((s, t) => s + t.subtotalCents, 0);
+      const { rules } = await resolveLeagueDiscounts(codes, teamsResolved.length, now);
+      const { discountLines, discountTotalCents } = computeOrderDiscount(orderSubtotal, rules);
+      const appliedCodes = discountLines.map((l) => l.code).join(",") || null;
+      const teamDiscounts = distributeDiscountAcrossTeams(teamsResolved.map((t) => t.subtotalCents), discountTotalCents);
 
       // Captain contact (reuse contacts).
       let captainContact = await storage.findContactByEmail(captain.email);
@@ -10203,133 +10399,89 @@ export async function registerRoutes(
         }))!;
       }
 
-      // Server-authoritative pricing.
-      const baseCents = division.teamCostCents || 0;
-      let subtotalCents = baseCents;
-      const lineItems: { productType: string; priceCents: number; label: string }[] = [
-        { productType: "team_fee", priceCents: baseCents, label: `${division.name} — team entry` },
-      ];
-
-      const upsellDefs: any[] = Array.isArray((program as any).upsellsJson) ? (program as any).upsellsJson : [];
-      for (const u of (Array.isArray(upsells) ? upsells : [])) {
-        const def = upsellDefs.find((d) => d.type === u);
-        if (def && def.priceCents > 0) {
-          subtotalCents += def.priceCents;
-          lineItems.push({ productType: def.type, priceCents: def.priceCents, label: def.label });
-        }
-      }
-
-      const now = new Date();
-      const deadline = (program as any).earlyBirdDeadline as string | null;
-      const pastDeadline = deadline ? new Date(deadline + "T23:59:59") < now : false;
-      const lateFeeCents = (program as any).lateFeeCents || 0;
-      if (pastDeadline && lateFeeCents > 0) {
-        subtotalCents += lateFeeCents;
-        lineItems.push({ productType: "late_fee", priceCents: lateFeeCents, label: "Late registration fee" });
-      }
-
-      // Optional discount code (same rules as camps).
-      let discountCents = 0, appliedDiscountId: number | null = null, appliedDiscountCode: string | null = null;
-      if (discountCode) {
-        const promo = await storage.getDiscountByCode(String(discountCode).trim(), MFL_ORG_ID);
-        if (promo && promo.status !== "disabled") {
-          const startOk = !promo.startDate || new Date(promo.startDate) <= now;
-          const endOk = !promo.endDate || new Date(promo.endDate) >= now;
-          const usageOk = !promo.maxTotalUses || promo.timesUsed < promo.maxTotalUses;
-          if (startOk && endOk && usageOk) {
-            discountCents = promo.valueType === "percentage"
-              ? Math.round(subtotalCents * Number(promo.value) / 100)
-              : Math.round(Number(promo.value) * 100);
-            if (discountCents > subtotalCents) discountCents = subtotalCents;
-            appliedDiscountId = promo.id; appliedDiscountCode = promo.code;
-          }
-        }
-      }
-
-      const totalCents = subtotalCents - discountCents;
-
-      // Payment plan. deposit_weekly = deposit now + weekly subscription (set
-      // up after the deposit succeeds); installment = deposit now + ONE balance
-      // charge ~3 weeks out; upfront = pay the full total now.
       const programDeposit = (program as any).depositCents as number | null;
       const paymentPlan = ((program as any).paymentPlan as string) || "installment";
       const numWeeks = ((program as any).numWeeklyPayments as number) || 8;
-      const hasDeposit = !!programDeposit && programDeposit > 0 && totalCents > programDeposit;
-      const isWeeklyPlan = hasDeposit && paymentPlan === "deposit_weekly" && numWeeks > 0;
-      const isInstalment = hasDeposit && !isWeeklyPlan;
+      const groupId = teamsResolved.length > 1 ? crypto.randomUUID() : null;
+      // Customer's choice: 'full' = pay the whole total now (no deposit, no weekly
+      // subscription); otherwise use the program's plan (deposit + weekly).
+      const wantsFull = String(req.body.paymentChoice || "").toLowerCase() === "full";
 
-      let depositCents = hasDeposit ? programDeposit! : totalCents;
-      let balanceDueDate: string | null = null;
-      let weeklyAmountCents: number | null = null;
-      let weeksTotal: number | null = null;
-      if (isWeeklyPlan) {
-        // Even weekly charge; the deposit then absorbs any rounding remainder so
-        // the captain pays the division price to the cent (deposit + every weekly
-        // charge == total exactly). For the $500/$600 divisions this leaves the
-        // deposit at exactly $120; for discounted/odd totals it shifts ≤ a few
-        // cents. The weekly subscription is anchored to term start and created
-        // once the deposit succeeds.
-        weeklyAmountCents = Math.round((totalCents - programDeposit!) / numWeeks);
-        weeksTotal = numWeeks;
-        depositCents = totalCents - weeklyAmountCents * numWeeks;
-      } else if (isInstalment) {
-        balanceDueDate = new Date(now.getTime() + 21 * 86400000).toISOString().slice(0, 10);
+      // Create one registration per team.
+      const created: { registration: any; pay: any; teamTotalCents: number }[] = [];
+      for (let i = 0; i < teamsResolved.length; i++) {
+        const { team, division, subtotalCents, lineItems } = teamsResolved[i];
+        const teamDiscountCents = teamDiscounts[i];
+        const teamTotalCents = subtotalCents - teamDiscountCents;
+        const pay = computeTeamPayment(teamTotalCents, wantsFull ? null : programDeposit, wantsFull ? "upfront" : paymentPlan, numWeeks);
+        const balanceDueDate = pay.isInstalment
+          ? new Date(now.getTime() + 21 * 86400000).toISOString().slice(0, 10)
+          : null;
+
+        const registration = await storage.createRegistration({
+          programId: program.id,
+          contactId: captainContact.id,
+          guardianId: captainContact.id,
+          status: "pending",
+          subtotalCents,
+          discountCents: teamDiscountCents,
+          discountCode: appliedCodes,
+          discountId: null,
+          totalCents: teamTotalCents,
+          currency: "NZD",
+          registrationLocation: "online",
+          source: "league_registration",
+          paymentMode: pay.paymentMode,
+          leagueDivisionId: division.id,
+          teamName: team.teamName,
+          registrationGroupId: groupId,
+          depositCents: pay.depositCents,
+          balanceCents: pay.balanceCents,
+          balanceDueDate,
+          balanceStatus: pay.isInstalment ? "scheduled" : "none",
+          weeklyAmountCents: pay.weeklyAmountCents,
+          weeksTotal: pay.weeksTotal,
+          weeksPaid: 0,
+          utmSource: utmSource || null,
+          utmMedium: utmMedium || null,
+          utmCampaign: utmCampaign || null,
+          fbclid: fbclid || null,
+        } as any);
+
+        await storage.createRegistrationItems(lineItems.map((li) => ({
+          registrationId: registration.id,
+          productType: li.productType,
+          priceCents: li.priceCents,
+          label: li.label,
+        })) as any);
+
+        created.push({ registration, pay, teamTotalCents });
       }
-      const balanceCents = hasDeposit ? totalCents - depositCents : 0;
-      const paymentMode = isWeeklyPlan ? "deposit_weekly" : isInstalment ? "installment" : "upfront";
 
-      const registration = await storage.createRegistration({
-        programId: program.id,
-        contactId: captainContact.id,
-        guardianId: captainContact.id,
-        status: "pending",
-        subtotalCents,
-        discountCents,
-        discountCode: appliedDiscountCode,
-        discountId: appliedDiscountId,
-        totalCents,
-        currency: "NZD",
-        registrationLocation: "online",
-        source: "league_registration",
-        paymentMode,
-        leagueDivisionId: division.id,
-        teamName,
-        depositCents,
-        balanceCents,
-        balanceDueDate,
-        balanceStatus: isInstalment ? "scheduled" : "none",
-        weeklyAmountCents,
-        weeksTotal,
-        weeksPaid: 0,
-        utmSource: utmSource || null,
-        utmMedium: utmMedium || null,
-        utmCampaign: utmCampaign || null,
-        fbclid: fbclid || null,
-      } as any);
+      const primary = created[0].registration;
+      const depositDueCents = created.reduce((s, c) => s + (c.pay.depositCents || 0), 0);
+      const orderTotalCents = created.reduce((s, c) => s + c.teamTotalCents, 0);
+      const anyPendingBalance = created.some((c) => c.pay.isInstalment || c.pay.isWeeklyPlan);
 
-      await storage.createRegistrationItems(lineItems.map((li) => ({
-        registrationId: registration.id,
-        productType: li.productType,
-        priceCents: li.priceCents,
-        label: li.label,
-      })) as any);
-
-      if (depositCents > 0 && process.env.STRIPE_SECRET_KEY) {
+      // ONE combined deposit PaymentIntent for the whole order. The saved card is
+      // reused for every team's weekly subscription on payment success.
+      if (depositDueCents > 0 && process.env.STRIPE_SECRET_KEY) {
         const customer = await getOrCreateCustomer({
           email: captain.email,
           name: `${captain.firstName} ${captain.lastName}`,
           phone: captain.phone,
         });
         const pi = await createPaymentIntent({
-          registrationId: registration.id,
-          campName: `${program.name} — ${teamName}`,
-          totalCents: depositCents,
+          registrationId: primary.id,
+          campName: `${program.name} — ${created.length > 1 ? `${created.length} teams` : (teamsResolved[0].team.teamName)}`,
+          totalCents: depositDueCents,
           currency: "NZD",
           parentEmail: captain.email,
           customerId: customer.id,
-          setupFutureUsage: (isInstalment || isWeeklyPlan) ? "off_session" : undefined,
+          setupFutureUsage: anyPendingBalance ? "off_session" : undefined,
           metadata: {
             registrationType: "league_team",
+            registrationGroupId: groupId || "",
             programId: String(program.id),
             slug,
             fbp: fbp || "",
@@ -10337,18 +10489,20 @@ export async function registerRoutes(
             userAgent: userAgent || "",
           },
         });
-        await storage.updateRegistration(registration.id, {
-          stripePaymentIntentId: pi.id,
-          stripeCustomerId: customer.id,
-        });
+        for (const c of created) {
+          await storage.updateRegistration(c.registration.id, {
+            stripePaymentIntentId: pi.id,
+            stripeCustomerId: customer.id,
+          } as any);
+        }
       }
 
       // Server-side Lead event mirroring the client pixel Lead (dedup by eventId).
       if (leadEventId) {
         sendLeadEvent({
-          registrationId: registration.id,
+          registrationId: primary.id,
           campId: program.id,
-          valueCents: totalCents,
+          valueCents: orderTotalCents,
           currency: "NZD",
           email: captain.email,
           phone: captain.phone,
@@ -10362,16 +10516,39 @@ export async function registerRoutes(
       }
 
       res.status(201).json({
-        registrationId: registration.id,
-        subtotalCents, discountCents, totalCents,
-        depositCents, balanceCents, balanceDueDate,
-        isInstalment,
-        paymentMode,
-        isWeeklyPlan,
-        weeklyAmountCents,
-        weeksTotal,
+        registrationId: primary.id,
+        groupId,
+        // Back-compat single-team fields (reflect the primary team).
+        subtotalCents: created[0].registration.subtotalCents,
+        discountCents: created[0].registration.discountCents,
+        totalCents: created[0].registration.totalCents,
+        depositCents: created[0].pay.depositCents,
+        balanceCents: created[0].pay.balanceCents,
+        isInstalment: created[0].pay.isInstalment,
+        paymentMode: created[0].pay.paymentMode,
+        isWeeklyPlan: created[0].pay.isWeeklyPlan,
+        weeklyAmountCents: created[0].pay.weeklyAmountCents,
+        weeksTotal: created[0].pay.weeksTotal,
+        // Order-level fields for the multi-team summary.
+        orderSubtotalCents: orderSubtotal,
+        orderDiscountCents: discountTotalCents,
+        orderTotalCents,
+        depositDueCents,
+        appliedCodes: discountLines.map((l) => ({ code: l.code, label: l.label, amountCents: l.amountCents })),
+        teamCount: created.length,
+        teams: created.map((c) => ({
+          registrationId: c.registration.id,
+          teamName: c.registration.teamName,
+          divisionId: c.registration.leagueDivisionId,
+          subtotalCents: c.registration.subtotalCents,
+          discountCents: c.registration.discountCents,
+          totalCents: c.teamTotalCents,
+          depositCents: c.pay.depositCents,
+          weeklyAmountCents: c.pay.weeklyAmountCents,
+          weeksTotal: c.pay.weeksTotal,
+        })),
         currency: "NZD",
-        requiresPayment: depositCents > 0,
+        requiresPayment: depositDueCents > 0,
         slug,
       });
     } catch (e: any) {
@@ -10388,17 +10565,26 @@ export async function registerRoutes(
       if (reg.status === "confirmed") return res.status(400).json({ message: "Already confirmed" });
       if (!reg.stripePaymentIntentId) return res.status(400).json({ message: "No payment intent" });
 
-      // Capacity re-check before payment — the chosen night may have filled up
-      // since this captain started registering. Fail fast so we don't take
-      // money for a full night. (Sub-second simultaneous races are still
-      // possible but rare; refunds cover the residual edge.)
-      if (reg.leagueDivisionId) {
-        const division = await storage.getLeagueDivision(reg.leagueDivisionId);
+      // A multi-team "stack & save" order = several registrations sharing one
+      // deposit PI. Settle the whole group on this one checkout.
+      const group = reg.registrationGroupId
+        ? await storage.getRegistrationsByGroup(reg.registrationGroupId)
+        : [reg];
+      const isMulti = group.length > 1;
+
+      // Capacity re-check before payment — a chosen night may have filled up
+      // since the captain started. Fail fast so we don't take money for a full
+      // night. (Sub-second simultaneous races are rare; refunds cover the edge.)
+      for (const g of group) {
+        if (!g.leagueDivisionId) continue;
+        const division = await storage.getLeagueDivision(g.leagueDivisionId);
         if (division?.maxTeams != null) {
           const teams = await storage.getLeagueTeams(MFL_ORG_ID, division.competitionId);
           const count = teams.filter((t) => t.divisionId === division.id && t.active).length;
-          if (count >= division.maxTeams) {
-            return res.status(409).json({ message: "This league night just filled up. Please head back and choose another night." });
+          // Count same-night teams within this order against the cap too.
+          const sameNightInOrder = group.filter((x) => x.leagueDivisionId === division.id).length;
+          if (count + sameNightInOrder > division.maxTeams) {
+            return res.status(409).json({ message: `${division.name} just filled up. Please head back and choose another night.` });
           }
         }
       }
@@ -10407,28 +10593,49 @@ export async function registerRoutes(
       if (!pi.client_secret) return res.status(400).json({ message: "No client secret" });
       const contact = await storage.getContact(reg.contactId);
       const program = await storage.getProgram(reg.programId);
-      const items = await storage.getRegistrationItems(reg.id);
+
+      // Combined order summary across the group.
+      let items: { label: string; priceCents: number; productType: string }[] = [];
+      for (const g of group) {
+        const gi = await storage.getRegistrationItems(g.id);
+        for (const i of (gi as any[])) {
+          items.push({ label: isMulti ? `${g.teamName} — ${i.label}` : i.label, priceCents: i.priceCents, productType: i.productType });
+        }
+      }
+      const subtotalCents = group.reduce((s, g) => s + (g.subtotalCents || 0), 0);
+      const discountCents = group.reduce((s, g) => s + (g.discountCents || 0), 0);
+      const totalCents = group.reduce((s, g) => s + (g.totalCents || 0), 0);
+      const depositCents = group.reduce((s, g) => s + (g.depositCents || 0), 0);
+      const balanceCents = group.reduce((s, g) => s + (g.balanceCents || 0), 0);
+      const weeklyAmountCents = group.reduce((s, g) => s + (g.weeklyAmountCents || 0), 0);
+      if (discountCents > 0) {
+        items.push({ label: `Discount (${reg.discountCode || "promo"})`, priceCents: -discountCents, productType: "discount" });
+      }
+
       res.json({
         clientSecret: pi.client_secret,
         registrationId: reg.id,
-        teamName: reg.teamName,
+        groupId: reg.registrationGroupId || null,
+        teamCount: group.length,
+        teamName: isMulti ? `${group.length} teams` : reg.teamName,
+        teamNames: group.map((g) => g.teamName),
         programName: program?.name || "",
         slug: program?.slug || "",
-        subtotalCents: reg.subtotalCents,
-        discountCents: reg.discountCents,
-        totalCents: reg.totalCents,
-        depositCents: reg.depositCents,
-        balanceCents: reg.balanceCents,
+        subtotalCents,
+        discountCents,
+        totalCents,
+        depositCents,
+        balanceCents,
         balanceDueDate: reg.balanceDueDate,
         isInstalment: reg.paymentMode === "installment",
         paymentMode: reg.paymentMode,
-        weeklyAmountCents: reg.weeklyAmountCents,
+        weeklyAmountCents,
         weeksTotal: reg.weeksTotal,
-        amountDueNowCents: reg.depositCents ?? reg.totalCents,
+        amountDueNowCents: depositCents > 0 ? depositCents : totalCents,
         currency: reg.currency || "NZD",
         captainName: contact ? `${contact.firstName} ${contact.lastName}` : "",
         captainEmail: contact?.email || "",
-        items: (items as any[]).map((i) => ({ label: i.label, priceCents: i.priceCents, productType: i.productType })),
+        items,
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -10441,23 +10648,40 @@ export async function registerRoutes(
       const contact = await storage.getContact(reg.contactId);
       const program = await storage.getProgram(reg.programId);
       const division = reg.leagueDivisionId ? await storage.getLeagueDivision(reg.leagueDivisionId) : null;
+
+      // Multi-team order — return every team in the group for the success page.
+      const group = reg.registrationGroupId
+        ? await storage.getRegistrationsByGroup(reg.registrationGroupId)
+        : [reg];
+      const teams = await Promise.all(group.map(async (g) => {
+        const d = g.leagueDivisionId ? await storage.getLeagueDivision(g.leagueDivisionId) : null;
+        return {
+          id: g.id, teamName: g.teamName, divisionName: d?.name || null,
+          totalCents: g.totalCents, depositCents: g.depositCents, balanceCents: g.balanceCents,
+          weeklyAmountCents: g.weeklyAmountCents, weeksTotal: g.weeksTotal,
+        };
+      }));
+
       res.json({
         id: reg.id,
+        groupId: reg.registrationGroupId || null,
+        teamCount: group.length,
         status: reg.status,
-        teamName: reg.teamName,
+        teamName: group.length > 1 ? `${group.length} teams` : reg.teamName,
+        teams,
         divisionName: division?.name || null,
         programName: program?.name,
         slug: program?.slug,
         captainName: contact ? `${contact.firstName} ${contact.lastName}` : "",
         captainEmail: contact?.email,
-        totalCents: reg.totalCents,
-        depositCents: reg.depositCents,
-        balanceCents: reg.balanceCents,
+        totalCents: group.reduce((s, g) => s + (g.totalCents || 0), 0),
+        depositCents: group.reduce((s, g) => s + (g.depositCents || 0), 0),
+        balanceCents: group.reduce((s, g) => s + (g.balanceCents || 0), 0),
         balanceDueDate: reg.balanceDueDate,
         balanceStatus: reg.balanceStatus,
         isInstalment: reg.paymentMode === "installment",
         paymentMode: reg.paymentMode,
-        weeklyAmountCents: reg.weeklyAmountCents,
+        weeklyAmountCents: group.reduce((s, g) => s + (g.weeklyAmountCents || 0), 0),
         weeksTotal: reg.weeksTotal,
         weeksPaid: reg.weeksPaid,
         currency: reg.currency || "NZD",
@@ -11210,6 +11434,37 @@ async function handlePrintPaymentSuccess(orderId: number, paymentIntentId: strin
   }
 }
 
+// Record discount usage for a (now-paid) registration. Handles both the legacy
+// single-code path (discountId set) and stacked multi-code orders (joined
+// `discountCode`), splitting this registration's discount share across the codes
+// weighted by their value so each code's totalDiscountedCents stays exact.
+// Idempotent in practice: only called from handlePaymentSuccess, which bails if
+// the registration is already confirmed.
+async function recordRegistrationDiscountUsage(reg: any) {
+  const cents = reg?.discountCents || 0;
+  if (cents <= 0) return;
+  if (reg.discountId) {
+    await storage.incrementDiscountUsage(reg.discountId, cents);
+    return;
+  }
+  const codes = String(reg.discountCode || "").split(",").map((s: string) => s.trim()).filter(Boolean);
+  if (codes.length === 0) return;
+  const program = await storage.getProgram(reg.programId);
+  const orgId = (program as any)?.organizationId;
+  if (!orgId) return;
+  const recs: any[] = [];
+  for (const c of codes) {
+    const d = await storage.getDiscountByCode(c, orgId);
+    if (d) recs.push(d);
+  }
+  if (recs.length === 0) return;
+  if (recs.length === 1) { await storage.incrementDiscountUsage(recs[0].id, cents); return; }
+  const shares = apportion(recs.map((d) => Number(d.value) || 1), cents);
+  for (let i = 0; i < recs.length; i++) {
+    if (shares[i] > 0) await storage.incrementDiscountUsage(recs[i].id, shares[i]);
+  }
+}
+
 async function handlePaymentSuccess(registrationId: number, stripeSessionId?: string, metadata?: Record<string, string>) {
   const reg = await storage.getRegistration(registrationId);
   if (!reg || reg.status === "confirmed") return;
@@ -11221,15 +11476,15 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
     ? (reg.depositCents ?? reg.totalCents ?? 0)
     : (reg.totalCents ?? 0);
 
-  await storage.updateRegistration(registrationId, {
-    status: "confirmed",
-    amountPaid: (paidCents / 100).toFixed(2),
-  });
+  // Atomically claim the pending→confirmed transition. If another caller (a
+  // racing webhook + confirm-payment on the same payment) already won it, bail
+  // BEFORE the one-time side effects so discount usage / email / Purchase can't
+  // double-fire. The leagueTeam unique index is a second backstop downstream.
+  const won = await storage.confirmRegistrationOnce(registrationId, (paidCents / 100).toFixed(2));
+  if (!won) return;
   await storage.assignOrderNumber(registrationId);
 
-  if ((reg as any).discountId && reg.discountCents && reg.discountCents > 0) {
-    await storage.incrementDiscountUsage((reg as any).discountId, reg.discountCents);
-  }
+  await recordRegistrationDiscountUsage(reg);
 
   // MFL team registration — materialise the league team + send branded email
   // + fire the Purchase CAPI event, then stop (skip the camp/class paths).
@@ -11546,35 +11801,46 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
   const fmtDate = (d: string | null) =>
     d ? new Date(d + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long" }) : "";
 
-  sendLeagueConfirmationEmail({
-    registrationId,
-    programId: program.id,
-    captainEmail: captain.email || "",
-    captainName: captain.firstName,
-    teamName: reg.teamName || "Your team",
-    divisionName: division?.name || program.name,
-    depositPaid: fmtNZ(reg.depositCents ?? reg.totalCents ?? 0),
-    balanceDue: fmtNZ(reg.balanceCents ?? 0),
-    balanceDueDate: fmtDate(reg.balanceDueDate ?? null),
-    fullyPaid: !isInstalment,
-  }).catch((e) => console.error("[MFL] confirmation email failed:", e));
+  // Fire ONE confirmation email + ONE Purchase per ORDER (on the primary
+  // registration of a multi-team group) with combined totals — so a captain who
+  // bought 3 teams gets a single email and Meta records a single Purchase that
+  // dedupes with the client pixel (which keys off the primary registrationId).
+  const group = reg.registrationGroupId ? await storage.getRegistrationsByGroup(reg.registrationGroupId) : [reg];
+  const primaryId = group[0]?.id ?? registrationId;
+  if (registrationId === primaryId) {
+    const totalDeposit = group.reduce((s, g) => s + (g.depositCents ?? g.totalCents ?? 0), 0);
+    const totalBalance = group.reduce((s, g) => s + (g.balanceCents ?? 0), 0);
+    const anyInstalment = group.some((g) => g.paymentMode === "installment" && (g.balanceCents ?? 0) > 0);
+    const teamLabel = group.length > 1 ? `your ${group.length} teams` : (reg.teamName || "Your team");
 
-  // Server-side Purchase (deposit value = money moved now). Deterministic
-  // eventId so it dedupes with the client-side pixel Purchase on the success page.
-  sendPurchaseEvent({
-    registrationId,
-    campId: program.id,
-    totalCents: reg.depositCents ?? reg.totalCents ?? 0,
-    currency: reg.currency || "NZD",
-    email: captain.email || "",
-    phone: captain.phone || undefined,
-    firstName: captain.firstName,
-    lastName: captain.lastName,
-    fbp: metadata?.fbp || undefined,
-    fbc: metadata?.fbc || undefined,
-    userAgent: metadata?.userAgent || undefined,
-    eventId: `mfl_purchase_${registrationId}`,
-    contentName: "MFL Term 3 Team Registration",
-    contentIds: [program.slug || String(program.id)],
-  }).catch((e) => console.error("[MFL] Purchase CAPI failed:", e));
+    sendLeagueConfirmationEmail({
+      registrationId: primaryId,
+      programId: program.id,
+      captainEmail: captain.email || "",
+      captainName: captain.firstName,
+      teamName: teamLabel,
+      divisionName: group.length > 1 ? `${group.length} teams` : (division?.name || program.name),
+      depositPaid: fmtNZ(totalDeposit),
+      balanceDue: fmtNZ(totalBalance),
+      balanceDueDate: fmtDate(reg.balanceDueDate ?? null),
+      fullyPaid: !anyInstalment,
+    }).catch((e) => console.error("[MFL] confirmation email failed:", e));
+
+    sendPurchaseEvent({
+      registrationId: primaryId,
+      campId: program.id,
+      totalCents: totalDeposit,
+      currency: reg.currency || "NZD",
+      email: captain.email || "",
+      phone: captain.phone || undefined,
+      firstName: captain.firstName,
+      lastName: captain.lastName,
+      fbp: metadata?.fbp || undefined,
+      fbc: metadata?.fbc || undefined,
+      userAgent: metadata?.userAgent || undefined,
+      eventId: `mfl_purchase_${primaryId}`,
+      contentName: "MFL Term 3 Team Registration",
+      contentIds: [program.slug || String(program.id)],
+    }).catch((e) => console.error("[MFL] Purchase CAPI failed:", e));
+  }
 }

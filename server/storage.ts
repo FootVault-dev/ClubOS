@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, desc, sql, and, ilike, or, inArray, asc, isNull } from "drizzle-orm";
+import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, ne } from "drizzle-orm";
 import {
   users, contacts, contactRelationships, programs,
   programSessions, registrations, auditLogs, settings,
@@ -731,6 +731,23 @@ export class DatabaseStorage implements IStorage {
     return reg;
   }
 
+  // All registrations that share a single deposit PaymentIntent (a multi-team
+  // MFL order). Ordered by id so the lowest id is the deterministic "primary".
+  async getRegistrationsByStripePaymentIntent(paymentIntentId: string): Promise<Registration[]> {
+    if (!paymentIntentId) return [];
+    return db.select().from(registrations)
+      .where(eq(registrations.stripePaymentIntentId, paymentIntentId))
+      .orderBy(asc(registrations.id));
+  }
+
+  // Registrations grouped under one multi-team order id.
+  async getRegistrationsByGroup(groupId: string): Promise<Registration[]> {
+    if (!groupId) return [];
+    return db.select().from(registrations)
+      .where(eq(registrations.registrationGroupId, groupId))
+      .orderBy(asc(registrations.id));
+  }
+
   async createRegistration(reg: InsertRegistration): Promise<Registration> {
     const [created] = await db.insert(registrations).values(reg).returning();
     return created;
@@ -739,6 +756,18 @@ export class DatabaseStorage implements IStorage {
   async updateRegistration(id: number, data: Partial<InsertRegistration>): Promise<Registration | undefined> {
     const [updated] = await db.update(registrations).set(data).where(eq(registrations.id, id)).returning();
     return updated;
+  }
+
+  // Atomically flip a pending registration to confirmed. Returns true ONLY for
+  // the caller that won the transition, so payment-success side effects (discount
+  // usage, confirmation email, Purchase event) fire exactly once even when the
+  // Stripe webhook and the client confirm-payment race on the same payment.
+  async confirmRegistrationOnce(id: number, amountPaid: string): Promise<boolean> {
+    const [row] = await db.update(registrations)
+      .set({ status: "confirmed", amountPaid })
+      .where(and(eq(registrations.id, id), ne(registrations.status, "confirmed")))
+      .returning({ id: registrations.id });
+    return !!row;
   }
 
   async assignOrderNumber(id: number): Promise<number> {

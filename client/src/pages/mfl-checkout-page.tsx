@@ -217,9 +217,15 @@ export default function MflCheckoutPage({ mode = "deposit" }: { mode?: "deposit"
 
         {/* Order summary */}
         <div className="rounded-2xl p-5 mt-6 space-y-2.5" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
-          {data.items.map((it, i) => (
-            <div key={i} className="flex justify-between text-sm"><span style={{ color: BRAND.muted }}>{it.label}</span><span>{formatCurrency(it.priceCents || 0, { fromCents: true })}</span></div>
-          ))}
+          {data.items.map((it, i) => {
+            const neg = (it.priceCents || 0) < 0;
+            return (
+              <div key={i} className="flex justify-between text-sm">
+                <span style={{ color: neg ? BRAND.gold : BRAND.muted }}>{it.label}</span>
+                <span style={neg ? { color: BRAND.gold } : undefined}>{neg ? "−" : ""}{formatCurrency(Math.abs(it.priceCents || 0), { fromCents: true })}</span>
+              </div>
+            );
+          })}
           <div className="flex justify-between font-bold pt-2.5 border-t" style={{ borderColor: BRAND.border }}>
             <span>{mode === "deposit" && (data.isInstalment || data.paymentMode === "deposit_weekly") ? "Due today (deposit)" : "Total (incl. GST)"}</span>
             <span style={{ color: BRAND.gold }}>{formatCurrency(data.amountDueNowCents, { fromCents: true })} NZD</span>
