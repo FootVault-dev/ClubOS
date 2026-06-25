@@ -20,9 +20,13 @@ const MFL_ORG_ID = 3;
 // runs in UTC, so the server reads it back as the correct instant.
 const EARLYBIRD_END = "2026-07-06 23:59:59"; // NZ local, end of Sunday
 
+// EARLYBIRD and MULTITEAM are CLUB-AUTOMATIC discounts — applied by the
+// registration flow itself (early bird until its end_date, multi-team for 2+
+// teams), never typed by a customer. The student discount is intentionally NOT
+// seeded as a public code: the MFL coordinator issues a custom one-time-use code
+// per qualifying team via the Discounts admin tab.
 const DISCOUNTS = [
-  { title: "Student 10%",    code: "STUDENT",   value: "10.00", method: "code",      endDate: null },
-  { title: "Early Bird 20%", code: "EARLYBIRD", value: "20.00", method: "code",      endDate: EARLYBIRD_END },
+  { title: "Early Bird 20%", code: "EARLYBIRD", value: "20.00", method: "automatic", endDate: EARLYBIRD_END },
   { title: "Multi-Team 10%", code: "MULTITEAM", value: "10.00", method: "automatic", endDate: null },
 ];
 
@@ -53,6 +57,10 @@ async function main() {
       );
     }
 
+    // 2b) Remove the legacy public STUDENT code (now issued per-team by the
+    // coordinator as a custom one-time code, not a public typeable code).
+    await client.query(`DELETE FROM discounts WHERE organization_id = $1 AND lower(code) = 'student'`, [MFL_ORG_ID]);
+
     await client.query("COMMIT");
 
     // 3) Verify.
@@ -66,11 +74,12 @@ async function main() {
          FROM discounts WHERE organization_id=$1 AND code IN ('STUDENT','EARLYBIRD','MULTITEAM') ORDER BY code`,
       [MFL_ORG_ID],
     );
-    console.log("Seeded discounts:");
+    console.log("Automatic discounts (org 3):");
     for (const r of rows.rows) {
       console.log(`  ${r.code.padEnd(10)} ${r.value}% combinesWithOrder=${r.combines_with_order} status=${r.status} ends=${r.end_date ? new Date(r.end_date).toISOString() : "—"}`);
     }
-    if (rows.rowCount !== 3) console.warn(`⚠️  expected 3 discounts, found ${rows.rowCount}`);
+    const hasStudent = rows.rows.some((r) => r.code === "STUDENT");
+    if (rows.rowCount !== 2 || hasStudent) console.warn(`⚠️  expected exactly EARLYBIRD + MULTITEAM, found ${rows.rowCount}${hasStudent ? " (STUDENT still present!)" : ""}`);
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;

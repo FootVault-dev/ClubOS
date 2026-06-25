@@ -10129,22 +10129,28 @@ export async function registerRoutes(
     const seen = new Set<string>();
     const wanted: string[] = [];
 
+    // Discounts the club applies automatically — never honoured as a typed code,
+    // so they can't be gamed or revealed. EARLYBIRD applies to every order until
+    // its own end_date (then auto-drops); MULTITEAM applies when 2+ teams.
+    const AUTO_CODES = new Set(["MULTITEAM", "EARLYBIRD"]);
+
     for (const raw of (Array.isArray(codes) ? codes : [])) {
       const code = String(raw || "").trim();
       if (!code) continue;
       const key = code.toUpperCase();
       if (seen.has(key)) continue;
-      // MULTITEAM is auto-only — never honour it as a typed code (so it can't be
-      // applied to a single-team order via a hand-crafted request).
-      if (key === "MULTITEAM") continue;
+      if (AUTO_CODES.has(key)) continue; // auto-only — ignore if someone types it
       seen.add(key);
       wanted.push(code);
     }
-    // Auto multi-team discount when the order has 2+ teams (not a typed code).
+    // Auto discounts (not typed). EARLYBIRD is added unconditionally; its date
+    // gate below silently drops it once the deadline passes. MULTITEAM only when
+    // the order has 2+ teams.
     if (teamCount >= 2 && !seen.has("MULTITEAM")) { wanted.push("MULTITEAM"); seen.add("MULTITEAM"); }
+    if (!seen.has("EARLYBIRD")) { wanted.push("EARLYBIRD"); seen.add("EARLYBIRD"); }
 
     for (const code of wanted) {
-      const isAuto = code.toUpperCase() === "MULTITEAM";
+      const isAuto = AUTO_CODES.has(code.toUpperCase());
       const d = await storage.getDiscountByCode(code, MFL_ORG_ID);
       if (!d || !d.code || d.status === "disabled") { if (!isAuto) rejected.push(code); continue; }
       const dCode: string = d.code;

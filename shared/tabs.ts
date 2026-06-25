@@ -76,6 +76,7 @@ const leagueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
   { slug: "competitions", title: "Competitions", url: "/admin/competitions" },
   { slug: "teams", title: "Teams", url: "/admin/teams" },
+  { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
   { slug: "settings", title: "Settings", url: "/admin/league-settings", secondary: true },

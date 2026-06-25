@@ -101,6 +101,7 @@ const leagueNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "competitions", title: "Competitions", url: "/admin/competitions", icon: Trophy },
   { tab: "teams", title: "Teams", url: "/admin/teams", icon: UsersRound },
+  { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
 ];
 
 const venueSecondary = [

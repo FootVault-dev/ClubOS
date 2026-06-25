@@ -121,6 +121,10 @@ export default function MflRegisterPage() {
 
   const rejected = pricing?.rejectedCodes || [];
   const validDiscountLines = (pricing?.discountLines || []).filter((l) => l.amountCents > 0);
+  // Club-applied automatic discounts (early bird until deadline, multi-team for
+  // 2+ teams) — shown as "auto" badges; the rest are the customer's typed codes.
+  const AUTO = ["EARLYBIRD", "MULTITEAM"];
+  const autoDiscountLines = validDiscountLines.filter((l) => AUTO.includes(l.code.toUpperCase()));
 
   // Display figures: prefer server pricing, fall back to local gross.
   const subtotalCents = pricing?.subtotalCents ?? (localSubtotalCents + lateFeeCents);
@@ -272,28 +276,29 @@ export default function MflRegisterPage() {
             </div>
           </div>
 
-          {/* Promo codes */}
+          {/* Promo code — discount codes are handed out privately; never list or
+              hint the actual codes here, so only people who qualify can use them. */}
           <div>
-            <label className="block text-sm font-semibold mb-2">Promo codes</label>
+            <label className="block text-sm font-semibold mb-2">Promo code</label>
             <div className="flex gap-2">
               <input className={inputCls} style={inputStyle} value={codeInput}
                 onChange={(e) => setCodeInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyCode(); } }}
-                placeholder="STUDENT, EARLYBIRD…" data-testid="input-promo-code" />
+                placeholder="Enter a code" data-testid="input-promo-code" />
               <button type="button" onClick={applyCode}
                 className="px-5 rounded-xl font-semibold whitespace-nowrap"
                 style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }} data-testid="button-apply-code">
                 Apply
               </button>
             </div>
-            <p className="mt-1.5 text-[12px]" style={{ color: BRAND.dim }}>Stack & save: Student 10% + Early bird 20% + Multi-team 10% = up to 40% off.</p>
-            {(codes.length > 0 || (pricing?.multiTeamApplied)) && (
+            <p className="mt-1.5 text-[12px]" style={{ color: BRAND.dim }}>Got a code? Enter it to apply your discount.</p>
+            {(codes.length > 0 || autoDiscountLines.length > 0) && (
               <div className="mt-2.5 flex flex-wrap gap-2">
-                {pricing?.multiTeamApplied && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold" style={{ background: `${BRAND.gold}1f`, color: BRAND.gold }}>
-                    <Tag className="w-3 h-3" /> Multi-team 10% · auto
+                {autoDiscountLines.map((l) => (
+                  <span key={l.code} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold" style={{ background: `${BRAND.gold}1f`, color: BRAND.gold }}>
+                    <Tag className="w-3 h-3" /> {l.label} · auto
                   </span>
-                )}
+                ))}
                 {codes.map((c) => {
                   const bad = rejected.includes(c);
                   return (

@@ -213,6 +213,9 @@ function AdminRouter() {
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />
+        <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
+        <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
+        <Route path="/admin/discounts" component={AdminDiscounts} />
         <Route path="/admin/league-settings" component={LeagueSettings} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />

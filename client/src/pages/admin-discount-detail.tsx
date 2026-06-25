@@ -82,7 +82,9 @@ export default function AdminDiscountDetail() {
   const [limitTotalUses, setLimitTotalUses] = useState(false);
   const [onePerCustomer, setOnePerCustomer] = useState(false);
   const [combinesWithProduct, setCombinesWithProduct] = useState(false);
-  const [combinesWithOrder, setCombinesWithOrder] = useState(false);
+  // Default ON so a newly-created code stacks with the club's automatic discounts
+  // (early bird / multi-team). Editing an existing discount loads its real value.
+  const [combinesWithOrder, setCombinesWithOrder] = useState(true);
   const [startDate, setStartDate] = useState(formatDateForInput(new Date()));
   const [startTime, setStartTime] = useState(formatTimeForInput(new Date()));
   const [hasEndDate, setHasEndDate] = useState(false);
