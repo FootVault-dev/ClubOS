@@ -74,6 +74,7 @@ import ClubDetail from "@/pages/club-detail";
 import TournamentDetail from "@/pages/tournament-detail";
 import TournamentTeamDetail from "@/pages/tournament-team-detail";
 import TournamentSkillsChallenge from "@/pages/tournament-skills-challenge";
+import TournamentFoodTruck from "@/pages/tournament-food-truck";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
 import PrintsCRM from "@/pages/prints-crm";
@@ -199,6 +200,7 @@ function AdminRouter() {
         <Route path="/admin/clubs/:id" component={ClubDetail} />
         <Route path="/admin/clubs" component={ClubsList} />
         <Route path="/admin/skills-challenge" component={TournamentSkillsChallenge} />
+        <Route path="/admin/food-truck" component={TournamentFoodTruck} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />

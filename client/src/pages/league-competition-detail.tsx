@@ -474,7 +474,7 @@ function StandingsTab({ competitionId, divisions }: { competitionId: number; div
   );
 }
 
-function SetupTab({ competitionId }: { competitionId: number }) {
+function SetupTab({ competitionId, teams }: { competitionId: number; teams: LeagueTeam[] }) {
   const { toast } = useToast();
   const [showDivModal, setShowDivModal] = useState(false);
   const [editingDiv, setEditingDiv] = useState<LeagueDivision | undefined>();
@@ -485,13 +485,9 @@ function SetupTab({ competitionId }: { competitionId: number }) {
     queryFn: () => fetch(`/api/admin/league/competitions/${competitionId}/divisions`).then(r => r.json()),
   });
 
-  // Registered teams for this competition — grouped per division (by name) so
-  // each league can be opened to see who's entered.
-  const { data: regs = [] } = useQuery<LeagueReg[]>({
-    queryKey: ["/api/admin/league/competitions", competitionId, "registrations"],
-    queryFn: () => fetch(`/api/admin/league/competitions/${competitionId}/registrations`).then(r => r.json()),
-  });
-  const teamsFor = (d: LeagueDivision) => regs.filter(r => r.divisionName === d.name);
+  // The actual teams in this competition, grouped per league night by division id
+  // (includes both registered teams and ones added manually / transferred in).
+  const teamsFor = (d: LeagueDivision) => teams.filter(t => t.divisionId === d.id && t.active);
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/league/divisions/${id}`),
@@ -557,7 +553,7 @@ function SetupTab({ competitionId }: { competitionId: number }) {
 }
 
 // Drill-in: the teams entered in one league night + quick management.
-function DivisionTeamsModal({ division, teams, onEdit, onClose }: { division: LeagueDivision; teams: LeagueReg[]; onEdit: () => void; onClose: () => void }) {
+function DivisionTeamsModal({ division, teams, onEdit, onClose }: { division: LeagueDivision; teams: LeagueTeam[]; onEdit: () => void; onClose: () => void }) {
   const meta = [division.dayOfWeek, division.maxTeams != null ? `${teams.length}/${division.maxTeams} teams` : `${teams.length} teams`].filter(Boolean).join(" · ");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
@@ -575,7 +571,7 @@ function DivisionTeamsModal({ division, teams, onEdit, onClose }: { division: Le
             <div className="text-center py-10 text-white/20">
               <Users className="w-9 h-9 mx-auto mb-2" />
               <p className="text-sm">No teams entered yet</p>
-              <p className="text-xs mt-1">Teams appear here as captains register and pay.</p>
+              <p className="text-xs mt-1">Teams appear here as captains register, or when you add them.</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -583,17 +579,17 @@ function DivisionTeamsModal({ division, teams, onEdit, onClose }: { division: Le
                 <div key={t.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-3.5" data-testid={`team-row-${t.id}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-white/85 truncate">{t.teamName || "Unnamed team"}</p>
-                      <p className="text-xs text-white/40 mt-0.5 truncate">{t.captainName}{t.captainEmail ? ` · ${t.captainEmail}` : ""}</p>
+                      <p className="text-sm font-medium text-white/85 truncate">{t.name || "Unnamed team"}</p>
+                      <p className="text-xs text-white/40 mt-0.5 truncate">{t.contactName || "—"}{t.contactEmail ? ` · ${t.contactEmail}` : ""}</p>
                     </div>
-                    <span className={`text-[11px] px-2 py-1 rounded-md font-medium whitespace-nowrap ${PAY_BADGE[t.paymentStatus] || PAY_BADGE.unpaid}`}>{PAY_LABEL[t.paymentStatus] || t.paymentStatus}</span>
+                    <span className={`text-[11px] px-2 py-1 rounded-md font-medium whitespace-nowrap ${PAY_BADGE[t.paymentStatus || "unpaid"] || PAY_BADGE.unpaid}`}>{PAY_LABEL[t.paymentStatus || "unpaid"] || t.paymentStatus}</span>
                   </div>
-                  <div className="flex items-center gap-3 mt-2 text-[11px] text-white/35">
-                    {t.amountPaid != null && <span>Paid ${Number(t.amountPaid).toFixed(2)}</span>}
-                    {t.balanceStatus && t.balanceStatus !== "paid" && t.balanceStatus !== "none" && (t.balanceCents || 0) > 0 && <span>· Balance {formatCurrency(t.balanceCents || 0, { fromCents: true })}</span>}
-                    {t.captainPhone && <span>· {t.captainPhone}</span>}
-                    {t.captainEmail && <a href={`mailto:${t.captainEmail}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 hover:underline ml-auto">Email</a>}
-                  </div>
+                  {(t.contactPhone || t.contactEmail) && (
+                    <div className="flex items-center gap-3 mt-2 text-[11px] text-white/35">
+                      {t.contactPhone && <span>{t.contactPhone}</span>}
+                      {t.contactEmail && <a href={`mailto:${t.contactEmail}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 hover:underline ml-auto">Email</a>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1060,7 +1056,7 @@ export default function LeagueCompetitionDetail({ params }: { params: { id: stri
       <div>
         {activeTab === "schedule" && <ScheduleTab competitionId={competitionId} teams={teams} divisions={divisions} />}
         {activeTab === "standings" && <StandingsTab competitionId={competitionId} divisions={divisions} />}
-        {activeTab === "setup" && <SetupTab competitionId={competitionId} />}
+        {activeTab === "setup" && <SetupTab competitionId={competitionId} teams={teams} />}
         {activeTab === "registrations" && <RegistrationsTab competitionId={competitionId} />}
         {activeTab === "registration" && <RegistrationTab competition={competition} divisions={divisions} />}
         {activeTab === "coupons" && <CouponsTab competitionId={competitionId} />}

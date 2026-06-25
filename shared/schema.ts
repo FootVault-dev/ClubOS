@@ -2022,3 +2022,22 @@ export const skillsChallengeEntries = pgTable("skills_challenge_entries", {
 export const insertSkillsChallengeEntrySchema = createInsertSchema(skillsChallengeEntries).omit({ id: true, createdAt: true });
 export type InsertSkillsChallengeEntry = z.infer<typeof insertSkillsChallengeEntrySchema>;
 export type SkillsChallengeEntry = typeof skillsChallengeEntries.$inferSelect;
+
+// ---- CIC Food Truck Roster ----
+// Staff roster for the food truck during the tournament. One row per person
+// assigned to a position on a given day. Internal-only (ClubOS Food Truck tab).
+// position: "lead" | "grill" | "barista" | "till" | "float"
+export const foodTruckShifts = pgTable("food_truck_shifts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  shiftDate: date("shift_date").notNull(), // YYYY-MM-DD
+  position: text("position").notNull(),
+  staffName: text("staff_name").notNull(),
+  timeLabel: text("time_label"), // optional, e.g. "AM", "PM", "9–3"
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertFoodTruckShiftSchema = createInsertSchema(foodTruckShifts).omit({ id: true, createdAt: true });
+export type InsertFoodTruckShift = z.infer<typeof insertFoodTruckShiftSchema>;
+export type FoodTruckShift = typeof foodTruckShifts.$inferSelect;

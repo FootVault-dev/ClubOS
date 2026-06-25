@@ -87,6 +87,7 @@ const tournamentTabs: TabDef[] = [
   { slug: "tournaments", title: "Tournaments", url: "/admin/tournaments" },
   { slug: "clubs", title: "Clubs", url: "/admin/clubs" },
   { slug: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge" },
+  { slug: "food-truck", title: "Food Truck", url: "/admin/food-truck" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
   { slug: "settings", title: "Settings", url: "/admin/tournament-settings", secondary: true },

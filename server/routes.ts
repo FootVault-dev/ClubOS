@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, bookingRequests } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, bookingRequests } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -7796,6 +7796,142 @@ export async function registerRoutes(
   });
 
   // ───────────────────────── END CIC SKILLS CHALLENGE ─────────────────────────
+
+  // ─────────────────────────────── CIC FOOD TRUCK ───────────────────────────────
+  // Internal staff roster for the food truck during the Christchurch
+  // International Cup. One row per person assigned to a position on a day.
+  // ClubOS-only (session + "food-truck" tab permission) — no public surface.
+
+  const FOOD_TRUCK_ORG_SLUG = "christchurch-international-cup";
+  const FOOD_TRUCK_POSITIONS = ["lead", "grill", "barista", "till", "float"] as const;
+
+  let foodTruckOrgIdCache: number | null = null;
+  async function foodTruckOrgId(): Promise<number> {
+    if (foodTruckOrgIdCache) return foodTruckOrgIdCache;
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, FOOD_TRUCK_ORG_SLUG));
+    if (!org) throw new Error("CIC organization not found");
+    foodTruckOrgIdCache = org.id;
+    return org.id;
+  }
+
+  function serializeFoodTruckShift(s: typeof foodTruckShifts.$inferSelect) {
+    return {
+      id: s.id,
+      shiftDate: s.shiftDate,
+      position: s.position,
+      staffName: s.staffName,
+      timeLabel: s.timeLabel,
+      notes: s.notes,
+    };
+  }
+
+  function normalizeFoodTruckInput(body: any):
+    | { shiftDate: string; position: string; staffName: string; timeLabel: string | null; notes: string | null }
+    | { error: string } {
+    const shiftDate = String(body?.shiftDate ?? "").trim();
+    const position = String(body?.position ?? "").trim();
+    const staffName = String(body?.staffName ?? "").trim();
+    const timeLabel = body?.timeLabel == null ? null : (String(body.timeLabel).trim().slice(0, 40) || null);
+    const notes = body?.notes == null ? null : (String(body.notes).trim().slice(0, 200) || null);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(shiftDate)) return { error: "shiftDate must be YYYY-MM-DD" };
+    if (!(FOOD_TRUCK_POSITIONS as readonly string[]).includes(position)) return { error: "Unknown position" };
+    if (!staffName || staffName.length > 80) return { error: "Staff name is required (max 80 characters)" };
+    return { shiftDate, position, staffName, timeLabel, notes };
+  }
+
+  async function foodTruckListShifts() {
+    const orgId = await foodTruckOrgId();
+    return db.select().from(foodTruckShifts)
+      .where(eq(foodTruckShifts.organizationId, orgId))
+      .orderBy(foodTruckShifts.shiftDate, foodTruckShifts.createdAt);
+  }
+
+  async function foodTruckCreateShift(body: any) {
+    const input = normalizeFoodTruckInput(body);
+    if ("error" in input) return { error: input.error };
+    const orgId = await foodTruckOrgId();
+    const [row] = await db.insert(foodTruckShifts).values({
+      organizationId: orgId,
+      shiftDate: input.shiftDate,
+      position: input.position,
+      staffName: input.staffName,
+      timeLabel: input.timeLabel,
+      notes: input.notes,
+    }).returning();
+    return { shift: row };
+  }
+
+  async function foodTruckPatchShift(id: number, body: any) {
+    const updates: Record<string, any> = {};
+    if ("staffName" in body) {
+      const v = String(body.staffName ?? "").trim();
+      if (!v || v.length > 80) return { error: "Staff name is required (max 80 characters)" };
+      updates.staffName = v;
+    }
+    if ("timeLabel" in body) updates.timeLabel = body.timeLabel == null ? null : (String(body.timeLabel).trim().slice(0, 40) || null);
+    if ("notes" in body) updates.notes = body.notes == null ? null : (String(body.notes).trim().slice(0, 200) || null);
+    if ("position" in body) {
+      const v = String(body.position ?? "").trim();
+      if (!(FOOD_TRUCK_POSITIONS as readonly string[]).includes(v)) return { error: "Unknown position" };
+      updates.position = v;
+    }
+    if (Object.keys(updates).length === 0) return { error: "Nothing to update" };
+    const orgId = await foodTruckOrgId();
+    const [row] = await db.update(foodTruckShifts).set(updates)
+      .where(and(eq(foodTruckShifts.id, id), eq(foodTruckShifts.organizationId, orgId)))
+      .returning();
+    if (!row) return { error: "Shift not found" };
+    return { shift: row };
+  }
+
+  async function foodTruckDeleteShift(id: number) {
+    const orgId = await foodTruckOrgId();
+    const [row] = await db.delete(foodTruckShifts)
+      .where(and(eq(foodTruckShifts.id, id), eq(foodTruckShifts.organizationId, orgId)))
+      .returning();
+    return !!row;
+  }
+
+  app.get("/api/admin/food-truck/shifts", requireAuth, requireTab("food-truck"), async (_req, res) => {
+    try {
+      const rows = await foodTruckListShifts();
+      res.json(rows.map(serializeFoodTruckShift));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/admin/food-truck/shifts", requireAuth, requireTab("food-truck"), async (req, res) => {
+    try {
+      const result = await foodTruckCreateShift(req.body ?? {});
+      if ("error" in result) return res.status(400).json({ message: result.error });
+      res.json(serializeFoodTruckShift(result.shift));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/admin/food-truck/shifts/:id", requireAuth, requireTab("food-truck"), async (req, res) => {
+    try {
+      const result = await foodTruckPatchShift(parseInt(String(req.params.id)), req.body ?? {});
+      if ("error" in result) return res.status(400).json({ message: result.error });
+      res.json(serializeFoodTruckShift(result.shift));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/admin/food-truck/shifts/:id", requireAuth, requireTab("food-truck"), async (req, res) => {
+    try {
+      const ok = await foodTruckDeleteShift(parseInt(String(req.params.id)));
+      if (!ok) return res.status(404).json({ message: "Shift not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ───────────────────────────── END CIC FOOD TRUCK ─────────────────────────────
 
   app.get("/api/public/camps", async (_req, res) => {
     try {

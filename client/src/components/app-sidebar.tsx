@@ -45,6 +45,7 @@ import {
   Sun,
   Moon,
   Zap,
+  Truck,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -121,6 +122,7 @@ const tournamentNav = [
   { tab: "tournaments", title: "Tournaments", url: "/admin/tournaments", icon: Award },
   { tab: "clubs", title: "Clubs", url: "/admin/clubs", icon: Shield },
   { tab: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge", icon: Zap },
+  { tab: "food-truck", title: "Food Truck", url: "/admin/food-truck", icon: Truck },
 ];
 
 const tournamentSecondary = [
