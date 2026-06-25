@@ -11816,8 +11816,10 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
   if (registrationId === primaryId) {
     const totalDeposit = group.reduce((s, g) => s + (g.depositCents ?? g.totalCents ?? 0), 0);
     const totalBalance = group.reduce((s, g) => s + (g.balanceCents ?? 0), 0);
-    const anyInstalment = group.some((g) => g.paymentMode === "installment" && (g.balanceCents ?? 0) > 0);
-    const teamLabel = group.length > 1 ? `your ${group.length} teams` : (reg.teamName || "Your team");
+    const totalPrice = group.reduce((s, g) => s + (g.totalCents ?? 0), 0);
+    const weeklyCents = group.reduce((s, g) => s + (g.weeklyAmountCents ?? 0), 0);
+    const mode = (reg.paymentMode as string) || "upfront"; // 'upfront'|'deposit_weekly'|'installment'
+    const teamLabel = group.length > 1 ? `${group.length} teams` : (reg.teamName || "Your team");
 
     sendLeagueConfirmationEmail({
       registrationId: primaryId,
@@ -11825,11 +11827,14 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
       captainEmail: captain.email || "",
       captainName: captain.firstName,
       teamName: teamLabel,
-      divisionName: group.length > 1 ? `${group.length} teams` : (division?.name || program.name),
-      depositPaid: fmtNZ(totalDeposit),
+      divisionName: group.length > 1 ? "" : (division?.name || ""),
+      paymentMode: mode,
+      amountPaidNow: fmtNZ(mode === "upfront" ? totalPrice : totalDeposit),
+      totalPrice: fmtNZ(totalPrice),
+      weeklyAmount: fmtNZ(weeklyCents),
+      weeksTotal: reg.weeksTotal ?? 8,
       balanceDue: fmtNZ(totalBalance),
       balanceDueDate: fmtDate(reg.balanceDueDate ?? null),
-      fullyPaid: !anyInstalment,
     }).catch((e) => console.error("[MFL] confirmation email failed:", e));
 
     sendPurchaseEvent({

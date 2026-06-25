@@ -185,21 +185,26 @@ export async function sendConfirmationEmail(params: {
 
 const MFL_FROM = "Mini Football Leagues <noreply@cufc.co.nz>";
 const MFL_REPLY_TO = "minifootball@cufc.co.nz";
+const MFL_LOGO_URL = "https://join.minifootball.co.nz/logos/mini-football-leagues.png";
 
 function mflShell(opts: { heading: string; bodyHtml: string }): string {
   return `
-  <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background:#000;">
-    <div style="background:#000; padding:32px; border-radius:16px 16px 0 0; text-align:center; border-bottom:2px solid #d1b96e;">
-      <h1 style="color:#d1b96e; margin:0; font-size:24px; letter-spacing:0.5px;">${opts.heading}</h1>
-      <p style="color:rgba(255,255,255,0.6); margin:8px 0 0; font-size:13px; text-transform:uppercase; letter-spacing:1px;">Mini Football Leagues</p>
-    </div>
-    <div style="background:#141414; padding:32px; border:1px solid #2a2a2a; border-top:0; border-radius:0 0 16px 16px; color:#e6e6e6;">
-      ${opts.bodyHtml}
-      <p style="color:#8a8a8a; font-size:13px; line-height:1.5; margin:24px 0 0;">
-        Questions? Just reply to this email.
+  <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:#000000; padding:36px 16px;">
+    <div style="max-width: 560px; margin: 0 auto;">
+      <div style="text-align:center; padding:4px 0 26px;">
+        <img src="${MFL_LOGO_URL}" alt="Mini Football Leagues" width="84" height="84" style="display:inline-block; width:84px; height:84px; margin:0 0 18px;" />
+        <h1 style="color:#ffffff; margin:0; font-size:22px; font-weight:700; letter-spacing:-0.2px;">${opts.heading}</h1>
+      </div>
+      <div style="background:#101010; border:1px solid #242424; border-radius:18px; padding:28px; color:#e6e6e6;">
+        ${opts.bodyHtml}
+        <p style="color:#7d7d7d; font-size:13px; line-height:1.55; margin:26px 0 0; border-top:1px solid #1f1f1f; padding-top:18px;">
+          Questions? Just reply to this email and we'll sort you out.
+        </p>
+      </div>
+      <p style="text-align:center; color:#5a5a5a; font-size:11px; line-height:1.7; margin:22px 0 0;">
+        Mini Football Leagues · Christchurch United Football Club<br/>United Sports Centre, Christchurch
       </p>
     </div>
-    <p style="text-align:center; color:#6a6a6a; font-size:11px; margin:16px 0 0;">Christchurch United Football Club · Mini Football Leagues</p>
   </div>`;
 }
 
@@ -210,45 +215,59 @@ function mflRow(label: string, value: string, emphasise = false): string {
   </tr>`;
 }
 
-/** Deposit-paid confirmation: "spot locked, $X balance due {date}". */
+/** Registration confirmation — adapts to pay-in-full / deposit+weekly / deposit+balance. */
 export async function sendLeagueConfirmationEmail(params: {
   registrationId: number;
   programId: number;
   captainEmail: string;
   captainName: string;
   teamName: string;
-  divisionName: string;
-  depositPaid: string;
-  balanceDue: string;
-  balanceDueDate: string;
-  fullyPaid: boolean;
+  divisionName: string;          // "" hides the night row (multi-team orders)
+  paymentMode: string;           // 'upfront' | 'deposit_weekly' | 'installment'
+  amountPaidNow: string;         // formatted — charged today
+  totalPrice: string;            // formatted — full order total
+  weeklyAmount?: string;         // formatted — deposit_weekly
+  weeksTotal?: number | null;    // deposit_weekly
+  balanceDue?: string;           // formatted — installment
+  balanceDueDate?: string;       // installment
 }): Promise<boolean> {
+  const isWeekly = params.paymentMode === "deposit_weekly";
+  const isInstalment = params.paymentMode === "installment";
+  const isFull = !isWeekly && !isInstalment;
+
   const rows = [
     mflRow("Team", params.teamName),
-    mflRow("League / night", params.divisionName),
-    mflRow("Deposit paid", params.depositPaid),
-    ...(params.fullyPaid
-      ? [mflRow("Status", "Paid in full", true)]
-      : [mflRow(`Balance due ${params.balanceDueDate}`, params.balanceDue, true)]),
+    ...(params.divisionName ? [mflRow("Night", params.divisionName)] : []),
+    ...(isFull
+      ? [mflRow("Paid today", params.amountPaidNow), mflRow("Status", "Paid in full", true)]
+      : isWeekly
+      ? [mflRow("Paid today (deposit)", params.amountPaidNow),
+         mflRow(`Then weekly × ${params.weeksTotal ?? 8}`, `${params.weeklyAmount}/wk`),
+         mflRow("Total", params.totalPrice, true)]
+      : [mflRow("Paid today (deposit)", params.amountPaidNow),
+         mflRow(`Balance on ${params.balanceDueDate}`, params.balanceDue || "", true)]),
   ].join("");
 
-  const intro = params.fullyPaid
-    ? `Your team is locked in and <strong style="color:#d1b96e;">paid in full</strong>. See you on the pitch!`
-    : `Your spot is <strong style="color:#d1b96e;">locked in</strong>. We've taken your deposit — the remaining balance of ${params.balanceDue} will be charged automatically to your card on <strong>${params.balanceDueDate}</strong>.`;
+  const intro = isFull
+    ? `You're locked in and <strong style="color:#d1b96e;">paid in full</strong>. See you on the pitch! ⚽`
+    : isWeekly
+    ? `You're <strong style="color:#d1b96e;">locked in</strong>. We've taken your deposit today — the rest is split into <strong>${params.weeksTotal ?? 8} weekly payments of ${params.weeklyAmount}</strong>, charged automatically to your card once the season starts. Nothing else to do.`
+    : `Your spot is <strong style="color:#d1b96e;">locked in</strong>. We've taken your deposit — the remaining <strong>${params.balanceDue}</strong> is charged automatically on <strong>${params.balanceDueDate}</strong>.`;
 
   const bodyHtml = `
-    <p style="color:#e6e6e6; font-size:16px; margin:0 0 16px;">Hi ${params.captainName},</p>
-    <p style="color:#bdbdbd; font-size:14px; line-height:1.6; margin:0 0 24px;">${intro}</p>
-    <div style="background:#000; border:1px solid #2a2a2a; border-radius:12px; padding:20px; margin:0 0 8px;">
+    <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.captainName},</p>
+    <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">${intro}</p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
       <table style="width:100%; border-collapse:collapse;">${rows}</table>
-    </div>`;
+    </div>
+    <a href="https://join.minifootball.co.nz/league" style="display:inline-block; margin:22px 0 0; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">View the league →</a>`;
 
   return sendEmail({
     to: params.captainEmail,
     from: MFL_FROM,
     replyTo: MFL_REPLY_TO,
-    subject: `You're in! ${params.teamName} — Mini Football Leagues`,
-    html: mflShell({ heading: params.fullyPaid ? "Team Registered" : "Spot Locked In", bodyHtml }),
+    subject: isFull ? `You're in! ${params.teamName} — Mini Football Leagues` : `Spot locked in — ${params.teamName}`,
+    html: mflShell({ heading: isFull ? "You're in! 🎉" : "Spot locked in", bodyHtml }),
     campId: params.programId,
     registrationId: params.registrationId,
   });

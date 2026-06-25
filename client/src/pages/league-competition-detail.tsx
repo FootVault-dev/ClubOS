@@ -5,7 +5,7 @@ import { formatCurrency } from "@/lib/format";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { Trophy, ArrowLeft, Calendar, BarChart3, Settings, Ticket, Tag, Plus, X, Trash2, Pencil, ChevronDown, Users, Wand2, ExternalLink, Loader2, Mail, Phone } from "lucide-react";
+import { Trophy, ArrowLeft, Calendar, BarChart3, Settings, Ticket, Tag, Plus, X, Trash2, Pencil, ChevronDown, ChevronRight, Users, Wand2, ExternalLink, Loader2, Mail, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TimePickerInput } from "@/components/ui/time-picker-input";
@@ -478,11 +478,20 @@ function SetupTab({ competitionId }: { competitionId: number }) {
   const { toast } = useToast();
   const [showDivModal, setShowDivModal] = useState(false);
   const [editingDiv, setEditingDiv] = useState<LeagueDivision | undefined>();
+  const [viewingDiv, setViewingDiv] = useState<LeagueDivision | undefined>();
 
   const { data: divisions = [] } = useQuery<LeagueDivision[]>({
     queryKey: ["/api/admin/league/competitions", competitionId, "divisions"],
     queryFn: () => fetch(`/api/admin/league/competitions/${competitionId}/divisions`).then(r => r.json()),
   });
+
+  // Registered teams for this competition — grouped per division (by name) so
+  // each league can be opened to see who's entered.
+  const { data: regs = [] } = useQuery<LeagueReg[]>({
+    queryKey: ["/api/admin/league/competitions", competitionId, "registrations"],
+    queryFn: () => fetch(`/api/admin/league/competitions/${competitionId}/registrations`).then(r => r.json()),
+  });
+  const teamsFor = (d: LeagueDivision) => regs.filter(r => r.divisionName === d.name);
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/league/divisions/${id}`),
@@ -492,41 +501,113 @@ function SetupTab({ competitionId }: { competitionId: number }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">Divisions</h3>
+        <h3 className="text-sm font-semibold text-white">Leagues</h3>
         <Button onClick={() => { setEditingDiv(undefined); setShowDivModal(true); }} className="bg-blue-600 hover:bg-blue-700 text-white gap-2" size="sm" data-testid="button-new-division">
-          <Plus className="w-3.5 h-3.5" />Division
+          <Plus className="w-3.5 h-3.5" />League
         </Button>
       </div>
 
       {divisions.length === 0 ? (
         <div className="text-center py-12 text-white/20">
           <Settings className="w-10 h-10 mx-auto mb-2" />
-          <p className="text-sm">No divisions created</p>
-          <p className="text-xs mt-1">Add divisions to organize your competition</p>
+          <p className="text-sm">No leagues created</p>
+          <p className="text-xs mt-1">Add a league night to organise your competition</p>
         </div>
       ) : (
         <div className="space-y-2">
-          {divisions.map(d => (
-            <div key={d.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-4 flex items-center justify-between" data-testid={`div-row-${d.id}`}>
-              <div>
-                <p className="text-sm font-medium text-white/80">{d.name}</p>
-                <div className="flex items-center gap-2 mt-0.5 text-xs text-white/30">
-                  {d.ageGroup && <span>{d.ageGroup}</span>}
-                  {d.gender && <span>· {d.gender}</span>}
-                  {d.dayOfWeek && <span>· {d.dayOfWeek}</span>}
-                  {d.maxTeams && <span>· Max {d.maxTeams} teams</span>}
+          {divisions.map(d => {
+            const dTeams = teamsFor(d);
+            return (
+              <div key={d.id}
+                onClick={() => setViewingDiv(d)}
+                className="rounded-xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.05] p-4 flex items-center justify-between cursor-pointer transition-colors group"
+                data-testid={`div-row-${d.id}`}>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white/80">{d.name}</p>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-white/30">
+                    {d.dayOfWeek && <span>{d.dayOfWeek}</span>}
+                    {d.maxTeams != null
+                      ? <span>· {dTeams.length}/{d.maxTeams} teams</span>
+                      : <span>· {dTeams.length} team{dTeams.length === 1 ? "" : "s"}</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-white/40 mr-1 hidden sm:inline opacity-0 group-hover:opacity-100 transition-opacity">View teams</span>
+                  <ChevronRight className="w-4 h-4 text-white/25 mr-1" />
+                  <button onClick={(e) => { e.stopPropagation(); setEditingDiv(d); setShowDivModal(true); }} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white/5 text-white/30" data-testid={`edit-div-${d.id}`}><Pencil className="w-3.5 h-3.5" /></button>
+                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete "${d.name}"? This can't be undone.`)) deleteMut.mutate(d.id); }} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400" data-testid={`delete-div-${d.id}`}><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
-              <div className="flex items-center gap-1">
-                <button onClick={() => { setEditingDiv(d); setShowDivModal(true); }} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white/5 text-white/30"><Pencil className="w-3.5 h-3.5" /></button>
-                <button onClick={() => deleteMut.mutate(d.id)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {showDivModal && <DivisionModal competitionId={competitionId} division={editingDiv} onClose={() => { setShowDivModal(false); setEditingDiv(undefined); }} />}
+      {viewingDiv && (
+        <DivisionTeamsModal
+          division={viewingDiv}
+          teams={teamsFor(viewingDiv)}
+          onEdit={() => { setEditingDiv(viewingDiv); setViewingDiv(undefined); setShowDivModal(true); }}
+          onClose={() => setViewingDiv(undefined)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Drill-in: the teams entered in one league night + quick management.
+function DivisionTeamsModal({ division, teams, onEdit, onClose }: { division: LeagueDivision; teams: LeagueReg[]; onEdit: () => void; onClose: () => void }) {
+  const meta = [division.dayOfWeek, division.maxTeams != null ? `${teams.length}/${division.maxTeams} teams` : `${teams.length} teams`].filter(Boolean).join(" · ");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-[#0a0e1a] border border-blue-500/15 rounded-2xl w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-white/5">
+          <div>
+            <h2 className="text-lg font-semibold text-white">{division.name}</h2>
+            <p className="text-xs text-white/40 mt-0.5">{meta}</p>
+          </div>
+          <button onClick={onClose} className="text-white/30 hover:text-white/60"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 overflow-y-auto flex-1">
+          {teams.length === 0 ? (
+            <div className="text-center py-10 text-white/20">
+              <Users className="w-9 h-9 mx-auto mb-2" />
+              <p className="text-sm">No teams entered yet</p>
+              <p className="text-xs mt-1">Teams appear here as captains register and pay.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {teams.map(t => (
+                <div key={t.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-3.5" data-testid={`team-row-${t.id}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-white/85 truncate">{t.teamName || "Unnamed team"}</p>
+                      <p className="text-xs text-white/40 mt-0.5 truncate">{t.captainName}{t.captainEmail ? ` · ${t.captainEmail}` : ""}</p>
+                    </div>
+                    <span className={`text-[11px] px-2 py-1 rounded-md font-medium whitespace-nowrap ${PAY_BADGE[t.paymentStatus] || PAY_BADGE.unpaid}`}>{PAY_LABEL[t.paymentStatus] || t.paymentStatus}</span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-2 text-[11px] text-white/35">
+                    {t.amountPaid != null && <span>Paid ${Number(t.amountPaid).toFixed(2)}</span>}
+                    {t.balanceStatus && t.balanceStatus !== "paid" && t.balanceStatus !== "none" && (t.balanceCents || 0) > 0 && <span>· Balance {formatCurrency(t.balanceCents || 0, { fromCents: true })}</span>}
+                    {t.captainPhone && <span>· {t.captainPhone}</span>}
+                    {t.captainEmail && <a href={`mailto:${t.captainEmail}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 hover:underline ml-auto">Email</a>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-white/5 flex gap-2 justify-between items-center">
+          <span className="text-xs text-white/30">{teams.length} team{teams.length === 1 ? "" : "s"} entered</span>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onEdit} className="text-white/60 gap-1.5" data-testid="button-edit-league"><Pencil className="w-3.5 h-3.5" />Edit league</Button>
+            <Button onClick={onClose} className="bg-blue-600 hover:bg-blue-700 text-white">Done</Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

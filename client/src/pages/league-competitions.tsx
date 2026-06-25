@@ -141,7 +141,6 @@ export default function LeagueCompetitions() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
-  const [sportFilter, setSportFilter] = useState("all");
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<LeagueCompetition | undefined>();
   const [menuOpen, setMenuOpen] = useState<number | null>(null);
@@ -187,10 +186,7 @@ export default function LeagueCompetitions() {
 
   const filtered = competitions
     .filter(c => showArchived ? c.archived : !c.archived)
-    .filter(c => sportFilter === "all" || c.sport === sportFilter)
     .filter(c => !search || c.name.toLowerCase().includes(search.toLowerCase()));
-
-  const sports = [...new Set(competitions.map(c => c.sport))];
 
   const gamesCountMap: Record<number, number> = {};
 
@@ -212,13 +208,6 @@ export default function LeagueCompetitions() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" />
           <Input placeholder="Search competitions..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 premium-input text-white" data-testid="input-search-competitions" />
         </div>
-        <Select value={sportFilter} onValueChange={setSportFilter}>
-          <SelectTrigger className="premium-input text-white w-[140px]"><SelectValue placeholder="Sport" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Sports</SelectItem>
-            {sports.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-          </SelectContent>
-        </Select>
         <div className="flex items-center gap-2">
           <Switch checked={showArchived} onCheckedChange={setShowArchived} />
           <span className="text-xs text-white/30">Show Archived</span>
@@ -243,7 +232,6 @@ export default function LeagueCompetitions() {
             <thead>
               <tr className="border-b border-white/5">
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Name</th>
-                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Sport</th>
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden sm:table-cell">Start</th>
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden sm:table-cell">End</th>
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Registration</th>
@@ -266,7 +254,6 @@ export default function LeagueCompetitions() {
                       <span className="text-sm font-medium text-white/80">{c.name}</span>
                     </div>
                   </td>
-                  <td className="px-5 py-3.5 text-sm text-white/50">{c.sport}</td>
                   <td className="px-5 py-3.5 text-sm text-white/40 hidden sm:table-cell">
                     {c.startDate ? new Date(c.startDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" }) : "—"}
                   </td>
