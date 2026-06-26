@@ -474,6 +474,46 @@ export async function sendManualBookingConfirmationEmail(params: {
   });
 }
 
+/** Customer confirmation for a PAID public venue booking (book.unitedsportscentre.com).
+ *  Sent when the Stripe payment for a booking group succeeds. Lists every session
+ *  in the group with its own date/time/price so single-session and multi-session
+ *  orders both render correctly. */
+export async function sendVenueBookingConfirmationEmail(params: {
+  to: string;
+  customerName: string;
+  sessions: { facilityName: string; dateLong: string; timeRange: string; sizeLabel?: string | null; amountLabel: string }[];
+  totalLabel: string;
+  reference: string;
+}): Promise<boolean> {
+  const rows = params.sessions.map(s =>
+    uscRow(
+      `${s.facilityName}${s.sizeLabel ? ` <span style="color:#8b8fa8;">(${s.sizeLabel})</span>` : ""}`,
+      `${s.dateLong}<br/><span style="color:#8b8fa8;">${s.timeRange} · ${s.amountLabel}</span>`,
+    )
+  ).join("");
+
+  const bodyHtml = `
+    <p style="color:#e6e8f0; font-size:16px; margin:0 0 16px;">Hi ${params.customerName},</p>
+    <p style="color:#bfc3d4; font-size:14px; line-height:1.6; margin:0 0 24px;">
+      Thanks for your booking — your reservation is <strong style="color:${USC_BRAND};">confirmed</strong> and payment received. Here are your details:
+    </p>
+    ${uscCard(rows + uscRow("Total paid", params.totalLabel, true))}
+    <p style="color:#8b8fa8; font-size:13px; line-height:1.6; margin:24px 0 0;">
+      Need to change or cancel? Reply to this email or contact
+      <a href="mailto:info@cufc.co.nz" style="color:${USC_BRAND};">info@cufc.co.nz</a> at least 24 hours before your booking.
+      <br/><span style="color:#5a6078;">Reference: ${params.reference}</span>
+    </p>`;
+
+  const subjectDate = params.sessions.length === 1 ? params.sessions[0].dateLong : `${params.sessions.length} sessions`;
+  return sendEmail({
+    to: params.to,
+    from: USC_FROM,
+    replyTo: USC_REPLY_TO,
+    subject: `Booking confirmed — ${params.sessions[0]?.facilityName || "United Sports Centre"}, ${subjectDate}`,
+    html: uscShell({ heading: "Booking Confirmed", sub: "United Sports Centre", bodyHtml }),
+  });
+}
+
 /** Cancellation notice — staff removed a booking from the admin calendar and
  *  chose to notify the customer. Covers single bookings and whole series. */
 export async function sendBookingCancellationEmail(params: {

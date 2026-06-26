@@ -69,20 +69,6 @@ function CompetitionModal({ competition, orgId, onClose }: { competition?: Leagu
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-white/40 mb-1 block">Sport</label>
-              <Select value={form.sport} onValueChange={v => setForm(f => ({ ...f, sport: v }))}>
-                <SelectTrigger className="premium-input text-white"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Soccer">Soccer</SelectItem>
-                  <SelectItem value="Futsal">Futsal</SelectItem>
-                  <SelectItem value="Football">Football</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
               <label className="text-xs text-white/40 mb-1 block">Start Date</label>
               <DatePickerInput value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="premium-input text-white" data-testid="input-comp-start" />
             </div>

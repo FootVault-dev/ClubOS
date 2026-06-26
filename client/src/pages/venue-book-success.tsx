@@ -69,7 +69,19 @@ export default function VenueBookSuccess() {
       if (!cancelled && attempts < 5) setTimeout(poll, 1500);
       else if (!cancelled) setLoading(false);
     };
-    poll();
+    // Self-heal: ask the server to confirm the payment against Stripe in case
+    // the webhook is slow or didn't fire, then poll picks up the 'paid' state.
+    // Idempotent server-side, so this never double-charges or double-emails.
+    (async () => {
+      try {
+        await fetch(`/api/public/venue/booking-group/${ref}/confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: stashedEmail }),
+        });
+      } catch {}
+      poll();
+    })();
     return () => { cancelled = true; };
   }, [ref, stashedEmail]);
 

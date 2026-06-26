@@ -3727,6 +3727,37 @@ export async function registerRoutes(
     }
   });
 
+  // Self-heal fallback: the success page calls this so a paid booking confirms
+  // even if the Stripe webhook is delayed, down, or (historically) mis-subscribed.
+  // Mirrors the registration /api/public/confirm-payment safety net. Idempotent
+  // and ownership-gated by the customer email (same as the GET above).
+  app.post("/api/public/venue/booking-group/:groupId/confirm", async (req, res) => {
+    try {
+      const groupId = req.params.groupId;
+      const emailQ = ((req.body?.email as string) || "").trim().toLowerCase();
+      if (!emailQ) return res.status(400).json({ message: "email required" });
+      const bookings = await db.select().from(facilityBookings)
+        .where(eq(facilityBookings.bookingGroupId, groupId));
+      if (bookings.length === 0) return res.status(404).json({ message: "Booking group not found" });
+      if ((bookings[0].customerEmail || "").toLowerCase() !== emailQ) {
+        return res.status(404).json({ message: "Booking group not found" });
+      }
+      if (bookings.some(b => b.status === "paid")) {
+        return res.json({ status: "paid", alreadyConfirmed: true });
+      }
+      const pi = bookings.find(b => b.stripePaymentIntentId)?.stripePaymentIntentId;
+      if (!pi) return res.json({ status: bookings[0].status });
+      const intent = await retrievePaymentIntent(pi);
+      if (intent.status === "succeeded") {
+        const updated = await confirmAndEmailVenueBookings(pi);
+        return res.json({ status: "paid", confirmed: updated.length });
+      }
+      return res.json({ status: bookings[0].status, paymentStatus: intent.status });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ========= Member booking requests (book.unitedsportscentre.com/members) =========
   //
   // Club members request a slot with no payment attached. The request lands in
@@ -8292,30 +8323,8 @@ export async function registerRoutes(
         const facilityGroupId = paymentIntent.metadata?.facilityBookingGroupId;
         if (facilityGroupId) {
           try {
-            const updated = await storage.confirmFacilityBookingsByPaymentIntent(paymentIntent.id);
+            const updated = await confirmAndEmailVenueBookings(paymentIntent.id);
             console.log(`[Stripe Webhook] Confirmed ${updated.length} facility bookings for group ${facilityGroupId}`);
-            if (updated.length > 0) {
-              const first = updated[0];
-              const totalCents = updated.reduce((s, b) => s + (b.totalCents || 0), 0);
-              const lines = await Promise.all(updated.map(async b => {
-                const f = await storage.getFacility(b.facilityId);
-                return `<li>${f?.name || 'Facility'} — ${b.bookingDate} ${b.startTime}–${b.endTime}${b.halfFull === 'half' ? ` (${b.halfPosition ? b.halfPosition + ' ' : ''}half)` : b.halfFull === 'quarter' ? ` (quarter ${(b.halfPosition || '').toUpperCase()})` : ''}</li>`;
-              }));
-              try {
-                const { sendEmail } = await import("./email");
-                await sendEmail({
-                  to: first.customerEmail,
-                  from: "United Sports Centre <bookings@unitedsportscentre.com>",
-                  subject: `Booking confirmation — ${updated.length} session${updated.length > 1 ? 's' : ''}`,
-                  html: `<p>Hi ${first.customerName},</p>
-                    <p>Thanks for your booking! Your reservation is confirmed.</p>
-                    <ul>${lines.join('')}</ul>
-                    <p><strong>Total paid:</strong> NZ$${(totalCents / 100).toFixed(2)} (incl. GST)</p>
-                    <p>Reference: <code>${facilityGroupId}</code></p>
-                    <p>See you at the centre!</p>`,
-                });
-              } catch (e) { console.error("[Venue email] failed", e); }
-            }
           } catch (e) {
             console.error("[Stripe Webhook] Facility booking confirm failed:", e);
           }
@@ -11499,6 +11508,54 @@ async function sendPasswordResetEmail(params: {
     subject: "Your ClubOS password was reset",
     html,
   });
+}
+
+// Confirm a paid venue booking group and email the customer. Shared by the
+// Stripe `payment_intent.succeeded` webhook AND the success-page fallback so a
+// missed/mis-subscribed webhook can never strand a paid booking. Idempotent:
+// confirmFacilityBookingsByPaymentIntent only flips pending→paid and returns
+// rows on the FIRST flip, so whichever caller wins sends exactly one email.
+async function confirmAndEmailVenueBookings(paymentIntentId: string) {
+  const updated = await storage.confirmFacilityBookingsByPaymentIntent(paymentIntentId);
+  if (updated.length === 0) return updated;
+
+  const fmtTime = (t: string) => {
+    const [h, m] = t.split(":").map(Number);
+    const ampm = h >= 12 ? "pm" : "am";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  };
+  const first = updated[0];
+  const ordered = updated.slice().sort((a, b) => a.bookingDate.localeCompare(b.bookingDate));
+  const sessions = await Promise.all(ordered.map(async b => {
+    const f = await storage.getFacility(b.facilityId);
+    const sizeLabel = b.halfFull === "half"
+      ? `${b.halfPosition ? b.halfPosition + " " : ""}half`
+      : b.halfFull === "quarter"
+      ? `quarter ${(b.halfPosition || "").toUpperCase()}`
+      : null;
+    return {
+      facilityName: f?.name || "Facility",
+      dateLong: new Date(b.bookingDate + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" }),
+      timeRange: `${fmtTime(b.startTime)}–${fmtTime(b.endTime)}`,
+      sizeLabel,
+      amountLabel: `NZ$${((b.totalCents || 0) / 100).toFixed(2)}`,
+    };
+  }));
+  const totalCents = updated.reduce((s, b) => s + (b.totalCents || 0), 0);
+  try {
+    const { sendVenueBookingConfirmationEmail } = await import("./email");
+    await sendVenueBookingConfirmationEmail({
+      to: first.customerEmail,
+      customerName: first.customerName,
+      sessions,
+      totalLabel: `NZ$${(totalCents / 100).toFixed(2)} (incl. GST)`,
+      reference: first.bookingGroupId || paymentIntentId,
+    });
+  } catch (e) {
+    console.error("[Venue email] failed", e);
+  }
+  return updated;
 }
 
 async function handlePrintPaymentSuccess(orderId: number, paymentIntentId: string) {

@@ -75,7 +75,7 @@ export default function LeagueDashboard() {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-white/80">{c.name}</p>
-                      <p className="text-xs text-white/30">{c.sport} · {compTeams.length} teams</p>
+                      <p className="text-xs text-white/30">{compTeams.length} team{compTeams.length === 1 ? "" : "s"}</p>
                     </div>
                   </div>
                   <div className="text-right">

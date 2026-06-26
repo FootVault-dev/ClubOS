@@ -1017,10 +1017,9 @@ export default function LeagueCompetitionDetail({ params }: { params: { id: stri
         <div>
           <h1 className="text-xl font-bold text-white" data-testid="text-comp-detail-title">{competition.name}</h1>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-white/30">{competition.sport}</span>
             {competition.startDate && (
               <span className="text-xs text-white/20">
-                · {new Date(competition.startDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}
+                {new Date(competition.startDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}
                 {competition.endDate && ` - ${new Date(competition.endDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}`}
               </span>
             )}
