@@ -61,7 +61,7 @@ import MemberBookingPage from "@/pages/member-booking";
 import VenueBookingRequests from "@/pages/venue-booking-requests";
 import LeagueDashboard from "@/pages/league-dashboard";
 import LeagueCompetitions from "@/pages/league-competitions";
-import LeagueCompetitionDetail from "@/pages/league-competition-detail";
+import LeagueCompetitionDetail, { LeagueDetail } from "@/pages/league-competition-detail";
 import LeagueTeams from "@/pages/league-teams";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
@@ -212,6 +212,7 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={LeagueDashboard} />
+        <Route path="/admin/competitions/:id/divisions/:divisionId" component={LeagueDetail} />
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />

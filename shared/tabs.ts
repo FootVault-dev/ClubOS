@@ -74,7 +74,7 @@ const venueTabs: TabDef[] = [
 
 const leagueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
-  { slug: "competitions", title: "Competitions", url: "/admin/competitions" },
+  { slug: "competitions", title: "Terms", url: "/admin/competitions" },
   { slug: "teams", title: "Teams", url: "/admin/teams" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },

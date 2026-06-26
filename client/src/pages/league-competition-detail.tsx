@@ -16,11 +16,10 @@ import type { LeagueCompetition, LeagueDivision, LeagueTeam, LeagueGame, LeagueC
 type GameWithTeams = LeagueGame & { homeTeam?: LeagueTeam; awayTeam?: LeagueTeam; division?: LeagueDivision };
 type Standing = { teamId: number; teamName: string; divisionId: number | null; divisionName: string; mp: number; w: number; l: number; d: number; gf: number; ga: number; gd: number; pts: number };
 
+// A Term's tabs. The leagues (divisions) are the hub; per-league management
+// (schedule/standings/payments) lives on each League's own page.
 const TABS = [
-  { id: "schedule", label: "Schedule", icon: Calendar },
-  { id: "standings", label: "Standings", icon: BarChart3 },
-  { id: "setup", label: "Setup", icon: Settings },
-  { id: "registrations", label: "Registrations", icon: Users },
+  { id: "setup", label: "Leagues", icon: Trophy },
   { id: "registration", label: "Settings", icon: Ticket },
   { id: "coupons", label: "Coupons", icon: Tag },
 ] as const;
@@ -264,11 +263,13 @@ function FixtureGenModal({ competitionId, divisions, teams, onClose }: { competi
   );
 }
 
-function ScheduleTab({ competitionId, teams, divisions }: { competitionId: number; teams: LeagueTeam[]; divisions: LeagueDivision[] }) {
+function ScheduleTab({ competitionId, teams, divisions, lockedDivisionId }: { competitionId: number; teams: LeagueTeam[]; divisions: LeagueDivision[]; lockedDivisionId?: number }) {
   const [showGameModal, setShowGameModal] = useState(false);
   const [showGenModal, setShowGenModal] = useState(false);
   const [editingGame, setEditingGame] = useState<GameWithTeams | undefined>();
-  const [divFilter, setDivFilter] = useState("all");
+  const [divFilter, setDivFilter] = useState(lockedDivisionId ? String(lockedDivisionId) : "all");
+  // When locked to one league, modals default new games to that division.
+  const modalDivisions = lockedDivisionId ? divisions.filter(d => d.id === lockedDivisionId) : divisions;
 
   const { data: games = [] } = useQuery<GameWithTeams[]>({
     queryKey: ["/api/admin/league/competitions", competitionId, "games"],
@@ -301,7 +302,7 @@ function ScheduleTab({ competitionId, teams, divisions }: { competitionId: numbe
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {divisions.length > 0 && (
+          {!lockedDivisionId && divisions.length > 0 && (
             <Select value={divFilter} onValueChange={setDivFilter}>
               <SelectTrigger className="premium-input text-white w-[160px]"><SelectValue placeholder="Division" /></SelectTrigger>
               <SelectContent>
@@ -384,14 +385,14 @@ function ScheduleTab({ competitionId, teams, divisions }: { competitionId: numbe
         ))
       )}
 
-      {showGameModal && <GameModal competitionId={competitionId} teams={teams} divisions={divisions} game={editingGame} onClose={() => { setShowGameModal(false); setEditingGame(undefined); }} />}
-      {showGenModal && <FixtureGenModal competitionId={competitionId} divisions={divisions} teams={teams} onClose={() => setShowGenModal(false)} />}
+      {showGameModal && <GameModal competitionId={competitionId} teams={teams} divisions={modalDivisions} game={editingGame} onClose={() => { setShowGameModal(false); setEditingGame(undefined); }} />}
+      {showGenModal && <FixtureGenModal competitionId={competitionId} divisions={modalDivisions} teams={teams} onClose={() => setShowGenModal(false)} />}
     </div>
   );
 }
 
-function StandingsTab({ competitionId, divisions }: { competitionId: number; divisions: LeagueDivision[] }) {
-  const [divFilter, setDivFilter] = useState("all");
+function StandingsTab({ competitionId, divisions, lockedDivisionId }: { competitionId: number; divisions: LeagueDivision[]; lockedDivisionId?: number }) {
+  const [divFilter, setDivFilter] = useState(lockedDivisionId ? String(lockedDivisionId) : "all");
 
   const { data: standings = [] } = useQuery<Standing[]>({
     queryKey: ["/api/admin/league/competitions", competitionId, "standings"],
@@ -408,7 +409,7 @@ function StandingsTab({ competitionId, divisions }: { competitionId: number; div
 
   return (
     <div className="space-y-4">
-      {divisions.length > 0 && (
+      {!lockedDivisionId && divisions.length > 0 && (
         <Select value={divFilter} onValueChange={setDivFilter}>
           <SelectTrigger className="premium-input text-white w-[160px]"><SelectValue placeholder="Division" /></SelectTrigger>
           <SelectContent>
@@ -476,9 +477,9 @@ function StandingsTab({ competitionId, divisions }: { competitionId: number; div
 
 function SetupTab({ competitionId, teams }: { competitionId: number; teams: LeagueTeam[] }) {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [showDivModal, setShowDivModal] = useState(false);
   const [editingDiv, setEditingDiv] = useState<LeagueDivision | undefined>();
-  const [viewingDiv, setViewingDiv] = useState<LeagueDivision | undefined>();
 
   const { data: divisions = [] } = useQuery<LeagueDivision[]>({
     queryKey: ["/api/admin/league/competitions", competitionId, "divisions"],
@@ -515,7 +516,7 @@ function SetupTab({ competitionId, teams }: { competitionId: number; teams: Leag
             const dTeams = teamsFor(d);
             return (
               <div key={d.id}
-                onClick={() => setViewingDiv(d)}
+                onClick={() => setLocation(`/admin/competitions/${competitionId}/divisions/${d.id}`)}
                 className="rounded-xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.05] p-4 flex items-center justify-between cursor-pointer transition-colors group"
                 data-testid={`div-row-${d.id}`}>
                 <div className="min-w-0">
@@ -540,70 +541,40 @@ function SetupTab({ competitionId, teams }: { competitionId: number; teams: Leag
       )}
 
       {showDivModal && <DivisionModal competitionId={competitionId} division={editingDiv} onClose={() => { setShowDivModal(false); setEditingDiv(undefined); }} />}
-      {viewingDiv && (
-        <DivisionTeamsModal
-          division={viewingDiv}
-          teams={teamsFor(viewingDiv)}
-          onEdit={() => { setEditingDiv(viewingDiv); setViewingDiv(undefined); setShowDivModal(true); }}
-          onClose={() => setViewingDiv(undefined)}
-        />
-      )}
     </div>
   );
 }
 
-// Drill-in: the teams entered in one league night + quick management.
-function DivisionTeamsModal({ division, teams, onEdit, onClose }: { division: LeagueDivision; teams: LeagueTeam[]; onEdit: () => void; onClose: () => void }) {
-  const meta = [division.dayOfWeek, division.maxTeams != null ? `${teams.length}/${division.maxTeams} teams` : `${teams.length} teams`].filter(Boolean).join(" · ");
+// The teams entered in one league (used on the League detail page's Setup tab).
+function LeagueTeamsList({ teams }: { teams: LeagueTeam[] }) {
+  if (teams.length === 0) {
+    return (
+      <div className="text-center py-10 text-white/20">
+        <Users className="w-9 h-9 mx-auto mb-2" />
+        <p className="text-sm">No teams entered yet</p>
+        <p className="text-xs mt-1">Teams appear here as captains register, or when you add them.</p>
+      </div>
+    );
+  }
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="bg-[#0a0e1a] border border-blue-500/15 rounded-2xl w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-white/5">
-          <div>
-            <h2 className="text-lg font-semibold text-white">{division.name}</h2>
-            <p className="text-xs text-white/40 mt-0.5">{meta}</p>
-          </div>
-          <button onClick={onClose} className="text-white/30 hover:text-white/60"><X className="w-5 h-5" /></button>
-        </div>
-
-        <div className="p-5 overflow-y-auto flex-1">
-          {teams.length === 0 ? (
-            <div className="text-center py-10 text-white/20">
-              <Users className="w-9 h-9 mx-auto mb-2" />
-              <p className="text-sm">No teams entered yet</p>
-              <p className="text-xs mt-1">Teams appear here as captains register, or when you add them.</p>
+    <div className="space-y-2">
+      {teams.map(t => (
+        <div key={t.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-3.5" data-testid={`team-row-${t.id}`}>
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-white/85 truncate">{t.name || "Unnamed team"}</p>
+              <p className="text-xs text-white/40 mt-0.5 truncate">{t.contactName || "—"}{t.contactEmail ? ` · ${t.contactEmail}` : ""}</p>
             </div>
-          ) : (
-            <div className="space-y-2">
-              {teams.map(t => (
-                <div key={t.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-3.5" data-testid={`team-row-${t.id}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-white/85 truncate">{t.name || "Unnamed team"}</p>
-                      <p className="text-xs text-white/40 mt-0.5 truncate">{t.contactName || "—"}{t.contactEmail ? ` · ${t.contactEmail}` : ""}</p>
-                    </div>
-                    <span className={`text-[11px] px-2 py-1 rounded-md font-medium whitespace-nowrap ${PAY_BADGE[t.paymentStatus || "unpaid"] || PAY_BADGE.unpaid}`}>{PAY_LABEL[t.paymentStatus || "unpaid"] || t.paymentStatus}</span>
-                  </div>
-                  {(t.contactPhone || t.contactEmail) && (
-                    <div className="flex items-center gap-3 mt-2 text-[11px] text-white/35">
-                      {t.contactPhone && <span>{t.contactPhone}</span>}
-                      {t.contactEmail && <a href={`mailto:${t.contactEmail}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 hover:underline ml-auto">Email</a>}
-                    </div>
-                  )}
-                </div>
-              ))}
+            <span className={`text-[11px] px-2 py-1 rounded-md font-medium whitespace-nowrap ${PAY_BADGE[t.paymentStatus || "unpaid"] || PAY_BADGE.unpaid}`}>{PAY_LABEL[t.paymentStatus || "unpaid"] || t.paymentStatus}</span>
+          </div>
+          {(t.contactPhone || t.contactEmail) && (
+            <div className="flex items-center gap-3 mt-2 text-[11px] text-white/35">
+              {t.contactPhone && <span>{t.contactPhone}</span>}
+              {t.contactEmail && <a href={`mailto:${t.contactEmail}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 hover:underline ml-auto">Email</a>}
             </div>
           )}
         </div>
-
-        <div className="p-4 border-t border-white/5 flex gap-2 justify-between items-center">
-          <span className="text-xs text-white/30">{teams.length} team{teams.length === 1 ? "" : "s"} entered</span>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={onEdit} className="text-white/60 gap-1.5" data-testid="button-edit-league"><Pencil className="w-3.5 h-3.5" />Edit league</Button>
-            <Button onClick={onClose} className="bg-blue-600 hover:bg-blue-700 text-white">Done</Button>
-          </div>
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
@@ -631,11 +602,12 @@ const PAY_LABEL: Record<string, string> = {
   unpaid: "Unpaid",
 };
 
-function RegistrationsTab({ competitionId }: { competitionId: number }) {
-  const { data: regs = [], isLoading } = useQuery<LeagueReg[]>({
+function RegistrationsTab({ competitionId, divisionName }: { competitionId: number; divisionName?: string }) {
+  const { data: allRegs = [], isLoading } = useQuery<LeagueReg[]>({
     queryKey: ["/api/admin/league/competitions", competitionId, "registrations"],
     queryFn: () => fetch(`/api/admin/league/competitions/${competitionId}/registrations`).then(r => r.json()),
   });
+  const regs = divisionName ? allRegs.filter(r => r.divisionName === divisionName) : allRegs;
 
   const paid = regs.filter(r => r.paymentStatus === "paid_in_full").length;
   const deposit = regs.filter(r => r.paymentStatus === "deposit_paid").length;
@@ -982,7 +954,7 @@ export default function LeagueCompetitionDetail({ params }: { params: { id: stri
   const { currentOrg } = useWorkspace();
   const orgId = currentOrg?.id;
   const competitionId = parseInt(params.id);
-  const [activeTab, setActiveTab] = useState<TabId>("schedule");
+  const [activeTab, setActiveTab] = useState<TabId>("setup");
 
   const { data: competition } = useQuery<LeagueCompetition>({
     queryKey: ["/api/admin/league/competitions", competitionId],
@@ -1053,13 +1025,119 @@ export default function LeagueCompetitionDetail({ params }: { params: { id: stri
       </div>
 
       <div>
-        {activeTab === "schedule" && <ScheduleTab competitionId={competitionId} teams={teams} divisions={divisions} />}
-        {activeTab === "standings" && <StandingsTab competitionId={competitionId} divisions={divisions} />}
         {activeTab === "setup" && <SetupTab competitionId={competitionId} teams={teams} />}
-        {activeTab === "registrations" && <RegistrationsTab competitionId={competitionId} />}
         {activeTab === "registration" && <RegistrationTab competition={competition} divisions={divisions} />}
         {activeTab === "coupons" && <CouponsTab competitionId={competitionId} />}
       </div>
+    </div>
+  );
+}
+
+// ── League (division) detail page — each league night, scoped to its division ──
+const LEAGUE_TABS = [
+  { id: "setup", label: "Setup", icon: Users },
+  { id: "schedule", label: "Schedule", icon: Calendar },
+  { id: "standings", label: "Standings", icon: BarChart3 },
+  { id: "payments", label: "Payments", icon: Ticket },
+  { id: "settings", label: "Settings", icon: Settings },
+  { id: "discounts", label: "Discounts", icon: Tag },
+] as const;
+
+export function LeagueDetail({ params }: { params: { id: string; divisionId: string } }) {
+  const [, setLocation] = useLocation();
+  const { currentOrg } = useWorkspace();
+  const orgId = currentOrg?.id;
+  const competitionId = parseInt(params.id);
+  const divisionId = parseInt(params.divisionId);
+  const [activeTab, setActiveTab] = useState<string>("setup");
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showGenModal, setShowGenModal] = useState(false);
+
+  const { data: divisions = [] } = useQuery<LeagueDivision[]>({
+    queryKey: ["/api/admin/league/competitions", competitionId, "divisions"],
+    queryFn: () => fetch(`/api/admin/league/competitions/${competitionId}/divisions`).then(r => r.json()),
+  });
+  const { data: teams = [] } = useQuery<LeagueTeam[]>({
+    queryKey: ["/api/admin/league/teams", { orgId, competitionId }],
+    queryFn: () => fetch(`/api/admin/league/teams?orgId=${orgId}&competitionId=${competitionId}`).then(r => r.json()),
+    enabled: !!orgId,
+  });
+
+  const division = divisions.find(d => d.id === divisionId);
+  const leagueTeams = teams.filter(t => t.divisionId === divisionId && t.active);
+
+  if (divisions.length > 0 && !division) {
+    return (
+      <div className="p-6 text-sm text-white/40">
+        League not found. <button onClick={() => setLocation(`/admin/competitions/${competitionId}`)} className="text-blue-400 hover:underline">Back to term</button>
+      </div>
+    );
+  }
+  if (!division) {
+    return <div className="p-6 flex items-center justify-center h-64"><div className="text-white/20 text-sm">Loading...</div></div>;
+  }
+
+  const meta = [division.dayOfWeek, division.maxTeams != null ? `${leagueTeams.length}/${division.maxTeams} teams` : `${leagueTeams.length} team${leagueTeams.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+
+  return (
+    <div className="p-4 sm:p-6 space-y-6">
+      <div className="flex items-center gap-3">
+        <button onClick={() => setLocation(`/admin/competitions/${competitionId}`)} className="w-8 h-8 rounded-lg bg-white/[0.03] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.06] text-white/30 hover:text-white/60 transition-all" data-testid="button-back-term">
+          <ArrowLeft className="w-4 h-4" />
+        </button>
+        <div>
+          <h1 className="text-xl font-bold text-white" data-testid="text-league-title">{division.name}</h1>
+          <p className="text-xs text-white/30 mt-0.5">{meta}</p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1 border-b border-white/[0.06] overflow-x-auto">
+        {LEAGUE_TABS.map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${activeTab === tab.id ? "border-blue-500 text-blue-400" : "border-transparent text-white/30 hover:text-white/50"}`}
+            data-testid={`ltab-${tab.id}`}>
+            <tab.icon className="w-3.5 h-3.5" />{tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div>
+        {activeTab === "setup" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-white">Teams</h3>
+              {leagueTeams.length >= 2 && (
+                <Button onClick={() => setShowGenModal(true)} variant="outline" className="border-white/10 text-white/70 hover:text-white gap-2" size="sm" data-testid="button-gen-fixtures">
+                  <Wand2 className="w-3.5 h-3.5" />Generate fixtures
+                </Button>
+              )}
+            </div>
+            <LeagueTeamsList teams={leagueTeams} />
+          </div>
+        )}
+        {activeTab === "schedule" && <ScheduleTab competitionId={competitionId} teams={teams} divisions={divisions} lockedDivisionId={divisionId} />}
+        {activeTab === "standings" && <StandingsTab competitionId={competitionId} divisions={divisions} lockedDivisionId={divisionId} />}
+        {activeTab === "payments" && <RegistrationsTab competitionId={competitionId} divisionName={division.name} />}
+        {activeTab === "settings" && (
+          <div className="rounded-xl border border-white/5 bg-white/[0.02] p-5 space-y-3 max-w-md">
+            <div className="flex items-center justify-between"><span className="text-xs text-white/30 uppercase tracking-wider">League</span><span className="text-sm text-white/80">{division.name}</span></div>
+            <div className="flex items-center justify-between"><span className="text-xs text-white/30 uppercase tracking-wider">Day</span><span className="text-sm text-white/80">{division.dayOfWeek || "—"}</span></div>
+            <div className="flex items-center justify-between"><span className="text-xs text-white/30 uppercase tracking-wider">Max teams</span><span className="text-sm text-white/80">{division.maxTeams ?? "—"}</span></div>
+            <div className="flex items-center justify-between"><span className="text-xs text-white/30 uppercase tracking-wider">Team cost</span><span className="text-sm text-white/80">{formatCurrency(division.teamCostCents || 0, { fromCents: true })}</span></div>
+            <Button onClick={() => setShowSettingsModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white gap-2 mt-2" size="sm" data-testid="button-edit-league-settings"><Pencil className="w-3.5 h-3.5" />Edit league</Button>
+          </div>
+        )}
+        {activeTab === "discounts" && (
+          <div className="rounded-xl border border-white/5 bg-white/[0.02] p-8 text-center space-y-3">
+            <Tag className="w-8 h-8 mx-auto text-white/20" />
+            <p className="text-sm text-white/60">Discount codes are shared across all Mini Football Leagues.</p>
+            <Button onClick={() => setLocation("/admin/discounts")} variant="outline" className="border-white/10 text-white/70 hover:text-white gap-2" size="sm"><ExternalLink className="w-3.5 h-3.5" />Manage discount codes</Button>
+          </div>
+        )}
+      </div>
+
+      {showSettingsModal && <DivisionModal competitionId={competitionId} division={division} onClose={() => setShowSettingsModal(false)} />}
+      {showGenModal && <FixtureGenModal competitionId={competitionId} divisions={[division]} teams={teams} onClose={() => setShowGenModal(false)} />}
     </div>
   );
 }

@@ -33,7 +33,7 @@ function CompetitionModal({ competition, orgId, onClose }: { competition?: Leagu
     mutationFn: (data: any) => apiRequest("POST", "/api/admin/league/competitions", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/league/competitions"] });
-      toast({ title: "League created" });
+      toast({ title: "Term created" });
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -43,7 +43,7 @@ function CompetitionModal({ competition, orgId, onClose }: { competition?: Leagu
     mutationFn: (data: any) => apiRequest("PATCH", `/api/admin/league/competitions/${competition!.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/league/competitions"] });
-      toast({ title: "League updated" });
+      toast({ title: "Term updated" });
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -59,7 +59,7 @@ function CompetitionModal({ competition, orgId, onClose }: { competition?: Leagu
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="bg-[#0a0e1a] border border-blue-500/15 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
         <div className="flex items-center justify-between p-5 border-b border-white/5">
-          <h2 className="text-lg font-semibold text-white">{competition ? "Edit League" : "New League"}</h2>
+          <h2 className="text-lg font-semibold text-white">{competition ? "Edit Term" : "New Term"}</h2>
           <button onClick={onClose} className="text-white/30 hover:text-white/60"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-5 space-y-4">
@@ -89,7 +89,7 @@ function CompetitionModal({ competition, orgId, onClose }: { competition?: Leagu
               <Switch checked={form.teamChat} onCheckedChange={v => setForm(f => ({ ...f, teamChat: v }))} />
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-white/60">Playoff League</span>
+              <span className="text-sm text-white/60">Playoffs</span>
               <Switch checked={form.playoffCompetition} onCheckedChange={v => setForm(f => ({ ...f, playoffCompetition: v }))} />
             </div>
             <div className="flex items-center justify-between">
@@ -141,7 +141,7 @@ export default function LeagueCompetitions() {
     mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/league/competitions/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/league/competitions"] });
-      toast({ title: "League deleted" });
+      toast({ title: "Term deleted" });
     },
   });
 
@@ -166,7 +166,7 @@ export default function LeagueCompetitions() {
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/league/competitions"] });
-      toast({ title: "League cloned" });
+      toast({ title: "Term cloned" });
     },
   });
 
@@ -180,19 +180,19 @@ export default function LeagueCompetitions() {
     <div className="p-4 sm:p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white" data-testid="text-competitions-title">Leagues</h1>
-          <p className="text-sm text-white/40 mt-1">{competitions.length} league{competitions.length !== 1 ? "s" : ""}</p>
+          <h1 className="text-2xl font-bold text-white" data-testid="text-competitions-title">Terms</h1>
+          <p className="text-sm text-white/40 mt-1">{competitions.length} term{competitions.length !== 1 ? "s" : ""}</p>
         </div>
         <Button onClick={() => { setEditing(undefined); setShowModal(true); }} className="bg-blue-600 hover:bg-blue-700 text-white gap-2" data-testid="button-new-competition">
           <Plus className="w-4 h-4" />
-          New League
+          New Term
         </Button>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" />
-          <Input placeholder="Search leagues..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 premium-input text-white" data-testid="input-search-competitions" />
+          <Input placeholder="Search terms..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 premium-input text-white" data-testid="input-search-competitions" />
         </div>
         <div className="flex items-center gap-2">
           <Switch checked={showArchived} onCheckedChange={setShowArchived} />
@@ -208,8 +208,8 @@ export default function LeagueCompetitions() {
         <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] p-5">
           <div className="flex flex-col items-center justify-center py-16 text-white/20">
             <Trophy className="w-12 h-12 mb-3" />
-            <p className="text-sm">{showArchived ? "No archived leagues" : "No leagues yet"}</p>
-            <p className="text-xs mt-1">Create a new league to get started</p>
+            <p className="text-sm">{showArchived ? "No archived terms" : "No terms yet"}</p>
+            <p className="text-xs mt-1">Create a new term to get started</p>
           </div>
         </div>
       ) : (
