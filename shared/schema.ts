@@ -546,6 +546,16 @@ export const facilityBookings = pgTable("facility_bookings", {
   additionalFacilityIds: integer("additional_facility_ids").array(),
   recurrenceRule: text("recurrence_rule"),
   recurrenceEndDate: date("recurrence_end_date"),
+  // Audit trail — how the booking originated and who put it on the calendar.
+  //   source: 'manual'         → staff created it in the admin calendar
+  //           'public'         → paid through the public booking website
+  //           'member_request' → a member request a staff member approved
+  // createdByUserId / createdByName: the staff member who created (manual) or
+  //   approved (member_request) the booking. NULL for public bookings (no
+  //   staff involved) and for legacy rows created before this existed.
+  source: text("source"),
+  createdByUserId: integer("created_by_user_id").references(() => users.id),
+  createdByName: text("created_by_name"),
   // Waiver acceptance for bookings made through the public booking site —
   // stamped at checkout (see shared/usc-waiver.ts). Admin-created and
   // member-request bookings leave these at their defaults (the member flow

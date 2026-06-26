@@ -345,7 +345,7 @@ export default function VenueCalendar() {
                 {Array.from({ length: 7 }, (_, dayIdx) => {
                   const slotBookings = getBookingsForSlot(dayIdx, hour);
                   return (
-                    <div key={dayIdx} className={`border-r border-b border-white/5 p-0.5 ${todayIdx === dayIdx ? "bg-blue-500/[0.03]" : ""}`}>
+                    <div key={dayIdx} className={`border-r border-b border-white/5 p-0.5 min-w-0 overflow-hidden ${todayIdx === dayIdx ? "bg-blue-500/[0.03]" : ""}`}>
                       {slotBookings.map(b => {
                         // If the booking has a custom color, render with that; otherwise fall
                         // back to the status-based color scheme for backwards compatibility.
@@ -359,7 +359,8 @@ export default function VenueCalendar() {
                             style={inline}
                             onClick={() => setSelectedBooking(b)}
                             role="button"
-                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium border cursor-pointer hover:brightness-125 transition ${b.color ? "" : statusColors[b.status]}`}
+                            title={`${b.customerName || b.facility?.name || "Booking"} · ${b.startTime}–${b.endTime}`}
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium border cursor-pointer hover:brightness-125 transition min-w-0 overflow-hidden ${b.color ? "" : statusColors[b.status]}`}
                             data-testid={`calendar-booking-${b.id}`}
                           >
                             <div className="truncate">{b.customerName || b.facility?.name || "Booking"}</div>
@@ -401,7 +402,7 @@ export default function VenueCalendar() {
                     <div className="border-r border-b border-white/5 flex items-start justify-end pr-2 pt-1">
                       <span className="text-[10px] text-white/20">{String(hour).padStart(2, "0")}:00</span>
                     </div>
-                    <div className={`border-r border-b border-white/5 p-1 ${isToday ? "bg-blue-500/[0.03]" : ""}`}>
+                    <div className={`border-r border-b border-white/5 p-1 min-w-0 overflow-hidden ${isToday ? "bg-blue-500/[0.03]" : ""}`}>
                       {hourBookings.map(b => {
                         const inline = b.color
                           ? { backgroundColor: `${b.color}33`, borderColor: `${b.color}55`, color: b.color }
@@ -413,7 +414,8 @@ export default function VenueCalendar() {
                             style={inline}
                             onClick={() => setSelectedBooking(b)}
                             role="button"
-                            className={`rounded px-2 py-1 text-xs font-medium border mb-0.5 cursor-pointer hover:brightness-125 transition ${b.color ? "" : statusColors[b.status]}`}
+                            title={`${b.customerName || b.facility?.name || "Booking"} · ${b.startTime}–${b.endTime}`}
+                            className={`rounded px-2 py-1 text-xs font-medium border mb-0.5 cursor-pointer hover:brightness-125 transition truncate ${b.color ? "" : statusColors[b.status]}`}
                             data-testid={`calendar-booking-${b.id}`}
                           >
                             <span className="opacity-70 mr-2">{b.startTime}–{b.endTime}</span>
@@ -673,14 +675,22 @@ export default function VenueCalendar() {
         const primaryName = b.facility?.name || facs.find(f => f.id === b.facilityId)?.name || "Facility";
         const extraNames = (b.additionalFacilityIds || []).map(id => facs.find(f => f.id === id)?.name || `Facility #${id}`);
         const amount = Number(b.totalAmount || 0);
-        const isMemberBooking = (b.notes || "").startsWith("Member booking request");
+        const isMemberBooking = b.source === "member_request" || (b.notes || "").startsWith("Member booking request");
+        // Audit trail — plain-English line for who put this booking on the calendar.
+        const attribution = b.source === "public"
+          ? "Booked online through the booking website"
+          : b.source === "member_request"
+          ? `Member request${b.createdByName ? ` · approved by ${b.createdByName}` : ""}`
+          : b.source === "manual"
+          ? (b.createdByName ? `Added by ${b.createdByName}` : "Added manually (staff)")
+          : null;
         const dateLong = new Date(b.bookingDate + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedBooking(null)}>
             <div className="bg-[#0f1423] border border-white/10 rounded-2xl p-6 w-[460px] max-w-[95vw] max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="booking-details-modal">
               <div className="flex items-start justify-between gap-3 mb-1">
                 <div className="min-w-0">
-                  <h3 className="text-lg font-semibold text-white truncate" data-testid="text-details-name">{b.customerName || "Booking"}</h3>
+                  <h3 className="text-lg font-semibold text-white break-words" data-testid="text-details-name">{b.customerName || "Booking"}</h3>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className={`text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full border ${statusColors[b.status]}`}>{b.status}</span>
                     {isMemberBooking && (
@@ -724,6 +734,13 @@ export default function VenueCalendar() {
                   <DetailRow label="Booked on">{new Date(b.createdAt).toLocaleString("en-NZ", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })}</DetailRow>
                 )}
               </div>
+
+              {/* Audit trail — small print at the bottom: who added this booking. */}
+              {attribution && (
+                <p className="mt-3 pt-3 border-t border-white/5 text-[11px] text-white/40" data-testid="text-booking-attribution">
+                  {attribution}
+                </p>
+              )}
 
               {(() => {
                 // Other rows sharing this booking's group id (recurring series /

@@ -2825,6 +2825,10 @@ export async function registerRoutes(
         : null;
       const recurrenceEndDate = freq !== "none" ? (repeat?.until || null) : null;
 
+      // Audit trail: stamp which staff member created this booking (paper trail).
+      const creator = await storage.getUser(req.session.userId!);
+      const creatorName = creator ? `${creator.firstName || ""} ${creator.lastName || ""}`.trim() || null : null;
+
       // Build all rows: one per (occurrence × facility). Server-managed fields are
       //   set explicitly here; status is always "confirmed" for admin-created bookings.
       const rows: any[] = [];
@@ -2836,6 +2840,9 @@ export async function registerRoutes(
             facilityId: fid,
             bookingDate: date,
             status: "confirmed" as const,
+            source: "manual" as const,
+            createdByUserId: req.session.userId!,
+            createdByName: creatorName,
             bookingGroupId,
             // Only the primary row of each occurrence carries the additional-facilities
             //   metadata so the UI can show the group at a glance; all rows still
@@ -3411,6 +3418,7 @@ export async function registerRoutes(
           discountCode: quote.discount?.code || null,
           discountCents: line.totalCents - lineTotalCents,
           status: "pending" as const,
+          source: "public" as const,
           bookingGroupId: groupId,
           notes: parsed.customer.notes || null,
           waiverAccepted: true,
@@ -3567,6 +3575,7 @@ export async function registerRoutes(
           totalAmount: (lineTotalCents / 100).toFixed(2),
           gstAmount: (lineGstCents / 100).toFixed(2),
           status: "pending" as const,
+          source: "public" as const,
           bookingGroupId: groupId,
           notes: parsed.customer.notes
             ? `${parsed.customer.notes}\n[Recurring weekly · ${idx + 1}/${parsed.items.length}]`
@@ -3946,6 +3955,10 @@ export async function registerRoutes(
       const facility = await storage.getFacility(request.facilityId);
       if (!facility) return res.status(404).json({ message: "Facility not found" });
 
+      // Audit trail: stamp which staff member approved this member request.
+      const approver = await storage.getUser(req.session.userId!);
+      const approverName = approver ? `${approver.firstName || ""} ${approver.lastName || ""}`.trim() || null : null;
+
       // Approve atomically: advisory-lock the facility (same lock the public
       // checkout takes), re-check conflicts, then create the confirmed $0
       // booking and flip the request — so an approval can never double-book
@@ -3983,6 +3996,9 @@ export async function registerRoutes(
           totalAmount: "0.00",
           gstAmount: "0.00",
           status: "confirmed",
+          source: "member_request" as const,
+          createdByUserId: req.session.userId!,
+          createdByName: approverName,
           notes: `Member booking request MBR-${request.id} (approved)`,
         }).returning();
         await tx.update(bookingRequests).set({

@@ -52,7 +52,15 @@ export default function VenueDashboard() {
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear() && b.status !== "cancelled";
   });
   const thisMonthRevenue = thisMonthBookings.reduce((sum, b) => sum + Number(b.totalAmount), 0);
-  const confirmedCount = bookings.filter(b => b.status === "confirmed" || b.status === "paid").length;
+  // "Paid" = revenue-generating bookings only. Internal academy/training blocks are
+  // created as $0 "confirmed" rows just to reserve the slot, so they must be excluded
+  // from the headline counts — otherwise the dashboard overstates real commercial activity.
+  const paidBookings = bookings.filter(b => b.status !== "cancelled" && Number(b.totalAmount) > 0);
+  const paidThisMonth = paidBookings.filter(b => {
+    const d = new Date(b.bookingDate);
+    const now = new Date();
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  });
 
   const today = new Date().toISOString().split("T")[0];
   const todayBookings = bookings.filter(b => b.bookingDate === today && b.status !== "cancelled");
@@ -92,13 +100,14 @@ export default function VenueDashboard() {
         </div>
         <div className="rounded-2xl border border-blue-500/15 bg-gradient-to-br from-blue-500/10 to-blue-500/5 p-5" data-testid="stat-total-bookings">
           <Calendar className="w-5 h-5 text-white/50 mb-3" />
-          <p className="text-2xl font-bold text-white">{bookings.length}</p>
-          <p className="text-xs text-white/40 mt-1">Total Bookings</p>
+          <p className="text-2xl font-bold text-white">{paidBookings.length}</p>
+          <p className="text-xs text-white/40 mt-1">Paid Bookings</p>
+          <p className="text-[10px] text-white/25">Excludes internal / $0</p>
         </div>
         <div className="rounded-2xl border border-blue-500/15 bg-gradient-to-br from-blue-500/10 to-blue-500/5 p-5" data-testid="stat-confirmed">
           <Clock className="w-5 h-5 text-white/50 mb-3" />
-          <p className="text-2xl font-bold text-white">{confirmedCount}</p>
-          <p className="text-xs text-white/40 mt-1">Confirmed</p>
+          <p className="text-2xl font-bold text-white">{paidThisMonth.length}</p>
+          <p className="text-xs text-white/40 mt-1">Paid This Month</p>
         </div>
       </div>
 

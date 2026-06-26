@@ -60,6 +60,7 @@ const campsTabs: TabDef[] = [
 const venueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
   { slug: "calendar", title: "Bookings Calendar", url: "/admin/calendar" },
+  { slug: "bookings", title: "Bookings", url: "/admin/bookings" },
   { slug: "booking-requests", title: "Booking Requests", url: "/admin/booking-requests" },
   { slug: "website", title: "Website", url: "/admin/website" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
@@ -76,6 +77,7 @@ const leagueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
   { slug: "competitions", title: "Terms", url: "/admin/competitions" },
   { slug: "teams", title: "Teams", url: "/admin/teams" },
+  { slug: "payments", title: "Payments", url: "/admin/payments" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },

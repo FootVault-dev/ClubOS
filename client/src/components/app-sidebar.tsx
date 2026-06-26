@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   Tent,
   ClipboardCheck,
+  ListChecks,
   Users,
   Mail,
   Settings,
@@ -83,6 +84,7 @@ const campsNav = [
 const venueNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "calendar", title: "Bookings Calendar", url: "/admin/calendar", icon: Calendar },
+  { tab: "bookings", title: "Bookings", url: "/admin/bookings", icon: ListChecks },
   { tab: "booking-requests", title: "Booking Requests", url: "/admin/booking-requests", icon: ClipboardCheck },
   { tab: "website", title: "Website", url: "/admin/website", icon: Globe },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
@@ -102,6 +104,7 @@ const leagueNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "competitions", title: "Terms", url: "/admin/competitions", icon: Trophy },
   { tab: "teams", title: "Teams", url: "/admin/teams", icon: UsersRound },
+  { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
 ];
 
@@ -403,7 +406,7 @@ export function AppSidebar() {
                     >
                       <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase().replace(/[\s&]/g, '-')}`}>
                         <item.icon className="w-4 h-4" />
-                        <span className="text-[13px] font-medium">{item.title}</span>
+                        <span className="text-[13px] font-medium truncate">{item.title}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -434,7 +437,7 @@ export function AppSidebar() {
                     >
                       <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase()}`}>
                         <item.icon className="w-4 h-4" />
-                        <span className="text-[13px] font-medium">{item.title}</span>
+                        <span className="text-[13px] font-medium truncate">{item.title}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

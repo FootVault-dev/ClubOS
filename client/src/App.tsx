@@ -35,6 +35,7 @@ import MflSuccessPage from "@/pages/mfl-success-page";
 import MflLegalPage from "@/pages/mfl-legal-page";
 import VenueDashboard from "@/pages/venue-dashboard";
 import VenueCalendar from "@/pages/venue-calendar";
+import VenueBookings from "@/pages/venue-bookings";
 import VenueAnalytics from "@/pages/venue-analytics";
 import CampAnalytics from "@/pages/camp-analytics";
 import AdminDiscounts from "@/pages/admin-discounts";
@@ -63,6 +64,7 @@ import LeagueDashboard from "@/pages/league-dashboard";
 import LeagueCompetitions from "@/pages/league-competitions";
 import LeagueCompetitionDetail, { LeagueDetail } from "@/pages/league-competition-detail";
 import LeagueTeams from "@/pages/league-teams";
+import LeaguePayments from "@/pages/league-payments";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
 import GymnasticsPrograms from "@/pages/gymnastics-programs";
@@ -216,6 +218,7 @@ function AdminRouter() {
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />
+        <Route path="/admin/payments" component={LeaguePayments} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
         <Route path="/admin/discounts" component={AdminDiscounts} />
@@ -232,6 +235,7 @@ function AdminRouter() {
       <Switch>
         <Route path="/admin" component={VenueDashboard} />
         <Route path="/admin/calendar" component={VenueCalendar} />
+        <Route path="/admin/bookings" component={VenueBookings} />
         <Route path="/admin/booking-requests" component={VenueBookingRequests} />
         <Route path="/admin/analytics" component={VenueAnalytics} />
         <Route path="/admin/facilities" component={VenueFacilities} />
