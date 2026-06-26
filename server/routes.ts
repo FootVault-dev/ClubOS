@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail } from "./email";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
 import { cellsOverlap } from "@shared/field-cells";
@@ -12046,5 +12046,28 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
       contentName: "MFL Term 3 Team Registration",
       contentIds: [program.slug || String(program.id)],
     }).catch((e) => console.error("[MFL] Purchase CAPI failed:", e));
+
+    // Internal heads-up to the MFL coordinator (info@minifootball.co.nz) with the
+    // same details the captain gets — one email per order, lists every team.
+    (async () => {
+      const teams = await Promise.all(group.map(async (g) => {
+        const d = g.leagueDivisionId ? await storage.getLeagueDivision(g.leagueDivisionId) : null;
+        return { name: g.teamName || "Unnamed team", night: d?.name || "" };
+      }));
+      await sendLeagueSignupNotification({
+        programId: program.id,
+        registrationId: primaryId,
+        bookingRef: String(primaryId),
+        captainName: `${captain.firstName} ${captain.lastName || ""}`.trim(),
+        captainEmail: captain.email || "",
+        captainPhone: captain.phone || "",
+        paymentMode: mode,
+        amountPaidNow: fmtNZ(mode === "upfront" ? totalPrice : totalDeposit),
+        totalPrice: fmtNZ(totalPrice),
+        weeklyAmount: fmtNZ(weeklyCents),
+        weeksTotal: reg.weeksTotal ?? 8,
+        teams,
+      });
+    })().catch((e) => console.error("[MFL] signup notification failed:", e));
   }
 }

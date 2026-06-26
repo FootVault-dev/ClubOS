@@ -300,6 +300,63 @@ export async function sendLeagueBalancePaidEmail(params: {
   });
 }
 
+/** Internal notification to the MFL coordinator when a team registers + pays. */
+export async function sendLeagueSignupNotification(params: {
+  programId: number;
+  registrationId: number;
+  bookingRef: string;
+  captainName: string;
+  captainEmail: string;
+  captainPhone: string;
+  paymentMode: string;        // 'upfront' | 'deposit_weekly' | 'installment'
+  amountPaidNow: string;
+  totalPrice: string;
+  weeklyAmount?: string;
+  weeksTotal?: number | null;
+  teams: { name: string; night: string }[];
+}): Promise<boolean> {
+  const multi = params.teams.length > 1;
+  const plan = params.paymentMode === "deposit_weekly"
+    ? `Deposit + ${params.weeksTotal ?? 8} weekly (${params.weeklyAmount}/wk)`
+    : params.paymentMode === "installment" ? "Deposit + balance" : "Paid in full";
+
+  const teamRows = params.teams.map((t) => mflRow(t.night || "—", t.name || "Unnamed team")).join("");
+  const captainRows = [
+    mflRow("Captain", params.captainName || "—"),
+    mflRow("Email", params.captainEmail || "—"),
+    mflRow("Phone", params.captainPhone || "—"),
+  ].join("");
+
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">New team signup</p>
+    <p style="color:#b9b9b9; font-size:14px; line-height:1.6; margin:0 0 20px;">${multi ? `${params.teams.length} teams just registered and paid.` : `A team just registered and paid.`}</p>
+    <div style="background:#000; border:1px solid #232323; border-radius:14px; padding:18px 20px; margin:0 0 14px;">
+      <p style="color:#8a8a8a; font-size:11px; text-transform:uppercase; letter-spacing:0.6px; margin:0 0 8px;">${multi ? "Teams (league / night)" : "Team (league / night)"}</p>
+      <table style="width:100%; border-collapse:collapse;">${teamRows}</table>
+    </div>
+    <div style="background:#000; border:1px solid #232323; border-radius:14px; padding:18px 20px; margin:0 0 14px;">
+      <table style="width:100%; border-collapse:collapse;">${captainRows}</table>
+    </div>
+    <div style="background:#000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">
+        ${mflRow("Paid today", params.amountPaidNow)}
+        ${mflRow("Order total", params.totalPrice)}
+        ${mflRow("Plan", plan)}
+        ${mflRow("Ref", `#${params.bookingRef}`, true)}
+      </table>
+    </div>`;
+
+  return sendEmail({
+    to: "info@minifootball.co.nz",
+    from: MFL_FROM,
+    replyTo: params.captainEmail || MFL_REPLY_TO,
+    subject: `New MFL signup — ${multi ? `${params.teams.length} teams` : (params.teams[0]?.name || "team")}`,
+    html: mflShell({ heading: "New Team Signup", bodyHtml }),
+    campId: params.programId,
+    registrationId: params.registrationId,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // United Sports Centre — member booking-request emails (dark navy + indigo,
 // matching the book.unitedsportscentre.com booking site).
