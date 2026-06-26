@@ -519,7 +519,7 @@ function SetupTab({ competitionId, teams }: { competitionId: number; teams: Leag
                 onClick={() => setLocation(`/admin/competitions/${competitionId}/divisions/${d.id}`)}
                 className="rounded-xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.05] p-4 flex items-center justify-between cursor-pointer transition-colors group"
                 data-testid={`div-row-${d.id}`}>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1 pr-4">
                   <p className="text-sm font-medium text-white/80">{d.name}</p>
                   <div className="flex items-center gap-2 mt-0.5 text-xs text-white/30">
                     {d.dayOfWeek && <span>{d.dayOfWeek}</span>}
@@ -527,6 +527,11 @@ function SetupTab({ competitionId, teams }: { competitionId: number; teams: Leag
                       ? <span>· {dTeams.length}/{d.maxTeams} teams</span>
                       : <span>· {dTeams.length} team{dTeams.length === 1 ? "" : "s"}</span>}
                   </div>
+                  {d.maxTeams != null && d.maxTeams > 0 && (
+                    <div className="mt-2 h-1.5 rounded-full bg-white/10 overflow-hidden max-w-[280px]" title={`${dTeams.length} of ${d.maxTeams} spots filled`}>
+                      <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${Math.min(100, Math.round((dTeams.length / d.maxTeams) * 100))}%` }} />
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
                   <span className="text-[11px] text-white/40 mr-1 hidden sm:inline opacity-0 group-hover:opacity-100 transition-opacity">View teams</span>
