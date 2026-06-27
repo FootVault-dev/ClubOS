@@ -3626,12 +3626,15 @@ export async function registerRoutes(
       // final week is paid. Adds 1 day so the final invoice fires in time.
       const cancelAt = Math.floor(new Date(lastDate + "T23:59:00Z").getTime() / 1000) + 86400;
 
+      // This Stripe API version rejects inline product_data on subscription
+      // price_data — create the product first and reference it by id.
+      const weeklyProduct = await stripe.products.create({ name: `Weekly facility booking — ${parsed.items.length} weeks` });
       const subscription = await stripe.subscriptions.create({
         customer: customer.id,
         items: [{
           price_data: {
             currency: "nzd",
-            product_data: { name: `Weekly facility booking — ${parsed.items.length} weeks` },
+            product: weeklyProduct.id,
             unit_amount: weeklyCents,
             recurring: { interval: "week" },
           },
@@ -11684,10 +11687,11 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
   const reg = await storage.getRegistration(registrationId);
   if (!reg || reg.status === "confirmed") return;
 
-  // For MFL instalment registrations only the deposit has been collected at
-  // this point — record the deposit as amount paid, not the full total.
+  // For MFL deposit registrations (installment OR deposit_weekly) only the
+  // deposit has been collected at this point — record the deposit as amount
+  // paid, not the full total. The weekly cron advances amountPaid as charges land.
   const isLeagueTeam = metadata?.registrationType === "league_team";
-  const paidCents = (isLeagueTeam && reg.paymentMode === "installment")
+  const paidCents = (isLeagueTeam && (reg.paymentMode === "installment" || reg.paymentMode === "deposit_weekly"))
     ? (reg.depositCents ?? reg.totalCents ?? 0)
     : (reg.totalCents ?? 0);
 
@@ -11840,11 +11844,14 @@ async function createLeagueWeeklySubscription(opts: {
   // a dead-webhook worst case overcharges by at most ~2 weeks, not months.
   const cancelAt = trialEnd + (weeksTotal + 2) * 7 * 86400;
 
+  // This Stripe API version rejects inline `product_data` on a subscription's
+  // price_data — create the product first and reference it by id.
+  const weeklyProduct = await stripe.products.create({ name: `${program.name} — weekly (${reg.teamName || "team"})` });
   const subscription = await stripe.subscriptions.create({
     customer: customerId,
     items: [{ price_data: {
       currency: "nzd",
-      product_data: { name: `${program.name} — weekly (${reg.teamName || "team"})` },
+      product: weeklyProduct.id,
       unit_amount: weeklyCents,
       recurring: { interval: "week" },
     } }],

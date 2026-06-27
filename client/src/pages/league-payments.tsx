@@ -125,7 +125,9 @@ export default function LeaguePayments() {
                     {r.balanceStatus && r.balanceStatus !== "paid" && r.balanceStatus !== "none" && (r.balanceCents || 0) > 0 ? (
                       <span className="text-yellow-400/80">
                         {formatCurrency(r.balanceCents || 0, { fromCents: true })}
-                        {r.balanceDueDate && <span className="text-white/30"> · due {new Date(r.balanceDueDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}</span>}
+                        {r.paymentMode === "deposit_weekly"
+                          ? <span className="text-white/30"> · weekly</span>
+                          : r.balanceDueDate && <span className="text-white/30"> · due {new Date(r.balanceDueDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}</span>}
                         {r.balanceStatus === "failed" && <span className="text-red-400"> · failed</span>}
                       </span>
                     ) : <span className="text-white/20">—</span>}
