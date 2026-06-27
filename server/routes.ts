@@ -4322,6 +4322,79 @@ export async function registerRoutes(
     }
   });
 
+  // Per-team payment tracker: the deposit + the weekly schedule, each with a
+  // real status (paid/failed/upcoming/scheduled) pulled from the Stripe
+  // subscription's invoices. Drives the payment-breakdown drill-in.
+  app.get("/api/admin/league/registrations/:id/payment-breakdown", requireAuth, async (req, res) => {
+    try {
+      const reg = await storage.getRegistration(parseInt(String(req.params.id)));
+      if (!reg) return res.status(404).json({ message: "Not found" });
+      const { stripe } = await import("./stripe");
+
+      const depositCents = reg.depositCents ?? reg.totalCents ?? 0;
+      const weeklyCents = reg.weeklyAmountCents ?? 0;
+      const weeksTotal = reg.weeksTotal ?? 0;
+      const totalCents = reg.totalCents ?? 0;
+      const isWeekly = reg.paymentMode === "deposit_weekly" && weeksTotal > 0;
+
+      // Deposit charge date (the deposit PaymentIntent's charge).
+      let depositPaidAt: string | null = null;
+      if (reg.stripePaymentIntentId) {
+        try {
+          const pi = await retrievePaymentIntent(reg.stripePaymentIntentId);
+          const chId = typeof pi.latest_charge === "string" ? pi.latest_charge : (pi.latest_charge as any)?.id;
+          if (chId) { const ch = await stripe.charges.retrieve(chId); depositPaidAt = new Date(ch.created * 1000).toISOString(); }
+        } catch { /* fall back to registeredAt */ }
+      }
+      const deposit = {
+        amountCents: depositCents,
+        status: reg.status === "confirmed" ? "paid" : "pending",
+        paidAt: depositPaidAt || (reg.registeredAt ? new Date(reg.registeredAt).toISOString() : null),
+      };
+
+      const weeks: any[] = [];
+      let weeksPaid = reg.weeksPaid ?? 0;
+      if (isWeekly) {
+        let trialEndSec: number | null = null;
+        const paidDates: number[] = [];
+        if (reg.stripeSubscriptionId) {
+          try {
+            const sub = await stripe.subscriptions.retrieve(reg.stripeSubscriptionId);
+            trialEndSec = sub.trial_end ?? null;
+            const invs = await stripe.invoices.list({ subscription: reg.stripeSubscriptionId, status: "paid", limit: 100 });
+            for (const inv of invs.data) if ((inv.amount_paid || 0) > 0) paidDates.push((inv.status_transitions?.paid_at || inv.created));
+            paidDates.sort((a, b) => a - b);
+            const totalWeeklyPaid = invs.data.reduce((s, i) => s + (i.amount_paid || 0), 0);
+            weeksPaid = weeklyCents > 0 ? Math.round(totalWeeklyPaid / weeklyCents) : paidDates.length;
+          } catch { /* fall back to reg.weeksPaid + comp start */ }
+        }
+        if (!trialEndSec) {
+          const program = await storage.getProgram(reg.programId);
+          const compId = (program as any)?.leagueCompetitionId;
+          const comp = compId ? await storage.getLeagueCompetition(compId) : null;
+          if ((comp as any)?.startDate) trialEndSec = Math.floor(new Date((comp as any).startDate + "T00:00:00Z").getTime() / 1000);
+        }
+        const nowSec = Math.floor(Date.now() / 1000);
+        for (let i = 1; i <= weeksTotal; i++) {
+          const dueSec = trialEndSec ? trialEndSec + (i - 1) * 7 * 86400 : null;
+          let status = "scheduled";
+          let paidAt: string | null = null;
+          if (i <= weeksPaid) { status = "paid"; paidAt = paidDates[i - 1] ? new Date(paidDates[i - 1] * 1000).toISOString() : null; }
+          else if (dueSec && dueSec < nowSec) status = "failed"; // past due, unpaid
+          else if (i === weeksPaid + 1) status = "upcoming";
+          weeks.push({ week: i, dueDate: dueSec ? new Date(dueSec * 1000).toISOString().slice(0, 10) : null, amountCents: weeklyCents, status, paidAt });
+        }
+      }
+
+      const paidCents = depositCents + weeksPaid * weeklyCents;
+      const remainingCents = Math.max(0, totalCents - paidCents);
+      res.json({
+        teamName: reg.teamName, paymentMode: reg.paymentMode, totalCents, depositCents,
+        weeklyAmountCents: weeklyCents, weeksTotal, weeksPaid, paidCents, remainingCents, deposit, weeks,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // Get the public registration page config (the league_team program) for a competition.
   app.get("/api/admin/league/competitions/:id/registration-settings", requireAuth, async (req, res) => {
     try {
