@@ -367,8 +367,8 @@ export default function MflRegisterPage() {
                   className="rounded-xl px-4 py-3 text-left transition-all"
                   style={{ background: paymentChoice === "weekly" ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${paymentChoice === "weekly" ? BRAND.gold : BRAND.border}` }}
                   data-testid="pay-weekly">
-                  <div className="font-semibold">Deposit + weekly</div>
-                  <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>A deposit now, then spread the rest weekly.</div>
+                  <div className="font-semibold">Play Now, Pay Later</div>
+                  <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>A deposit now, then spread the rest into weekly payments.</div>
                 </button>
               )}
               {offersSplit && (
@@ -376,8 +376,8 @@ export default function MflRegisterPage() {
                   className="rounded-xl px-4 py-3 text-left transition-all"
                   style={{ background: isSplit ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${isSplit ? BRAND.gold : BRAND.border}` }}
                   data-testid="pay-split">
-                  <div className="font-semibold flex items-center gap-2"><Users className="w-4 h-4" style={{ color: BRAND.gold }} /> Split across my squad</div>
-                  <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>Everyone pays their own equal share on their own card.</div>
+                  <div className="font-semibold flex items-center gap-2"><Users className="w-4 h-4" style={{ color: BRAND.gold }} /> Player Pay</div>
+                  <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>Split across your squad — everyone pays their own share on their own card.</div>
                 </button>
               )}
             </div>

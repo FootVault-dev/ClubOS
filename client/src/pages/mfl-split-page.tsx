@@ -637,7 +637,7 @@ export default function MflSplitPage() {
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
         className="rounded-3xl p-6 mb-5" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] font-bold mb-2.5" style={{ color: BRAND.gold }}>
-          <Sparkles className="w-3.5 h-3.5" /> Split Pay
+          <Sparkles className="w-3.5 h-3.5" /> Player Pay
         </div>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{view.teamName}</h1>
         <p className="mt-1.5 text-[15px]" style={{ color: BRAND.muted }}>
