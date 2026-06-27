@@ -14,6 +14,7 @@ import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
 import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail } from "./email";
+import * as splitPay from "./split-pay";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
 import { cellsOverlap } from "@shared/field-cells";
@@ -4265,6 +4266,38 @@ export async function registerRoutes(
     }
   });
 
+  // ── Split Pay admin (monitoring + recovery) ──
+  app.get("/api/admin/league/splits", requireAuth, async (req, res) => {
+    try {
+      const competitionId = parseInt(String(req.query.competitionId));
+      if (!competitionId) return res.status(400).json({ message: "competitionId required" });
+      res.json(await splitPay.listSplitsForCompetition(competitionId));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.get("/api/admin/league/splits/:id", requireAuth, async (req, res) => {
+    try {
+      const detail = await splitPay.getSplitDetail(parseInt(req.params.id));
+      if (!detail) return res.status(404).json({ message: "Split not found" });
+      res.json(detail);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  // Admin "collect the rest" — (re)charge any outstanding shares, then settle if complete.
+  app.post("/api/admin/league/splits/:id/collect", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const r = await splitPay.chargeOutstandingShares(id);
+      if (await splitPay.isSettleReady(id)) await settleSplitSession(id);
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/admin/league/splits/:id/cancel", requireAuth, async (req, res) => {
+    try {
+      const r = await splitPay.adminCancelSplit(parseInt(req.params.id));
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
   app.get("/api/admin/league/competitions/:id/standings", requireAuth, async (req, res) => {
     try {
       const divisionId = req.query.divisionId ? parseInt(req.query.divisionId as string) : undefined;
@@ -8390,6 +8423,16 @@ export async function registerRoutes(
 
       const event = constructWebhookEvent(req.rawBody as Buffer, sig);
 
+      // Split Pay: a squad member saved their card → mark them card_saved.
+      // Standalone (not part of the chains below) so it coexists cleanly.
+      if (event.type === "setup_intent.succeeded") {
+        const si = event.data.object as any;
+        if (si.metadata?.splitSessionId) {
+          try { await splitPay.markCardSavedBySetupIntent(si.id); }
+          catch (e) { console.error("[Stripe Webhook] split setup_intent.succeeded failed:", e); }
+        }
+      }
+
       if (event.type === "payment_intent.succeeded") {
         const paymentIntent = event.data.object as any;
         const regType = paymentIntent.metadata?.registrationType;
@@ -8397,6 +8440,15 @@ export async function registerRoutes(
         if (regType === "league_balance" && registrationId) {
           // MFL instalment balance collected.
           await handleLeagueBalanceSuccess(registrationId, paymentIntent.id);
+        } else if (regType === "league_share") {
+          // Split Pay: one squad member's share cleared. Mark them paid; when the
+          // whole roster has paid, settle the split (confirm team reg + materialise
+          // the leagueTeam). Idempotent — markPaidOnce + markSplitSettledOnce.
+          // NB: must precede the generic registrationId branch — a share PI carries
+          // the TEAM registrationId in metadata, which must NOT trigger a team
+          // confirmation per member.
+          const r = await splitPay.markPaidByPaymentIntent(paymentIntent);
+          if (r && (await splitPay.isSettleReady(r.sessionId))) await settleSplitSession(r.sessionId);
         } else if (regType === "league_team") {
           // MFL team deposit. A multi-team "stack & save" order shares one
           // deposit PI across several registrations — materialise every one.
@@ -8427,6 +8479,10 @@ export async function registerRoutes(
         const registrationId = parseInt(paymentIntent.metadata?.registrationId);
         if (regType === "league_balance" && registrationId) {
           await handleLeagueBalanceFailed(registrationId);
+        } else if (regType === "league_share") {
+          // Split Pay: a member's share charge declined → flag them failed so the
+          // hub prompts a retry (or the captain resolves). Never re-splits others.
+          await splitPay.markFailedByPaymentIntent(paymentIntent);
         }
         const facilityGroupId = paymentIntent.metadata?.facilityBookingGroupId;
         if (facilityGroupId) {
@@ -10561,6 +10617,7 @@ export async function registerRoutes(
         depositCents: (program as any).depositCents ?? null,
         paymentPlan: (program as any).paymentPlan || "installment",
         numWeeklyPayments: (program as any).numWeeklyPayments ?? 8,
+        splitEnabled: !!(program as any).splitEnabled,
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -10702,6 +10759,44 @@ export async function registerRoutes(
       }
 
       const primary = created[0].registration;
+
+      // ── Split Pay ── Captain chose to split the fee across the squad instead of
+      // paying it. Don't charge anyone now: create a split session + attach the
+      // captain as the first paying member, and hand back the share link + the
+      // captain's SetupIntent (saves their card, no charge). Single team in v1.
+      if (String(req.body.paymentChoice || "").toLowerCase() === "split") {
+        if (!(program as any).splitEnabled) return res.status(400).json({ message: "Split Pay isn't enabled for this league yet." });
+        if (created.length > 1) return res.status(400).json({ message: "You can split one team at a time for now." });
+        const c0 = created[0];
+        // Split is settled in full (equally) — strip any deposit/weekly framing
+        // from the registration; paymentMode 'split' marks it as squad-funded.
+        await storage.updateRegistration(c0.registration.id, {
+          paymentMode: "split", depositCents: null, balanceCents: null, balanceDueDate: null,
+          balanceStatus: "none", weeklyAmountCents: null, weeksTotal: null,
+        } as any);
+        const split = await splitPay.createSplitForRegistration({
+          organizationId: program.organizationId!,
+          registration: {
+            id: c0.registration.id, totalCents: c0.teamTotalCents,
+            teamName: c0.registration.teamName, leagueDivisionId: c0.registration.leagueDivisionId,
+            programId: program.id,
+          },
+          captain: { email: captain.email, firstName: captain.firstName, lastName: captain.lastName, phone: captain.phone },
+          targetCount: req.body.targetCount ? parseInt(String(req.body.targetCount)) : null,
+        });
+        return res.status(201).json({
+          mode: "split",
+          registrationId: c0.registration.id,
+          splitCode: split.shareCode,
+          organiserToken: split.organiserToken,
+          memberToken: split.memberToken,
+          setupClientSecret: split.setupClientSecret,
+          totalCents: c0.teamTotalCents,
+          teamName: c0.registration.teamName,
+          slug,
+        });
+      }
+
       const depositDueCents = created.reduce((s, c) => s + (c.pay.depositCents || 0), 0);
       const orderTotalCents = created.reduce((s, c) => s + c.teamTotalCents, 0);
       const anyPendingBalance = created.some((c) => c.pay.isInstalment || c.pay.isWeeklyPlan);
@@ -10798,6 +10893,127 @@ export async function registerRoutes(
       console.error("[MFL register] error:", e);
       res.status(400).json({ message: e.message });
     }
+  });
+
+  // ── Split Pay public endpoints ──────────────────────────────────────────────
+  // The squad-facing split flow. Amounts are always server-authoritative; the
+  // organiser/member tokens (issued at create/join) gate the privileged actions.
+
+  // Live session view (hub / joiner / 2s poll). ?token= unlocks the viewer's own state.
+  app.get("/api/public/league/split/:code", async (req, res) => {
+    try {
+      const view = await splitPay.getSplitView(req.params.code, req.query.token as string | undefined);
+      if (!view) return res.status(404).json({ message: "Split not found" });
+      res.json(view);
+    } catch (e: any) {
+      console.error("[Split view] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // A squad member joins → creates their member row + a SetupIntent to save a card.
+  app.post("/api/public/league/split/:code/join", async (req, res) => {
+    try {
+      const { name, email, phone } = req.body;
+      const r = await splitPay.joinSplit(req.params.code, { name, email, phone });
+      if ((r as any).error) return res.status(400).json({ message: (r as any).error });
+      res.json(r);
+    } catch (e: any) {
+      console.error("[Split join] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Issue a fresh SetupIntent for an existing member (refresh-safe card form).
+  app.post("/api/public/league/split/:code/setup-intent", async (req, res) => {
+    try {
+      const r = await splitPay.refreshSetupIntent(req.params.code, req.body.memberToken);
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Client fallback after confirming a SetupIntent (mirrors /confirm-payment).
+  app.post("/api/public/league/split/:code/confirm-setup", async (req, res) => {
+    try {
+      const r = await splitPay.confirmMemberCardSaved(req.params.code, req.body.memberToken);
+      if ((r as any).error) return res.status(400).json({ message: (r as any).error });
+      res.json(r);
+    } catch (e: any) {
+      console.error("[Split confirm-setup] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Organiser locks the roster → charges every saved card its frozen share once.
+  app.post("/api/public/league/split/:code/lock", async (req, res) => {
+    try {
+      const capacityCheck = async (divisionId: number | null) => {
+        if (!divisionId) return true;
+        const div = await storage.getLeagueDivision(divisionId);
+        if (!div || div.maxTeams == null) return true;
+        const teams = await storage.getLeagueTeams(MFL_ORG_ID, div.competitionId);
+        return teams.filter((t) => t.divisionId === divisionId && t.active).length < div.maxTeams;
+      };
+      const r = await splitPay.lockAndChargeSplit(req.params.code, req.body.organiserToken, { capacityCheck });
+      if (r.error) return res.status(400).json({ message: r.error, missingCards: r.missingCards });
+      // All shares may have cleared synchronously (off-session) → settle now.
+      if (r.sessionId && (await splitPay.isSettleReady(r.sessionId))) await settleSplitSession(r.sessionId);
+      res.json(r);
+    } catch (e: any) {
+      console.error("[Split lock] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // A member leaves while the split is open (re-splits live, no money moved).
+  app.post("/api/public/league/split/:code/leave", async (req, res) => {
+    try {
+      const r = await splitPay.leaveSplit(req.params.code, req.body.memberToken);
+      if ((r as any).error) return res.status(400).json({ message: (r as any).error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Organiser removes a member while the split is open.
+  app.post("/api/public/league/split/:code/remove", async (req, res) => {
+    try {
+      const r = await splitPay.removeMember(req.params.code, req.body.organiserToken, parseInt(String(req.body.memberId)));
+      if ((r as any).error) return res.status(400).json({ message: (r as any).error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // A failed member retries on-session → returns a client_secret to confirm.
+  app.post("/api/public/league/split/:code/retry", async (req, res) => {
+    try {
+      const r = await splitPay.retryMemberCharge(req.params.code, req.body.memberToken);
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Client fallback after confirming a retry PaymentIntent → mark paid + settle.
+  app.post("/api/public/league/split/:code/confirm-payment", async (req, res) => {
+    try {
+      const { paymentIntentId } = req.body;
+      if (!paymentIntentId) return res.status(400).json({ message: "paymentIntentId required" });
+      const pi = await retrievePaymentIntent(paymentIntentId);
+      if (pi.metadata?.registrationType !== "league_share") return res.status(400).json({ message: "Not a split payment" });
+      if (pi.status !== "succeeded") return res.status(400).json({ message: "Payment not completed" });
+      const r = await splitPay.markPaidByPaymentIntent(pi);
+      if (r && (await splitPay.isSettleReady(r.sessionId))) await settleSplitSession(r.sessionId);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Organiser cancels the whole split → refunds anyone already charged.
+  app.post("/api/public/league/split/:code/cancel", async (req, res) => {
+    try {
+      const r = await splitPay.cancelSplit(req.params.code, req.body.organiserToken);
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Checkout data (clientSecret + order summary) for the deposit.
@@ -12166,4 +12382,23 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
       });
     })().catch((e) => console.error("[MFL] signup notification failed:", e));
   }
+}
+
+// Split Pay settlement — runs exactly ONCE when every squad member has paid their
+// share (invoked from the lock endpoint + the Stripe webhook; guarded by
+// markSplitSettledOnce). Confirms the team registration then reuses
+// handleLeagueRegistrationSuccess to materialise the leagueTeam + captain
+// confirmation + Purchase, identical to a normally-paid team. paymentMode 'split'
+// has no deposit/weekly so it settles as paid-in-full.
+async function settleSplitSession(sessionId: number) {
+  const won = await splitPay.markSplitSettledOnce(sessionId);
+  if (!won) return; // another caller already settled this split
+  const regId = await splitPay.getSplitRegistrationId(sessionId);
+  if (!regId) return;
+  const reg = await storage.getRegistration(regId);
+  if (!reg) return;
+  await storage.confirmRegistrationOnce(reg.id, ((reg.totalCents ?? 0) / 100).toFixed(2));
+  await storage.assignOrderNumber(reg.id);
+  await recordRegistrationDiscountUsage(reg);
+  await handleLeagueRegistrationSuccess(reg.id, { registrationType: "league_team" });
 }

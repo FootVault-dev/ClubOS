@@ -3,7 +3,8 @@ import { useRoute, useLocation, Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/format";
 import { initPixel, trackEvent, getFbp, getFbc, generateEventId } from "@/lib/meta-pixel";
-import { ArrowLeft, ArrowRight, Loader2, Flame, Plus, X, Tag } from "lucide-react";
+import { stashSetupSecret, saveSplitTokens } from "@/lib/split-pay";
+import { ArrowLeft, ArrowRight, Loader2, Flame, Plus, Minus, X, Tag, Users } from "lucide-react";
 
 const BRAND = {
   black: "#000000", bg: "#0a0a0a", card: "#141414", cardSoft: "#1c1c1c", border: "#2a2a2a",
@@ -50,7 +51,11 @@ export default function MflRegisterPage() {
   const [codes, setCodes] = useState<string[]>([]);
   const [codeInput, setCodeInput] = useState("");
   const [pricing, setPricing] = useState<Pricing | null>(null);
-  const [paymentChoice, setPaymentChoice] = useState<"weekly" | "full">("weekly");
+  const [paymentChoice, setPaymentChoice] = useState<"weekly" | "full" | "split">("weekly");
+  // Split Pay: how many teammates the captain expects to chip in (used only for
+  // the live "each ≈ $X" preview; the live share is recalculated server-side as
+  // cards are saved).
+  const [targetCount, setTargetCount] = useState(8);
 
   useEffect(() => {
     const pixelId = (import.meta as any).env?.VITE_META_PIXEL_ID;
@@ -96,7 +101,8 @@ export default function MflRegisterPage() {
     const t = setTimeout(() => {
       fetch("/api/public/league/validate-discounts", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug, teams: teams.map((tm) => ({ divisionId: tm.divisionId, upsells: [] })), codes, paymentChoice }),
+        // Split Pay charges the full team fee (just divided), so price it as "full".
+        body: JSON.stringify({ slug, teams: teams.map((tm) => ({ divisionId: tm.divisionId, upsells: [] })), codes, paymentChoice: paymentChoice === "split" ? "full" : paymentChoice }),
       })
         .then((r) => r.json())
         .then((p) => { if (reqId === priceReq.current && !p.message) setPricing(p); })
@@ -129,9 +135,13 @@ export default function MflRegisterPage() {
   // Display figures: prefer server pricing, fall back to local gross.
   const subtotalCents = pricing?.subtotalCents ?? (localSubtotalCents + lateFeeCents);
   const totalCents = pricing?.totalCents ?? subtotalCents;
+  const isSplit = paymentChoice === "split";
   const payInFull = paymentChoice === "full";
   const offersWeekly = data?.paymentPlan === "deposit_weekly";
-  const isWeekly = !payInFull && (pricing?.paymentMode || data?.paymentPlan) === "deposit_weekly";
+  const offersSplit = !!data?.splitEnabled;
+  const isWeekly = !payInFull && !isSplit && (pricing?.paymentMode || data?.paymentPlan) === "deposit_weekly";
+  // Live per-person estimate for the Split Pay stepper (server is authoritative).
+  const perShareCents = targetCount > 0 ? Math.round(totalCents / targetCount) : totalCents;
   const depositCents = pricing?.depositDueCents ?? 0;
   const weeklyAmountCents = pricing?.weeklyAmountCents ?? 0;
   const weeksTotal = pricing?.weeksTotal ?? (data?.numWeeklyPayments || 8);
@@ -149,28 +159,56 @@ export default function MflRegisterPage() {
     const leadEventId = generateEventId();
     trackEvent("Lead", { content_name: PIXEL_CONTENT, value: totalCents / 100, currency: "NZD" }, leadEventId);
 
+    const tracking = {
+      utmSource: url.searchParams.get("utm_source"),
+      utmMedium: url.searchParams.get("utm_medium"),
+      utmCampaign: url.searchParams.get("utm_campaign"),
+      fbclid: url.searchParams.get("fbclid"),
+      fbp: getFbp(),
+      fbc: getFbc(),
+      userAgent: navigator.userAgent,
+      leadEventId,
+    };
+
     try {
+      // Split Pay creates one team and hands back tokens + a SetupIntent secret;
+      // we route to the share hub instead of the normal deposit checkout.
+      const payload = isSplit
+        ? {
+            slug,
+            captain: { firstName, lastName, email, phone },
+            teamName: teams[0].teamName,
+            divisionId: teams[0].divisionId,
+            upsells: [],
+            discountCodes: codes,
+            paymentChoice: "split",
+            targetCount,
+            ...tracking,
+          }
+        : {
+            slug,
+            teams: teams.map((t) => ({ teamName: t.teamName, divisionId: t.divisionId, upsells: [] })),
+            discountCodes: codes,
+            paymentChoice,
+            captain: { firstName, lastName, email, phone },
+            ...tracking,
+          };
+
       const res = await fetch("/api/public/league/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          slug,
-          teams: teams.map((t) => ({ teamName: t.teamName, divisionId: t.divisionId, upsells: [] })),
-          discountCodes: codes,
-          paymentChoice,
-          captain: { firstName, lastName, email, phone },
-          utmSource: url.searchParams.get("utm_source"),
-          utmMedium: url.searchParams.get("utm_medium"),
-          utmCampaign: url.searchParams.get("utm_campaign"),
-          fbclid: url.searchParams.get("fbclid"),
-          fbp: getFbp(),
-          fbc: getFbc(),
-          userAgent: navigator.userAgent,
-          leadEventId,
-        }),
+        body: JSON.stringify(payload),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.message || "Registration failed");
+
+      if (body.mode === "split" && body.splitCode) {
+        saveSplitTokens(body.splitCode, { organiserToken: body.organiserToken, memberToken: body.memberToken });
+        if (body.setupClientSecret) stashSetupSecret(body.splitCode, body.setupClientSecret);
+        setLocation(`/league/split/${body.splitCode}`);
+        return;
+      }
+
       setLocation(`/league/${slug}/checkout?registrationId=${body.registrationId}`);
     } catch (err: any) {
       setError(err.message || "Something went wrong. Please try again.");
@@ -313,28 +351,69 @@ export default function MflRegisterPage() {
             )}
           </div>
 
-          {/* Payment method — pay in full, or deposit + weekly */}
-          {offersWeekly && (
-            <div>
-              <label className="block text-sm font-semibold mb-2">How would you like to pay?</label>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <button type="button" onClick={() => setPaymentChoice("full")}
-                  className="rounded-xl px-4 py-3 text-left transition-all"
-                  style={{ background: payInFull ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${payInFull ? BRAND.gold : BRAND.border}` }}
-                  data-testid="pay-full">
-                  <div className="font-semibold">Pay in full</div>
-                  <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>One payment of {formatCurrency(totalCents, { fromCents: true })} today.</div>
-                </button>
+          {/* Payment method — pay in full, deposit + weekly, or split the fee */}
+          <div>
+            <label className="block text-sm font-semibold mb-2">How would you like to pay?</label>
+            <div className="grid gap-3">
+              <button type="button" onClick={() => setPaymentChoice("full")}
+                className="rounded-xl px-4 py-3 text-left transition-all"
+                style={{ background: paymentChoice === "full" ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${paymentChoice === "full" ? BRAND.gold : BRAND.border}` }}
+                data-testid="pay-full">
+                <div className="font-semibold">Pay in full</div>
+                <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>One payment of {formatCurrency(totalCents, { fromCents: true })} today.</div>
+              </button>
+              {offersWeekly && (
                 <button type="button" onClick={() => setPaymentChoice("weekly")}
                   className="rounded-xl px-4 py-3 text-left transition-all"
-                  style={{ background: !payInFull ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${!payInFull ? BRAND.gold : BRAND.border}` }}
+                  style={{ background: paymentChoice === "weekly" ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${paymentChoice === "weekly" ? BRAND.gold : BRAND.border}` }}
                   data-testid="pay-weekly">
                   <div className="font-semibold">Deposit + weekly</div>
                   <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>A deposit now, then spread the rest weekly.</div>
                 </button>
-              </div>
+              )}
+              {offersSplit && (
+                <button type="button" onClick={() => setPaymentChoice("split")}
+                  className="rounded-xl px-4 py-3 text-left transition-all"
+                  style={{ background: isSplit ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${isSplit ? BRAND.gold : BRAND.border}` }}
+                  data-testid="pay-split">
+                  <div className="font-semibold flex items-center gap-2"><Users className="w-4 h-4" style={{ color: BRAND.gold }} /> Split across my squad</div>
+                  <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>Everyone pays their own equal share on their own card.</div>
+                </button>
+              )}
             </div>
-          )}
+
+            {/* Squad-size stepper + live per-person preview */}
+            {isSplit && (
+              <div className="mt-3 rounded-xl p-4" style={{ background: `${BRAND.gold}12`, border: `1px solid ${BRAND.gold}3a` }}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">How many are paying?</div>
+                    <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>Including you. Add or remove people any time.</div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <button type="button" onClick={() => setTargetCount((n) => Math.max(2, n - 1))}
+                      className="w-9 h-9 rounded-full flex items-center justify-center disabled:opacity-40"
+                      style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }}
+                      disabled={targetCount <= 2} data-testid="split-minus">
+                      <Minus className="w-4 h-4" />
+                    </button>
+                    <span className="text-xl font-bold tabular-nums w-7 text-center" data-testid="split-count">{targetCount}</span>
+                    <button type="button" onClick={() => setTargetCount((n) => Math.min(20, n + 1))}
+                      className="w-9 h-9 rounded-full flex items-center justify-center disabled:opacity-40"
+                      style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }}
+                      disabled={targetCount >= 20} data-testid="split-plus">
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 pt-3 flex items-baseline justify-between border-t" style={{ borderColor: `${BRAND.gold}3a` }}>
+                  <span className="text-sm" style={{ color: BRAND.muted }}>Each pays about</span>
+                  <span className="text-2xl font-bold tracking-tight" style={{ color: BRAND.gold }} data-testid="split-each">{formatCurrency(perShareCents, { fromCents: true })}</span>
+                </div>
+                <p className="mt-2 text-[12px]" style={{ color: BRAND.dim }}>The final share is the team fee divided by everyone who saves a card — it only drops as more join.</p>
+              </div>
+            )}
+          </div>
 
           {/* Summary */}
           <div className="rounded-2xl p-5 space-y-2.5" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
@@ -363,7 +442,11 @@ export default function MflRegisterPage() {
             <div className="flex justify-between font-bold pt-2.5 border-t" style={{ borderColor: BRAND.border }}>
               <span>Total (incl. GST)</span><span>{formatCurrency(totalCents, { fromCents: true })} NZD</span>
             </div>
-            {payInFull ? (
+            {isSplit ? (
+              <div className="rounded-xl px-4 py-3 mt-1 text-[13px]" style={{ background: `${BRAND.gold}14`, color: BRAND.gold }}>
+                Split <strong>{formatCurrency(totalCents, { fromCents: true })}</strong> across your squad — about <strong>{formatCurrency(perShareCents, { fromCents: true })}</strong> each over {targetCount}. Everyone saves a card; nobody's charged until you lock the team.
+              </div>
+            ) : payInFull ? (
               <div className="rounded-xl px-4 py-3 mt-1 text-[13px]" style={{ background: `${BRAND.gold}14`, color: BRAND.gold }}>
                 Pay <strong>{formatCurrency(totalCents, { fromCents: true })}</strong> today — paid in full, no weekly charges.
               </div>
@@ -379,9 +462,9 @@ export default function MflRegisterPage() {
           <button type="submit" disabled={submitting}
             className="w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-[16px] disabled:opacity-60"
             style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-continue-to-payment">
-            {submitting ? <><Loader2 className="w-4 h-4 animate-spin" /> Securing your spot…</> : <>Continue to payment <ArrowRight className="w-4 h-4" /></>}
+            {submitting ? <><Loader2 className="w-4 h-4 animate-spin" /> {isSplit ? "Starting your split…" : "Securing your spot…"}</> : isSplit ? <>Start the split <ArrowRight className="w-4 h-4" /></> : <>Continue to payment <ArrowRight className="w-4 h-4" /></>}
           </button>
-          <p className="text-center text-[12px]" style={{ color: BRAND.dim }}>Secure payment by Stripe · You'll confirm on the next step</p>
+          <p className="text-center text-[12px]" style={{ color: BRAND.dim }}>{isSplit ? "You'll save your card next, then share the link with your squad" : "Secure payment by Stripe · You'll confirm on the next step"}</p>
         </form>
       </main>
     </div>

@@ -63,6 +63,25 @@ export async function getOrCreateCustomer(params: {
 }
 
 /**
+ * Create a SetupIntent to save a card on file with NO charge. Used by Split Pay:
+ * each squad member saves their card while the split is 'open'; that saved card
+ * is then charged its frozen share ONCE, off-session, when the captain locks the
+ * roster (via createOffSessionPaymentIntent). usage:"off_session" so the saved
+ * method is valid for the later merchant-initiated charge.
+ */
+export async function createSetupIntent(params: {
+  customerId: string;
+  metadata?: Record<string, string>;
+}): Promise<Stripe.SetupIntent> {
+  return stripe.setupIntents.create({
+    customer: params.customerId,
+    usage: "off_session",
+    automatic_payment_methods: { enabled: true },
+    metadata: params.metadata || {},
+  });
+}
+
+/**
  * Charge a saved payment method off-session (no customer present). Used by the
  * MFL balance cron to collect the second instalment on the due date.
  * Throws if the charge requires authentication or is declined — caller handles state.

@@ -273,6 +273,36 @@ export async function sendLeagueConfirmationEmail(params: {
   });
 }
 
+/** Split Pay — a squad member's share has been charged. Their personal receipt. */
+export async function sendSplitShareReceiptEmail(params: {
+  to: string;
+  memberName: string;
+  teamName: string;
+  amountCents: number;
+  registrationId?: number;
+}): Promise<boolean> {
+  const amount = `$${(params.amountCents / 100).toFixed(2)} NZD`;
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.memberName},</p>
+    <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">
+      Your share of <strong>${params.teamName}</strong> is <strong style="color:#d1b96e;">paid</strong>. Thanks for chipping in — see you on the pitch! ⚽
+    </p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">
+        ${mflRow("Team", params.teamName)}
+        ${mflRow("Your share", amount, true)}
+      </table>
+    </div>`;
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: MFL_REPLY_TO,
+    subject: `Your share is paid — ${params.teamName}`,
+    html: mflShell({ heading: "Share paid ✓", bodyHtml }),
+    ...(params.registrationId ? { registrationId: params.registrationId } : {}),
+  });
+}
+
 /** Balance instalment successfully collected. */
 export async function sendLeagueBalancePaidEmail(params: {
   registrationId: number;

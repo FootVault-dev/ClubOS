@@ -150,6 +150,42 @@ export function apportion(weights: number[], totalCents: number): number[] {
   return largestRemainder(weights, totalCents);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Split Pay — split a fixed team fee equally across N payers.
+//
+// Used by the "Split across my squad" flow. The team fee is FIXED; it is divided
+// among however many members hold a valid card at lock. Because money only moves
+// once (lock-then-charge), the live share simply recomputes as members join/drop
+// — there are no refunds or re-charges. apportion() guarantees the N shares sum
+// to the fee EXACTLY, so the club always collects the full fee to the cent.
+//
+// Invariant (asserted by script/test-split-pricing.ts):
+//   5. Σ equalSplit(total, n)  == total           (largest-remainder, n>=1)
+//   6. max(share) - min(share) <= 1 cent          (as even as integer cents allow)
+//   7. provisionalShareCents(total, n) == max(share)  (display never understates)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Split `totalCents` into `n` equal shares (integer cents) that sum EXACTLY to
+ * totalCents. With a remainder, the first few members (by index) pay 1c more.
+ * n <= 0 returns []. The authoritative per-member charge amount at lock.
+ */
+export function equalSplit(totalCents: number, n: number): number[] {
+  if (n <= 0) return [];
+  if (totalCents < 0) totalCents = 0;
+  return largestRemainder(new Array(n).fill(1), totalCents);
+}
+
+/**
+ * A single representative "each person pays ≈ $X" figure for display while a
+ * split is open. Returns the LARGEST individual share (ceil to the cent) so the
+ * quoted amount can only ever go down, never surprise a member upward. n <= 0 → 0.
+ */
+export function provisionalShareCents(totalCents: number, n: number): number {
+  if (n <= 0 || totalCents <= 0) return 0;
+  return Math.ceil(totalCents / n);
+}
+
 function largestRemainder(weights: number[], totalCents: number): number[] {
   const n = weights.length;
   if (n === 0) return [];

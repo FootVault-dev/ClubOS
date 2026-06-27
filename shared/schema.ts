@@ -176,6 +176,10 @@ export const programs = pgTable("programs", {
   //                      weekly auto-charges anchored to the competition start.
   paymentPlan: text("payment_plan").default("installment"),
   numWeeklyPayments: integer("num_weekly_payments").default(8),
+  // Split Pay rollout flag — when true the public register page offers "Split
+  // across my squad". Default false so the feature only appears where explicitly
+  // enabled (the test program first; real Term 3 once a live charge is validated).
+  splitEnabled: boolean("split_enabled").default(false),
 
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -700,6 +704,85 @@ export const leagueTeams = pgTable("league_teams", {
   uniqueRegistration: uniqueIndex("league_teams_registration_id_unique").on(t.registrationId),
 }));
 
+// ── Split Pay (split a team fee across the squad) ────────────────────────────
+// A split session divides a FIXED team fee equally across N payers, each paying
+// their own share on their own card. Lock-then-charge: members join + save a
+// card while the session is 'open' (no money moves, the live share recomputes as
+// people join/drop); when the captain locks, every saved card is charged its
+// frozen share ONCE. The owning team registration stays 'pending' until the
+// split settles, then materialises exactly one leagueTeam. See shared/league-pricing.ts
+// (equalSplit) — the N shares sum to totalCents to the cent, so the club always
+// collects the full fee.
+export const splitSessions = pgTable("split_sessions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // The team registration this split funds (created 'pending', confirmed on settle).
+  registrationId: integer("registration_id").references(() => registrations.id, { onDelete: "set null" }),
+  programId: integer("program_id").references(() => programs.id, { onDelete: "set null" }),
+  leagueDivisionId: integer("league_division_id").references(() => leagueDivisions.id, { onDelete: "set null" }),
+  teamName: text("team_name"),
+  // The fixed total being split N ways (the already-discounted team fee).
+  totalCents: integer("total_cents").notNull(),
+  currency: text("currency").notNull().default("NZD"),
+  // open: members join + save cards, share recomputes live, no money moves.
+  // settling: locked — every saved card is being charged its frozen share once.
+  // settled: all charged, team materialised. failed: a charge needs resolving.
+  status: text("status").notNull().default("open"),  // 'open'|'settling'|'settled'|'cancelled'|'failed'
+  // Captain's expected squad size — drives the "X / N joined" progress display
+  // only; the real split is over the members holding a valid card at lock.
+  targetCount: integer("target_count"),
+  // Frozen per-member share at lock (null while open) — display/audit; the
+  // authoritative per-member amount is splitMembers.chargedCents.
+  shareLockedCents: integer("share_locked_cents"),
+  // Private token the captain holds to lock/cancel/manage (never shown to members).
+  organiserToken: text("organiser_token").notNull(),
+  // Public short code in the share link / QR (/league/split/:code).
+  shareCode: text("share_code").notNull(),
+  lockedAt: timestamp("locked_at"),
+  settledAt: timestamp("settled_at"),
+  // Optional auto-lock deadline (e.g. competition start). Null = captain-locks only.
+  deadlineAt: timestamp("deadline_at"),
+  // Abandoned-session GC horizon.
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueShareCode: uniqueIndex("split_sessions_share_code_unique").on(t.shareCode),
+  // One split per team registration (DB backstop against double-create; NULLs are
+  // distinct in Postgres unique indexes so non-registration splits are unaffected).
+  uniqueRegistration: uniqueIndex("split_sessions_registration_id_unique").on(t.registrationId),
+}));
+
+export const splitMembers = pgTable("split_members", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  splitSessionId: integer("split_session_id").notNull().references(() => splitSessions.id, { onDelete: "cascade" }),
+  name: text("name"),
+  email: text("email").notNull(),  // required for receipt
+  phone: text("phone"),
+  role: text("role").notNull().default("member"),  // 'organiser'|'member'
+  // joined: entered details. card_saved: SetupIntent succeeded, card on file.
+  // paid: their frozen share was charged at lock. failed: charge declined.
+  // removed: dropped while open (excluded from the split).
+  status: text("status").notNull().default("joined"),  // 'joined'|'card_saved'|'paid'|'failed'|'removed'
+  // Card on file — saved with NO charge via a SetupIntent, then charged once at lock.
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSetupIntentId: text("stripe_setup_intent_id"),
+  stripePaymentMethodId: text("stripe_payment_method_id"),
+  // The single lock charge.
+  chargedCents: integer("charged_cents"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  paidAt: timestamp("paid_at"),
+  // Only used if a captain cancels a settled/partly-settled split (explicit refund).
+  stripeRefundId: text("stripe_refund_id"),
+  stripeRefundStatus: text("stripe_refund_status"),
+  // Private token identifying this member's device for status polling + retry.
+  memberToken: text("member_token").notNull(),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+}, (t) => ({
+  // A member can't join the same split twice with the same email (re-join
+  // reactivates a 'removed' row instead of inserting a duplicate).
+  uniqueSessionEmail: uniqueIndex("split_members_session_email_unique").on(t.splitSessionId, t.email),
+}));
+
 export const leagueGames = pgTable("league_games", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   competitionId: integer("competition_id").notNull().references(() => leagueCompetitions.id, { onDelete: "cascade" }),
@@ -960,6 +1043,8 @@ export const insertLeagueDivisionSchema = createInsertSchema(leagueDivisions).om
 export const insertLeagueTeamSchema = createInsertSchema(leagueTeams).omit({ id: true, createdAt: true });
 export const insertLeagueGameSchema = createInsertSchema(leagueGames).omit({ id: true, createdAt: true });
 export const insertLeagueCouponSchema = createInsertSchema(leagueCoupons).omit({ id: true, createdAt: true });
+export const insertSplitSessionSchema = createInsertSchema(splitSessions).omit({ id: true, createdAt: true });
+export const insertSplitMemberSchema = createInsertSchema(splitMembers).omit({ id: true, joinedAt: true });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertContactSchema = createInsertSchema(contacts).omit({ id: true, createdAt: true });
@@ -1047,6 +1132,10 @@ export type InsertLeagueGame = z.infer<typeof insertLeagueGameSchema>;
 export type LeagueGame = typeof leagueGames.$inferSelect;
 export type InsertLeagueCoupon = z.infer<typeof insertLeagueCouponSchema>;
 export type LeagueCoupon = typeof leagueCoupons.$inferSelect;
+export type InsertSplitSession = z.infer<typeof insertSplitSessionSchema>;
+export type SplitSession = typeof splitSessions.$inferSelect;
+export type InsertSplitMember = z.infer<typeof insertSplitMemberSchema>;
+export type SplitMember = typeof splitMembers.$inferSelect;
 export type InsertTournament = z.infer<typeof insertTournamentSchema>;
 export type Tournament = typeof tournaments.$inferSelect;
 export type InsertTournamentGroup = z.infer<typeof insertTournamentGroupSchema>;
