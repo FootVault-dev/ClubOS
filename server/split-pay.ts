@@ -152,8 +152,12 @@ export async function getSplitView(code: string, viewerToken?: string) {
   const withCard = active.filter((m) => m.status === "card_saved" || m.status === "paid");
   const paid = active.filter((m) => m.status === "paid");
   const denom = Math.max(withCard.length, 1);
-  const viewer = viewerToken ? members.find((m) => m.memberToken === viewerToken) : undefined;
+  let viewer = viewerToken ? members.find((m) => m.memberToken === viewerToken) : undefined;
   const isOrganiserView = !!viewerToken && viewerToken === s.organiserToken;
+  // The captain identifies with the session organiserToken (NOT a member token),
+  // so resolve their own member record here — otherwise the hub shows them no
+  // card-save form and they can't pay their share.
+  if (!viewer && isOrganiserView) viewer = members.find((m) => m.role === "organiser");
 
   return {
     code: s.shareCode,
