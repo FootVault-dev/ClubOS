@@ -10556,8 +10556,14 @@ export async function registerRoutes(
   app.get("/api/public/league/register", async (_req, res) => {
     try {
       const all = await storage.getPrograms();
+      // Hide offerings whose competition is archived (e.g. the staff split-test
+      // program) from the public list — they stay reachable by direct slug and
+      // visible in admin (getLeagueCompetitions doesn't filter archived).
+      const comps = await storage.getLeagueCompetitions(MFL_ORG_ID);
+      const archivedCompIds = new Set(comps.filter((c) => c.archived).map((c) => c.id));
       const offerings = all
-        .filter((p) => (p as any).type === "league_team" && p.organizationId === MFL_ORG_ID && p.isActive)
+        .filter((p) => (p as any).type === "league_team" && p.organizationId === MFL_ORG_ID && p.isActive
+          && !archivedCompIds.has((p as any).leagueCompetitionId))
         .map((p) => ({ id: p.id, slug: p.slug, name: p.name, heroImage: p.heroImage, descriptionShort: (p as any).descriptionShort }));
       const [org] = await db.select().from(organizations).where(eq(organizations.id, MFL_ORG_ID));
       res.json({

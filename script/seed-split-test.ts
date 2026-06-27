@@ -33,7 +33,7 @@ async function main() {
       compId = compSel.rows[0].id;
       await client.query(
         `UPDATE league_competitions SET start_date='2026-07-20', end_date='2026-09-24',
-           enable_registration=true, registration_status='open', active=true, archived=false WHERE id=$1`,
+           enable_registration=true, registration_status='open', active=true, archived=true WHERE id=$1`,
         [compId],
       );
       console.log(`✓ Reusing test competition #${compId}`);
@@ -41,8 +41,8 @@ async function main() {
       const ins = await client.query(
         `INSERT INTO league_competitions
            (organization_id, name, sport, start_date, end_date, registration_status,
-            enable_registration, active)
-         VALUES ($1,$2,'Football','2026-07-20','2026-09-24','open',true,true)
+            enable_registration, active, archived)
+         VALUES ($1,$2,'Football','2026-07-20','2026-09-24','open',true,true,true)
          RETURNING id`,
         [ORG_ID, COMP_NAME],
       );
