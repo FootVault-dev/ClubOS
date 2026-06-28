@@ -28,6 +28,7 @@ interface Pricing {
   weeklyAmountCents: number;
   weeksTotal: number | null;
   paymentMode: string;
+  weeklyPreview?: { depositCents: number; weeklyAmountCents: number; weeksTotal: number | null } | null;
   payInFull?: boolean;
   rejectedCodes: string[];
   teamCount: number;
@@ -145,6 +146,17 @@ export default function MflRegisterPage() {
   const depositCents = pricing?.depositDueCents ?? 0;
   const weeklyAmountCents = pricing?.weeklyAmountCents ?? 0;
   const weeksTotal = pricing?.weeksTotal ?? (data?.numWeeklyPayments || 8);
+
+  // Always-on weekly-plan figures for the Play Now, Pay Later option card (shown
+  // even before it's selected). Fall back to the selected-mode figures.
+  const wkDepositCents = pricing?.weeklyPreview?.depositCents ?? depositCents;
+  const wkWeeklyCents = pricing?.weeklyPreview?.weeklyAmountCents ?? weeklyAmountCents;
+  const wkWeeks = pricing?.weeklyPreview?.weeksTotal ?? weeksTotal;
+  const seasonStartRaw: string | null = data?.competition?.startDate || data?.program?.startDate || null;
+  const seasonStartLabel = seasonStartRaw
+    ? new Date(seasonStartRaw.length <= 10 ? seasonStartRaw + "T12:00:00" : seasonStartRaw)
+        .toLocaleDateString("en-NZ", { day: "numeric", month: "long" })
+    : null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -368,7 +380,18 @@ export default function MflRegisterPage() {
                   style={{ background: paymentChoice === "weekly" ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${paymentChoice === "weekly" ? BRAND.gold : BRAND.border}` }}
                   data-testid="pay-weekly">
                   <div className="font-semibold">Play Now, Pay Later</div>
-                  <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>A deposit now, then spread the rest into weekly payments.</div>
+                  {wkDepositCents > 0 ? (
+                    <>
+                      <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>Pay <span style={{ color: BRAND.white, fontWeight: 600 }}>{formatCurrency(wkDepositCents, { fromCents: true })}</span> deposit today</div>
+                      {wkWeeklyCents > 0 && (
+                        <div className="text-[11px] mt-0.5" style={{ color: BRAND.dim }}>
+                          Then {formatCurrency(wkWeeklyCents, { fromCents: true })}/week for {wkWeeks} weeks{seasonStartLabel ? ` starting ${seasonStartLabel}` : ""}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-[12px] mt-0.5" style={{ color: BRAND.muted }}>A deposit now, then spread the rest into weekly payments.</div>
+                  )}
                 </button>
               )}
               {offersSplit && (
@@ -410,7 +433,7 @@ export default function MflRegisterPage() {
                   <span className="text-sm" style={{ color: BRAND.muted }}>Each pays about</span>
                   <span className="text-2xl font-bold tracking-tight" style={{ color: BRAND.gold }} data-testid="split-each">{formatCurrency(perShareCents, { fromCents: true })}</span>
                 </div>
-                <p className="mt-2 text-[12px]" style={{ color: BRAND.dim }}>The final share is the team fee divided by everyone who saves a card — it only drops as more join.</p>
+                <p className="mt-2 text-[12px]" style={{ color: BRAND.dim }}>The team fee is split equally across your squad. You'll get a share link — everyone pays their own share on their own card.</p>
               </div>
             )}
           </div>

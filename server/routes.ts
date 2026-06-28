@@ -10527,11 +10527,20 @@ export async function registerRoutes(
       let weeklyAmountCents = 0;
       let weeksTotal: number | null = null;
       let anyWeekly = false;
+      // Always-on weekly-plan preview (deposit + weekly split) so the page can
+      // show "$X today · then $Y/week" on the Play Now, Pay Later option even
+      // before it's selected — independent of the customer's current choice.
+      let previewDeposit = 0, previewWeekly = 0, previewWeeks: number | null = null, previewIsWeekly = false;
       for (let i = 0; i < perTeamSubtotals.length; i++) {
         const pay = computeTeamPayment(perTeamSubtotals[i] - teamDiscounts[i], wantsFull ? null : programDeposit, wantsFull ? "upfront" : paymentPlan, numWeeks);
         depositDueCents += pay.depositCents;
         weeklyAmountCents += pay.weeklyAmountCents || 0;
         if (pay.isWeeklyPlan) { anyWeekly = true; weeksTotal = pay.weeksTotal; }
+
+        const wk = computeTeamPayment(perTeamSubtotals[i] - teamDiscounts[i], programDeposit, paymentPlan, numWeeks);
+        previewDeposit += wk.depositCents;
+        previewWeekly += wk.weeklyAmountCents || 0;
+        if (wk.isWeeklyPlan) { previewIsWeekly = true; previewWeeks = wk.weeksTotal; }
       }
 
       res.json({
@@ -10544,6 +10553,7 @@ export async function registerRoutes(
         weeklyAmountCents: anyWeekly ? weeklyAmountCents : 0,
         weeksTotal,
         paymentMode: anyWeekly ? "deposit_weekly" : "upfront",
+        weeklyPreview: previewIsWeekly ? { depositCents: previewDeposit, weeklyAmountCents: previewWeekly, weeksTotal: previewWeeks } : null,
         payInFull: wantsFull,
         rejectedCodes: rejected,
         teamCount: teamList.length,
