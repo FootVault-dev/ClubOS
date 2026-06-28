@@ -539,6 +539,17 @@ export const rewardSeasonRewards = pgTable("reward_season_rewards", {
   memberTierUnq: uniqueIndex("reward_season_rewards_member_tier_unq").on(t.memberId, t.tier),
 }));
 
+// Referee Rewards — bonus tokens (courses, ref of the season, etc). Game tokens
+// are derived live from final games refereed; only manual bonuses are stored here.
+export const rewardRefBonus = pgTable("reward_ref_bonus", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokens: integer("tokens").notNull().default(0),
+  note: text("note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Email suppression list — anyone who unsubscribed from broadcasts. Per-org
 // (organizationId null = global). The mailer audience resolver excludes these.
 export const emailUnsubscribes = pgTable("email_unsubscribes", {

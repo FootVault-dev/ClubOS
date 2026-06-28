@@ -7,11 +7,11 @@
 // and ACCOUNT CREDIT (commission at their tier) toward their own fees. Attribution
 // is idempotent per registration (unique registration_id on the event ledger).
 import crypto from "crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { rewardBuilders, rewardBuilderEvents, rewardSeasonMembers, rewardSeasonEvents, rewardSeasonRewards, type RewardBuilder, type RewardSeasonMember } from "@shared/schema";
+import { rewardBuilders, rewardBuilderEvents, rewardSeasonMembers, rewardSeasonEvents, rewardSeasonRewards, rewardRefBonus, leagueGameReferees, leagueGames, leagueCompetitions, users, type RewardBuilder, type RewardSeasonMember } from "@shared/schema";
 import { storage } from "./storage";
-import { builderTierFor, nextBuilderTier, BUILDER_TIERS, SEASON_TIERS, seasonTierFor, SEASON_XP_PER_SIGNUP, type SeasonTier } from "@shared/rewards";
+import { builderTierFor, nextBuilderTier, BUILDER_TIERS, SEASON_TIERS, seasonTierFor, SEASON_XP_PER_SIGNUP, REFEREE_TIERS, refereeTierFor, type SeasonTier } from "@shared/rewards";
 
 function token(bytes = 12): string { return crypto.randomBytes(bytes).toString("base64url"); }
 
@@ -322,4 +322,77 @@ export async function getSeasonDetail(id: number) {
 
 export async function fulfilSeasonReward(rewardId: number): Promise<void> {
   await db.update(rewardSeasonRewards).set({ status: "fulfilled" }).where(eq(rewardSeasonRewards.id, rewardId));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Referee Rewards (staff retention) — tokens derived live from final games
+// refereed + admin bonus tokens. Tiers unlock perks; pay-rate is display-only.
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function orgCompetitionIds(orgId: number): Promise<number[]> {
+  const comps = await db.select({ id: leagueCompetitions.id }).from(leagueCompetitions).where(eq(leagueCompetitions.organizationId, orgId));
+  return comps.map((c) => c.id);
+}
+
+export async function listReferees(orgId: number) {
+  const compIds = await orgCompetitionIds(orgId);
+  const byUser = new Map<number, { userId: number; name: string; email: string; gamesRefereed: number; assigned: number; bonus: number }>();
+
+  if (compIds.length > 0) {
+    const assignments = await db.select({
+      userId: leagueGameReferees.userId, status: leagueGames.status,
+      firstName: users.firstName, lastName: users.lastName, email: users.email,
+    }).from(leagueGameReferees)
+      .innerJoin(leagueGames, eq(leagueGameReferees.gameId, leagueGames.id))
+      .innerJoin(users, eq(leagueGameReferees.userId, users.id))
+      .where(inArray(leagueGames.competitionId, compIds));
+    for (const a of assignments) {
+      let r = byUser.get(a.userId);
+      if (!r) { r = { userId: a.userId, name: `${a.firstName} ${a.lastName}`.trim(), email: a.email, gamesRefereed: 0, assigned: 0, bonus: 0 }; byUser.set(a.userId, r); }
+      r.assigned++;
+      if (a.status === "final") r.gamesRefereed++;
+    }
+  }
+
+  const bonuses = await db.select().from(rewardRefBonus).where(eq(rewardRefBonus.organizationId, orgId));
+  const missingIds = Array.from(new Set(bonuses.map((b) => b.userId))).filter((id) => !byUser.has(id));
+  if (missingIds.length > 0) {
+    const us = await db.select().from(users).where(inArray(users.id, missingIds));
+    for (const u of us) byUser.set(u.id, { userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), email: u.email, gamesRefereed: 0, assigned: 0, bonus: 0 });
+  }
+  for (const b of bonuses) { const r = byUser.get(b.userId); if (r) r.bonus += b.tokens; }
+
+  return Array.from(byUser.values()).map((r) => {
+    const tokens = r.gamesRefereed + r.bonus;
+    const tier = refereeTierFor(tokens);
+    return { userId: r.userId, name: r.name, email: r.email, gamesRefereed: r.gamesRefereed, bonusTokens: r.bonus, tokens, tier: tier?.name ?? "—", payRateCents: tier?.payRateCents ?? null };
+  }).sort((a, b) => b.tokens - a.tokens);
+}
+
+export async function getRefereeDetail(orgId: number, userId: number) {
+  const [u] = await db.select().from(users).where(eq(users.id, userId));
+  if (!u) return null;
+  const compIds = await orgCompetitionIds(orgId);
+  const games = compIds.length > 0
+    ? await db.select({ id: leagueGames.id, gameDate: leagueGames.gameDate, status: leagueGames.status })
+        .from(leagueGameReferees)
+        .innerJoin(leagueGames, eq(leagueGameReferees.gameId, leagueGames.id))
+        .where(and(eq(leagueGameReferees.userId, userId), inArray(leagueGames.competitionId, compIds)))
+        .orderBy(desc(leagueGames.gameDate))
+    : [];
+  const bonus = await db.select().from(rewardRefBonus).where(and(eq(rewardRefBonus.organizationId, orgId), eq(rewardRefBonus.userId, userId))).orderBy(desc(rewardRefBonus.createdAt));
+  const gamesRefereed = games.filter((g) => g.status === "final").length;
+  const bonusTotal = bonus.reduce((s, b) => s + b.tokens, 0);
+  const tokens = gamesRefereed + bonusTotal;
+  const tier = refereeTierFor(tokens);
+  return {
+    referee: { userId, name: `${u.firstName} ${u.lastName}`.trim(), email: u.email, tokens, gamesRefereed, gamesAssigned: games.length, bonusTotal, tier: tier?.name ?? "—", payRateCents: tier?.payRateCents ?? null },
+    tiers: REFEREE_TIERS,
+    games: games.map((g) => ({ id: g.id, date: g.gameDate, status: g.status })),
+    bonus: bonus.map((b) => ({ id: b.id, tokens: b.tokens, note: b.note, at: b.createdAt })),
+  };
+}
+
+export async function addRefBonus(orgId: number, userId: number, tokens: number, note?: string): Promise<void> {
+  await db.insert(rewardRefBonus).values({ organizationId: orgId, userId, tokens, note: note ?? null });
 }

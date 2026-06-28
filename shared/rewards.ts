@@ -65,3 +65,32 @@ export function nextSeasonTier(xp: number): { tier: SeasonTier; xpAway: number }
   for (const t of SEASON_TIERS) if (xp < t.xp) return { tier: t, xpAway: t.xp - xp };
   return null;
 }
+
+// ── Referee Rewards (staff retention) ───────────────────────────────────────
+// +1 Ref Token per game refereed (game.status = 'final') + admin bonus tokens.
+// Tiers unlock perks; the pay-rate tiers are display-only (the club applies them).
+export interface RefereeTier {
+  name: string;
+  tokens: number;
+  perk: string;
+  payRateCents: number | null;  // base pay/game once reached (null = perk only)
+}
+
+export const REFEREE_TIERS: RefereeTier[] = [
+  { name: "Starter", tokens: 25, perk: "Keep your cards, coin toss & whistle", payRateCents: null },
+  { name: "Kickoff Club", tokens: 50, perk: "Keep your ref kit", payRateCents: null },
+  { name: "100 Club", tokens: 100, perk: "Base pay $24/game", payRateCents: 2400 },
+  { name: "VIP", tokens: 250, perk: "Base pay $25/game", payRateCents: 2500 },
+  { name: "Legends Club", tokens: 500, perk: "Base pay $26/game", payRateCents: 2600 },
+];
+
+export function refereeTierFor(tokens: number): RefereeTier | null {
+  let tier: RefereeTier | null = null;
+  for (const t of REFEREE_TIERS) if (tokens >= t.tokens) tier = t;
+  return tier;
+}
+
+export function nextRefereeTier(tokens: number): { tier: RefereeTier; tokensAway: number } | null {
+  for (const t of REFEREE_TIERS) if (tokens < t.tokens) return { tier: t, tokensAway: t.tokens - tokens };
+  return null;
+}

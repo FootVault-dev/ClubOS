@@ -4548,6 +4548,27 @@ export async function registerRoutes(
     catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
+  // ── Referee Rewards — admin ─────────────────────────────────────────────────
+  app.get("/api/admin/league/referees", requireAuth, async (_req, res) => {
+    try { res.json(await rewards.listReferees(MFL_ORG_ID)); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/admin/league/referees/:userId", requireAuth, async (req, res) => {
+    try {
+      const d = await rewards.getRefereeDetail(MFL_ORG_ID, parseInt(req.params.userId));
+      if (!d) return res.status(404).json({ message: "Referee not found" });
+      res.json(d);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/league/referees/:userId/bonus", requireAuth, async (req, res) => {
+    try {
+      const tokens = Math.round(Number(req.body.tokens) || 0);
+      if (!tokens) return res.status(400).json({ message: "tokens required" });
+      await rewards.addRefBonus(MFL_ORG_ID, parseInt(req.params.userId), tokens, req.body.note);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
   app.get("/api/admin/league/competitions/:id/standings", requireAuth, async (req, res) => {
     try {
       const divisionId = req.query.divisionId ? parseInt(req.query.divisionId as string) : undefined;
