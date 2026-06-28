@@ -66,6 +66,7 @@ import LeagueCompetitions from "@/pages/league-competitions";
 import LeagueCompetitionDetail, { LeagueDetail } from "@/pages/league-competition-detail";
 import LeagueTeams from "@/pages/league-teams";
 import LeaguePayments from "@/pages/league-payments";
+import LeagueMailer from "@/pages/league-mailer";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
 import GymnasticsPrograms from "@/pages/gymnastics-programs";
@@ -220,6 +221,7 @@ function AdminRouter() {
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />
         <Route path="/admin/payments" component={LeaguePayments} />
+        <Route path="/admin/mailer" component={LeagueMailer} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
         <Route path="/admin/discounts" component={AdminDiscounts} />

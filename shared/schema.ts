@@ -454,6 +454,18 @@ export const emailCampaigns = pgTable("email_campaigns", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Email suppression list — anyone who unsubscribed from broadcasts. Per-org
+// (organizationId null = global). The mailer audience resolver excludes these.
+export const emailUnsubscribes = pgTable("email_unsubscribes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id"),
+  email: text("email").notNull(),
+  source: text("source"), // e.g. 'league_broadcast'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgEmailUnq: uniqueIndex("email_unsub_org_email_unq").on(t.organizationId, t.email),
+}));
+
 export const auditLogs = pgTable("audit_logs", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   userId: integer("user_id").references(() => users.id),
@@ -1065,6 +1077,9 @@ export const insertAttendanceSchema = createInsertSchema(attendance).omit({ id: 
 export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({ id: true, sentAt: true });
 export const insertMetaEventLogSchema = createInsertSchema(metaEventLogs).omit({ id: true, sentAt: true });
 export const insertEmailCampaignSchema = createInsertSchema(emailCampaigns).omit({ id: true, createdAt: true, sentAt: true });
+export const insertEmailUnsubscribeSchema = createInsertSchema(emailUnsubscribes).omit({ id: true, createdAt: true });
+export type InsertEmailUnsubscribe = z.infer<typeof insertEmailUnsubscribeSchema>;
+export type EmailUnsubscribe = typeof emailUnsubscribes.$inferSelect;
 
 export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
 export const insertUserOrganizationSchema = createInsertSchema(userOrganizations).omit({ id: true });

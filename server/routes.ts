@@ -1,19 +1,19 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, bookingRequests } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, bookingRequests } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
-import { eq, and, sql, asc, desc, inArray, isNull } from "drizzle-orm";
+import { eq, and, or, sql, asc, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail } from "./email";
 import * as splitPay from "./split-pay";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
@@ -4296,6 +4296,104 @@ export async function registerRoutes(
       if (r.error) return res.status(400).json({ message: r.error });
       res.json(r);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── MFL Mailer / CRM ────────────────────────────────────────────────────────
+  // The full MFL contact database (captains + Player Pay squad players), deduped
+  // by email, with an unsubscribed flag. ?competitionId= filters to one term.
+  app.get("/api/admin/league/mailer/contacts", requireAuth, async (req, res) => {
+    try {
+      const compId = req.query.competitionId ? parseInt(String(req.query.competitionId)) : null;
+      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: "all" });
+      const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
+      const contacts = recipients.map((r) => ({ ...r, unsubscribed: unsub.has(r.email) }));
+      res.json({ contacts, total: contacts.length, unsubscribedCount: contacts.filter((c) => c.unsubscribed).length });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Recent broadcasts (history) — league campaigns only.
+  app.get("/api/admin/league/mailer/campaigns", requireAuth, async (_req, res) => {
+    try {
+      const all = await storage.getEmailCampaigns();
+      res.json(all.filter((c) => String(c.segmentType || "").startsWith("league")));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Live recipient count for the chosen audience (excludes unsubscribed).
+  app.post("/api/admin/league/mailer/preview", requireAuth, async (req, res) => {
+    try {
+      const compId = req.body.competitionId ? parseInt(String(req.body.competitionId)) : null;
+      const audience = req.body.audience === "all" ? "all" : "captains";
+      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience });
+      const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
+      res.json({ count: recipients.filter((r) => !unsub.has(r.email)).length });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send a single test (to the admin's own address) — safe preview, no DB blast.
+  app.post("/api/admin/league/mailer/test-send", requireAuth, async (req, res) => {
+    try {
+      const { to, subject, body, replyTo } = req.body || {};
+      const dest = String(to || "").trim();
+      if (!dest || !String(subject || "").trim() || !String(body || "").trim()) {
+        return res.status(400).json({ message: "to, subject and body are required" });
+      }
+      const ok = await sendLeagueBroadcastEmail({
+        to: dest, subject: `[TEST] ${String(subject).trim()}`, bodyHtml: String(body),
+        replyTo: replyTo || undefined, unsubscribeUrl: mflUnsubUrl(MFL_ORG_ID, dest),
+      });
+      res.json({ ok });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send the broadcast to the resolved audience (batched, MFL-branded, logged).
+  app.post("/api/admin/league/mailer/send", requireAuth, async (req, res) => {
+    try {
+      const { subject, body, competitionId, audience, replyTo } = req.body || {};
+      const subj = String(subject || "").trim();
+      if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
+      if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
+      const aud = audience === "all" ? "all" : "captains";
+      const compId = competitionId ? parseInt(String(competitionId)) : null;
+
+      const all = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: aud });
+      const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
+      const recipients = all.filter((r) => !unsub.has(r.email));
+      if (recipients.length === 0) return res.status(400).json({ message: "No recipients in this audience" });
+
+      const [campaign] = await db.insert(emailCampaigns).values({
+        subject: subj, body: String(body),
+        fromEmail: "Mini Football Leagues <noreply@cufc.co.nz>",
+        replyTo: replyTo || "minifootball@cufc.co.nz",
+        segmentType: `league_${aud}`,
+        segmentConfig: JSON.stringify({ orgId: MFL_ORG_ID, competitionId: compId, audience: aud }),
+        recipientCount: recipients.length, status: "sending",
+      }).returning();
+
+      let sent = 0, failed = 0;
+      const BATCH = 40, DELAY_MS = 1100;
+      for (let i = 0; i < recipients.length; i += BATCH) {
+        const slice = recipients.slice(i, i + BATCH);
+        const results = await Promise.all(slice.map(async (r) => {
+          try {
+            return await sendLeagueBroadcastEmail({
+              to: r.email, subject: subj, bodyHtml: String(body), replyTo: replyTo || undefined,
+              unsubscribeUrl: mflUnsubUrl(MFL_ORG_ID, r.email), campId: undefined,
+            });
+          } catch { return false; }
+        }));
+        sent += results.filter(Boolean).length;
+        failed += results.filter((x) => !x).length;
+        if (i + BATCH < recipients.length) await new Promise((res2) => setTimeout(res2, DELAY_MS));
+      }
+
+      await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed, status: "sent", sentAt: new Date() })
+        .where(eq(emailCampaigns.id, campaign.id));
+      res.json({ recipientCount: recipients.length, sentCount: sent, failedCount: failed });
+    } catch (e: any) {
+      console.error("[League mailer send] error:", e);
+      res.status(400).json({ message: e.message });
+    }
   });
 
   app.get("/api/admin/league/competitions/:id/standings", requireAuth, async (req, res) => {
@@ -10911,6 +11009,23 @@ export async function registerRoutes(
     }
   });
 
+  // Public one-click unsubscribe from MFL broadcasts (link in every newsletter).
+  // Stateless signed token (HMAC of org:email) — no auth, no enumeration.
+  app.get("/api/public/unsubscribe", async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.o || ""));
+      const email = String(req.query.e || "").trim().toLowerCase();
+      const token = String(req.query.t || "");
+      if (!orgId || !email || mflUnsubToken(orgId, email) !== token) {
+        return res.status(400).send(mflUnsubPage("This unsubscribe link is invalid or has expired. Reply to any email and we'll remove you."));
+      }
+      await db.insert(emailUnsubscribes).values({ organizationId: orgId, email, source: "league_broadcast" }).onConflictDoNothing();
+      res.send(mflUnsubPage("You've been unsubscribed. You won't receive any more Mini Football Leagues newsletters. You'll still get essential emails about teams you've registered."));
+    } catch (e: any) {
+      res.status(500).send(mflUnsubPage("Something went wrong. Reply to any email and we'll remove you manually."));
+    }
+  });
+
   // ── Split Pay public endpoints ──────────────────────────────────────────────
   // The squad-facing split flow. Amounts are always server-authoritative; the
   // organiser/member tokens (issued at create/join) gate the privileged actions.
@@ -12412,4 +12527,64 @@ async function settleSplitSession(sessionId: number) {
   } catch (e) {
     console.error("[SplitPay] team-confirmed email failed:", e);
   }
+}
+
+// ── MFL Mailer / CRM helpers ──────────────────────────────────────────────────
+// Audience resolver + suppression list + stateless unsubscribe tokens, shared by
+// the league mailer endpoints. orgId is passed in (MFL = 3).
+
+const UNSUB_SECRET = process.env.SESSION_SECRET || process.env.STRIPE_WEBHOOK_SECRET || "mfl-unsub-secret-v1";
+function mflUnsubToken(orgId: number, email: string): string {
+  return crypto.createHmac("sha256", UNSUB_SECRET).update(`${orgId}:${email.trim().toLowerCase()}`).digest("hex").slice(0, 32);
+}
+function mflUnsubUrl(orgId: number, email: string): string {
+  return `https://join.minifootball.co.nz/api/public/unsubscribe?o=${orgId}&e=${encodeURIComponent(email)}&t=${mflUnsubToken(orgId, email)}`;
+}
+
+async function getUnsubscribedEmails(orgId: number): Promise<Set<string>> {
+  const rows = await db.select({ email: emailUnsubscribes.email })
+    .from(emailUnsubscribes)
+    .where(or(eq(emailUnsubscribes.organizationId, orgId), isNull(emailUnsubscribes.organizationId)));
+  return new Set(rows.map((r) => (r.email || "").trim().toLowerCase()));
+}
+
+type MflContact = { name: string; email: string; phone: string; role: string; team: string; term: string };
+
+// Build the MFL contact database: captains (from team registrations) + squad
+// players (from Player Pay splits), deduped by email. audience 'captains' skips
+// players. competitionId null = every term.
+async function resolveMflAudience(orgId: number, opts: { competitionId: number | null; audience: "captains" | "all" }): Promise<MflContact[]> {
+  const comps = await storage.getLeagueCompetitions(orgId);
+  const targetComps = opts.competitionId ? comps.filter((c) => c.id === opts.competitionId) : comps;
+  const byEmail = new Map<string, MflContact>();
+
+  for (const comp of targetComps) {
+    const regs = await storage.getLeagueRegistrations(comp.id);
+    for (const r of regs) {
+      const email = String(r.captainEmail || "").trim().toLowerCase();
+      if (!email) continue;
+      if (!byEmail.has(email)) {
+        byEmail.set(email, { name: r.captainName || "", email, phone: r.captainPhone || "", role: "Captain", team: r.teamName || "", term: comp.name });
+      }
+    }
+    if (opts.audience === "all") {
+      const members = await splitPay.listSplitMembersForOrg(orgId, comp.id);
+      for (const m of members) {
+        const email = String(m.email || "").trim().toLowerCase();
+        if (!email || byEmail.has(email)) continue;
+        byEmail.set(email, { name: m.name || "", email, phone: m.phone || "", role: m.role === "organiser" ? "Captain" : "Player", team: m.teamName || "", term: comp.name });
+      }
+    }
+  }
+  return [...byEmail.values()];
+}
+
+function mflUnsubPage(message: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mini Football Leagues</title></head>
+  <body style="margin:0;background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <div style="max-width:480px;margin:0 auto;padding:64px 24px;text-align:center;">
+      <img src="https://join.minifootball.co.nz/logos/mini-football-leagues.png" alt="Mini Football Leagues" width="72" height="72" style="margin:0 0 20px;" />
+      <p style="font-size:16px;line-height:1.6;color:#e6e6e6;">${message}</p>
+    </div>
+  </body></html>`;
 }

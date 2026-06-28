@@ -603,6 +603,26 @@ async function doCancel(s: SplitSession): Promise<{ ok?: boolean; error?: string
   return { ok: true, refunded };
 }
 
+// All squad members across an org's splits (optionally one competition) — used by
+// the MFL mailer to build the player side of the contact database. Excludes
+// removed members; emails/phones come straight off split_members.
+export async function listSplitMembersForOrg(organizationId: number, competitionId?: number): Promise<Array<{
+  name: string | null; email: string; phone: string | null; role: string; status: string;
+  teamName: string | null; divisionName: string | null;
+}>> {
+  const conds = [eq(splitSessions.organizationId, organizationId), ne(splitMembers.status, "removed")];
+  if (competitionId) conds.push(eq(leagueDivisions.competitionId, competitionId));
+  return db.select({
+    name: splitMembers.name, email: splitMembers.email, phone: splitMembers.phone,
+    role: splitMembers.role, status: splitMembers.status,
+    teamName: splitSessions.teamName, divisionName: leagueDivisions.name,
+  })
+    .from(splitMembers)
+    .innerJoin(splitSessions, eq(splitMembers.splitSessionId, splitSessions.id))
+    .leftJoin(leagueDivisions, eq(splitSessions.leagueDivisionId, leagueDivisions.id))
+    .where(and(...conds));
+}
+
 // ── Admin views ──────────────────────────────────────────────────────────────
 export async function listSplitsForCompetition(competitionId: number) {
   const rows = await db.select().from(splitSessions)

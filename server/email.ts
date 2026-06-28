@@ -215,6 +215,35 @@ function mflRow(label: string, value: string, emphasise = false): string {
   </tr>`;
 }
 
+/**
+ * MFL broadcast / newsletter — wraps the composer's rich HTML in the black+gold
+ * MFL shell with the subject as the heading and a functional unsubscribe link.
+ * Sent one-per-recipient (the mailer route batches). The unsubscribeUrl is a
+ * per-recipient signed link the public /api/public/unsubscribe route honours.
+ */
+export async function sendLeagueBroadcastEmail(params: {
+  to: string;
+  subject: string;
+  bodyHtml: string;
+  replyTo?: string;
+  unsubscribeUrl: string;
+  campId?: number;
+}): Promise<boolean> {
+  const unsubFooter = `
+    <p style="color:#5a5a5a; font-size:11px; line-height:1.6; margin:18px 0 0; border-top:1px solid #1f1f1f; padding-top:14px;">
+      You're receiving this because you registered a team or player with Mini Football Leagues.
+      <a href="${params.unsubscribeUrl}" style="color:#8a8a8a; text-decoration:underline;">Unsubscribe</a>
+    </p>`;
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: params.replyTo || MFL_REPLY_TO,
+    subject: params.subject,
+    html: mflShell({ heading: params.subject, bodyHtml: params.bodyHtml + unsubFooter }),
+    ...(params.campId ? { campId: params.campId } : {}),
+  });
+}
+
 /** Registration confirmation — adapts to pay-in-full / deposit+weekly / deposit+balance. */
 export async function sendLeagueConfirmationEmail(params: {
   registrationId: number;
