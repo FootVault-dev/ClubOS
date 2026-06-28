@@ -15,6 +15,7 @@ import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, crea
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
 import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail } from "./email";
 import * as splitPay from "./split-pay";
+import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
 import { cellsOverlap } from "@shared/field-cells";
@@ -4507,6 +4508,27 @@ export async function registerRoutes(
       console.error("[League mailer send] error:", e);
       res.status(400).json({ message: e.message });
     }
+  });
+
+  // ── League Builders (referral rewards) — admin ──────────────────────────────
+  app.get("/api/admin/league/builders", requireAuth, async (_req, res) => {
+    try { res.json(await rewards.listBuilders(MFL_ORG_ID)); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/admin/league/builders/:id", requireAuth, async (req, res) => {
+    try {
+      const d = await rewards.getBuilderDetail(parseInt(req.params.id));
+      if (!d) return res.status(404).json({ message: "Builder not found" });
+      res.json(d);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/league/builders/:id/credit-used", requireAuth, async (req, res) => {
+    try {
+      const cents = Math.round(Number(req.body.amountCents) || 0);
+      if (cents <= 0) return res.status(400).json({ message: "amountCents required" });
+      await rewards.recordCreditUsed(parseInt(req.params.id), cents, req.body.note);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   app.get("/api/admin/league/competitions/:id/standings", requireAuth, async (req, res) => {
@@ -11122,6 +11144,25 @@ export async function registerRoutes(
     }
   });
 
+  // ── League Builders — public (opt-in join + My Builder dashboard) ───────────
+  app.post("/api/public/league/builders/join", async (req, res) => {
+    try {
+      const name = String(req.body.name || "").trim();
+      const email = String(req.body.email || "").trim().toLowerCase();
+      const phone = String(req.body.phone || "").trim();
+      if (!name || !/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Name and a valid email are required" });
+      const b = await rewards.joinBuilder({ organizationId: MFL_ORG_ID, name, email, phone: phone || undefined });
+      res.json({ inviteToken: b.inviteToken, builderCode: b.builderCode });
+    } catch (e: any) { console.error("[Builders join] error:", e); res.status(400).json({ message: e.message }); }
+  });
+  app.get("/api/public/league/builders/:token", async (req, res) => {
+    try {
+      const view = await rewards.getBuilderViewByToken(req.params.token, "https://join.minifootball.co.nz");
+      if (!view) return res.status(404).json({ message: "Not found" });
+      res.json(view);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
   // Public one-click unsubscribe from MFL broadcasts (link in every newsletter).
   // Stateless signed token (HMAC of org:email) — no auth, no enumeration.
   app.get("/api/public/unsubscribe", async (req, res) => {
@@ -12540,6 +12581,19 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
     stripePaymentMethodId: paymentMethodId,
     balanceStatus: hasPendingBalance ? "scheduled" : "paid",
   });
+
+  // League Builders: if this confirmed team used a builder referral code, award
+  // the builder their points + account credit (idempotent per registration).
+  try {
+    await rewards.attributeReferral({
+      organizationId: program.organizationId!,
+      registrationId,
+      discountCodeRaw: (reg as any).discountCode ?? null,
+      referredEmail: captain.email ?? null,
+      referredContactId: reg.contactId ?? null,
+      teamName: reg.teamName ?? null,
+    });
+  } catch (e) { console.error("[Builders] attribution failed:", e); }
 
   // deposit_weekly: stand up the weekly Stripe subscription on the saved card,
   // anchored to the competition start. Guarded against a webhook re-fire making

@@ -66,6 +66,18 @@ export default function MflRegisterPage() {
     }
   }, []);
 
+  // League Builders referral: a ?ref=BUILD-… link (or one captured on the landing
+  // page) auto-applies the builder's code so the referral attributes on confirm.
+  useEffect(() => {
+    let ref = "";
+    try {
+      ref = (new URLSearchParams(window.location.search).get("ref") || sessionStorage.getItem("mfl_ref") || "").trim();
+      if (ref) sessionStorage.setItem("mfl_ref", ref);
+    } catch { /* noop */ }
+    if (ref) setCodes((prev) => (prev.includes(ref) ? prev : [...prev, ref]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     fetch(`/api/public/league/register/${slug}`)
       .then((r) => { if (!r.ok) throw new Error("not found"); return r.json(); })

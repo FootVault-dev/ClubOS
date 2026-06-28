@@ -68,6 +68,8 @@ import LeagueCompetitionDetail, { LeagueDetail } from "@/pages/league-competitio
 import LeagueTeams from "@/pages/league-teams";
 import LeaguePayments from "@/pages/league-payments";
 import LeagueMailer from "@/pages/league-mailer";
+import LeagueRewards from "@/pages/league-rewards";
+import LeagueBuilderPage from "@/pages/league-builder-page";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
 import GymnasticsPrograms from "@/pages/gymnastics-programs";
@@ -223,6 +225,7 @@ function AdminRouter() {
         <Route path="/admin/teams" component={LeagueTeams} />
         <Route path="/admin/payments" component={LeaguePayments} />
         <Route path="/admin/mailer" component={LeagueMailer} />
+        <Route path="/admin/rewards" component={LeagueRewards} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
         <Route path="/admin/discounts" component={AdminDiscounts} />
@@ -386,6 +389,9 @@ function App() {
             {/* Split Pay hub — captain splits a fixed team fee across the squad.
                 3-segment route; must precede the 2-segment /league/:slug. */}
             <Route path="/league/split/:code" component={MflSplitPage} />
+            {/* League Builders (referral hub) — must precede /league/:slug. */}
+            <Route path="/league/builders/:token" component={LeagueBuilderPage} />
+            <Route path="/league/builders" component={LeagueBuilderPage} />
             {/* Literal legal routes must precede /league/:slug (else slug='privacy') */}
             <Route path="/league/privacy">{() => <MflLegalPage kind="privacy" />}</Route>
             <Route path="/league/delete-account">{() => <MflLegalPage kind="delete" />}</Route>

@@ -454,6 +454,49 @@ export const emailCampaigns = pgTable("email_campaigns", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// ── League Builders (referral / affiliate rewards) ──────────────────────────
+// Opt-in: a member joins → gets a personal stackable 10% discount code + invite
+// link. Referred teams' confirmed registrations award Builder Points (+3 first
+// league per referred captain, +1 each extra) and accrue ACCOUNT CREDIT (cash-
+// equivalent commission at the builder's tier) toward their own fees.
+export const rewardBuilders = pgTable("reward_builders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  contactId: integer("contact_id"),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  builderCode: text("builder_code").notNull(),   // the stackable 10% discount code
+  discountId: integer("discount_id"),            // the discounts row backing the code
+  inviteToken: text("invite_token").notNull(),   // public token for the share link + My Builder page
+  points: integer("points").notNull().default(0),
+  creditEarnedCents: integer("credit_earned_cents").notNull().default(0),
+  creditUsedCents: integer("credit_used_cents").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  builderCodeUnq: uniqueIndex("reward_builders_code_unq").on(t.builderCode),
+  inviteTokenUnq: uniqueIndex("reward_builders_invite_unq").on(t.inviteToken),
+  orgEmailUnq: uniqueIndex("reward_builders_org_email_unq").on(t.organizationId, t.email),
+}));
+
+// Immutable ledger: every point/credit movement. One referral event per
+// registration (unique registrationId) makes attribution idempotent.
+export const rewardBuilderEvents = pgTable("reward_builder_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  builderId: integer("builder_id").notNull().references(() => rewardBuilders.id, { onDelete: "cascade" }),
+  type: text("type").notNull(),  // 'referral_first' | 'referral_extra' | 'credit_used' | 'adjust'
+  points: integer("points").notNull().default(0),
+  commissionCents: integer("commission_cents").notNull().default(0),
+  registrationId: integer("registration_id"),
+  referredEmail: text("referred_email"),
+  referredTeamName: text("referred_team_name"),
+  tierAtEarning: text("tier_at_earning"),
+  note: text("note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  regUnq: uniqueIndex("reward_builder_events_reg_unq").on(t.registrationId),
+}));
+
 // Email suppression list — anyone who unsubscribed from broadcasts. Per-org
 // (organizationId null = global). The mailer audience resolver excludes these.
 export const emailUnsubscribes = pgTable("email_unsubscribes", {
@@ -1087,6 +1130,8 @@ export const insertEmailCampaignSchema = createInsertSchema(emailCampaigns).omit
 export const insertEmailUnsubscribeSchema = createInsertSchema(emailUnsubscribes).omit({ id: true, createdAt: true });
 export type InsertEmailUnsubscribe = z.infer<typeof insertEmailUnsubscribeSchema>;
 export type EmailUnsubscribe = typeof emailUnsubscribes.$inferSelect;
+export type RewardBuilder = typeof rewardBuilders.$inferSelect;
+export type RewardBuilderEvent = typeof rewardBuilderEvents.$inferSelect;
 
 export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
 export const insertUserOrganizationSchema = createInsertSchema(userOrganizations).omit({ id: true });

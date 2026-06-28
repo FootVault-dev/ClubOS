@@ -107,6 +107,7 @@ const leagueNav = [
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
+  { tab: "rewards", title: "Rewards", url: "/admin/rewards", icon: Award },
 ];
 
 const venueSecondary = [

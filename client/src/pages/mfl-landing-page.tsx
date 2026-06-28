@@ -68,6 +68,12 @@ export default function MflLandingPage() {
   const [loading, setLoading] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
+  // League Builders: capture a ?ref=BUILD-… referral code so it carries through
+  // to the register page and attributes the referral on checkout.
+  useEffect(() => {
+    try { const ref = new URLSearchParams(window.location.search).get("ref"); if (ref) sessionStorage.setItem("mfl_ref", ref.trim()); } catch { /* noop */ }
+  }, []);
+
   // Init the shared Meta pixel + ViewContent (tagged for MFL).
   useEffect(() => {
     const pixelId = (import.meta as any).env?.VITE_META_PIXEL_ID;
