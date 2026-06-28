@@ -233,8 +233,10 @@ export async function joinSplit(code: string, body: { name?: string; email: stri
   if (s.status !== "open") return { error: "closed" as const };
   const email = String(body.email || "").trim().toLowerCase();
   if (!email || !/.+@.+\..+/.test(email)) return { error: "invalid_email" as const };
+  const phone = String(body.phone || "").trim();
+  if (!phone) return { error: "Please add a mobile number." as const };
 
-  const customer = await getOrCreateCustomer({ email, name: body.name, phone: body.phone });
+  const customer = await getOrCreateCustomer({ email, name: body.name, phone });
   const shareCents = memberShareCents(s);
 
   const existing = (await membersOf(s.id)).find((m) => m.email.toLowerCase() === email);

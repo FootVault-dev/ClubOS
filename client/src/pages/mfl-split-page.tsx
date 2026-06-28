@@ -354,7 +354,7 @@ export default function MflSplitPage() {
 
   const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!joinName.trim() || !joinEmail.trim()) { setJoinError("Please add your name and email."); return; }
+    if (!joinName.trim() || !joinEmail.trim() || !joinPhone.trim()) { setJoinError("Please add your name, email and mobile number."); return; }
     setJoining(true); setJoinError(null);
     try {
       const res = await fetch(`/api/public/league/split/${code}/join`, {
@@ -685,7 +685,7 @@ function ViewerPanel(props: {
             <input type="email" className={inputCls} style={inputStyle} value={joinEmail} onChange={(e) => setJoinEmail(e.target.value)} placeholder="you@email.com" data-testid="input-join-email" />
           </div>
           <div>
-            <label className="block text-sm font-semibold mb-1.5">Mobile <span style={{ color: BRAND.dim }}>(optional)</span></label>
+            <label className="block text-sm font-semibold mb-1.5">Mobile</label>
             <input className={inputCls} style={inputStyle} value={joinPhone} onChange={(e) => setJoinPhone(e.target.value)} placeholder="021…" data-testid="input-join-phone" />
           </div>
           {joinError && <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(220,38,38,0.12)", color: BRAND.red, border: "1px solid rgba(220,38,38,0.3)" }}>{joinError}</div>}
