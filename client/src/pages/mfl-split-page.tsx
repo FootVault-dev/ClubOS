@@ -655,11 +655,10 @@ export default function MflSplitPage() {
         )}
       </motion.div>
 
-      {/* Counters */}
+      {/* Counters — match PayShare: squad target is the denominator for both */}
       <div className="flex gap-3 mb-5">
         <Counter value={view.joinedCount} total={view.targetCount || view.joinedCount} label="Joined" />
-        <Counter value={view.cardCount} total={view.joinedCount} label="Cards in" />
-        <Counter value={view.paidCount} total={view.joinedCount} label="Paid" />
+        <Counter value={view.paidCount} total={view.targetCount || view.joinedCount} label="Paid" />
       </div>
 
       {/* ── Viewer's own status / action ── */}
@@ -748,7 +747,7 @@ export default function MflSplitPage() {
       {/* Group status modal */}
       <Modal open={showGroup} onClose={() => setShowGroup(false)}>
         <h3 className="text-lg font-bold tracking-tight">Group status</h3>
-        <p className="text-sm mt-1 mb-4" style={{ color: BRAND.muted }}>{view.cardCount} of {view.joinedCount} ready · {view.paidCount} paid</p>
+        <p className="text-sm mt-1 mb-4" style={{ color: BRAND.muted }}>{view.joinedCount} of {view.targetCount || view.joinedCount} joined · {view.paidCount} paid</p>
         <div className="space-y-2 max-h-[55vh] overflow-y-auto -mx-1 px-1">
           {view.members.filter((m) => m.status !== "removed").map((m) => (
             <div key={m.id} className="flex items-center justify-between gap-3 rounded-xl px-3.5 py-3" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}` }}>
