@@ -49,7 +49,7 @@ function JoinForm() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !email.trim()) { setError("Please add your name and email."); return; }
+    if (!name.trim() || !email.trim() || !phone.trim()) { setError("Please add your name, email and mobile number."); return; }
     setBusy(true); setError(null);
     try {
       const r = await fetch("/api/public/league/builders/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim(), email: email.trim(), phone: phone.trim() }) });
@@ -71,7 +71,7 @@ function JoinForm() {
         <form onSubmit={submit} className="space-y-3">
           <div><label className="block text-sm font-semibold mb-1.5">Your name</label><input className={input} style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" data-testid="builder-join-name" /></div>
           <div><label className="block text-sm font-semibold mb-1.5">Email</label><input type="email" className={input} style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" data-testid="builder-join-email" /></div>
-          <div><label className="block text-sm font-semibold mb-1.5">Mobile <span style={{ color: B.dim }}>(optional)</span></label><input className={input} style={inputStyle} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="021…" data-testid="builder-join-phone" /></div>
+          <div><label className="block text-sm font-semibold mb-1.5">Mobile</label><input className={input} style={inputStyle} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="021…" data-testid="builder-join-phone" /></div>
           {error && <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(220,38,38,0.12)", color: "#fca5a5", border: "1px solid rgba(220,38,38,0.3)" }}>{error}</div>}
           <button type="submit" disabled={busy} className="w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-[16px] disabled:opacity-60" style={{ background: B.gold, color: B.black }} data-testid="builder-join-submit">
             {busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Setting you up…</> : <>Get my Builder code</>}

@@ -11151,7 +11151,8 @@ export async function registerRoutes(
       const email = String(req.body.email || "").trim().toLowerCase();
       const phone = String(req.body.phone || "").trim();
       if (!name || !/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Name and a valid email are required" });
-      const b = await rewards.joinBuilder({ organizationId: MFL_ORG_ID, name, email, phone: phone || undefined });
+      if (!phone) return res.status(400).json({ message: "A mobile number is required" });
+      const b = await rewards.joinBuilder({ organizationId: MFL_ORG_ID, name, email, phone });
       res.json({ inviteToken: b.inviteToken, builderCode: b.builderCode });
     } catch (e: any) { console.error("[Builders join] error:", e); res.status(400).json({ message: e.message }); }
   });
