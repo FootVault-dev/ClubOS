@@ -618,7 +618,7 @@ export async function listSplitsForCompetition(competitionId: number) {
     const paid = active.filter((m) => m.status === "paid");
     out.push({
       id: s.id, shareCode: s.shareCode, teamName: s.teamName, divisionName: div?.name ?? null,
-      status: s.status, totalCents: s.totalCents,
+      status: s.status, totalCents: s.totalCents, targetCount: s.targetCount,
       joinedCount: active.length,
       cardCount: active.filter((m) => m.status === "card_saved" || m.status === "paid").length,
       paidCount: paid.length,

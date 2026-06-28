@@ -29,6 +29,22 @@ const PAY_LABEL: Record<string, string> = {
   paid_in_full: "Paid", deposit_paid: "Deposit", refunded: "Refunded", partially_refunded: "Part. refund", unpaid: "Unpaid",
 };
 
+// How the team is paying — Player Pay (split across squad), Play Now Pay Later
+// (deposit + weekly instalments), or Card (paid upfront in one go).
+const METHOD_BADGE: Record<string, string> = {
+  split: "bg-violet-500/15 text-violet-300",
+  weekly: "bg-sky-500/15 text-sky-300",
+  card: "bg-white/10 text-white/55",
+};
+const METHOD_LABEL: Record<string, string> = {
+  split: "Player Pay", weekly: "Play Now, Pay Later", card: "Card",
+};
+function methodKey(mode: string | null): "split" | "weekly" | "card" {
+  if (mode === "split") return "split";
+  if (mode === "deposit_weekly" || mode === "weekly") return "weekly";
+  return "card";
+}
+
 export default function LeaguePayments() {
   const { currentOrg } = useWorkspace();
   const orgId = currentOrg?.id;
@@ -68,11 +84,11 @@ export default function LeaguePayments() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white">Payments</h1>
-          <p className="text-sm text-white/40 mt-1">{view === "splits" ? "Track and recover split-pay teams across the league" : "What's been collected across the league"}</p>
+          <p className="text-sm text-white/40 mt-1">{view === "splits" ? "Player Pay teams — who's paid, who to follow up" : "What's been collected across the league"}</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <div className="inline-flex rounded-lg border border-white/5 bg-white/[0.02] p-0.5" data-testid="payments-view-toggle">
-            {([["registrations", "Registrations"], ["splits", "Splits"]] as const).map(([v, label]) => (
+            {([["registrations", "Registrations"], ["splits", "Player Pay"]] as const).map(([v, label]) => (
               <button
                 key={v}
                 onClick={() => setView(v)}
@@ -122,7 +138,7 @@ export default function LeaguePayments() {
               <table className="w-full min-w-[760px]">
                 <thead>
                   <tr className="border-b border-white/5">
-                    {["Team", "League", "Captain", "Status", "Paid", "Balance"].map(h => (
+                    {["Team", "League", "Captain", "Method", "Status", "Paid", "Balance"].map(h => (
                       <th key={h} className="text-left text-[10px] text-white/30 uppercase px-4 py-2 font-semibold">{h}</th>
                     ))}
                   </tr>
@@ -138,6 +154,11 @@ export default function LeaguePayments() {
                           {r.captainEmail && <a href={`mailto:${r.captainEmail}`} onClick={e => e.stopPropagation()} className="flex items-center gap-1 hover:text-white/50"><Mail className="w-3 h-3" />{r.captainEmail}</a>}
                           {r.captainPhone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{r.captainPhone}</span>}
                         </div>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full ${METHOD_BADGE[methodKey(r.paymentMode)]}`}>
+                          {METHOD_LABEL[methodKey(r.paymentMode)]}
+                        </span>
                       </td>
                       <td className="px-4 py-2.5">
                         <span className={`text-[10px] px-2 py-0.5 rounded-full ${PAY_BADGE[r.paymentStatus] || PAY_BADGE.unpaid}`}>
@@ -207,7 +228,10 @@ function PaymentBreakdownModal({ reg, onClose }: { reg: LeagueReg; onClose: () =
       <div className="bg-[#0a0e1a] border border-blue-500/15 rounded-2xl w-full max-w-lg shadow-2xl max-h-[88vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-white/5">
           <div>
-            <h2 className="text-lg font-semibold text-white">{reg.teamName || `#${reg.id}`}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-white">{reg.teamName || `#${reg.id}`}</h2>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${METHOD_BADGE[methodKey(reg.paymentMode)]}`}>{METHOD_LABEL[methodKey(reg.paymentMode)]}</span>
+            </div>
             <p className="text-xs text-white/40 mt-0.5">{reg.captainName}{reg.divisionName ? ` · ${reg.divisionName}` : ""}</p>
           </div>
           <button onClick={onClose} className="text-white/30 hover:text-white/60"><X className="w-5 h-5" /></button>
@@ -217,6 +241,11 @@ function PaymentBreakdownModal({ reg, onClose }: { reg: LeagueReg; onClose: () =
           <div className="p-10 text-center text-white/20 text-sm">Loading…</div>
         ) : (
           <div className="p-5 overflow-y-auto flex-1 space-y-5">
+            {reg.paymentMode === "split" && (
+              <div className="rounded-lg border border-violet-500/20 bg-violet-500/[0.06] px-3 py-2.5 text-[11px] text-violet-200/80 leading-relaxed">
+                Funded via <span className="font-semibold">Player Pay</span> — each player paid their own share. Open the <span className="font-semibold">Player Pay</span> tab to see who's paid and chase anyone outstanding.
+              </div>
+            )}
             {/* Summary */}
             <div className="grid grid-cols-3 gap-3">
               {[
@@ -277,16 +306,16 @@ function PaymentBreakdownModal({ reg, onClose }: { reg: LeagueReg; onClose: () =
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Split Pay — monitoring + recovery view
-   Captains split an MFL team fee across their squad (each member pays their own
-   share; lock-then-charge). Coordinators watch progress here and recover stuck
-   splits (re-charge declined cards, or cancel + refund).
+   Player Pay — monitoring + follow-up view
+   Captains split an MFL team fee across their squad; each player pays their own
+   share on the spot (charge-on-pay). Coordinators watch progress here — who's
+   paid vs outstanding (with contact details to chase) — and can cancel + refund.
    ────────────────────────────────────────────────────────────────────────── */
 
 type SplitRow = {
   id: number; shareCode: string; teamName: string | null; divisionName: string | null;
   status: "open" | "settling" | "settled" | "cancelled" | "failed";
-  totalCents: number; joinedCount: number; cardCount: number; paidCount: number;
+  totalCents: number; targetCount: number | null; joinedCount: number; cardCount: number; paidCount: number;
   collectedCents: number; createdAt: string; lockedAt: string | null; settledAt: string | null;
 };
 
@@ -341,8 +370,8 @@ function SplitsView({ competitionId }: { competitionId: number | null }) {
         <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-5">
           <div className="flex flex-col items-center justify-center py-16 text-white/20">
             <Users className="w-12 h-12 mb-3" />
-            <p className="text-sm">No split payments yet for this term.</p>
-            <p className="text-xs mt-1">Splits appear here when a captain shares a fee across their squad</p>
+            <p className="text-sm">No Player Pay teams yet for this term.</p>
+            <p className="text-xs mt-1">They appear here when a captain splits a team fee across their squad</p>
           </div>
         </div>
       ) : (
@@ -367,8 +396,8 @@ function SplitsView({ competitionId }: { competitionId: number | null }) {
                       </span>
                     </td>
                     <td className="px-4 py-2.5 text-sm">
-                      <div className="text-white/70">{s.paidCount}/{s.joinedCount} paid</div>
-                      <div className="text-[11px] text-white/30">{s.joinedCount} joined · {s.cardCount} card{s.cardCount === 1 ? "" : "s"} saved</div>
+                      <div className="text-white/70">{s.paidCount}/{s.targetCount || s.joinedCount} paid</div>
+                      <div className="text-[11px] text-white/30">{s.joinedCount} joined{s.targetCount ? ` of ${s.targetCount}` : ""}</div>
                     </td>
                     <td className="px-4 py-2.5 text-sm">
                       <div className="flex items-center justify-between gap-2">
@@ -497,7 +526,7 @@ function SplitDetailModal({ splitId, competitionId, onClose }: { splitId: number
               {[
                 { label: "Total", value: formatCurrency(s.totalCents, { fromCents: true }) },
                 { label: "Collected", value: formatCurrency(collected, { fromCents: true }), klass: "text-green-400" },
-                { label: "Paid", value: `${paidCount}/${members.length}`, klass: paidCount < members.length ? "text-yellow-400" : "text-white/60" },
+                { label: "Paid", value: `${paidCount}/${s.targetCount || members.length}`, klass: paidCount < (s.targetCount || members.length) ? "text-yellow-400" : "text-white/60" },
               ].map((c, i) => (
                 <div key={i} className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
                   <p className="text-[10px] uppercase tracking-wider text-white/30">{c.label}</p>
