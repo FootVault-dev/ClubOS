@@ -3201,6 +3201,8 @@ export async function registerRoutes(
       if (!(await assertFacilityInOrg(facilityId, orgId))) {
         return res.status(404).json({ message: "Facility not found" });
       }
+      // Release any expired Player Pay holds so freed slots show as available.
+      try { await splitPay.sweepExpiredBookingSplits(orgId); } catch (e) { console.error("[Venue avail] sweep failed:", e); }
       const bookings = await storage.getFacilityBookingsForDates(facilityId, dates);
       res.json(bookings.map(b => ({
         date: b.bookingDate,
@@ -3503,6 +3505,114 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Venue Checkout] Error:", error);
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Player Pay checkout — split the booking cost across a group. Reserves the
+  // slots as 'pending' (holding them), then attaches a split session instead of
+  // a single group PI; each person pays their share on the venue split hub. The
+  // group confirms (pending→paid) only when everyone's paid; the hold auto-expires.
+  app.post("/api/public/venue/:orgId/bookings/checkout-split", async (req, res) => {
+    try {
+      const orgId = parseInt(req.params.orgId);
+      if (!orgId) return res.status(400).json({ message: "orgId required" });
+      if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ message: "Stripe not configured" });
+
+      const parsed = checkoutSchema.parse(req.body);
+      const targetCount = req.body.targetCount ? parseInt(String(req.body.targetCount)) : null;
+      if (!targetCount || targetCount < 2) return res.status(400).json({ message: "How many are splitting? (2 or more)" });
+      assertItemsBookable(parsed.items);
+
+      // Release any expired Player Pay holds before we reserve, so dead holds don't block.
+      try { await splitPay.sweepExpiredBookingSplits(orgId); } catch (e) { console.error("[Venue split] sweep failed:", e); }
+
+      const quote = await buildQuote(orgId, parsed.items, parsed.discountCode);
+      const groupId = `vbg_${crypto.randomBytes(8).toString("hex")}`;
+
+      const factor = quote.preDiscountCents > 0 ? quote.totalCents / quote.preDiscountCents : 1;
+      const lineCount = quote.lineItems.length;
+      let runningTotal = 0, runningGst = 0;
+      const bookingsToCreate: any[] = quote.lineItems.map((line, idx) => {
+        const isLast = idx === lineCount - 1;
+        const lineTotalCents = isLast ? (quote.totalCents - runningTotal) : Math.round(line.totalCents * factor);
+        runningTotal += lineTotalCents;
+        const lineGstCents = isLast ? (quote.gstCents - runningGst) : Math.round(quote.gstCents * lineTotalCents / (quote.totalCents || 1));
+        runningGst += lineGstCents;
+        return {
+          organizationId: orgId, facilityId: line.facilityId,
+          customerName: parsed.customer.name, customerEmail: parsed.customer.email,
+          customerPhone: parsed.customer.phone || null, customerClub: parsed.customer.club || null,
+          bookingDate: line.date, startTime: line.startTime, endTime: line.endTime,
+          halfFull: line.halfFull, halfPosition: line.halfPosition, addonsJson: line.addons,
+          subtotalCents: lineTotalCents - lineGstCents, gstCents: lineGstCents, totalCents: lineTotalCents,
+          totalAmount: (lineTotalCents / 100).toFixed(2), gstAmount: (lineGstCents / 100).toFixed(2),
+          discountCode: quote.discount?.code || null, discountCents: line.totalCents - lineTotalCents,
+          status: "pending" as const, source: "public" as const, bookingGroupId: groupId,
+          notes: parsed.customer.notes || null, waiverAccepted: true, waiverVersion: USC_WAIVER_VERSION, waiverAcceptedAt: new Date(),
+        };
+      });
+
+      const uniqueFacilityIds = Array.from(new Set(parsed.items.map((i) => i.facilityId))).sort((a, b) => a - b);
+      await db.transaction(async (tx) => {
+        for (const fid of uniqueFacilityIds) await tx.execute(sql`SELECT pg_advisory_xact_lock(${fid})`);
+        const datesByFacility = new Map<number, string[]>();
+        for (const it of parsed.items) {
+          if (!datesByFacility.has(it.facilityId)) datesByFacility.set(it.facilityId, []);
+          datesByFacility.get(it.facilityId)!.push(it.date);
+        }
+        for (const [fid, dates] of datesByFacility.entries()) {
+          const existing = await tx.select().from(facilityBookings).where(and(
+            eq(facilityBookings.facilityId, fid),
+            inArray(facilityBookings.bookingDate, Array.from(new Set(dates))),
+            inArray(facilityBookings.status, ["pending", "confirmed", "paid"]),
+          ));
+          for (const it of parsed.items) {
+            if (it.facilityId !== fid) continue;
+            const conflict = existing.find((e) => e.bookingDate === it.date && e.startTime < it.endTime && e.endTime > it.startTime && cellsOverlap(e.halfFull, e.halfPosition, it.halfFull, it.halfPosition));
+            if (conflict) {
+              const part = it.halfFull === "half" ? ` ${it.halfPosition} half` : it.halfFull === "quarter" ? ` quarter ${it.halfPosition}` : "";
+              throw new Error(`Slot already booked: ${it.date} ${it.startTime}-${it.endTime}${part}`);
+            }
+          }
+        }
+        return tx.insert(facilityBookings).values(bookingsToCreate).returning();
+      });
+
+      if (quote.discount?.id && quote.discountCents > 0) {
+        try { await storage.incrementDiscountUsage(quote.discount.id, quote.discountCents); } catch (e) { console.error("[Venue split] discount usage:", e); }
+      }
+
+      // Friendly label for the split hub, e.g. "Turf 1 · Sat 5 Jul, 6:00–7:00 pm".
+      const first = quote.lineItems[0];
+      const firstFacility = first ? await storage.getFacility(first.facilityId) : null;
+      const fmtT = (t: string) => { const [h, m] = t.split(":").map(Number); const ap = h >= 12 ? "pm" : "am"; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}:${String(m).padStart(2, "0")} ${ap}`; };
+      const dateShort = first ? new Date(first.date + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short" }) : "";
+      const label = first
+        ? `${firstFacility?.name || "Booking"} · ${dateShort}, ${fmtT(first.startTime)}–${fmtT(first.endTime)}${lineCount > 1 ? ` +${lineCount - 1} more` : ""}`
+        : "Venue booking";
+
+      const nameParts = parsed.customer.name.trim().split(" ");
+      const split = await splitPay.createSplitForBooking({
+        organizationId: orgId,
+        bookingGroupId: groupId,
+        totalCents: quote.totalCents,
+        label,
+        captain: { email: parsed.customer.email, firstName: nameParts[0] || "Organiser", lastName: nameParts.slice(1).join(" ") || undefined, phone: parsed.customer.phone || undefined },
+        targetCount,
+      });
+
+      res.json({
+        mode: "split",
+        bookingGroupId: groupId,
+        splitCode: split.shareCode,
+        organiserToken: split.organiserToken,
+        memberToken: split.memberToken,
+        paymentClientSecret: split.paymentClientSecret,
+        quote,
+      });
+    } catch (error: any) {
+      console.error("[Venue Split Checkout] Error:", error);
       res.status(400).json({ message: error.message });
     }
   });
@@ -11965,6 +12075,49 @@ async function confirmAndEmailVenueBookings(paymentIntentId: string) {
   return updated;
 }
 
+// Player Pay venue settle: confirm a whole booking GROUP (each squad member paid
+// their own PI, so there's no single group PI). Mirrors confirmAndEmailVenueBookings
+// but flips by bookingGroupId. Idempotent — only the first flip emails.
+async function confirmAndEmailVenueBookingGroup(groupId: string) {
+  const updated = await storage.confirmFacilityBookingsByGroup(groupId);
+  if (updated.length === 0) return updated;
+  const fmtTime = (t: string) => {
+    const [h, m] = t.split(":").map(Number);
+    const ampm = h >= 12 ? "pm" : "am";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  };
+  const first = updated[0];
+  const ordered = updated.slice().sort((a, b) => a.bookingDate.localeCompare(b.bookingDate));
+  const sessions = await Promise.all(ordered.map(async (b) => {
+    const f = await storage.getFacility(b.facilityId);
+    const sizeLabel = b.halfFull === "half"
+      ? `${b.halfPosition ? b.halfPosition + " " : ""}half`
+      : b.halfFull === "quarter" ? `quarter ${(b.halfPosition || "").toUpperCase()}` : null;
+    return {
+      facilityName: f?.name || "Facility",
+      dateLong: new Date(b.bookingDate + "T00:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long", year: "numeric" }),
+      timeRange: `${fmtTime(b.startTime)}–${fmtTime(b.endTime)}`,
+      sizeLabel,
+      amountLabel: `NZ$${((b.totalCents || 0) / 100).toFixed(2)}`,
+    };
+  }));
+  const totalCents = updated.reduce((s, b) => s + (b.totalCents || 0), 0);
+  try {
+    const { sendVenueBookingConfirmationEmail } = await import("./email");
+    await sendVenueBookingConfirmationEmail({
+      to: first.customerEmail,
+      customerName: first.customerName,
+      sessions,
+      totalLabel: `NZ$${(totalCents / 100).toFixed(2)} (incl. GST)`,
+      reference: groupId,
+    });
+  } catch (e) {
+    console.error("[Venue email] group confirm failed", e);
+  }
+  return updated;
+}
+
 async function handlePrintPaymentSuccess(orderId: number, paymentIntentId: string) {
   const order = await storage.getPrintOrder ? await (storage as any).getPrintOrder(orderId) : null;
   // Fall back to direct DB lookup if no helper exists yet
@@ -12496,7 +12649,18 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
 async function settleSplitSession(sessionId: number) {
   const won = await splitPay.markSplitSettledOnce(sessionId);
   if (!won) return; // another caller already settled this split
-  const regId = await splitPay.getSplitRegistrationId(sessionId);
+
+  // Dispatch on what the split funds: a venue booking group, or an MFL team reg.
+  const funding = await splitPay.getSplitFunding(sessionId);
+  if (funding?.type === "booking") {
+    if (funding.bookingGroupId) {
+      try { await confirmAndEmailVenueBookingGroup(funding.bookingGroupId); }
+      catch (e) { console.error("[SplitPay] venue booking settle failed:", e); }
+    }
+    return;
+  }
+
+  const regId = funding?.registrationId ?? null;
   if (!regId) return;
   const reg = await storage.getRegistration(regId);
   if (!reg) return;

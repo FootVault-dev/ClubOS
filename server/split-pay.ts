@@ -24,7 +24,7 @@
 import crypto from "crypto";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { db } from "./db";
-import { splitSessions, splitMembers, registrations, leagueDivisions, type SplitSession, type SplitMember } from "@shared/schema";
+import { splitSessions, splitMembers, registrations, leagueDivisions, facilityBookings, type SplitSession, type SplitMember } from "@shared/schema";
 import { getOrCreateCustomer, createOffSessionPaymentIntent, createPaymentIntent, createRefund, stripe } from "./stripe";
 import { equalSplit } from "@shared/league-pricing";
 
@@ -173,6 +173,89 @@ export async function createSplitForRegistration(opts: {
   return { sessionId: session.id, shareCode, organiserToken, memberToken, paymentClientSecret: pi.client_secret, customerId: customer.id };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Create a split that funds a VENUE BOOKING GROUP (USC). The facility_bookings
+// rows are already inserted 'pending' (holding the slots) by the venue checkout;
+// here we attach a split session (fundingType 'booking') + the organiser as the
+// first paying member. The booking confirms (pending→paid) on settle, and the
+// hold auto-releases at deadlineAt if the squad doesn't finish paying.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function createSplitForBooking(opts: {
+  organizationId: number;
+  bookingGroupId: string;
+  totalCents: number;
+  label: string;                 // e.g. "Pitch 1 · Sat 5 Jul, 6–7pm"
+  captain: { email: string; firstName: string; lastName?: string; phone?: string };
+  targetCount?: number | null;
+  holdHours?: number;            // slot-hold window (default 48h)
+}): Promise<{ sessionId: number; shareCode: string; organiserToken: string; memberToken: string; paymentClientSecret: string | null; customerId: string }> {
+  const { captain } = opts;
+  const organiserToken = token();
+
+  let shareCode = token(6);
+  for (let i = 0; i < 5; i++) {
+    const existing = await sessionByCode(shareCode);
+    if (!existing) break;
+    shareCode = token(6);
+  }
+
+  const holdMs = (opts.holdHours ?? 48) * 3600_000;
+  const deadlineAt = new Date(Date.now() + holdMs);
+  const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 86400_000);
+  const [session] = await db.insert(splitSessions).values({
+    organizationId: opts.organizationId,
+    fundingType: "booking",
+    facilityBookingGroupId: opts.bookingGroupId,
+    teamName: opts.label,
+    totalCents: opts.totalCents,
+    currency: "NZD",
+    status: "open",
+    targetCount: opts.targetCount ?? null,
+    organiserToken,
+    shareCode,
+    deadlineAt,
+    expiresAt,
+  }).returning();
+
+  const customer = await getOrCreateCustomer({
+    email: captain.email,
+    name: `${captain.firstName} ${captain.lastName ?? ""}`.trim(),
+    phone: captain.phone,
+  });
+  const shareCents = memberShareCents(session);
+  const memberToken = token();
+  const [captainMember] = await db.insert(splitMembers).values({
+    splitSessionId: session.id,
+    name: `${captain.firstName} ${captain.lastName ?? ""}`.trim(),
+    email: captain.email.trim().toLowerCase(),
+    phone: captain.phone ?? null,
+    role: "organiser",
+    status: "joined",
+    stripeCustomerId: customer.id,
+    chargedCents: shareCents,
+    memberToken,
+  }).returning();
+
+  const pi = await createPaymentIntent({
+    registrationId: 0,
+    campName: `${session.teamName || "Booking"} — split share`,
+    totalCents: shareCents,
+    currency: "NZD",
+    parentEmail: captain.email,
+    customerId: customer.id,
+    metadata: {
+      registrationType: "league_share",
+      splitSessionId: String(session.id),
+      splitMemberId: String(captainMember.id),
+      registrationId: "",
+    },
+    idempotencyKey: `split-${session.id}-member-${captainMember.id}-pay`,
+  });
+  await db.update(splitMembers).set({ stripePaymentIntentId: pi.id }).where(eq(splitMembers.id, captainMember.id));
+
+  return { sessionId: session.id, shareCode, organiserToken, memberToken, paymentClientSecret: pi.client_secret, customerId: customer.id };
+}
+
 // Public view for the hub / joiner / polling. viewerToken (organiser or member)
 // unlocks that viewer's own status + email. Other members' emails are masked.
 export async function getSplitView(code: string, viewerToken?: string) {
@@ -193,6 +276,7 @@ export async function getSplitView(code: string, viewerToken?: string) {
   return {
     code: s.shareCode,
     status: s.status,
+    fundingType: (s as any).fundingType || "registration",
     teamName: s.teamName,
     totalCents: s.totalCents,
     currency: s.currency,
@@ -559,6 +643,13 @@ export async function getSplitRegistrationId(sessionId: number): Promise<number 
   return s?.registrationId ?? null;
 }
 
+// What a split funds — drives settlement dispatch (registration→team vs booking→paid).
+export async function getSplitFunding(sessionId: number): Promise<{ type: string; registrationId: number | null; bookingGroupId: string | null } | null> {
+  const [s] = await db.select().from(splitSessions).where(eq(splitSessions.id, sessionId));
+  if (!s) return null;
+  return { type: (s as any).fundingType || "registration", registrationId: s.registrationId ?? null, bookingGroupId: (s as any).facilityBookingGroupId ?? null };
+}
+
 // Captain cancels — refund any members already charged, cancel the session + the
 // pending team registration. Only the EXPLICIT cancel ever refunds. Disallowed
 // once settled (a confirmed team must be unwound via the admin refund flow).
@@ -597,10 +688,34 @@ async function doCancel(s: SplitSession): Promise<{ ok?: boolean; error?: string
     }
   }
   await db.update(splitSessions).set({ status: "cancelled" }).where(eq(splitSessions.id, s.id));
-  if (s.registrationId) {
+  if ((s as any).fundingType === "booking" && (s as any).facilityBookingGroupId) {
+    // Release the held venue slots — only the still-pending rows (never a paid one).
+    try {
+      await db.update(facilityBookings).set({ status: "cancelled" })
+        .where(and(eq(facilityBookings.bookingGroupId, (s as any).facilityBookingGroupId), eq(facilityBookings.status, "pending")));
+    } catch (e: any) { console.error(`[SplitPay] release booking group failed:`, e?.message); }
+  } else if (s.registrationId) {
     try { await db.update(registrations).set({ status: "cancelled" }).where(and(eq(registrations.id, s.registrationId), ne(registrations.status, "confirmed"))); } catch {}
   }
   return { ok: true, refunded };
+}
+
+// Lazy auto-expiry: release venue slots whose split hold has passed its deadline
+// without finishing payment. Called on venue availability/checkout traffic (no cron).
+// Cancels each expired open booking-split via doCancel (refunds any partial payers).
+export async function sweepExpiredBookingSplits(organizationId: number): Promise<number> {
+  const now = new Date();
+  const expired = await db.select().from(splitSessions).where(and(
+    eq(splitSessions.organizationId, organizationId),
+    eq(splitSessions.fundingType, "booking"),
+    eq(splitSessions.status, "open"),
+  ));
+  let released = 0;
+  for (const s of expired) {
+    if (!s.deadlineAt || new Date(s.deadlineAt) > now) continue;
+    try { await doCancel(s); released++; } catch (e: any) { console.error(`[SplitPay] sweep cancel failed session=${s.id}:`, e?.message); }
+  }
+  return released;
 }
 
 // All squad members across an org's splits (optionally one competition) — used by

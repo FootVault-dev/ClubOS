@@ -151,6 +151,7 @@ export interface IStorage {
   getFacilityBookingsForDates(facilityId: number, dates: string[]): Promise<FacilityBooking[]>;
   createFacilityBookingDrafts(items: InsertFacilityBooking[]): Promise<FacilityBooking[]>;
   confirmFacilityBookingsByPaymentIntent(paymentIntentId: string): Promise<FacilityBooking[]>;
+  confirmFacilityBookingsByGroup(groupId: string): Promise<FacilityBooking[]>;
   cancelFacilityBookingsByGroup(groupId: string): Promise<void>;
   cancelPendingFacilityBookingsByGroup(groupId: string): Promise<FacilityBooking[]>;
   getStalePendingFacilityBookings(olderThanMinutes: number): Promise<FacilityBooking[]>;
@@ -1478,6 +1479,18 @@ export class DatabaseStorage implements IStorage {
       .set({ status: "paid", paidAt: new Date() })
       .where(and(
         eq(facilityBookings.stripePaymentIntentId, paymentIntentId),
+        eq(facilityBookings.status, "pending"),
+      ))
+      .returning();
+  }
+
+  // Confirm a whole booking GROUP (used by Player Pay venue splits, where each
+  // payer has their own PI rather than one group PI). Idempotent: pending → paid.
+  async confirmFacilityBookingsByGroup(groupId: string): Promise<FacilityBooking[]> {
+    return db.update(facilityBookings)
+      .set({ status: "paid", paidAt: new Date() })
+      .where(and(
+        eq(facilityBookings.bookingGroupId, groupId),
         eq(facilityBookings.status, "pending"),
       ))
       .returning();

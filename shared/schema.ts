@@ -753,9 +753,14 @@ export const splitSessions = pgTable("split_sessions", {
   lockedAt: timestamp("locked_at"),
   settledAt: timestamp("settled_at"),
   // Optional auto-lock deadline (e.g. competition start). Null = captain-locks only.
+  // For venue bookings this doubles as the "hold expires, release the slot" time.
   deadlineAt: timestamp("deadline_at"),
   // Abandoned-session GC horizon.
   expiresAt: timestamp("expires_at"),
+  // What this split funds: 'registration' (MFL team) or 'booking' (USC venue slot).
+  fundingType: text("funding_type").notNull().default("registration"),
+  // The facility booking group this split funds (when fundingType = 'booking').
+  facilityBookingGroupId: text("facility_booking_group_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   uniqueShareCode: uniqueIndex("split_sessions_share_code_unique").on(t.shareCode),
