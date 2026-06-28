@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, bookingRequests } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, bookingRequests } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification } from "./email";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -4565,6 +4565,24 @@ export async function registerRoutes(
       const tokens = Math.round(Number(req.body.tokens) || 0);
       if (!tokens) return res.status(400).json({ message: "tokens required" });
       await rewards.addRefBonus(MFL_ORG_ID, parseInt(req.params.userId), tokens, req.body.note);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── All-in-one Inbox — admin ────────────────────────────────────────────────
+  app.get("/api/admin/league/inbox", requireAuth, async (req, res) => {
+    try {
+      const rows = await db.select().from(inboxMessages)
+        .where(eq(inboxMessages.organizationId, MFL_ORG_ID))
+        .orderBy(desc(inboxMessages.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/league/inbox/:id/status", requireAuth, async (req, res) => {
+    try {
+      const status = String(req.body.status || "");
+      if (!["new", "read", "replied", "archived"].includes(status)) return res.status(400).json({ message: "invalid status" });
+      await db.update(inboxMessages).set({ status }).where(and(eq(inboxMessages.id, parseInt(req.params.id)), eq(inboxMessages.organizationId, MFL_ORG_ID)));
       res.json({ ok: true });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
@@ -11282,6 +11300,39 @@ export async function registerRoutes(
       if (!view) return res.status(404).json({ message: "Not found" });
       res.json(view);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── Website contact form → all-in-one inbox + email Isaac (info@minifootball) ──
+  // Called cross-origin from the marketing site (minifootball.co.nz on Vercel), so
+  // it sets CORS for that origin + handles the preflight.
+  const MFL_SITE_ORIGINS = ["https://minifootball.co.nz", "https://www.minifootball.co.nz", "https://mfl-website-alpha.vercel.app"];
+  const setMflCors = (req: any, res: any) => {
+    const origin = req.headers.origin || "";
+    if (MFL_SITE_ORIGINS.includes(origin)) res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  };
+  app.options("/api/public/mfl/contact", (req, res) => { setMflCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/mfl/contact", async (req, res) => {
+    setMflCors(req, res);
+    try {
+      const name = String(req.body.name || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const subject = String(req.body.subject || "").trim();
+      const message = String(req.body.message || "").trim();
+      if (!name || !/.+@.+\..+/.test(email) || !message) return res.status(400).json({ message: "Please add your name, a valid email and a message." });
+
+      await db.insert(inboxMessages).values({
+        organizationId: MFL_ORG_ID, channel: "web_form",
+        name, email, phone: phone || null, subject: subject || null, body: message,
+        sourceUrl: String(req.body.sourceUrl || "minifootball.co.nz"), status: "new",
+      });
+      try {
+        await sendMflContactNotification({ to: "info@minifootball.co.nz", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
+      } catch (e) { console.error("[MFL contact] email failed:", e); }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[MFL contact] error:", e); res.status(400).json({ message: e.message }); }
   });
 
   // Public one-click unsubscribe from MFL broadcasts (link in every newsletter).

@@ -550,6 +550,24 @@ export const rewardRefBonus = pgTable("reward_ref_bonus", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// All-in-one support inbox — every inbound customer message across channels
+// (website contact form now; email / Instagram / Facebook / live chat next).
+// One row per message; the admin Inbox tab reads + manages these.
+export const inboxMessages = pgTable("inbox_messages", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  channel: text("channel").notNull(),        // 'web_form'|'email'|'instagram'|'facebook'|'livechat'
+  name: text("name"),
+  email: text("email"),
+  phone: text("phone"),
+  subject: text("subject"),
+  body: text("body").notNull(),
+  status: text("status").notNull().default("new"),  // 'new'|'read'|'replied'|'archived'
+  sourceUrl: text("source_url"),
+  handledByUserId: integer("handled_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Email suppression list — anyone who unsubscribed from broadcasts. Per-org
 // (organizationId null = global). The mailer audience resolver excludes these.
 export const emailUnsubscribes = pgTable("email_unsubscribes", {
@@ -1187,6 +1205,7 @@ export type RewardBuilder = typeof rewardBuilders.$inferSelect;
 export type RewardBuilderEvent = typeof rewardBuilderEvents.$inferSelect;
 export type RewardSeasonMember = typeof rewardSeasonMembers.$inferSelect;
 export type RewardSeasonReward = typeof rewardSeasonRewards.$inferSelect;
+export type InboxMessage = typeof inboxMessages.$inferSelect;
 
 export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
 export const insertUserOrganizationSchema = createInsertSchema(userOrganizations).omit({ id: true });

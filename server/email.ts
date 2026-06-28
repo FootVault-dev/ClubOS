@@ -395,6 +395,33 @@ export async function sendSeasonRewardEmail(params: {
   });
 }
 
+/** Website contact-form enquiry → the MFL support inbox (info@minifootball.co.nz).
+ *  Reply-To is the enquirer so staff can reply straight from their inbox. */
+export async function sendMflContactNotification(params: {
+  to: string; name: string; email: string; phone?: string; subject?: string; message: string; sourceUrl?: string;
+}): Promise<boolean> {
+  const rows = [
+    mflRow("From", params.name || "—"),
+    mflRow("Email", params.email || "—"),
+    ...(params.phone ? [mflRow("Phone", params.phone)] : []),
+    ...(params.subject ? [mflRow("Subject", params.subject)] : []),
+  ].join("");
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:16px; font-weight:600; margin:0 0 14px;">New website enquiry</p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:18px 0 0; white-space:pre-wrap;">${(params.message || "").replace(/</g, "&lt;")}</p>
+    ${params.sourceUrl ? `<p style="color:#5a5a5a; font-size:11px; margin:16px 0 0;">via ${params.sourceUrl}</p>` : ""}`;
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: params.email || MFL_REPLY_TO,
+    subject: `New enquiry${params.name ? ` from ${params.name}` : ""} — minifootball.co.nz`,
+    html: mflShell({ heading: "New enquiry", bodyHtml }),
+  });
+}
+
 /** Balance instalment successfully collected. */
 export async function sendLeagueBalancePaidEmail(params: {
   registrationId: number;

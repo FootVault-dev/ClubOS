@@ -47,6 +47,7 @@ import {
   Moon,
   Zap,
   Truck,
+  Inbox,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -107,6 +108,7 @@ const leagueNav = [
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
+  { tab: "inbox", title: "Inbox", url: "/admin/inbox", icon: Inbox },
   { tab: "rewards", title: "Rewards", url: "/admin/rewards", icon: Award },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
 ];

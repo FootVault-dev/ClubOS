@@ -80,6 +80,7 @@ const leagueTabs: TabDef[] = [
   { slug: "payments", title: "Payments", url: "/admin/payments" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },
+  { slug: "inbox", title: "Inbox", url: "/admin/inbox" },
   { slug: "rewards", title: "Rewards", url: "/admin/rewards" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
