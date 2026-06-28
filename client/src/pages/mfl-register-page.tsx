@@ -204,7 +204,7 @@ export default function MflRegisterPage() {
 
       if (body.mode === "split" && body.splitCode) {
         saveSplitTokens(body.splitCode, { organiserToken: body.organiserToken, memberToken: body.memberToken });
-        if (body.setupClientSecret) stashSetupSecret(body.splitCode, body.setupClientSecret);
+        if (body.paymentClientSecret) stashSetupSecret(body.splitCode, body.paymentClientSecret);
         setLocation(`/league/split/${body.splitCode}`);
         return;
       }
@@ -444,7 +444,7 @@ export default function MflRegisterPage() {
             </div>
             {isSplit ? (
               <div className="rounded-xl px-4 py-3 mt-1 text-[13px]" style={{ background: `${BRAND.gold}14`, color: BRAND.gold }}>
-                Split <strong>{formatCurrency(totalCents, { fromCents: true })}</strong> across your squad — about <strong>{formatCurrency(perShareCents, { fromCents: true })}</strong> each over {targetCount}. Everyone saves a card; nobody's charged until you lock the team.
+                Split <strong>{formatCurrency(totalCents, { fromCents: true })}</strong> across your squad — <strong>{formatCurrency(perShareCents, { fromCents: true })}</strong> each over {targetCount}. You'll get a share link; everyone pays their own share on their own card.
               </div>
             ) : payInFull ? (
               <div className="rounded-xl px-4 py-3 mt-1 text-[13px]" style={{ background: `${BRAND.gold}14`, color: BRAND.gold }}>
@@ -464,7 +464,7 @@ export default function MflRegisterPage() {
             style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-continue-to-payment">
             {submitting ? <><Loader2 className="w-4 h-4 animate-spin" /> {isSplit ? "Starting your split…" : "Securing your spot…"}</> : isSplit ? <>Start the split <ArrowRight className="w-4 h-4" /></> : <>Continue to payment <ArrowRight className="w-4 h-4" /></>}
           </button>
-          <p className="text-center text-[12px]" style={{ color: BRAND.dim }}>{isSplit ? "You'll save your card next, then share the link with your squad" : "Secure payment by Stripe · You'll confirm on the next step"}</p>
+          <p className="text-center text-[12px]" style={{ color: BRAND.dim }}>{isSplit ? "You'll pay your own share next, then share the link with your squad" : "Secure payment by Stripe · You'll confirm on the next step"}</p>
         </form>
       </main>
     </div>

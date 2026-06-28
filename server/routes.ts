@@ -10796,7 +10796,7 @@ export async function registerRoutes(
           splitCode: split.shareCode,
           organiserToken: split.organiserToken,
           memberToken: split.memberToken,
-          setupClientSecret: split.setupClientSecret,
+          paymentClientSecret: split.paymentClientSecret,
           totalCents: c0.teamTotalCents,
           teamName: c0.registration.teamName,
           slug,
@@ -10917,7 +10917,8 @@ export async function registerRoutes(
     }
   });
 
-  // A squad member joins → creates their member row + a SetupIntent to save a card.
+  // A squad member joins → creates their member row + an on-session PaymentIntent
+  // for their fixed share (they pay on the spot — PayShare model, no card-save/lock).
   app.post("/api/public/league/split/:code/join", async (req, res) => {
     try {
       const { name, email, phone } = req.body;
@@ -10930,46 +10931,13 @@ export async function registerRoutes(
     }
   });
 
-  // Issue a fresh SetupIntent for an existing member (refresh-safe card form).
-  app.post("/api/public/league/split/:code/setup-intent", async (req, res) => {
+  // Issue (or reuse) an existing member's share PaymentIntent (refresh-safe pay form).
+  app.post("/api/public/league/split/:code/pay-intent", async (req, res) => {
     try {
-      const r = await splitPay.refreshSetupIntent(req.params.code, req.body.memberToken);
+      const r = await splitPay.payShareIntent(req.params.code, req.body.memberToken);
       if (r.error) return res.status(400).json({ message: r.error });
       res.json(r);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
-  });
-
-  // Client fallback after confirming a SetupIntent (mirrors /confirm-payment).
-  app.post("/api/public/league/split/:code/confirm-setup", async (req, res) => {
-    try {
-      const r = await splitPay.confirmMemberCardSaved(req.params.code, req.body.memberToken);
-      if ((r as any).error) return res.status(400).json({ message: (r as any).error });
-      res.json(r);
-    } catch (e: any) {
-      console.error("[Split confirm-setup] error:", e);
-      res.status(400).json({ message: e.message });
-    }
-  });
-
-  // Organiser locks the roster → charges every saved card its frozen share once.
-  app.post("/api/public/league/split/:code/lock", async (req, res) => {
-    try {
-      const capacityCheck = async (divisionId: number | null) => {
-        if (!divisionId) return true;
-        const div = await storage.getLeagueDivision(divisionId);
-        if (!div || div.maxTeams == null) return true;
-        const teams = await storage.getLeagueTeams(MFL_ORG_ID, div.competitionId);
-        return teams.filter((t) => t.divisionId === divisionId && t.active).length < div.maxTeams;
-      };
-      const r = await splitPay.lockAndChargeSplit(req.params.code, req.body.organiserToken, { capacityCheck });
-      if (r.error) return res.status(400).json({ message: r.error, missingCards: r.missingCards });
-      // All shares may have cleared synchronously (off-session) → settle now.
-      if (r.sessionId && (await splitPay.isSettleReady(r.sessionId))) await settleSplitSession(r.sessionId);
-      res.json(r);
-    } catch (e: any) {
-      console.error("[Split lock] error:", e);
-      res.status(400).json({ message: e.message });
-    }
   });
 
   // A member leaves while the split is open (re-splits live, no money moved).

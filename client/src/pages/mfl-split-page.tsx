@@ -168,83 +168,9 @@ function FullLoader({ label }: { label: string }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Card forms (Stripe Elements) — SetupIntent (save card) + PaymentIntent (retry)
+// Pay form (Stripe Elements) — on-session PaymentIntent; each player pays their share
 // ─────────────────────────────────────────────────────────────────────────────
-function SetupForm({ code, memberToken, email, returnUrl, onSaved }: {
-  code: string; memberToken: string; email?: string; returnUrl: string; onSaved: () => void;
-}) {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [processing, setProcessing] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stripe || !elements) return;
-    setProcessing(true); setError(null);
-
-    const { error: stripeError, setupIntent } = await stripe.confirmSetup({
-      elements,
-      confirmParams: { return_url: returnUrl },
-      redirect: "if_required",
-    });
-
-    if (stripeError) { setError(stripeError.message || "We couldn't save your card. Please try again."); setProcessing(false); return; }
-
-    if (setupIntent && setupIntent.status === "succeeded") {
-      try {
-        await fetch(`/api/public/league/split/${code}/confirm-setup`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memberToken }),
-        });
-      } catch { /* the webhook handles it too */ }
-      onSaved();
-      return;
-    }
-    setError("We couldn't confirm your card. Please try another.");
-    setProcessing(false);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="rounded-2xl p-5" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}`, minHeight: 96 }}>
-        {!ready && !loadError && (
-          <div className="flex items-center justify-center gap-2 py-6 text-sm" style={{ color: BRAND.muted }}>
-            <Loader2 className="w-4 h-4 animate-spin" /> Loading secure card form…
-          </div>
-        )}
-        {loadError && (
-          <div className="flex items-start gap-2 text-sm" style={{ color: BRAND.red }}>
-            <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" /> {loadError}
-          </div>
-        )}
-        <div style={{ display: ready ? "block" : "none" }}>
-          <PaymentElement
-            options={{ layout: "tabs", defaultValues: { billingDetails: email ? { email } : undefined } }}
-            onReady={() => setReady(true)}
-            onLoadError={(e: any) => setLoadError(e?.error?.message || "Couldn't load the card form. Refresh and try again.")}
-          />
-        </div>
-      </div>
-
-      {error && <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(220,38,38,0.12)", color: BRAND.red, border: "1px solid rgba(220,38,38,0.3)" }}>{error}</div>}
-
-      <button type="submit" disabled={!stripe || !ready || processing}
-        className="w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-[16px] disabled:opacity-60"
-        style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-save-card">
-        {processing ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving your card…</> : <><Lock className="w-4 h-4" /> Save my card</>}
-      </button>
-
-      <div className="flex items-center justify-center gap-5 text-[12px]" style={{ color: BRAND.dim }}>
-        <span className="flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" /> No charge yet</span>
-        <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Stripe secure</span>
-      </div>
-    </form>
-  );
-}
-
-function RetryForm({ code, returnUrl, onPaid }: { code: string; returnUrl: string; onPaid: () => void }) {
+function PayForm({ code, returnUrl, onPaid, amountCents }: { code: string; returnUrl: string; onPaid: () => void; amountCents: number }) {
   const stripe = useStripe();
   const elements = useElements();
   const [processing, setProcessing] = useState(false);
@@ -301,8 +227,8 @@ function RetryForm({ code, returnUrl, onPaid }: { code: string; returnUrl: strin
 
       <button type="submit" disabled={!stripe || !ready || processing}
         className="w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-[16px] disabled:opacity-60"
-        style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-retry-pay">
-        {processing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing…</> : <><Lock className="w-4 h-4" /> Pay my share</>}
+        style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-pay">
+        {processing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing…</> : <><Lock className="w-4 h-4" /> Pay {formatCurrency(amountCents, { fromCents: true })}</>}
       </button>
     </form>
   );
@@ -325,17 +251,11 @@ export default function MflSplitPage() {
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
 
-  // Card-save flow
-  const [setupSecret, setSetupSecret] = useState<string | null>(null);
+  // Pay flow — the viewer's own share PaymentIntent client secret
+  const [paySecret, setPaySecret] = useState<string | null>(null);
   const fetchingSecret = useRef(false);
 
-  // Retry flow
-  const [retrySecret, setRetrySecret] = useState<string | null>(null);
-  const [retryLoading, setRetryLoading] = useState(false);
-
   // Organiser actions
-  const [locking, setLocking] = useState(false);
-  const [lockError, setLockError] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [showGroup, setShowGroup] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
@@ -360,7 +280,7 @@ export default function MflSplitPage() {
     enabled: !!code,
     refetchInterval: (q) => {
       const s = q.state.data?.status;
-      return s === "open" || s === "settling" ? 2500 : false;
+      return s === "open" ? 2500 : false;
     },
   });
 
@@ -368,21 +288,13 @@ export default function MflSplitPage() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const redirectStatus = sp.get("redirect_status");
-    const si = sp.get("setup_intent");
     const pi = sp.get("payment_intent");
-    if (redirectStatus === "succeeded" && (si || pi)) {
-      const mt = loadSplitTokens(code).memberToken;
+    if (redirectStatus === "succeeded" && pi) {
       (async () => {
         try {
-          if (si && mt) {
-            await fetch(`/api/public/league/split/${code}/confirm-setup`, {
-              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memberToken: mt }),
-            });
-          } else if (pi) {
-            await fetch(`/api/public/league/split/${code}/confirm-payment`, {
-              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paymentIntentId: pi }),
-            });
-          }
+          await fetch(`/api/public/league/split/${code}/confirm-payment`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paymentIntentId: pi }),
+          });
         } catch { /* webhook backstop */ }
         // Clean the URL and refetch the fresh state.
         window.history.replaceState({}, "", `/league/split/${code}`);
@@ -392,26 +304,26 @@ export default function MflSplitPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
-  // ── Ensure we have a SetupIntent secret when the viewer still needs a card ──
+  // ── Ensure we have the viewer's share PaymentIntent secret when unpaid ──
   useEffect(() => {
     if (!view || view.status !== "open") return;
-    const needsCard = !!view.viewer && view.viewer.status === "joined";
-    if (!needsCard || setupSecret || fetchingSecret.current) return;
+    const needsPay = !!view.viewer && (view.viewer.status === "joined" || view.viewer.status === "failed");
+    if (!needsPay || paySecret || fetchingSecret.current) return;
 
     const fromHandoff = consumeSetupSecret(code);
-    if (fromHandoff) { setSetupSecret(fromHandoff); return; }
+    if (fromHandoff) { setPaySecret(fromHandoff); return; }
 
     const mt = tokens.memberToken;
     if (!mt) return;
     fetchingSecret.current = true;
-    fetch(`/api/public/league/split/${code}/setup-intent`, {
+    fetch(`/api/public/league/split/${code}/pay-intent`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memberToken: mt }),
     })
       .then((r) => r.json())
-      .then((b) => { if (b.setupClientSecret) setSetupSecret(b.setupClientSecret); })
-      .catch(() => { /* surfaced by the card panel staying in its loader */ })
+      .then((b) => { if (b.paymentClientSecret) setPaySecret(b.paymentClientSecret); })
+      .catch(() => { /* surfaced by the pay panel staying in its loader */ })
       .finally(() => { fetchingSecret.current = false; });
-  }, [view, setupSecret, code, tokens.memberToken]);
+  }, [view, paySecret, code, tokens.memberToken]);
 
   const copyLink = async () => {
     try {
@@ -431,7 +343,7 @@ export default function MflSplitPage() {
       try {
         await (navigator as any).share({
           title: `Pay your share — ${view?.teamName || "our team"}`,
-          text: `Chip in for ${view?.teamName || "our MFL team"} — save your card and your share is charged when we lock the squad.`,
+          text: `Chip in for ${view?.teamName || "our MFL team"} — open the link and pay your share of the team fee.`,
           url: shareUrl,
         });
         return;
@@ -453,49 +365,12 @@ export default function MflSplitPage() {
       if (!res.ok) throw new Error(body.message || "Couldn't join this split.");
       saveSplitTokens(code, { memberToken: body.memberToken });
       setTokens((p) => ({ ...p, memberToken: body.memberToken }));
-      if (body.setupClientSecret) setSetupSecret(body.setupClientSecret);
+      if (body.paymentClientSecret) setPaySecret(body.paymentClientSecret);
       refetch();
     } catch (err: any) {
       setJoinError(err.message || "Something went wrong. Please try again.");
       setJoining(false);
     }
-  };
-
-  const handleLock = async () => {
-    if (!tokens.organiserToken) return;
-    setLocking(true); setLockError(null);
-    try {
-      const res = await fetch(`/api/public/league/split/${code}/lock`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ organiserToken: tokens.organiserToken }),
-      });
-      const body = await res.json();
-      if (!res.ok) {
-        if (body.message === "members_without_card") {
-          setLockError(`Some cards aren't saved yet (${body.missingCards ?? "a few"}). Give them a nudge.`);
-        } else {
-          setLockError(body.message || "Couldn't lock the split. Please try again.");
-        }
-        setLocking(false);
-        return;
-      }
-      await refetch();
-    } catch {
-      setLockError("Couldn't lock the split. Please try again.");
-    } finally {
-      setLocking(false);
-    }
-  };
-
-  const handleRetry = async () => {
-    if (!tokens.memberToken) return;
-    setRetryLoading(true);
-    try {
-      const res = await fetch(`/api/public/league/split/${code}/retry`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memberToken: tokens.memberToken }),
-      });
-      const body = await res.json();
-      if (res.ok && body.clientSecret) setRetrySecret(body.clientSecret);
-    } catch { /* noop */ } finally { setRetryLoading(false); }
   };
 
   const handleLeave = async () => {
@@ -507,7 +382,7 @@ export default function MflSplitPage() {
     } catch { /* noop */ }
     saveSplitTokens(code, { memberToken: undefined });
     setTokens((p) => ({ ...p, memberToken: undefined }));
-    setSetupSecret(null);
+    setPaySecret(null);
     refetch();
   };
 
@@ -559,19 +434,13 @@ export default function MflSplitPage() {
 
   const isOrganiser = view.isOrganiserView;
   const viewer = view.viewer;
-  // Member-facing "fair share" = the fixed team fee split equally across the squad
-  // (target size), so it reads a stable $X each from the start — matches PayShare.
-  // The exact amount charged at lock can differ if a teammate doesn't pay; that
-  // nuance is explained in the Player Pay terms (see the "How Player Pay works" modal).
+  // Each player's fixed share = the team fee split equally across the squad (target
+  // size). What they see is exactly what they pay on the spot. Matches the server
+  // (round, not ceil) and the register-page preview.
   const fairShareCents = view.targetCount > 0
     ? Math.round(view.totalCents / view.targetCount)
     : (view.provisionalShareCents || 0);
   const shareCents = fairShareCents;
-  // What each saved card is actually charged right now (fee ÷ cards in) — shown on
-  // the captain's Lock button so the charge math stays honest at the moment of charge.
-  const chargeShareCents = view.provisionalShareCents || 0;
-  const lockReady = view.cardCount === view.joinedCount && view.joinedCount >= 1;
-  const missingCards = Math.max(0, view.joinedCount - view.cardCount);
 
   // ── Terminal states ────────────────────────────────────────────────────────
   if (view.status === "settled") {
@@ -616,8 +485,6 @@ export default function MflSplitPage() {
   // ── Live states ─────────────────────────────────────────────────────────────
   return (
     <Shell teamName={view.teamName}>
-      <AnimatePresence>{locking && <FullLoader label="Charging the squad…" />}</AnimatePresence>
-
       {/* Copied toast */}
       <AnimatePresence>
         {copied && (
@@ -692,51 +559,21 @@ export default function MflSplitPage() {
         </div>
       </div>
 
-      {/* ── Viewer's own status / action ── */}
+      {/* ── Viewer's own status / action (pay your share) ── */}
       <ViewerPanel
-        view={view} viewer={viewer} code={code} tokens={tokens} setupSecret={setupSecret}
-        retrySecret={retrySecret} retryLoading={retryLoading} hubUrl={hubUrl}
+        view={view} viewer={viewer} code={code} tokens={tokens} paySecret={paySecret} hubUrl={hubUrl}
         joinName={joinName} setJoinName={setJoinName} joinEmail={joinEmail} setJoinEmail={setJoinEmail}
         joinPhone={joinPhone} setJoinPhone={setJoinPhone} joining={joining} joinError={joinError}
-        onJoin={handleJoin} onRetry={handleRetry} onLeave={handleLeave}
-        onCardSaved={() => { refetch(); }}
-        onRetried={() => { refetch(); }}
+        onJoin={handleJoin} onLeave={handleLeave}
+        onPaid={() => { refetch(); }}
         shareCents={shareCents}
       />
 
-      {/* ── Organiser hub ── */}
-      {isOrganiser && (
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
-          className="mt-5 rounded-3xl p-6 space-y-4" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] font-bold" style={{ color: BRAND.gold }}>
-            <Crown className="w-3.5 h-3.5" /> Captain controls
-          </div>
-
-          {lockError && <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(220,38,38,0.12)", color: BRAND.red, border: "1px solid rgba(220,38,38,0.3)" }}>{lockError}</div>}
-
-          {/* Lock & charge */}
-          {view.status === "open" && (
-            <button onClick={handleLock} disabled={!lockReady || locking}
-              className="w-full flex flex-col items-center justify-center gap-0.5 py-4 rounded-full font-bold text-[16px] disabled:opacity-50"
-              style={{ background: lockReady ? BRAND.gold : BRAND.cardSoft, color: lockReady ? BRAND.black : BRAND.muted, border: lockReady ? "none" : `1px solid ${BRAND.border}` }}
-              data-testid="button-lock">
-              {lockReady ? (
-                <>
-                  <span className="flex items-center gap-2"><Lock className="w-4 h-4" /> Lock &amp; charge everyone</span>
-                  <span className="text-[12px] font-semibold" style={{ color: "rgba(0,0,0,0.6)" }}>Locking now: {view.cardCount} × {formatCurrency(chargeShareCents, { fromCents: true })}</span>
-                </>
-              ) : (
-                <span className="text-[14px] font-semibold">
-                  {view.joinedCount === 0 ? "Share the link to get started" : `Waiting on ${missingCards} to add a card`}
-                </span>
-              )}
-            </button>
-          )}
-
-          <button onClick={() => setShowCancel(true)} className="w-full text-center text-[12px] pt-1" style={{ color: BRAND.dim }} data-testid="button-cancel-split">
-            Cancel this split
-          </button>
-        </motion.div>
+      {/* ── Captain: cancel the whole split (refunds anyone already paid) ── */}
+      {isOrganiser && view.status === "open" && (
+        <button onClick={() => setShowCancel(true)} className="mt-5 w-full text-center text-[12px]" style={{ color: BRAND.dim }} data-testid="button-cancel-split">
+          Cancel this split
+        </button>
       )}
 
       {/* QR modal */}
@@ -782,8 +619,8 @@ export default function MflSplitPage() {
         <h3 className="text-lg font-bold tracking-tight">Cancel this split?</h3>
         <p className="text-sm mt-2" style={{ color: BRAND.muted }}>
           {view.paidCount > 0
-            ? "Anyone already charged will be refunded in full. Saved cards won't be charged. This can't be undone."
-            : "No cards will be charged. This can't be undone."}
+            ? "Anyone who's already paid will be refunded in full. This can't be undone."
+            : "Nobody will be charged. This can't be undone."}
         </p>
         <div className="mt-5 grid grid-cols-2 gap-3">
           <button onClick={() => setShowCancel(false)} className="py-3 rounded-full font-semibold text-sm" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }}>
@@ -799,10 +636,9 @@ export default function MflSplitPage() {
       <Modal open={showTerms} onClose={() => setShowTerms(false)}>
         <h3 className="text-lg font-bold tracking-tight">How Player Pay works</h3>
         <div className="mt-3 space-y-3 text-sm" style={{ color: BRAND.muted }}>
-          <p>The team fee is a fixed <strong style={{ color: BRAND.white }}>{formatCurrency(view.totalCents, { fromCents: true })}</strong>. It's split equally across your squad — about <strong style={{ color: BRAND.white }}>{formatCurrency(shareCents, { fromCents: true })}</strong> per player{view.targetCount > 0 ? ` for a squad of ${view.targetCount}` : ""}.</p>
-          <p>Saving your card doesn't charge you. Your share is charged <strong style={{ color: BRAND.white }}>once</strong> — when the captain locks the squad.</p>
-          <p>If a teammate doesn't add a card, the team fee is shared between the players who do, so your share can be a little higher than the estimate. The club always collects the full team fee.</p>
-          <p>If the captain cancels the split, anyone already charged is refunded in full.</p>
+          <p>The team fee is a fixed <strong style={{ color: BRAND.white }}>{formatCurrency(view.totalCents, { fromCents: true })}</strong>. It's split equally across your squad — <strong style={{ color: BRAND.white }}>{formatCurrency(shareCents, { fromCents: true })}</strong> per player{view.targetCount > 0 ? ` for a squad of ${view.targetCount}` : ""}.</p>
+          <p>Everyone pays their <strong style={{ color: BRAND.white }}>own</strong> share on the spot, on their own card — one charge each. There's no captain "lock" step.</p>
+          <p>The team is confirmed once the whole squad has paid. If a teammate doesn't pay, the team isn't confirmed yet — the captain can chase them up, or cancel for a full refund to everyone who paid.</p>
           <p>Payments are processed securely by Stripe — we never see or store your card details.</p>
         </div>
         <button onClick={() => setShowTerms(false)} className="mt-5 w-full py-3 rounded-full font-semibold text-sm" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }}>
@@ -814,20 +650,20 @@ export default function MflSplitPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Viewer panel — adapts to joiner / needs-card / saved / paid / failed
+// Viewer panel — adapts to joiner / pay-your-share / paid / done
 // ─────────────────────────────────────────────────────────────────────────────
 function ViewerPanel(props: {
   view: SplitView; viewer: SplitViewer | null; code: string; tokens: SplitTokens;
-  setupSecret: string | null; retrySecret: string | null; retryLoading: boolean; hubUrl: string;
+  paySecret: string | null; hubUrl: string;
   joinName: string; setJoinName: (s: string) => void; joinEmail: string; setJoinEmail: (s: string) => void;
   joinPhone: string; setJoinPhone: (s: string) => void; joining: boolean; joinError: string | null;
-  onJoin: (e: React.FormEvent) => void; onRetry: () => void; onLeave: () => void;
-  onCardSaved: () => void; onRetried: () => void; shareCents: number;
+  onJoin: (e: React.FormEvent) => void; onLeave: () => void;
+  onPaid: () => void; shareCents: number;
 }) {
   const {
-    view, viewer, code, tokens, setupSecret, retrySecret, retryLoading, hubUrl,
+    view, viewer, code, tokens, paySecret, hubUrl,
     joinName, setJoinName, joinEmail, setJoinEmail, joinPhone, setJoinPhone, joining, joinError,
-    onJoin, onRetry, onLeave, onCardSaved, onRetried, shareCents,
+    onJoin, onLeave, onPaid, shareCents,
   } = props;
 
   const cardWrap = "rounded-3xl p-6" as const;
@@ -837,8 +673,8 @@ function ViewerPanel(props: {
   if (!tokens.memberToken && view.status === "open") {
     return (
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={cardStyle}>
-        <h2 className="text-lg font-bold tracking-tight">Join this split</h2>
-        <p className="text-sm mt-1 mb-4" style={{ color: BRAND.muted }}>Add your details, then save a card. You won't be charged until your captain locks the team.</p>
+        <h2 className="text-lg font-bold tracking-tight">Pay your share</h2>
+        <p className="text-sm mt-1 mb-4" style={{ color: BRAND.muted }}>Add your details, then pay your <strong style={{ color: BRAND.white }}>{formatCurrency(shareCents, { fromCents: true })}</strong> share of the team fee on your own card.</p>
         <form onSubmit={onJoin} className="space-y-3">
           <div>
             <label className="block text-sm font-semibold mb-1.5">Your name</label>
@@ -856,7 +692,7 @@ function ViewerPanel(props: {
           <button type="submit" disabled={joining}
             className="w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-[16px] disabled:opacity-60"
             style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-join">
-            {joining ? <><Loader2 className="w-4 h-4 animate-spin" /> Joining…</> : <>Join &amp; add my card</>}
+            {joining ? <><Loader2 className="w-4 h-4 animate-spin" /> Continuing…</> : <>Continue to payment</>}
           </button>
           <p className="text-center text-[12px]" style={{ color: BRAND.dim }}>Your share: {formatCurrency(shareCents, { fromCents: true })} — an equal split of the team fee</p>
         </form>
@@ -864,65 +700,8 @@ function ViewerPanel(props: {
     );
   }
 
-  // From here the visitor IS a member (organiser or a joined member).
-  // Card form shows when the server says "joined", or transiently right after
-  // joining (viewer not refetched yet) when we already hold a setup secret.
-  const needsCard = view.status === "open" && (viewer?.status === "joined" || (!viewer && !!setupSecret));
-  if (needsCard) {
-    const isOrganiserViewer = viewer?.role === "organiser";
-    return (
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={cardStyle}>
-        <h2 className="text-lg font-bold tracking-tight">{isOrganiserViewer ? "Add your card" : "Save your card to lock in your share"}</h2>
-        <p className="text-sm mt-1 mb-4" style={{ color: BRAND.muted }}>
-          No charge now. Your share of {formatCurrency(shareCents, { fromCents: true })} is charged once — when the captain locks the squad.
-        </p>
-        {!stripePromise ? (
-          <div className="rounded-2xl p-5 flex items-start gap-3 text-sm" style={{ background: BRAND.cardSoft, border: "1px solid rgba(220,38,38,0.3)", color: BRAND.red }}>
-            <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
-            <div><p className="font-semibold" style={{ color: BRAND.white }}>Card setup is temporarily unavailable</p><p className="mt-1" style={{ color: BRAND.muted }}>Please refresh and try again, or email minifootball@cufc.co.nz.</p></div>
-          </div>
-        ) : !setupSecret ? (
-          <div className="rounded-2xl p-5 flex items-center justify-center gap-2 text-sm" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.muted }}>
-            <Loader2 className="w-4 h-4 animate-spin" /> Opening secure card form…
-          </div>
-        ) : (
-          <Elements stripe={stripePromise} options={{ clientSecret: setupSecret, appearance: APPEARANCE }}>
-            <SetupForm code={code} memberToken={tokens.memberToken!} email={viewer?.email} returnUrl={hubUrl} onSaved={onCardSaved} />
-          </Elements>
-        )}
-      </motion.div>
-    );
-  }
-
-  // Still loading the viewer record (member token present, view not back yet).
-  if (!viewer) return null;
-
-  // Card saved → waiting to be charged
-  if (view.status !== "settled" && viewer.status === "card_saved") {
-    return (
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={cardStyle}>
-        <div className="flex items-start gap-3">
-          <div className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${BRAND.gold}1f` }}>
-            <CreditCard className="w-5 h-5" style={{ color: BRAND.gold }} />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold tracking-tight">You're in{viewer.role === "organiser" ? " — your card's saved" : ""}</h2>
-            <p className="text-sm mt-1" style={{ color: BRAND.muted }}>
-              Your share is <strong style={{ color: BRAND.gold }}>{formatCurrency(shareCents, { fromCents: true })}</strong> — charged once, when {viewer.role === "organiser" ? "you" : "the captain"} lock{viewer.role === "organiser" ? "" : "s"} the squad.
-            </p>
-          </div>
-        </div>
-        {viewer.role !== "organiser" && view.status === "open" && (
-          <button onClick={onLeave} className="mt-4 inline-flex items-center gap-1.5 text-[12px]" style={{ color: BRAND.dim }} data-testid="button-leave">
-            <LogOut className="w-3.5 h-3.5" /> Leave this split
-          </button>
-        )}
-      </motion.div>
-    );
-  }
-
-  // Paid
-  if (viewer.status === "paid") {
+  // Member who is paid → confirmation (shows regardless of session status).
+  if (viewer?.status === "paid") {
     return (
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={{ background: "rgba(123,220,181,0.08)", border: "1px solid rgba(123,220,181,0.25)" }}>
         <div className="flex items-center gap-3">
@@ -931,43 +710,66 @@ function ViewerPanel(props: {
           </div>
           <div>
             <h2 className="text-lg font-bold tracking-tight">Your share is paid</h2>
-            <p className="text-sm mt-0.5" style={{ color: BRAND.muted }}>{formatCurrency(viewer.chargedCents || shareCents, { fromCents: true })} — you're all set.</p>
+            <p className="text-sm mt-0.5" style={{ color: BRAND.muted }}>{formatCurrency(viewer.chargedCents || shareCents, { fromCents: true })} — you're all set{view.status === "settled" ? ". The team's confirmed — see you on the pitch!" : "."}</p>
           </div>
         </div>
       </motion.div>
     );
   }
 
-  // Failed → retry
-  if (viewer.status === "failed") {
+  // Session no longer open and the viewer isn't a paid member → terminal notice.
+  if (view.status !== "open") {
+    const msg = view.status === "settled"
+      ? "This team is fully paid. Registration's complete."
+      : view.status === "cancelled"
+        ? "This split was cancelled. Anyone who paid has been refunded."
+        : "This split is closed.";
     return (
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={{ background: BRAND.card, border: "1px solid rgba(220,38,38,0.3)" }}>
-        <div className="flex items-start gap-3">
-          <div className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: "rgba(220,38,38,0.14)" }}>
-            <AlertCircle className="w-5 h-5" style={{ color: BRAND.red }} />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold tracking-tight">Your payment didn't go through</h2>
-            <p className="text-sm mt-0.5" style={{ color: BRAND.muted }}>Your card was declined for {formatCurrency(viewer.chargedCents || shareCents, { fromCents: true })}. Try another card to settle your share.</p>
-          </div>
-        </div>
-        <div className="mt-4">
-          {!retrySecret ? (
-            <button onClick={onRetry} disabled={retryLoading}
-              className="w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-[16px] disabled:opacity-60"
-              style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-start-retry">
-              {retryLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Opening secure checkout…</> : <>Retry payment</>}
-            </button>
-          ) : stripePromise ? (
-            <Elements stripe={stripePromise} options={{ clientSecret: retrySecret, appearance: APPEARANCE }}>
-              <RetryForm code={code} returnUrl={hubUrl} onPaid={onRetried} />
-            </Elements>
-          ) : null}
-        </div>
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={cardStyle}>
+        <p className="text-sm" style={{ color: BRAND.muted }}>{msg}</p>
       </motion.div>
     );
   }
 
+  // From here the visitor IS an unpaid member while the split is open. Show the
+  // pay form (joined OR a previously-declined card; the same PaymentIntent secret
+  // can be re-confirmed). Also covers the instant after joining (viewer not back
+  // yet) when we already hold the payment secret.
+  const declined = viewer?.status === "failed";
+  const needsPay = viewer?.status === "joined" || declined || (!viewer && !!paySecret);
+  if (needsPay) {
+    return (
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={{ background: BRAND.card, border: declined ? "1px solid rgba(220,38,38,0.3)" : `1px solid ${BRAND.border}` }}>
+        <h2 className="text-lg font-bold tracking-tight">{declined ? "That card didn't go through" : "Pay your share"}</h2>
+        <p className="text-sm mt-1 mb-4" style={{ color: BRAND.muted }}>
+          {declined
+            ? <>Your card was declined. Try another to pay your <strong style={{ color: BRAND.white }}>{formatCurrency(shareCents, { fromCents: true })}</strong> share.</>
+            : <>Your <strong style={{ color: BRAND.white }}>{formatCurrency(shareCents, { fromCents: true })}</strong> share of the team fee — one charge, now. You'll get an email receipt.</>}
+        </p>
+        {!stripePromise ? (
+          <div className="rounded-2xl p-5 flex items-start gap-3 text-sm" style={{ background: BRAND.cardSoft, border: "1px solid rgba(220,38,38,0.3)", color: BRAND.red }}>
+            <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+            <div><p className="font-semibold" style={{ color: BRAND.white }}>Payment is temporarily unavailable</p><p className="mt-1" style={{ color: BRAND.muted }}>Please refresh and try again, or email minifootball@cufc.co.nz.</p></div>
+          </div>
+        ) : !paySecret ? (
+          <div className="rounded-2xl p-5 flex items-center justify-center gap-2 text-sm" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.muted }}>
+            <Loader2 className="w-4 h-4 animate-spin" /> Opening secure payment…
+          </div>
+        ) : (
+          <Elements stripe={stripePromise} options={{ clientSecret: paySecret, appearance: APPEARANCE }}>
+            <PayForm code={code} returnUrl={hubUrl} onPaid={onPaid} amountCents={shareCents} />
+          </Elements>
+        )}
+        {viewer && viewer.role !== "organiser" && (
+          <button onClick={onLeave} className="mt-4 inline-flex items-center gap-1.5 text-[12px]" style={{ color: BRAND.dim }} data-testid="button-leave">
+            <LogOut className="w-3.5 h-3.5" /> Leave this split
+          </button>
+        )}
+      </motion.div>
+    );
+  }
+
+  // Member token present but the viewer record hasn't loaded yet.
   return null;
 }
 

@@ -25,10 +25,21 @@ import crypto from "crypto";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { db } from "./db";
 import { splitSessions, splitMembers, registrations, leagueDivisions, type SplitSession, type SplitMember } from "@shared/schema";
-import { getOrCreateCustomer, createSetupIntent, createOffSessionPaymentIntent, createPaymentIntent, createRefund, stripe } from "./stripe";
-import { equalSplit, provisionalShareCents } from "@shared/league-pricing";
+import { getOrCreateCustomer, createOffSessionPaymentIntent, createPaymentIntent, createRefund, stripe } from "./stripe";
+import { equalSplit } from "@shared/league-pricing";
 
 const SESSION_TTL_DAYS = 30;
+
+// V1 (PayShare model): each player pays a FIXED equal share = team fee ÷ squad
+// size, on the spot, the moment they add their card. No captain "lock" step. The
+// share matches what the hub + register page display (round, not ceil) so what a
+// player sees is exactly what they pay. If a teammate never pays, the club simply
+// collects less — that's the group's responsibility (same as PayShare). When
+// `targetCount` players have paid, the session settles (team confirmed).
+function memberShareCents(s: { totalCents: number; targetCount: number | null }): number {
+  const n = s.targetCount && s.targetCount > 0 ? s.targetCount : 1;
+  return Math.round(s.totalCents / n);
+}
 
 function token(bytes = 16): string {
   return crypto.randomBytes(bytes).toString("base64url");
@@ -69,11 +80,12 @@ async function markPaidOnce(memberId: number, paymentIntentId: string): Promise<
   return !!row;
 }
 
-// Atomic settling→settled flip. The winner runs the one-time settlement in
-// routes.ts (confirm reg + materialise team + captain email + Purchase).
+// Atomic open→settled flip. The winner runs the one-time settlement in routes.ts
+// (confirm reg + materialise team + captain email + Purchase). Fires when the
+// squad target has been reached (every player paid their share on the spot).
 export async function markSplitSettledOnce(sessionId: number): Promise<boolean> {
   const [row] = await db.update(splitSessions).set({ status: "settled", settledAt: new Date() })
-    .where(and(eq(splitSessions.id, sessionId), eq(splitSessions.status, "settling")))
+    .where(and(eq(splitSessions.id, sessionId), eq(splitSessions.status, "open")))
     .returning({ id: splitSessions.id });
   return !!row;
 }
@@ -90,7 +102,7 @@ export async function createSplitForRegistration(opts: {
   captain: { email: string; firstName: string; lastName?: string; phone?: string };
   targetCount?: number | null;
   deadlineAt?: Date | null;
-}): Promise<{ sessionId: number; shareCode: string; organiserToken: string; memberToken: string; setupClientSecret: string | null; customerId: string }> {
+}): Promise<{ sessionId: number; shareCode: string; organiserToken: string; memberToken: string; paymentClientSecret: string | null; customerId: string }> {
   const { registration: reg, captain } = opts;
   const organiserToken = token();
 
@@ -119,15 +131,15 @@ export async function createSplitForRegistration(opts: {
     expiresAt,
   }).returning();
 
-  // Captain is the first paying member. Save their card via a SetupIntent.
+  // Captain is the first paying member. They pay their own fixed share on the hub.
   const customer = await getOrCreateCustomer({
     email: captain.email,
     name: `${captain.firstName} ${captain.lastName ?? ""}`.trim(),
     phone: captain.phone,
   });
-  const si = await createSetupIntent({ customerId: customer.id, metadata: { splitSessionId: String(session.id), role: "organiser" } });
+  const shareCents = memberShareCents(session);
   const memberToken = token();
-  await db.insert(splitMembers).values({
+  const [captainMember] = await db.insert(splitMembers).values({
     splitSessionId: session.id,
     name: `${captain.firstName} ${captain.lastName ?? ""}`.trim(),
     email: captain.email.trim().toLowerCase(),
@@ -135,11 +147,30 @@ export async function createSplitForRegistration(opts: {
     role: "organiser",
     status: "joined",
     stripeCustomerId: customer.id,
-    stripeSetupIntentId: si.id,
+    chargedCents: shareCents,
     memberToken,
-  });
+  }).returning();
 
-  return { sessionId: session.id, shareCode, organiserToken, memberToken, setupClientSecret: si.client_secret, customerId: customer.id };
+  // On-session PaymentIntent for the captain's share — confirmed on the hub via
+  // Elements. Stable idempotency key so a refresh reuses the same intent.
+  const pi = await createPaymentIntent({
+    registrationId: reg.id,
+    campName: `${session.teamName || "Team"} — split share`,
+    totalCents: shareCents,
+    currency: "NZD",
+    parentEmail: captain.email,
+    customerId: customer.id,
+    metadata: {
+      registrationType: "league_share",
+      splitSessionId: String(session.id),
+      splitMemberId: String(captainMember.id),
+      registrationId: String(reg.id),
+    },
+    idempotencyKey: `split-${session.id}-member-${captainMember.id}-pay`,
+  });
+  await db.update(splitMembers).set({ stripePaymentIntentId: pi.id }).where(eq(splitMembers.id, captainMember.id));
+
+  return { sessionId: session.id, shareCode, organiserToken, memberToken, paymentClientSecret: pi.client_secret, customerId: customer.id };
 }
 
 // Public view for the hub / joiner / polling. viewerToken (organiser or member)
@@ -149,14 +180,14 @@ export async function getSplitView(code: string, viewerToken?: string) {
   if (!s) return null;
   const members = await membersOf(s.id);
   const active = members.filter((m) => m.status !== "removed");
-  const withCard = active.filter((m) => m.status === "card_saved" || m.status === "paid");
+  // "cardCount" now tracks how many have paid (no separate card-saved state).
+  const withCard = active.filter((m) => m.status === "paid");
   const paid = active.filter((m) => m.status === "paid");
-  const denom = Math.max(withCard.length, 1);
   let viewer = viewerToken ? members.find((m) => m.memberToken === viewerToken) : undefined;
   const isOrganiserView = !!viewerToken && viewerToken === s.organiserToken;
   // The captain identifies with the session organiserToken (NOT a member token),
   // so resolve their own member record here — otherwise the hub shows them no
-  // card-save form and they can't pay their share.
+  // pay form and they can't pay their share.
   if (!viewer && isOrganiserView) viewer = members.find((m) => m.role === "organiser");
 
   return {
@@ -170,8 +201,8 @@ export async function getSplitView(code: string, viewerToken?: string) {
     cardCount: withCard.length,
     paidCount: paid.length,
     shareLockedCents: s.shareLockedCents,
-    // Provisional "each pays ≈" = the LARGEST current share (never understates).
-    provisionalShareCents: provisionalShareCents(s.totalCents, denom),
+    // Each player's fixed share = team fee ÷ squad size (matches what's charged).
+    provisionalShareCents: memberShareCents(s),
     lockedAt: s.lockedAt,
     settledAt: s.settledAt,
     deadlineAt: s.deadlineAt,
@@ -194,7 +225,8 @@ export async function getSplitView(code: string, viewerToken?: string) {
 }
 
 // A squad member opens the link and joins. Creates (or reactivates) their member
-// row + a SetupIntent so they save their card (no charge).
+// row, then issues an on-session PaymentIntent for their fixed share so they pay
+// on the spot (PayShare model — no card-save, no captain lock).
 export async function joinSplit(code: string, body: { name?: string; email: string; phone?: string }) {
   const s = await sessionByCode(code);
   if (!s) return { error: "not_found" as const };
@@ -203,17 +235,21 @@ export async function joinSplit(code: string, body: { name?: string; email: stri
   if (!email || !/.+@.+\..+/.test(email)) return { error: "invalid_email" as const };
 
   const customer = await getOrCreateCustomer({ email, name: body.name, phone: body.phone });
-  const si = await createSetupIntent({ customerId: customer.id, metadata: { splitSessionId: String(s.id), role: "member" } });
+  const shareCents = memberShareCents(s);
 
   const existing = (await membersOf(s.id)).find((m) => m.email.toLowerCase() === email);
   let member: SplitMember;
   if (existing) {
+    if (existing.status === "paid") {
+      // Already paid — just hand back their token; nothing more to charge.
+      return { memberToken: existing.memberToken, paymentClientSecret: null, memberId: existing.id, alreadyPaid: true as const };
+    }
     [member] = await db.update(splitMembers).set({
       name: body.name ?? existing.name,
       phone: body.phone ?? existing.phone,
-      status: existing.status === "paid" ? "paid" : "joined", // re-join reactivates a removed/idle row
+      status: "joined", // re-join reactivates a removed/idle row
       stripeCustomerId: customer.id,
-      stripeSetupIntentId: si.id,
+      chargedCents: shareCents,
       memberToken: existing.memberToken || token(),
     }).where(eq(splitMembers.id, existing.id)).returning();
   } else {
@@ -221,18 +257,35 @@ export async function joinSplit(code: string, body: { name?: string; email: stri
       [member] = await db.insert(splitMembers).values({
         splitSessionId: s.id, name: body.name ?? null, email, phone: body.phone ?? null,
         role: "member", status: "joined",
-        stripeCustomerId: customer.id, stripeSetupIntentId: si.id, memberToken: token(),
+        stripeCustomerId: customer.id, chargedCents: shareCents, memberToken: token(),
       }).returning();
     } catch (e: any) {
       // Lost a same-email race → load + update the row that won.
       if (e?.code === "23505" || /duplicate|unique/i.test(e?.message || "")) {
         const row = (await membersOf(s.id)).find((m) => m.email.toLowerCase() === email)!;
-        [member] = await db.update(splitMembers).set({ stripeCustomerId: customer.id, stripeSetupIntentId: si.id })
+        [member] = await db.update(splitMembers).set({ stripeCustomerId: customer.id, chargedCents: shareCents })
           .where(eq(splitMembers.id, row.id)).returning();
       } else throw e;
     }
   }
-  return { memberToken: member.memberToken, setupClientSecret: si.client_secret, memberId: member.id };
+
+  const pi = await createPaymentIntent({
+    registrationId: s.registrationId ?? 0,
+    campName: `${s.teamName || "Team"} — split share`,
+    totalCents: shareCents,
+    currency: s.currency || "NZD",
+    parentEmail: member.email,
+    customerId: customer.id,
+    metadata: {
+      registrationType: "league_share",
+      splitSessionId: String(s.id),
+      splitMemberId: String(member.id),
+      registrationId: String(s.registrationId ?? ""),
+    },
+    idempotencyKey: `split-${s.id}-member-${member.id}-pay`,
+  });
+  await db.update(splitMembers).set({ stripePaymentIntentId: pi.id }).where(eq(splitMembers.id, member.id));
+  return { memberToken: member.memberToken, paymentClientSecret: pi.client_secret, memberId: member.id };
 }
 
 // Mark a member's card saved from their SetupIntent (webhook setup_intent.succeeded
@@ -253,10 +306,12 @@ export async function markCardSavedBySetupIntent(setupIntentId: string): Promise
   }).where(and(eq(splitMembers.id, m.id), ne(splitMembers.status, "paid")));
 }
 
-// Issue a FRESH SetupIntent for an existing member (refresh-safe: the UI calls
-// this whenever a member needs to add/update a card, e.g. after a page reload
-// where the original client secret was lost). Returns the new client secret.
-export async function refreshSetupIntent(code: string, memberToken: string): Promise<{ error?: string; setupClientSecret?: string | null }> {
+// Issue (or reuse) the on-session PaymentIntent for an existing member's share —
+// refresh-safe: the hub calls this whenever an unpaid member needs the pay form
+// (e.g. after a reload that lost the original client secret, or to retry a
+// declined card). The stable idempotency key returns the SAME intent created at
+// join, whose client secret can be re-confirmed if a card was declined.
+export async function payShareIntent(code: string, memberToken: string): Promise<{ error?: string; paymentClientSecret?: string | null }> {
   const s = await sessionByCode(code);
   if (!s) return { error: "not_found" };
   if (s.status !== "open") return { error: "closed" };
@@ -268,18 +323,27 @@ export async function refreshSetupIntent(code: string, memberToken: string): Pro
     const c = await getOrCreateCustomer({ email: m.email, name: m.name ?? undefined, phone: m.phone ?? undefined });
     customerId = c.id;
   }
-  const si = await createSetupIntent({ customerId, metadata: { splitSessionId: String(s.id), role: m.role } });
-  await db.update(splitMembers).set({ stripeSetupIntentId: si.id, stripeCustomerId: customerId }).where(eq(splitMembers.id, m.id));
-  return { setupClientSecret: si.client_secret };
-}
-
-export async function confirmMemberCardSaved(code: string, memberToken: string) {
-  const s = await sessionByCode(code);
-  if (!s) return { error: "not_found" as const };
-  const [m] = await db.select().from(splitMembers).where(and(eq(splitMembers.memberToken, memberToken), eq(splitMembers.splitSessionId, s.id)));
-  if (!m?.stripeSetupIntentId) return { error: "not_found" as const };
-  await markCardSavedBySetupIntent(m.stripeSetupIntentId);
-  return { ok: true as const };
+  const shareCents = memberShareCents(s);
+  const pi = await createPaymentIntent({
+    registrationId: s.registrationId ?? 0,
+    campName: `${s.teamName || "Team"} — split share`,
+    totalCents: shareCents,
+    currency: s.currency || "NZD",
+    parentEmail: m.email,
+    customerId,
+    metadata: {
+      registrationType: "league_share",
+      splitSessionId: String(s.id),
+      splitMemberId: String(m.id),
+      registrationId: String(s.registrationId ?? ""),
+    },
+    idempotencyKey: `split-${s.id}-member-${m.id}-pay`,
+  });
+  await db.update(splitMembers).set({
+    stripePaymentIntentId: pi.id, stripeCustomerId: customerId, chargedCents: shareCents,
+    status: m.status === "failed" ? "joined" : m.status,
+  }).where(and(eq(splitMembers.id, m.id), ne(splitMembers.status, "paid")));
+  return { paymentClientSecret: pi.client_secret };
 }
 
 export async function removeMember(code: string, organiserToken: string, memberId: number) {
@@ -476,13 +540,15 @@ export async function chargeOutstandingShares(sessionId: number): Promise<{ char
   return { charged, failed, sessionId };
 }
 
-// True when every member that was charged at lock has paid → ready to settle.
+// True when the squad target has paid → ready to settle (confirm the team). In
+// the charge-on-pay model the bar is the squad size: once `targetCount` players
+// have each paid their share, the fee is collected and the team is confirmed.
 export async function isSettleReady(sessionId: number): Promise<boolean> {
   const [s] = await db.select().from(splitSessions).where(eq(splitSessions.id, sessionId));
-  if (!s || s.status !== "settling") return false;
-  const included = (await membersOf(sessionId)).filter((m) => m.status !== "removed" && m.chargedCents != null);
-  if (included.length === 0) return false;
-  return included.every((m) => m.status === "paid");
+  if (!s || s.status !== "open") return false;
+  const paid = (await membersOf(sessionId)).filter((m) => m.status === "paid");
+  const target = s.targetCount && s.targetCount > 0 ? s.targetCount : paid.length;
+  return paid.length > 0 && paid.length >= target;
 }
 
 // The registration this split funds (routes.ts settlement needs it).
