@@ -138,7 +138,7 @@ export default function LeaguePayments() {
               <table className="w-full min-w-[760px]">
                 <thead>
                   <tr className="border-b border-white/5">
-                    {["Team", "League", "Captain", "Method", "Status", "Paid", "Balance"].map(h => (
+                    {["Team", "League", "Signed up", "Captain", "Method", "Status", "Paid", "Balance"].map(h => (
                       <th key={h} className="text-left text-[10px] text-white/30 uppercase px-4 py-2 font-semibold">{h}</th>
                     ))}
                   </tr>
@@ -148,6 +148,9 @@ export default function LeaguePayments() {
                     <tr key={r.id} onClick={() => setSelected(r)} className="border-b border-white/[0.02] hover:bg-white/[0.03] cursor-pointer transition-colors group" data-testid={`pay-row-${r.id}`}>
                       <td className="px-4 py-2.5 text-sm text-white/80 font-medium">{r.teamName || `#${r.id}`}</td>
                       <td className="px-4 py-2.5 text-sm text-white/50">{r.divisionName || "—"}</td>
+                      <td className="px-4 py-2.5 text-sm text-white/50 whitespace-nowrap">
+                        {r.registeredAt ? (() => { const d = new Date(r.registeredAt); return (<><div>{d.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })}</div><div className="text-[11px] text-white/30">{d.toLocaleTimeString("en-NZ", { hour: "numeric", minute: "2-digit" })}</div></>); })() : "—"}
+                      </td>
                       <td className="px-4 py-2.5 text-sm text-white/60">
                         <div>{r.captainName}</div>
                         <div className="flex items-center gap-3 text-[11px] text-white/30 mt-0.5">
