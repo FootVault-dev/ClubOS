@@ -4569,6 +4569,88 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
+  // ── MFL Analytics — key business metrics ────────────────────────────────────
+  // ?competitionId= scopes to one term; omitted = all MFL terms aggregated.
+  app.get("/api/admin/league/analytics", requireAuth, async (req, res) => {
+    try {
+      const compId = req.query.competitionId ? parseInt(String(req.query.competitionId)) : null;
+      const allComps = await storage.getLeagueCompetitions(MFL_ORG_ID);
+      const comps = compId ? allComps.filter((c) => c.id === compId) : allComps;
+
+      let teams = 0, confirmed = 0, collected = 0, contracted = 0, owed = 0, owedTeams = 0;
+      const captains = new Set<string>();
+      const signups = new Map<string, { count: number; cents: number }>();
+      const payMix: Record<string, { count: number; cents: number }> = { "Card": { count: 0, cents: 0 }, "Play Now, Pay Later": { count: 0, cents: 0 }, "Player Pay": { count: 0, cents: 0 } };
+      const statusMix: Record<string, number> = {};
+      const collectedByDiv = new Map<string, number>();
+
+      for (const comp of comps) {
+        const regs = await storage.getLeagueRegistrations(comp.id);
+        for (const r of regs as any[]) {
+          teams++;
+          if (r.status === "confirmed") confirmed++;
+          const paid = Math.round(parseFloat(r.amountPaid || "0") * 100) || 0;
+          collected += paid;
+          contracted += (r.totalCents || 0);
+          if (r.captainEmail) captains.add(String(r.captainEmail).toLowerCase());
+          const day = r.registeredAt ? new Date(r.registeredAt).toISOString().slice(0, 10) : null;
+          if (day) { const s = signups.get(day) || { count: 0, cents: 0 }; s.count++; s.cents += paid; signups.set(day, s); }
+          const mk = r.paymentMode === "split" ? "Player Pay" : (r.paymentMode === "deposit_weekly" || r.paymentMode === "weekly") ? "Play Now, Pay Later" : "Card";
+          payMix[mk].count++; payMix[mk].cents += paid;
+          statusMix[r.paymentStatus || "unpaid"] = (statusMix[r.paymentStatus || "unpaid"] || 0) + 1;
+          if (r.balanceStatus && r.balanceStatus !== "paid" && r.balanceStatus !== "none" && (r.balanceCents || 0) > 0) { owed += r.balanceCents; owedTeams++; }
+          const dn = r.divisionName || "—";
+          collectedByDiv.set(dn, (collectedByDiv.get(dn) || 0) + paid);
+        }
+      }
+
+      // Capacity / fill from divisions.
+      let capacity = 0, activeTeams = 0;
+      const byDivision: any[] = [];
+      for (const comp of comps) {
+        const divs = await storage.getLeagueDivisions(comp.id);
+        const cteams = await storage.getLeagueTeams(MFL_ORG_ID, comp.id);
+        for (const d of divs as any[]) {
+          const tc = cteams.filter((t: any) => t.divisionId === d.id && t.active).length;
+          capacity += d.maxTeams || 0; activeTeams += tc;
+          byDivision.push({
+            name: d.name, capacity: d.maxTeams ?? null, teams: tc,
+            spotsLeft: d.maxTeams != null ? Math.max(0, d.maxTeams - tc) : null,
+            fillPct: d.maxTeams ? Math.round((tc / d.maxTeams) * 100) : null,
+            collectedCents: collectedByDiv.get(d.name) || 0,
+          });
+        }
+      }
+
+      const builders = await rewards.listBuilders(MFL_ORG_ID);
+      const season = await rewards.listSeasonMembers(MFL_ORG_ID);
+      const refs = await rewards.listReferees(MFL_ORG_ID);
+
+      res.json({
+        terms: allComps.map((c) => ({ id: c.id, name: c.name })),
+        overview: {
+          teams, confirmedTeams: confirmed,
+          revenueCollectedCents: collected, totalContractedCents: contracted,
+          revenueOwedCents: owed, owedTeams,
+          avgTeamValueCents: teams ? Math.round(contracted / teams) : 0,
+          uniqueCaptains: captains.size,
+          capacity, activeTeams, spotsLeft: Math.max(0, capacity - activeTeams),
+          fillRatePct: capacity ? Math.round((activeTeams / capacity) * 100) : null,
+          divisions: byDivision.length,
+        },
+        signupsByDay: Array.from(signups.entries()).map(([date, v]) => ({ date, count: v.count, revenueCents: v.cents })).sort((a, b) => a.date.localeCompare(b.date)),
+        paymentMix: Object.entries(payMix).map(([mode, v]) => ({ mode, count: v.count, collectedCents: v.cents })).filter((x) => x.count > 0),
+        statusMix: Object.entries(statusMix).map(([status, count]) => ({ status, count })),
+        byDivision: byDivision.sort((a, b) => b.collectedCents - a.collectedCents),
+        rewards: {
+          builders: builders.length, builderCreditEarnedCents: builders.reduce((s, b) => s + b.creditEarnedCents, 0),
+          seasonMembers: season.length, seasonRewardsIssued: season.reduce((s, m) => s + m.rewardsIssued, 0),
+          referees: refs.length, refTokens: refs.reduce((s, r) => s + r.tokens, 0),
+        },
+      });
+    } catch (e: any) { console.error("[League analytics] error:", e); res.status(500).json({ message: e.message }); }
+  });
+
   app.get("/api/admin/league/competitions/:id/standings", requireAuth, async (req, res) => {
     try {
       const divisionId = req.query.divisionId ? parseInt(req.query.divisionId as string) : undefined;
