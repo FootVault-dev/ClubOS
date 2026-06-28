@@ -339,6 +339,7 @@ export default function MflSplitPage() {
   const [showQr, setShowQr] = useState(false);
   const [showGroup, setShowGroup] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -558,7 +559,17 @@ export default function MflSplitPage() {
 
   const isOrganiser = view.isOrganiserView;
   const viewer = view.viewer;
-  const shareCents = view.provisionalShareCents || 0;
+  // Member-facing "fair share" = the fixed team fee split equally across the squad
+  // (target size), so it reads a stable $X each from the start — matches PayShare.
+  // The exact amount charged at lock can differ if a teammate doesn't pay; that
+  // nuance is explained in the Player Pay terms (see the "How Player Pay works" modal).
+  const fairShareCents = view.targetCount > 0
+    ? Math.round(view.totalCents / view.targetCount)
+    : (view.provisionalShareCents || 0);
+  const shareCents = fairShareCents;
+  // What each saved card is actually charged right now (fee ÷ cards in) — shown on
+  // the captain's Lock button so the charge math stays honest at the moment of charge.
+  const chargeShareCents = view.provisionalShareCents || 0;
   const lockReady = view.cardCount === view.joinedCount && view.joinedCount >= 1;
   const missingCards = Math.max(0, view.joinedCount - view.cardCount);
 
@@ -641,13 +652,15 @@ export default function MflSplitPage() {
         </div>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{view.teamName}</h1>
         <p className="mt-1.5 text-[15px]" style={{ color: BRAND.muted }}>
-          {formatCurrency(view.totalCents, { fromCents: true })} team fee, split evenly across everyone who saves a card.
+          {formatCurrency(view.totalCents, { fromCents: true })} team fee, split equally across the squad.
         </p>
         <div className="mt-5 flex items-end gap-2">
           <span className="text-4xl font-bold tracking-tight" style={{ color: BRAND.gold }}>{formatCurrency(shareCents, { fromCents: true })}</span>
-          <span className="text-sm mb-1.5" style={{ color: BRAND.muted }}>each right now · {view.cardCount} {view.cardCount === 1 ? "card" : "cards"} in</span>
+          <span className="text-sm mb-1.5" style={{ color: BRAND.muted }}>each{view.targetCount > 0 ? ` · squad of ${view.targetCount}` : ""}</span>
         </div>
-        <p className="mt-1 text-[12px]" style={{ color: BRAND.dim }}>The more teammates add a card, the lower everyone's share.</p>
+        <button onClick={() => setShowTerms(true)} className="mt-1.5 inline-flex items-center text-[12px] underline-offset-2 hover:underline" style={{ color: BRAND.dim }} data-testid="link-player-pay-terms">
+          How Player Pay works
+        </button>
         {deadlineLabel && (
           <p className="mt-3 inline-flex items-center gap-1.5 text-[12px]" style={{ color: BRAND.dim }}>
             <Clock3 className="w-3.5 h-3.5" /> Closes {deadlineLabel}
@@ -656,9 +669,27 @@ export default function MflSplitPage() {
       </motion.div>
 
       {/* Counters — match PayShare: squad target is the denominator for both */}
-      <div className="flex gap-3 mb-5">
+      <div className="flex gap-3 mb-3">
         <Counter value={view.joinedCount} total={view.targetCount || view.joinedCount} label="Joined" />
         <Counter value={view.paidCount} total={view.targetCount || view.joinedCount} label="Paid" />
+      </div>
+
+      {/* Group actions — share + status, up with the counters and visible to everyone (PayShare layout) */}
+      <div className="space-y-2.5 mb-5">
+        <button onClick={() => setShowGroup(true)} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-[14px]" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }} data-testid="button-group-status">
+          <Users className="w-4 h-4" /> View group status ({view.joinedCount})
+        </button>
+        <div className="grid grid-cols-3 gap-2.5">
+          <button onClick={handleShare} className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl font-semibold text-[13px]" style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-share">
+            <Share2 className="w-4 h-4" /> Share
+          </button>
+          <button onClick={copyLink} className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl font-semibold text-[13px]" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }} data-testid="button-copy">
+            <Copy className="w-4 h-4" /> {copied ? "Copied!" : "Copy link"}
+          </button>
+          <button onClick={() => setShowQr(true)} className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl font-semibold text-[13px]" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }} data-testid="button-qr">
+            <QrCode className="w-4 h-4" /> QR code
+          </button>
+        </div>
       </div>
 
       {/* ── Viewer's own status / action ── */}
@@ -681,28 +712,6 @@ export default function MflSplitPage() {
             <Crown className="w-3.5 h-3.5" /> Captain controls
           </div>
 
-          {/* Share row */}
-          <div className="space-y-2.5">
-            <div className="flex items-center gap-2 rounded-xl px-3.5 py-3 text-sm" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}` }}>
-              <span className="truncate flex-1" style={{ color: BRAND.muted }}>{shareUrl.replace(/^https?:\/\//, "")}</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2.5">
-              <button onClick={handleShare} className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl font-semibold text-[13px]" style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-share">
-                <Share2 className="w-4 h-4" /> Share
-              </button>
-              <button onClick={copyLink} className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl font-semibold text-[13px]" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }} data-testid="button-copy">
-                <Copy className="w-4 h-4" /> Copy link
-              </button>
-              <button onClick={() => setShowQr(true)} className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl font-semibold text-[13px]" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }} data-testid="button-qr">
-                <QrCode className="w-4 h-4" /> QR code
-              </button>
-            </div>
-          </div>
-
-          <button onClick={() => setShowGroup(true)} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-[14px]" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }} data-testid="button-group-status">
-            <Users className="w-4 h-4" /> View group status ({view.joinedCount})
-          </button>
-
           {lockError && <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(220,38,38,0.12)", color: BRAND.red, border: "1px solid rgba(220,38,38,0.3)" }}>{lockError}</div>}
 
           {/* Lock & charge */}
@@ -714,7 +723,7 @@ export default function MflSplitPage() {
               {lockReady ? (
                 <>
                   <span className="flex items-center gap-2"><Lock className="w-4 h-4" /> Lock &amp; charge everyone</span>
-                  <span className="text-[12px] font-semibold" style={{ color: "rgba(0,0,0,0.6)" }}>Locking now: {view.cardCount} × {formatCurrency(shareCents, { fromCents: true })}</span>
+                  <span className="text-[12px] font-semibold" style={{ color: "rgba(0,0,0,0.6)" }}>Locking now: {view.cardCount} × {formatCurrency(chargeShareCents, { fromCents: true })}</span>
                 </>
               ) : (
                 <span className="text-[14px] font-semibold">
@@ -785,6 +794,21 @@ export default function MflSplitPage() {
           </button>
         </div>
       </Modal>
+
+      {/* Player Pay terms / how-it-works modal */}
+      <Modal open={showTerms} onClose={() => setShowTerms(false)}>
+        <h3 className="text-lg font-bold tracking-tight">How Player Pay works</h3>
+        <div className="mt-3 space-y-3 text-sm" style={{ color: BRAND.muted }}>
+          <p>The team fee is a fixed <strong style={{ color: BRAND.white }}>{formatCurrency(view.totalCents, { fromCents: true })}</strong>. It's split equally across your squad — about <strong style={{ color: BRAND.white }}>{formatCurrency(shareCents, { fromCents: true })}</strong> per player{view.targetCount > 0 ? ` for a squad of ${view.targetCount}` : ""}.</p>
+          <p>Saving your card doesn't charge you. Your share is charged <strong style={{ color: BRAND.white }}>once</strong> — when the captain locks the squad.</p>
+          <p>If a teammate doesn't add a card, the team fee is shared between the players who do, so your share can be a little higher than the estimate. The club always collects the full team fee.</p>
+          <p>If the captain cancels the split, anyone already charged is refunded in full.</p>
+          <p>Payments are processed securely by Stripe — we never see or store your card details.</p>
+        </div>
+        <button onClick={() => setShowTerms(false)} className="mt-5 w-full py-3 rounded-full font-semibold text-sm" style={{ background: BRAND.cardSoft, border: `1px solid ${BRAND.border}`, color: BRAND.white }}>
+          Got it
+        </button>
+      </Modal>
     </Shell>
   );
 }
@@ -834,7 +858,7 @@ function ViewerPanel(props: {
             style={{ background: BRAND.gold, color: BRAND.black }} data-testid="button-join">
             {joining ? <><Loader2 className="w-4 h-4 animate-spin" /> Joining…</> : <>Join &amp; add my card</>}
           </button>
-          <p className="text-center text-[12px]" style={{ color: BRAND.dim }}>Your share ≈ {formatCurrency(shareCents, { fromCents: true })} today · drops as more people join</p>
+          <p className="text-center text-[12px]" style={{ color: BRAND.dim }}>Your share: {formatCurrency(shareCents, { fromCents: true })} — an equal split of the team fee</p>
         </form>
       </motion.div>
     );
@@ -850,7 +874,7 @@ function ViewerPanel(props: {
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardWrap} style={cardStyle}>
         <h2 className="text-lg font-bold tracking-tight">{isOrganiserViewer ? "Add your card" : "Save your card to lock in your share"}</h2>
         <p className="text-sm mt-1 mb-4" style={{ color: BRAND.muted }}>
-          No charge now. Your share (≈ {formatCurrency(shareCents, { fromCents: true })}) is charged once — when the captain locks the team.
+          No charge now. Your share of {formatCurrency(shareCents, { fromCents: true })} is charged once — when the captain locks the squad.
         </p>
         {!stripePromise ? (
           <div className="rounded-2xl p-5 flex items-start gap-3 text-sm" style={{ background: BRAND.cardSoft, border: "1px solid rgba(220,38,38,0.3)", color: BRAND.red }}>
@@ -884,7 +908,7 @@ function ViewerPanel(props: {
           <div>
             <h2 className="text-lg font-bold tracking-tight">You're in{viewer.role === "organiser" ? " — your card's saved" : ""}</h2>
             <p className="text-sm mt-1" style={{ color: BRAND.muted }}>
-              Your share is about <strong style={{ color: BRAND.gold }}>{formatCurrency(shareCents, { fromCents: true })}</strong> — charged once, when {viewer.role === "organiser" ? "you" : "the captain"} lock{viewer.role === "organiser" ? "" : "s"} the team. It drops if more teammates join.
+              Your share is <strong style={{ color: BRAND.gold }}>{formatCurrency(shareCents, { fromCents: true })}</strong> — charged once, when {viewer.role === "organiser" ? "you" : "the captain"} lock{viewer.role === "organiser" ? "" : "s"} the squad.
             </p>
           </div>
         </div>
