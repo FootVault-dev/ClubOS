@@ -370,6 +370,31 @@ export async function sendSplitTeamConfirmedEmail(params: {
   });
 }
 
+/** Season Ticket Rewards — a tier unlocked. Sends the voucher code (or a custom-kit heads-up). */
+export async function sendSeasonRewardEmail(params: {
+  to: string; memberName: string; tierName: string; rewardLabel: string; voucherCode: string | null;
+}): Promise<boolean> {
+  const rows = [
+    mflRow("Tier reached", params.tierName, false),
+    mflRow("Reward", params.rewardLabel, true),
+    ...(params.voucherCode ? [mflRow("Your code", params.voucherCode, true)] : []),
+  ].join("");
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.memberName},</p>
+    <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">
+      You've hit <strong style="color:#d1b96e;">${params.tierName}</strong> on Season Ticket Rewards — thanks for being part of the leagues! ${params.voucherCode ? `Use the code below at checkout for your <strong>${params.rewardLabel}</strong>.` : `You've unlocked your <strong>${params.rewardLabel}</strong> — we'll be in touch to sort it out.`}
+    </p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    ${params.voucherCode ? `<a href="https://join.minifootball.co.nz/league" style="display:inline-block; margin:22px 0 0; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">Enter a team →</a>` : ""}`;
+  return sendEmail({
+    to: params.to, from: MFL_FROM, replyTo: MFL_REPLY_TO,
+    subject: `You've unlocked ${params.tierName} — Season Ticket Rewards`,
+    html: mflShell({ heading: `${params.tierName} unlocked 🎉`, bodyHtml }),
+  });
+}
+
 /** Balance instalment successfully collected. */
 export async function sendLeagueBalancePaidEmail(params: {
   registrationId: number;

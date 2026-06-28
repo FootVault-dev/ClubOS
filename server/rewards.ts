@@ -9,9 +9,9 @@
 import crypto from "crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "./db";
-import { rewardBuilders, rewardBuilderEvents, type RewardBuilder } from "@shared/schema";
+import { rewardBuilders, rewardBuilderEvents, rewardSeasonMembers, rewardSeasonEvents, rewardSeasonRewards, type RewardBuilder, type RewardSeasonMember } from "@shared/schema";
 import { storage } from "./storage";
-import { builderTierFor, nextBuilderTier, BUILDER_TIERS } from "@shared/rewards";
+import { builderTierFor, nextBuilderTier, BUILDER_TIERS, SEASON_TIERS, seasonTierFor, SEASON_XP_PER_SIGNUP, type SeasonTier } from "@shared/rewards";
 
 function token(bytes = 12): string { return crypto.randomBytes(bytes).toString("base64url"); }
 
@@ -199,4 +199,127 @@ export async function recordCreditUsed(builderId: number, amountCents: number, n
   if (!b) return;
   await db.insert(rewardBuilderEvents).values({ builderId, type: "credit_used", commissionCents: -Math.abs(amountCents), note: note ?? "Credit redeemed", registrationId: null });
   await db.update(rewardBuilders).set({ creditUsedCents: b.creditUsedCents + Math.abs(amountCents) }).where(eq(rewardBuilders.id, builderId));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Season Ticket Rewards (loyalty) — +3 Team XP per confirmed signup; crossing a
+// tier auto-issues a reward (voucher code, or custom kit flagged for fulfilment).
+// ═══════════════════════════════════════════════════════════════════════════
+
+function genVoucherCode(pct: number): string {
+  return `SEASON${pct}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+}
+
+// Accrue Team XP for a confirmed registration (idempotent per registration), then
+// issue any newly-unlocked tier rewards. Keyed by captain email.
+export async function accrueSeasonXp(opts: {
+  organizationId: number; registrationId: number; name: string; email: string; phone?: string | null; contactId?: number | null; teamName?: string | null;
+}): Promise<void> {
+  const email = String(opts.email || "").trim().toLowerCase();
+  if (!email) return;
+
+  // Find/create the member.
+  let [member] = await db.select().from(rewardSeasonMembers).where(and(eq(rewardSeasonMembers.organizationId, opts.organizationId), eq(rewardSeasonMembers.email, email)));
+  if (!member) {
+    try {
+      [member] = await db.insert(rewardSeasonMembers).values({
+        organizationId: opts.organizationId, contactId: opts.contactId ?? null,
+        name: opts.name || email, email, phone: opts.phone ?? null,
+      }).returning();
+    } catch (e: any) {
+      if (e?.code === "23505" || /duplicate|unique/i.test(e?.message || "")) {
+        [member] = await db.select().from(rewardSeasonMembers).where(and(eq(rewardSeasonMembers.organizationId, opts.organizationId), eq(rewardSeasonMembers.email, email)));
+      } else throw e;
+    }
+  }
+  if (!member) return;
+
+  // Idempotent +XP per registration (unique registration_id on the event).
+  try {
+    await db.insert(rewardSeasonEvents).values({ memberId: member.id, xp: SEASON_XP_PER_SIGNUP, registrationId: opts.registrationId, teamName: opts.teamName ?? null });
+  } catch (e: any) {
+    if (e?.code === "23505" || /duplicate|unique/i.test(e?.message || "")) return; // already accrued
+    throw e;
+  }
+  const newXp = member.xp + SEASON_XP_PER_SIGNUP;
+  await db.update(rewardSeasonMembers).set({ xp: newXp }).where(eq(rewardSeasonMembers.id, member.id));
+
+  // Issue any tiers now reached that haven't been issued yet.
+  for (const tier of SEASON_TIERS) {
+    if (newXp >= tier.xp) await issueSeasonReward({ ...member, xp: newXp }, tier);
+  }
+}
+
+async function issueSeasonReward(member: RewardSeasonMember, tier: SeasonTier): Promise<void> {
+  // Idempotent: unique (member, tier). Insert the reward row first; if it already
+  // exists the unique index throws and we skip (no duplicate voucher).
+  let voucherCode: string | null = null;
+  let discountId: number | null = null;
+  if (tier.rewardType === "discount") {
+    voucherCode = genVoucherCode(tier.value);
+    try {
+      const d = await storage.createDiscount({
+        organizationId: member.organizationId,
+        title: `Season Ticket ${tier.name} — ${member.name}`,
+        code: voucherCode,
+        type: "amount_off_order", method: "code", valueType: "percentage", value: String(tier.value),
+        appliesTo: "all", eligibility: "all", minPurchaseType: "none",
+        combinesWithOrder: true, combinesWithProduct: true, status: "active",
+        maxTotalUses: 1, startDate: new Date(),
+      } as any);
+      discountId = d.id;
+    } catch (e: any) { console.error("[Season] voucher code create failed:", e?.message); }
+  }
+  try {
+    await db.insert(rewardSeasonRewards).values({
+      memberId: member.id, tier: tier.name, rewardType: tier.rewardType,
+      voucherCode, discountId, status: "issued",
+    });
+  } catch (e: any) {
+    if (e?.code === "23505" || /duplicate|unique/i.test(e?.message || "")) {
+      // Already issued — clean up the orphan discount we just made.
+      if (discountId) { try { await (storage as any).updateDiscount?.(discountId, { status: "disabled" }); } catch {} }
+      return;
+    }
+    throw e;
+  }
+  void sendSeasonRewardEmail(member, tier, voucherCode);
+}
+
+async function sendSeasonRewardEmail(member: RewardSeasonMember, tier: SeasonTier, voucherCode: string | null): Promise<void> {
+  try {
+    const { sendSeasonRewardEmail: send } = await import("./email");
+    await send({ to: member.email, memberName: member.name?.split(" ")[0] || "there", tierName: tier.name, rewardLabel: tier.label, voucherCode });
+  } catch (e: any) { console.error(`[Season] reward email failed member=${member.id}:`, e?.message); }
+}
+
+export async function listSeasonMembers(orgId: number) {
+  const rows = await db.select().from(rewardSeasonMembers).where(eq(rewardSeasonMembers.organizationId, orgId)).orderBy(desc(rewardSeasonMembers.xp));
+  const out = [] as any[];
+  for (const m of rows) {
+    const rewards = await db.select().from(rewardSeasonRewards).where(eq(rewardSeasonRewards.memberId, m.id));
+    out.push({
+      id: m.id, name: m.name, email: m.email, phone: m.phone, xp: m.xp,
+      tier: seasonTierFor(m.xp)?.name ?? "—",
+      rewardsIssued: rewards.length,
+      kitPending: rewards.some((r) => r.rewardType === "custom_kit" && r.status !== "fulfilled"),
+    });
+  }
+  return out;
+}
+
+export async function getSeasonDetail(id: number) {
+  const [m] = await db.select().from(rewardSeasonMembers).where(eq(rewardSeasonMembers.id, id));
+  if (!m) return null;
+  const rewards = await db.select().from(rewardSeasonRewards).where(eq(rewardSeasonRewards.memberId, id)).orderBy(desc(rewardSeasonRewards.createdAt));
+  const events = await db.select().from(rewardSeasonEvents).where(eq(rewardSeasonEvents.memberId, id)).orderBy(desc(rewardSeasonEvents.createdAt));
+  return {
+    member: { id: m.id, name: m.name, email: m.email, phone: m.phone, xp: m.xp, tier: seasonTierFor(m.xp)?.name ?? "—" },
+    rewards: rewards.map((r) => ({ id: r.id, tier: r.tier, rewardType: r.rewardType, voucherCode: r.voucherCode, status: r.status, at: r.createdAt })),
+    signups: events.map((e) => ({ teamName: e.teamName, xp: e.xp, at: e.createdAt })),
+  };
+}
+
+export async function fulfilSeasonReward(rewardId: number): Promise<void> {
+  await db.update(rewardSeasonRewards).set({ status: "fulfilled" }).where(eq(rewardSeasonRewards.id, rewardId));
 }

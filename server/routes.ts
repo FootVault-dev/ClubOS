@@ -4531,6 +4531,23 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
+  // ── Season Ticket Rewards — admin ───────────────────────────────────────────
+  app.get("/api/admin/league/season", requireAuth, async (_req, res) => {
+    try { res.json(await rewards.listSeasonMembers(MFL_ORG_ID)); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/admin/league/season/:id", requireAuth, async (req, res) => {
+    try {
+      const d = await rewards.getSeasonDetail(parseInt(req.params.id));
+      if (!d) return res.status(404).json({ message: "Member not found" });
+      res.json(d);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/league/season/reward/:rewardId/fulfil", requireAuth, async (req, res) => {
+    try { await rewards.fulfilSeasonReward(parseInt(req.params.rewardId)); res.json({ ok: true }); }
+    catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
   app.get("/api/admin/league/competitions/:id/standings", requireAuth, async (req, res) => {
     try {
       const divisionId = req.query.divisionId ? parseInt(req.query.divisionId as string) : undefined;
@@ -12595,6 +12612,20 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
       teamName: reg.teamName ?? null,
     });
   } catch (e) { console.error("[Builders] attribution failed:", e); }
+
+  // Season Ticket Rewards: +3 Team XP for this confirmed signup; auto-issue any
+  // newly-unlocked tier reward (idempotent per registration).
+  try {
+    await rewards.accrueSeasonXp({
+      organizationId: program.organizationId!,
+      registrationId,
+      name: `${captain.firstName} ${captain.lastName ?? ""}`.trim(),
+      email: captain.email ?? "",
+      phone: captain.phone ?? null,
+      contactId: reg.contactId ?? null,
+      teamName: reg.teamName ?? null,
+    });
+  } catch (e) { console.error("[Season] accrual failed:", e); }
 
   // deposit_weekly: stand up the weekly Stripe subscription on the saved card,
   // anchored to the competition start. Guarded against a webhook re-fire making

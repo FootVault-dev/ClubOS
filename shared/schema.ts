@@ -497,6 +497,48 @@ export const rewardBuilderEvents = pgTable("reward_builder_events", {
   regUnq: uniqueIndex("reward_builder_events_reg_unq").on(t.registrationId),
 }));
 
+// ── Season Ticket Rewards (loyalty) ─────────────────────────────────────────
+// A team (keyed by captain email) earns +3 Team XP per confirmed league signup.
+// Crossing a tier unlocks a reward (auto-issued voucher code, or custom kit).
+export const rewardSeasonMembers = pgTable("reward_season_members", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  contactId: integer("contact_id"),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  xp: integer("xp").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgEmailUnq: uniqueIndex("reward_season_org_email_unq").on(t.organizationId, t.email),
+}));
+
+// +3 XP per confirmed registration. Unique registration_id = idempotent accrual.
+export const rewardSeasonEvents = pgTable("reward_season_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  memberId: integer("member_id").notNull().references(() => rewardSeasonMembers.id, { onDelete: "cascade" }),
+  xp: integer("xp").notNull().default(0),
+  registrationId: integer("registration_id"),
+  teamName: text("team_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  regUnq: uniqueIndex("reward_season_events_reg_unq").on(t.registrationId),
+}));
+
+// One row per tier unlocked → the issued reward (voucher code or custom kit).
+export const rewardSeasonRewards = pgTable("reward_season_rewards", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  memberId: integer("member_id").notNull().references(() => rewardSeasonMembers.id, { onDelete: "cascade" }),
+  tier: text("tier").notNull(),
+  rewardType: text("reward_type").notNull(),  // 'discount' | 'custom_kit'
+  voucherCode: text("voucher_code"),
+  discountId: integer("discount_id"),
+  status: text("status").notNull().default("issued"),  // 'issued' | 'fulfilled'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  memberTierUnq: uniqueIndex("reward_season_rewards_member_tier_unq").on(t.memberId, t.tier),
+}));
+
 // Email suppression list — anyone who unsubscribed from broadcasts. Per-org
 // (organizationId null = global). The mailer audience resolver excludes these.
 export const emailUnsubscribes = pgTable("email_unsubscribes", {
@@ -1132,6 +1174,8 @@ export type InsertEmailUnsubscribe = z.infer<typeof insertEmailUnsubscribeSchema
 export type EmailUnsubscribe = typeof emailUnsubscribes.$inferSelect;
 export type RewardBuilder = typeof rewardBuilders.$inferSelect;
 export type RewardBuilderEvent = typeof rewardBuilderEvents.$inferSelect;
+export type RewardSeasonMember = typeof rewardSeasonMembers.$inferSelect;
+export type RewardSeasonReward = typeof rewardSeasonRewards.$inferSelect;
 
 export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
 export const insertUserOrganizationSchema = createInsertSchema(userOrganizations).omit({ id: true });
