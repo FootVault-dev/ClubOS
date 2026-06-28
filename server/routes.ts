@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail } from "./email";
 import * as splitPay from "./split-pay";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
@@ -12300,21 +12300,25 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
     const mode = (reg.paymentMode as string) || "upfront"; // 'upfront'|'deposit_weekly'|'installment'
     const teamLabel = group.length > 1 ? `${group.length} teams` : (reg.teamName || "Your team");
 
-    sendLeagueConfirmationEmail({
-      registrationId: primaryId,
-      programId: program.id,
-      captainEmail: captain.email || "",
-      captainName: captain.firstName,
-      teamName: teamLabel,
-      divisionName: group.length > 1 ? "" : (division?.name || ""),
-      paymentMode: mode,
-      amountPaidNow: fmtNZ(mode === "upfront" ? totalPrice : totalDeposit),
-      totalPrice: fmtNZ(totalPrice),
-      weeklyAmount: fmtNZ(weeklyCents),
-      weeksTotal: reg.weeksTotal ?? 8,
-      balanceDue: fmtNZ(totalBalance),
-      balanceDueDate: fmtDate(reg.balanceDueDate ?? null),
-    }).catch((e) => console.error("[MFL] confirmation email failed:", e));
+    // Player Pay teams get a dedicated "whole squad paid — you're in" email from
+    // settleSplitSession instead; skip the generic captain confirmation here.
+    if (mode !== "split") {
+      sendLeagueConfirmationEmail({
+        registrationId: primaryId,
+        programId: program.id,
+        captainEmail: captain.email || "",
+        captainName: captain.firstName,
+        teamName: teamLabel,
+        divisionName: group.length > 1 ? "" : (division?.name || ""),
+        paymentMode: mode,
+        amountPaidNow: fmtNZ(mode === "upfront" ? totalPrice : totalDeposit),
+        totalPrice: fmtNZ(totalPrice),
+        weeklyAmount: fmtNZ(weeklyCents),
+        weeksTotal: reg.weeksTotal ?? 8,
+        balanceDue: fmtNZ(totalBalance),
+        balanceDueDate: fmtDate(reg.balanceDueDate ?? null),
+      }).catch((e) => console.error("[MFL] confirmation email failed:", e));
+    }
 
     sendPurchaseEvent({
       registrationId: primaryId,
@@ -12375,4 +12379,27 @@ async function settleSplitSession(sessionId: number) {
   await storage.assignOrderNumber(reg.id);
   await recordRegistrationDiscountUsage(reg);
   await handleLeagueRegistrationSuccess(reg.id, { registrationType: "league_team" });
+
+  // Dedicated captain confirmation: the whole squad has paid → the team is in.
+  try {
+    const program = await storage.getProgram(reg.programId);
+    const captain = await storage.getContact(reg.contactId);
+    const division = reg.leagueDivisionId ? await storage.getLeagueDivision(reg.leagueDivisionId) : null;
+    const detail = await splitPay.getSplitDetail(sessionId);
+    const playerCount = detail?.members.filter((m) => m.status === "paid").length ?? 0;
+    if (program && captain?.email) {
+      await sendSplitTeamConfirmedEmail({
+        registrationId: reg.id,
+        programId: program.id,
+        captainEmail: captain.email,
+        captainName: captain.firstName,
+        teamName: reg.teamName || "Your team",
+        divisionName: division?.name || "",
+        playerCount,
+        totalCents: reg.totalCents ?? 0,
+      });
+    }
+  } catch (e) {
+    console.error("[SplitPay] team-confirmed email failed:", e);
+  }
 }

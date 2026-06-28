@@ -303,6 +303,44 @@ export async function sendSplitShareReceiptEmail(params: {
   });
 }
 
+/** Player Pay — the whole squad has paid; the captain's team is confirmed. */
+export async function sendSplitTeamConfirmedEmail(params: {
+  registrationId: number;
+  programId: number;
+  captainEmail: string;
+  captainName: string;
+  teamName: string;
+  divisionName: string;   // "" hides the night row
+  playerCount: number;
+  totalCents: number;
+}): Promise<boolean> {
+  const total = `$${(params.totalCents / 100).toFixed(2)} NZD`;
+  const rows = [
+    mflRow("Team", params.teamName),
+    ...(params.divisionName ? [mflRow("Night", params.divisionName)] : []),
+    mflRow("Players paid", `${params.playerCount} / ${params.playerCount}`),
+    mflRow("Team fee", total, true),
+  ].join("");
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.captainName},</p>
+    <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">
+      Great news — your whole squad has paid, so <strong>${params.teamName}</strong> is <strong style="color:#d1b96e;">officially in</strong>. All ${params.playerCount} players have covered their share and the full team fee is settled. Nothing else to do — see you on the pitch! ⚽
+    </p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    <a href="https://join.minifootball.co.nz/league" style="display:inline-block; margin:22px 0 0; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">View the league →</a>`;
+  return sendEmail({
+    to: params.captainEmail,
+    from: MFL_FROM,
+    replyTo: MFL_REPLY_TO,
+    subject: `Your team's in! ${params.teamName} — everyone's paid`,
+    html: mflShell({ heading: "Your team's in! 🎉", bodyHtml }),
+    campId: params.programId,
+    registrationId: params.registrationId,
+  });
+}
+
 /** Balance instalment successfully collected. */
 export async function sendLeagueBalancePaidEmail(params: {
   registrationId: number;
