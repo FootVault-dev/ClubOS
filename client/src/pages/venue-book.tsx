@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
+import { saveSplitTokens, stashSetupSecret } from "@/lib/split-pay";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { Button } from "@/components/ui/button";
@@ -399,6 +400,10 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
   const [checkout, setCheckout] = useState<{ clientSecret: string; bookingGroupId: string; quote: Quote } | null>(null);
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkoutErr, setCheckoutErr] = useState<string | null>(null);
+  // Player Pay: split the booking across a group (each pays their own share).
+  const [payMode, setPayMode] = useState<"full" | "split">("full");
+  const [splitCount, setSplitCount] = useState(4);
+  const [, setNavLocation] = useLocation();
 
   const startCheckout = async () => {
     setCheckingOut(true);
@@ -409,6 +414,31 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
       // recurring batch per cart, so this is safe; the server enforces that
       // every item shares the same slot.
       const isSubscription = cart.some(c => c.paymentMode === "weekly");
+      const items = cart.map(c => ({
+        facilityId: c.facility.id,
+        date: c.date,
+        startTime: c.startTime,
+        endTime: c.endTime,
+        halfFull: c.halfFull,
+        halfPosition: c.halfPosition,
+        addons: c.addons,
+      }));
+
+      // Player Pay: reserve the slots, create a split, and hand off to the hub.
+      if (payMode === "split" && !isSubscription) {
+        const r = await fetch(`/api/public/venue/${organization.id}/bookings/checkout-split`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customer, items, discountCode: discountCode.trim() || undefined, waiverAccepted: waiverAgreed, targetCount: splitCount }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.message || "Couldn't start the split");
+        saveSplitTokens(data.splitCode, { organiserToken: data.organiserToken, memberToken: data.memberToken });
+        if (data.paymentClientSecret) stashSetupSecret(data.splitCode, data.paymentClientSecret);
+        setNavLocation(`/book/split/${data.splitCode}`);
+        return;
+      }
+
       const endpoint = isSubscription
         ? `/api/public/venue/${organization.id}/bookings/checkout-subscription`
         : `/api/public/venue/${organization.id}/bookings/checkout`;
@@ -418,15 +448,7 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customer,
-          items: cart.map(c => ({
-            facilityId: c.facility.id,
-            date: c.date,
-            startTime: c.startTime,
-            endTime: c.endTime,
-            halfFull: c.halfFull,
-            halfPosition: c.halfPosition,
-            addons: c.addons,
-          })),
+          items,
           discountCode: discountCode.trim() || undefined,
           waiverAccepted: waiverAgreed,
         }),
@@ -497,6 +519,12 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
               onSubmit={startCheckout}
               loading={checkingOut}
               error={checkoutErr}
+              allowSplit={!cart.some(c => c.paymentMode === "weekly") && !!(settings as any).splitEnabled}
+              payMode={payMode}
+              setPayMode={setPayMode}
+              splitCount={splitCount}
+              setSplitCount={setSplitCount}
+              totalCents={quote?.totalCents ?? 0}
             />
           )}
           {step === "payment" && checkout && (
@@ -1507,6 +1535,7 @@ function ReviewStep({
 // ============ STEP 3 — Details ============
 function DetailsStep({
   customer, setCustomer, waiverAgreed, setWaiverAgreed, brand, onBack, onSubmit, loading, error,
+  allowSplit, payMode, setPayMode, splitCount, setSplitCount, totalCents,
 }: {
   customer: { name: string; email: string; phone: string; club: string; notes: string };
   setCustomer: (c: { name: string; email: string; phone: string; club: string; notes: string }) => void;
@@ -1517,9 +1546,17 @@ function DetailsStep({
   onSubmit: () => void;
   loading: boolean;
   error: string | null;
+  allowSplit: boolean;
+  payMode: "full" | "split";
+  setPayMode: (m: "full" | "split") => void;
+  splitCount: number;
+  setSplitCount: (n: number) => void;
+  totalCents: number;
 }) {
   const valid = customer.name.trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(customer.email) && waiverAgreed;
   const waiverSections = waiverSectionsFor("public");
+  const perShareCents = splitCount > 0 ? Math.round(totalCents / splitCount) : totalCents;
+  const money = (c: number) => `$${(c / 100).toFixed(2)}`;
   return (
     <div>
       <h2 className="text-lg font-semibold mb-3">Your details</h2>
@@ -1585,6 +1622,51 @@ function DetailsStep({
         </label>
       </div>
 
+      {/* Payment method — pay in full now, or split across the group (Player Pay) */}
+      {allowSplit && (
+        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 mb-5">
+          <div className="text-sm font-semibold mb-3">How would you like to pay?</div>
+          <div className="grid gap-3">
+            <button type="button" onClick={() => setPayMode("full")}
+              className="rounded-xl px-4 py-3 text-left transition-all border"
+              style={{ background: payMode === "full" ? `${brand}1f` : "rgba(255,255,255,0.02)", borderColor: payMode === "full" ? brand : "rgba(255,255,255,0.10)" }}
+              data-testid="venue-pay-full">
+              <div className="font-semibold text-sm">Pay in full</div>
+              <div className="text-[12px] text-white/50 mt-0.5">One payment of {money(totalCents)} now.</div>
+            </button>
+            <button type="button" onClick={() => setPayMode("split")}
+              className="rounded-xl px-4 py-3 text-left transition-all border"
+              style={{ background: payMode === "split" ? `${brand}1f` : "rgba(255,255,255,0.02)", borderColor: payMode === "split" ? brand : "rgba(255,255,255,0.10)" }}
+              data-testid="venue-pay-split">
+              <div className="font-semibold text-sm flex items-center gap-2"><Users className="w-4 h-4" style={{ color: brand }} /> Player Pay — split across your group</div>
+              <div className="text-[12px] text-white/50 mt-0.5">Everyone pays their own share on their own card. The booking holds until your group has paid.</div>
+            </button>
+          </div>
+
+          {payMode === "split" && (
+            <div className="mt-3 rounded-xl p-4" style={{ background: `${brand}12`, border: `1px solid ${brand}3a` }}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">How many are splitting?</div>
+                  <div className="text-[12px] text-white/50 mt-0.5">Including you. They can pay any time before the hold expires.</div>
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <button type="button" onClick={() => setSplitCount(Math.max(2, splitCount - 1))} disabled={splitCount <= 2}
+                    className="w-9 h-9 rounded-full flex items-center justify-center border border-white/10 bg-white/[0.04] text-white disabled:opacity-40" data-testid="venue-split-minus">−</button>
+                  <span className="text-xl font-bold tabular-nums w-7 text-center" data-testid="venue-split-count">{splitCount}</span>
+                  <button type="button" onClick={() => setSplitCount(Math.min(30, splitCount + 1))} disabled={splitCount >= 30}
+                    className="w-9 h-9 rounded-full flex items-center justify-center border border-white/10 bg-white/[0.04] text-white disabled:opacity-40" data-testid="venue-split-plus">+</button>
+                </div>
+              </div>
+              <div className="mt-3 pt-3 flex items-baseline justify-between border-t" style={{ borderColor: `${brand}3a` }}>
+                <span className="text-sm text-white/60">Each pays</span>
+                <span className="text-2xl font-bold tracking-tight" style={{ color: brand }} data-testid="venue-split-each">{money(perShareCents)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg p-2.5 mb-5">{error}</div>}
 
       <div className="flex gap-2 justify-between">
@@ -1592,7 +1674,7 @@ function DetailsStep({
           <ArrowLeft className="w-4 h-4 mr-1.5" /> Back
         </Button>
         <Button onClick={onSubmit} disabled={!valid || loading} className="text-white border-0" style={{ background: brand }} data-testid="button-continue-payment">
-          {loading ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Preparing…</> : <>Continue to payment <ArrowRight className="w-4 h-4 ml-1.5" /></>}
+          {loading ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Preparing…</> : payMode === "split" ? <>Start Player Pay <ArrowRight className="w-4 h-4 ml-1.5" /></> : <>Continue to payment <ArrowRight className="w-4 h-4 ml-1.5" /></>}
         </Button>
       </div>
     </div>

@@ -58,6 +58,7 @@ import VenuePayments from "@/pages/venue-payments";
 import VenueSettings from "@/pages/venue-settings";
 import VenueWebsite from "@/pages/venue-website";
 import VenueBookPage from "@/pages/venue-book";
+import VenueSplitPage from "@/pages/venue-split-page";
 import VenueBookSuccess from "@/pages/venue-book-success";
 import MemberBookingPage from "@/pages/member-booking";
 import VenueBookingRequests from "@/pages/venue-booking-requests";
@@ -367,6 +368,7 @@ function App() {
             <Route path="/calendar/rsvp/:token" component={RsvpPage} />
             <Route path="/book" component={VenueBookPage} />
             <Route path="/book/success" component={VenueBookSuccess} />
+            <Route path="/book/split/:code" component={VenueSplitPage} />
             {/* Member booking requests (book.unitedsportscentre.com/members) */}
             <Route path="/members" component={MemberBookingPage} />
             <Route path="/print" component={PrintHub} />

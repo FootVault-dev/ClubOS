@@ -3519,6 +3519,9 @@ export async function registerRoutes(
       if (!orgId) return res.status(400).json({ message: "orgId required" });
       if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ message: "Stripe not configured" });
 
+      const vs = await storage.getVenueSettings(orgId);
+      if (!(vs as any)?.splitEnabled) return res.status(400).json({ message: "Player Pay isn't available for this venue." });
+
       const parsed = checkoutSchema.parse(req.body);
       const targetCount = req.body.targetCount ? parseInt(String(req.body.targetCount)) : null;
       if (!targetCount || targetCount < 2) return res.status(400).json({ message: "How many are splitting? (2 or more)" });

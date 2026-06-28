@@ -599,6 +599,8 @@ export const venueSettings = pgTable("venue_settings", {
   footerText: text("footer_text").default(""),
   paymentPolicy: text("payment_policy").default("Full payment required at booking. Cancellations 48 hours+ in advance receive a full refund."),
   successMessage: text("success_message").default("Thanks for your booking! A confirmation has been sent to your email."),
+  // Player Pay (split a booking across a group) — kill switch for the venue site.
+  splitEnabled: boolean("split_enabled").default(false),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
