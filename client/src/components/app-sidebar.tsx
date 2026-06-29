@@ -48,6 +48,7 @@ import {
   Zap,
   Truck,
   Inbox,
+  School,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -78,6 +79,7 @@ const campsNav = [
   { tab: "registrations", title: "Registrations", url: "/admin/registrations", icon: ClipboardCheck },
   { tab: "contacts", title: "Contacts", url: "/admin/contacts", icon: Users },
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
+  { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
 ];

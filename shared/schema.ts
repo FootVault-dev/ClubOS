@@ -2263,6 +2263,35 @@ export const insertSkillsChallengeEntrySchema = createInsertSchema(skillsChallen
 export type InsertSkillsChallengeEntry = z.infer<typeof insertSkillsChallengeEntrySchema>;
 export type SkillsChallengeEntry = typeof skillsChallengeEntries.$inferSelect;
 
+// ---- Football Institute Applications ----
+// Enrolment enquiries for the Football Institute (Christchurch United × Ao
+// Tawhiti Unlimited Discovery). One row per application. Submissions come from
+// the public marketing site's Apply form (cross-origin POST) or from admins
+// adding a walk-up; managed in the CUFC "Football Institute" ClubOS tab.
+export const footballInstituteApplications = pgTable("football_institute_applications", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  applicantName: text("applicant_name").notNull(), // student full name
+  yearLevel: text("year_level"),                   // "Year 10".."Year 13"
+  position: text("position"),
+  currentSchool: text("current_school"),
+  currentClub: text("current_club"),
+  parentName: text("parent_name"),
+  email: text("email").notNull(),                  // best contact email
+  phone: text("phone"),
+  studentEmail: text("student_email"),
+  videoUrl: text("video_url"),
+  message: text("message"),
+  intakeYear: integer("intake_year"),
+  status: text("status").notNull().default("new"), // new | contacted | reviewing | accepted | declined
+  source: text("source").notNull().default("website"), // website | admin
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertFootballInstituteApplicationSchema = createInsertSchema(footballInstituteApplications).omit({ id: true, createdAt: true });
+export type InsertFootballInstituteApplication = z.infer<typeof insertFootballInstituteApplicationSchema>;
+export type FootballInstituteApplication = typeof footballInstituteApplications.$inferSelect;
+
 // ---- CIC Food Truck Roster ----
 // Staff roster for the food truck during the tournament. One row per person
 // assigned to a position on a given day. Internal-only (ClubOS Food Truck tab).

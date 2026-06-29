@@ -952,7 +952,7 @@ function ConfigureFacility({
               prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort()
             ) : undefined}
             min={todayISO()}
-            max={addDays(todayISO(), settings.advanceBookingDays)}
+            max={(settings.advanceBookingDays > 0 ? addDays(todayISO(), settings.advanceBookingDays) : "9999-12-31")}
             brand={brand}
           />
         </div>
@@ -1217,7 +1217,7 @@ function ConfigureFacility({
               <DatePickerInput
                 value={recurringUntil}
                 min={date}
-                max={addDays(todayISO(), settings.advanceBookingDays)}
+                max={(settings.advanceBookingDays > 0 ? addDays(todayISO(), settings.advanceBookingDays) : "9999-12-31")}
                 onChange={e => setRecurringUntil(e.target.value)}
                 data-testid="input-recurring-until"
                 className="bg-white/[0.04] border-white/10 text-white"

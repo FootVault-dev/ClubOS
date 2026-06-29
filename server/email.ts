@@ -507,6 +507,86 @@ export async function sendLeagueSignupNotification(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Football Institute — new application notification (CUFC royal blue + gold,
+// matching the marketing site at The Football Institute).
+// ---------------------------------------------------------------------------
+
+const FI_FROM = "CUFC Football Institute <noreply@cufc.co.nz>";
+const FI_NOTIFY_TO = "academy@cufc.co.nz";
+
+function fiRow(label: string, value: string): string {
+  if (!value) return "";
+  return `<tr>
+    <td style="color:#8a93b8; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; padding:7px 0; vertical-align:top; white-space:nowrap;">${label}</td>
+    <td style="color:#0c1640; font-size:14px; font-weight:500; padding:7px 0 7px 16px; text-align:right;">${value}</td>
+  </tr>`;
+}
+
+/** Internal notification to the Academy inbox when a Football Institute application arrives. */
+export async function sendFootballInstituteApplicationNotification(params: {
+  applicantName: string;
+  yearLevel?: string;
+  position?: string;
+  currentSchool?: string;
+  currentClub?: string;
+  parentName?: string;
+  email: string;
+  phone?: string;
+  studentEmail?: string;
+  videoUrl?: string;
+  message?: string;
+  intakeYear?: number;
+}): Promise<boolean> {
+  const rows = [
+    fiRow("Year level", params.yearLevel || ""),
+    fiRow("Position", params.position || ""),
+    fiRow("Current school", params.currentSchool || ""),
+    fiRow("Current club", params.currentClub || ""),
+    fiRow("Intake", params.intakeYear ? String(params.intakeYear) : ""),
+  ].join("");
+  const contactRows = [
+    fiRow("Parent / guardian", params.parentName || ""),
+    fiRow("Email", params.email || ""),
+    fiRow("Phone", params.phone || ""),
+    fiRow("Student email", params.studentEmail || ""),
+    fiRow("Video", params.videoUrl ? `<a href="${params.videoUrl}" style="color:#263996;">${params.videoUrl}</a>` : ""),
+  ].join("");
+
+  const bodyHtml = `
+  <div style="background:#f4f6fb; padding:24px 12px; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+    <div style="max-width:600px; margin:0 auto;">
+      <div style="background:linear-gradient(135deg,#263996,#0c1640); padding:32px; border-radius:16px 16px 0 0; text-align:center; border-bottom:3px solid #D4AF37;">
+        <h1 style="color:#ffffff; margin:0; font-size:22px;">New Football Institute Application</h1>
+        <p style="color:#D4AF37; margin:8px 0 0; font-size:12px; text-transform:uppercase; letter-spacing:2px; font-weight:600;">United × Ao Tawhiti</p>
+      </div>
+      <div style="background:#ffffff; padding:28px; border:1px solid #e3e7f0; border-top:0; border-radius:0 0 16px 16px;">
+        <p style="color:#0c1640; font-size:18px; font-weight:700; margin:0 0 4px;">${params.applicantName}</p>
+        <p style="color:#5a6078; font-size:14px; margin:0 0 20px;">A new student-athlete has applied through the website.</p>
+        <div style="background:#f7f8fb; border:1px solid #e3e7f0; border-radius:12px; padding:8px 18px; margin:0 0 14px;">
+          <table style="width:100%; border-collapse:collapse;">${rows}</table>
+        </div>
+        <div style="background:#f7f8fb; border:1px solid #e3e7f0; border-radius:12px; padding:8px 18px; margin:0 0 14px;">
+          <table style="width:100%; border-collapse:collapse;">${contactRows}</table>
+        </div>
+        ${params.message ? `<div style="background:#f7f8fb; border:1px solid #e3e7f0; border-radius:12px; padding:16px 18px;">
+          <p style="color:#8a93b8; font-size:11px; text-transform:uppercase; letter-spacing:0.6px; margin:0 0 8px;">Their message</p>
+          <p style="color:#0c1640; font-size:14px; line-height:1.6; margin:0; white-space:pre-wrap;">${params.message}</p>
+        </div>` : ""}
+        <p style="color:#8a93b8; font-size:12px; margin:20px 0 0;">Manage this application in ClubOS → Football Institute.</p>
+      </div>
+    </div>
+  </div>`;
+
+  return sendEmail({
+    to: FI_NOTIFY_TO,
+    from: FI_FROM,
+    replyTo: params.email || FI_NOTIFY_TO,
+    subject: `New Football Institute application — ${params.applicantName}`,
+    html: bodyHtml,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // United Sports Centre — member booking-request emails (dark navy + indigo,
 // matching the book.unitedsportscentre.com booking site).
 // ---------------------------------------------------------------------------

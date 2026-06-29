@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, bookingRequests } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, footballInstituteApplications, bookingRequests } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification } from "./email";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -3976,7 +3976,7 @@ export async function registerRoutes(
         if ((eh * 60 + em) - (sh * 60 + sm) < settings.minDurationMinutes) {
           return res.status(400).json({ message: `Minimum booking is ${settings.minDurationMinutes} minutes` });
         }
-        if (parsed.date > addDaysISO(today, settings.advanceBookingDays)) {
+        if (settings.advanceBookingDays > 0 && parsed.date > addDaysISO(today, settings.advanceBookingDays)) {
           return res.status(400).json({ message: `Bookings can be requested up to ${settings.advanceBookingDays} days ahead` });
         }
       }
@@ -8323,6 +8323,222 @@ export async function registerRoutes(
   });
 
   // ───────────────────────── END CIC SKILLS CHALLENGE ─────────────────────────
+
+  // ─────────────────────────── FOOTBALL INSTITUTE ─────────────────────────────
+  // Enrolment applications for the Football Institute (Christchurch United ×
+  // Ao Tawhiti Unlimited Discovery). The public marketing site (a separate
+  // Vercel app) POSTs its Apply form cross-origin to /api/public/football-institute/apply.
+  // Staff manage applications in the CUFC "Football Institute" ClubOS tab
+  // (session + "football-institute" tab permission). Data is scoped to the
+  // christchurch-united org regardless of which camps-type workspace is active.
+
+  const FI_ORG_SLUG = "christchurch-united";
+  const FI_YEAR_LEVELS = ["Year 10", "Year 11", "Year 12", "Year 13"];
+  const FI_STATUSES = ["new", "contacted", "reviewing", "accepted", "declined"];
+
+  let fiOrgIdCache: number | null = null;
+  async function fiOrgId(): Promise<number> {
+    if (fiOrgIdCache) return fiOrgIdCache;
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, FI_ORG_SLUG));
+    if (!org) throw new Error("Christchurch United organization not found");
+    fiOrgIdCache = org.id;
+    return org.id;
+  }
+
+  // Scoped CORS for the public apply endpoint only. No cookies are used here,
+  // so reflecting an allow-listed origin is safe. Covers the production domain,
+  // any Vercel deployment (previews + prod), and localhost during development.
+  function fiAllowOrigin(origin: string | undefined): string | null {
+    if (!origin) return null;
+    try {
+      const { hostname, protocol } = new URL(origin);
+      if (protocol !== "https:" && hostname !== "localhost" && hostname !== "127.0.0.1") return null;
+      if (
+        hostname === "footballinstitute.co.nz" ||
+        hostname === "www.footballinstitute.co.nz" ||
+        hostname.endsWith(".vercel.app") ||
+        hostname === "localhost" ||
+        hostname === "127.0.0.1"
+      ) return origin;
+    } catch { /* malformed origin */ }
+    return null;
+  }
+  function fiApplyCors(req: Request, res: Response) {
+    const allowed = fiAllowOrigin(req.headers.origin as string | undefined);
+    if (allowed) {
+      res.set("Access-Control-Allow-Origin", allowed);
+      res.set("Vary", "Origin");
+      res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.set("Access-Control-Allow-Headers", "Content-Type");
+    }
+  }
+
+  function s(v: any, max = 200): string { return String(v ?? "").trim().slice(0, max); }
+
+  function serializeFiApplication(a: typeof footballInstituteApplications.$inferSelect) {
+    return {
+      id: a.id,
+      applicantName: a.applicantName,
+      yearLevel: a.yearLevel,
+      position: a.position,
+      currentSchool: a.currentSchool,
+      currentClub: a.currentClub,
+      parentName: a.parentName,
+      email: a.email,
+      phone: a.phone,
+      studentEmail: a.studentEmail,
+      videoUrl: a.videoUrl,
+      message: a.message,
+      intakeYear: a.intakeYear,
+      status: a.status,
+      source: a.source,
+      createdAt: a.createdAt,
+    };
+  }
+
+  async function fiCreateApplication(body: any, source: string) {
+    const applicantName = s(body?.applicantName || `${s(body?.studentFirstName, 60)} ${s(body?.studentLastName, 60)}`, 120);
+    const email = s(body?.email, 160).toLowerCase();
+    if (!applicantName) return { error: "Student name is required" };
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "A valid contact email is required" };
+    const yearLevelRaw = s(body?.yearLevel, 20);
+    const yearLevel = FI_YEAR_LEVELS.includes(yearLevelRaw) ? yearLevelRaw : (yearLevelRaw || null);
+    const intakeYearNum = Number(body?.intakeYear);
+    const orgId = await fiOrgId();
+    const values: any = {
+      organizationId: orgId,
+      applicantName,
+      yearLevel,
+      position: s(body?.position, 40) || null,
+      currentSchool: s(body?.currentSchool, 120) || null,
+      currentClub: s(body?.currentClub, 120) || null,
+      parentName: s(body?.parentName, 120) || null,
+      email,
+      phone: s(body?.phone, 40) || null,
+      studentEmail: s(body?.studentEmail, 160).toLowerCase() || null,
+      videoUrl: s(body?.videoUrl, 500) || null,
+      message: s(body?.message, 4000) || null,
+      intakeYear: Number.isFinite(intakeYearNum) && intakeYearNum > 2024 && intakeYearNum < 2100 ? intakeYearNum : null,
+      source,
+    };
+    const [row] = await db.insert(footballInstituteApplications).values(values).returning();
+    return { application: row };
+  }
+
+  async function fiListApplications() {
+    const orgId = await fiOrgId();
+    return db.select().from(footballInstituteApplications)
+      .where(eq(footballInstituteApplications.organizationId, orgId))
+      .orderBy(desc(footballInstituteApplications.createdAt));
+  }
+
+  async function fiPatchApplication(id: number, body: any) {
+    const updates: Record<string, any> = {};
+    if ("status" in body) {
+      const v = s(body.status, 20);
+      if (!FI_STATUSES.includes(v)) return { error: "Unknown status" };
+      updates.status = v;
+    }
+    for (const f of ["applicantName", "yearLevel", "position", "currentSchool", "currentClub", "parentName", "email", "phone", "studentEmail", "videoUrl", "message"]) {
+      if (f in body) updates[f] = s(body[f], f === "message" ? 4000 : 200) || null;
+    }
+    if (Object.keys(updates).length === 0) return { error: "Nothing to update" };
+    const orgId = await fiOrgId();
+    const [row] = await db.update(footballInstituteApplications)
+      .set(updates)
+      .where(and(eq(footballInstituteApplications.id, id), eq(footballInstituteApplications.organizationId, orgId)))
+      .returning();
+    if (!row) return { error: "Application not found" };
+    return { application: row };
+  }
+
+  async function fiDeleteApplication(id: number) {
+    const orgId = await fiOrgId();
+    const [row] = await db.delete(footballInstituteApplications)
+      .where(and(eq(footballInstituteApplications.id, id), eq(footballInstituteApplications.organizationId, orgId)))
+      .returning();
+    return !!row;
+  }
+
+  // -- Public: apply (the external marketing site posts here, cross-origin) --
+
+  app.options("/api/public/football-institute/apply", (req, res) => {
+    fiApplyCors(req, res);
+    res.sendStatus(204);
+  });
+
+  app.post("/api/public/football-institute/apply", async (req, res) => {
+    fiApplyCors(req, res);
+    try {
+      const result = await fiCreateApplication(req.body, "website");
+      if ("error" in result) return res.status(400).json({ message: result.error });
+      // Email is best-effort — never fail the application if Resend hiccups.
+      try {
+        await sendFootballInstituteApplicationNotification({
+          applicantName: result.application.applicantName,
+          yearLevel: result.application.yearLevel ?? undefined,
+          position: result.application.position ?? undefined,
+          currentSchool: result.application.currentSchool ?? undefined,
+          currentClub: result.application.currentClub ?? undefined,
+          parentName: result.application.parentName ?? undefined,
+          email: result.application.email,
+          phone: result.application.phone ?? undefined,
+          studentEmail: result.application.studentEmail ?? undefined,
+          videoUrl: result.application.videoUrl ?? undefined,
+          message: result.application.message ?? undefined,
+          intakeYear: result.application.intakeYear ?? undefined,
+        });
+      } catch (mailErr) {
+        console.error("[FootballInstitute] notification email failed:", mailErr);
+      }
+      res.json({ ok: true, id: result.application.id });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // -- Web admin (ClubOS Football Institute tab — session + tab permission) --
+
+  app.get("/api/admin/football-institute/applications", requireAuth, requireTab("football-institute"), async (_req, res) => {
+    try {
+      const apps = await fiListApplications();
+      res.json(apps.map(serializeFiApplication));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/admin/football-institute/applications", requireAuth, requireTab("football-institute"), async (req, res) => {
+    try {
+      const result = await fiCreateApplication(req.body, "admin");
+      if ("error" in result) return res.status(400).json({ message: result.error });
+      res.json(serializeFiApplication(result.application));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/admin/football-institute/applications/:id", requireAuth, requireTab("football-institute"), async (req, res) => {
+    try {
+      const result = await fiPatchApplication(parseInt(String(req.params.id)), req.body ?? {});
+      if ("error" in result) return res.status(400).json({ message: result.error });
+      res.json(serializeFiApplication(result.application));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/admin/football-institute/applications/:id", requireAuth, requireTab("football-institute"), async (req, res) => {
+    try {
+      const ok = await fiDeleteApplication(parseInt(String(req.params.id)));
+      if (!ok) return res.status(404).json({ message: "Application not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ───────────────────────── END FOOTBALL INSTITUTE ───────────────────────────
 
   // ─────────────────────────────── CIC FOOD TRUCK ───────────────────────────────
   // Internal staff roster for the food truck during the Christchurch

@@ -17,6 +17,7 @@ import AdminRegistrations from "@/pages/admin-registrations";
 import AdminContacts from "@/pages/admin-contacts";
 import AdminContactDetail from "@/pages/admin-contact-detail";
 import AdminMailer from "@/pages/admin-mailer";
+import FootballInstitute from "@/pages/football-institute";
 import AdminSettings from "@/pages/admin-settings";
 import AdminEditPage from "@/pages/admin-edit-page";
 import CampPage from "@/pages/camp-page";
@@ -276,6 +277,7 @@ function AdminRouter() {
       <Route path="/admin/contacts/parent/:id" component={AdminContactDetail} />
       <Route path="/admin/contacts/player/:id" component={AdminContactDetail} />
       <Route path="/admin/mailer" component={AdminMailer} />
+      <Route path="/admin/football-institute" component={FootballInstitute} />
       <Route path="/admin/analytics" component={CampAnalytics} />
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
       <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />

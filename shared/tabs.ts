@@ -50,6 +50,7 @@ const campsTabs: TabDef[] = [
   { slug: "registrations", title: "Registrations", url: "/admin/registrations" },
   { slug: "contacts", title: "Contacts", url: "/admin/contacts" },
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },
+  { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },

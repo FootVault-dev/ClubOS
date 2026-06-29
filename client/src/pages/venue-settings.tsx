@@ -177,8 +177,8 @@ export default function VenueSettingsPage() {
           <Field label="Min booking duration (minutes)">
             <Input type="number" min={30} step={30} value={form.minDurationMinutes} onChange={e => setForm({ ...form, minDurationMinutes: parseInt(e.target.value) || 60 })} data-testid="input-min-duration" />
           </Field>
-          <Field label="Advance booking window (days)">
-            <Input type="number" min={1} value={form.advanceBookingDays} onChange={e => setForm({ ...form, advanceBookingDays: parseInt(e.target.value) || 60 })} data-testid="input-advance" />
+          <Field label="Advance booking window (days · 0 = unlimited)">
+            <Input type="number" min={0} value={form.advanceBookingDays} onChange={e => { const n = parseInt(e.target.value); setForm({ ...form, advanceBookingDays: Number.isNaN(n) ? 0 : Math.max(0, n) }); }} data-testid="input-advance" />
           </Field>
           <Field label="GST rate (%)">
             <Input type="number" min={0} step={0.01} value={form.gstRatePercent} onChange={e => setForm({ ...form, gstRatePercent: e.target.value })} data-testid="input-gst" />

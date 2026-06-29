@@ -10,6 +10,15 @@ import crypto from "crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { rewardBuilders, rewardBuilderEvents, rewardSeasonMembers, rewardSeasonEvents, rewardSeasonRewards, rewardRefBonus, leagueGameReferees, leagueGames, leagueCompetitions, users, type RewardBuilder, type RewardSeasonMember } from "@shared/schema";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MASTER PAUSE SWITCH for reward AUTO-ISSUANCE on registration.
+// Paused 2026-06-29 at Daniel's request: the rewards program (Builder referral
+// attribution + Season Ticket XP/voucher issuance) must not auto-create discount
+// codes / credit on real registrations until it's consciously switched on.
+// Admin Rewards tab + viewing still work; only the automatic accrual is gated.
+// Flip to true to re-enable.
+export const REWARDS_AUTO_ISSUE_ENABLED = false;
 import { storage } from "./storage";
 import { builderTierFor, nextBuilderTier, BUILDER_TIERS, SEASON_TIERS, seasonTierFor, SEASON_XP_PER_SIGNUP, REFEREE_TIERS, refereeTierFor, type SeasonTier } from "@shared/rewards";
 
@@ -118,6 +127,7 @@ export async function attributeReferral(opts: {
   organizationId: number; registrationId: number; discountCodeRaw: string | null;
   referredEmail: string | null; referredContactId: number | null; teamName: string | null;
 }): Promise<void> {
+  if (!REWARDS_AUTO_ISSUE_ENABLED) return;  // rewards paused — no auto-attribution
   const codes = String(opts.discountCodeRaw || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (codes.length === 0) return;
   const referredEmail = (opts.referredEmail || "").trim().toLowerCase();
@@ -215,6 +225,7 @@ function genVoucherCode(pct: number): string {
 export async function accrueSeasonXp(opts: {
   organizationId: number; registrationId: number; name: string; email: string; phone?: string | null; contactId?: number | null; teamName?: string | null;
 }): Promise<void> {
+  if (!REWARDS_AUTO_ISSUE_ENABLED) return;  // rewards paused — no auto XP/voucher issuance
   const email = String(opts.email || "").trim().toLowerCase();
   if (!email) return;
 
