@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, footballInstituteApplications, bookingRequests, cic7sRegistrations } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, footballInstituteApplications, bookingRequests, cic7sRegistrations } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -18,6 +18,7 @@ import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
+import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
 import crypto from "crypto";
@@ -5408,9 +5409,26 @@ export async function registerRoutes(
     try {
       const g = await storage.updateTournamentGame(parseInt(req.params.id), req.body);
       if (!g) return res.status(404).json({ message: "Not found" });
+      // A saved result can settle a pool or decide a knockout game, which in
+      // turn fills downstream bracket slots ("A1", "W G27"…). Re-flow the
+      // bracket after every game edit. Never let a resolver hiccup fail the
+      // score save itself.
+      try { await resolveTournamentBrackets(g.tournamentId); } catch (e) { console.error("[brackets] resolve failed", e); }
       res.json(g);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Manual "recompute brackets" — fills knockout placeholders from current
+  // pool standings + results. Auto-runs on every score save too; this is the
+  // belt-and-braces button for admins.
+  app.post("/api/admin/tournament/tournaments/:id/resolve-brackets", requireAuth, async (req, res) => {
+    try {
+      const updated = await resolveTournamentBrackets(parseInt(req.params.id));
+      res.json({ updated });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
     }
   });
 
@@ -7785,6 +7803,22 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
+  });
+
+  // The public tournament API is read by the CIC Youth mobile app (no CORS) AND,
+  // now, by the cicyouth.com marketing site's live Draws/Results page (browser →
+  // cross-origin). Allow cicyouth.com + Vercel previews on every /api/public/tournament
+  // GET. Native app requests carry no Origin header and are unaffected.
+  app.use("/api/public/tournament", (req, res, next) => {
+    const origin = req.headers.origin as string | undefined;
+    if (origin && (/^https:\/\/(www\.)?cicyouth\.com$/.test(origin) || /\.vercel\.app$/.test(origin))) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+      res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+      res.header("Access-Control-Allow-Headers", "Content-Type");
+    }
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
   });
 
   app.get("/api/public/tournament/tournaments", async (req, res) => {

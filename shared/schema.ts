@@ -1620,6 +1620,56 @@ export const insertSponsorshipOnboardingTemplateSchema = createInsertSchema(spon
 export type InsertSponsorshipOnboardingTemplate = z.infer<typeof insertSponsorshipOnboardingTemplateSchema>;
 export type SponsorshipOnboardingTemplate = typeof sponsorshipOnboardingTemplates.$inferSelect;
 
+// ── Sponsorship prospect database (raw scraped outreach leads) ───────────────
+// Top-of-funnel research/scraping list, kept SEPARATE from sponsorship_deals so
+// the qualified pipeline isn't cluttered. When a prospect is actioned it is
+// "promoted" into a sponsorship_deals row (status -> 'promoted', promoted_deal_id set).
+export const sponsorshipProspectStatusEnum = pgEnum("sponsorship_prospect_status", [
+  "new", "reviewing", "shortlisted", "promoted", "dismissed",
+]);
+
+export const sponsorshipProspects = pgTable("sponsorship_prospects", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  company: text("company").notNull(),
+  website: text("website"),
+  sector: text("sector"),
+  location: text("location"),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  segment: text("segment"),                  // research segment id, e.g. SP1
+  category: text("category"),                // commercial category, e.g. hydration / automotive / finance
+  tier: text("tier"),                        // A | B | C
+  fitScore: integer("fit_score"),
+  spendCapacityScore: integer("spend_capacity_score"),
+  reachabilityScore: integer("reachability_score"),
+  capacityEstimate: text("capacity_estimate"),
+  alreadyBacksSport: boolean("already_backs_sport"),
+  sportEvidence: text("sport_evidence"),
+  whyFit: text("why_fit"),
+  brief: text("brief"),
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  emailConfidence: text("email_confidence"),
+  contactPhone: text("contact_phone"),
+  decisionMakerName: text("decision_maker_name"),
+  decisionMakerRole: text("decision_maker_role"),
+  decisionMakerLinkedin: text("decision_maker_linkedin"),
+  linkedinUrl: text("linkedin_url"),
+  sources: text("sources").array().notNull().default(sql`ARRAY[]::text[]`),
+  gradeRationale: text("grade_rationale"),
+  detail: text("detail"),                    // JSON string: full decision_makers[], socials{}, size_signal
+  status: sponsorshipProspectStatusEnum("status").notNull().default("new"),
+  promotedDealId: integer("promoted_deal_id").references(() => sponsorshipDeals.id, { onDelete: "set null" }),
+  ownerId: integer("owner_id").references(() => users.id),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertSponsorshipProspectSchema = createInsertSchema(sponsorshipProspects).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSponsorshipProspect = z.infer<typeof insertSponsorshipProspectSchema>;
+export type SponsorshipProspect = typeof sponsorshipProspects.$inferSelect;
+
 // ── Billboard sales (Go Media contra resell) ────────────────────────────────
 // USG holds a $250k contra credit with Go Media. We resell slices of that
 // credit to local businesses at 20-30% off rate-card, target $200k revenue.

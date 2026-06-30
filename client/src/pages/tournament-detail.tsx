@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Award, Users, Calendar, LayoutGrid, Settings2, Plus, Trash2, GripVertical, X, Shield, Clock, MapPin, Pencil, Check, ChevronDown, Goal } from "lucide-react";
+import { ArrowLeft, Award, Users, Calendar, LayoutGrid, Settings2, Plus, Trash2, GripVertical, X, Shield, Clock, MapPin, Pencil, Check, ChevronDown, Goal, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TimePickerInput } from "@/components/ui/time-picker-input";
@@ -288,6 +288,28 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
     },
   });
 
+  // Teams for this tournament — used to let admins assign teams into knockout
+  // slots that have no auto-fill rule (the U10–U14 finals).
+  const { data: teams = [] } = useQuery<(TournamentTeam & { group?: TournamentGroup })[]>({
+    queryKey: ["/api/admin/tournament/tournaments", tournamentId, "teams"],
+    queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/teams`).then(r => r.json()),
+  });
+  const sortedTeams = useMemo(() => [...teams].sort((a, b) => a.name.localeCompare(b.name)), [teams]);
+
+  // Belt-and-braces: re-flow the bracket from current pool standings + results.
+  // (This also runs automatically on every score save server-side.)
+  const resolveBracketsMut = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/admin/tournament/tournaments/${tournamentId}/resolve-brackets`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId, "games"] });
+      toast({ title: "Brackets updated", description: "Knockout slots filled from current standings & results." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const assignTeam = (gameId: number, side: "home" | "away", teamId: number) =>
+    updateGameMut.mutate({ id: gameId, data: { [side === "home" ? "homeTeamId" : "awayTeamId"]: teamId } });
+
   const startEditing = (game: GameWithRelations) => {
     setEditingGameId(game.id);
     setEditTime(game.startTime || "");
@@ -426,7 +448,18 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                   )}
                 </td>
                 <td className="px-3 py-2.5 text-right">
-                  <span className="text-sm text-white/70 font-medium">{homeName}</span>
+                  {isKnockout && !game.homeTeam && !game.homeTeamPlaceholder ? (
+                    <Select value={game.homeTeamId ? String(game.homeTeamId) : ""} onValueChange={v => assignTeam(game.id, "home", Number(v))}>
+                      <SelectTrigger className="w-44 h-7 text-xs premium-input text-white ml-auto" data-testid={`select-home-team-${game.id}`}>
+                        <SelectValue placeholder="Assign team" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sortedTeams.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className="text-sm text-white/70 font-medium">{homeName}</span>
+                  )}
                 </td>
                 <td className="px-1 py-2.5">
                   {game.status === "final" ? (
@@ -456,7 +489,18 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                   )}
                 </td>
                 <td className="px-3 py-2.5 text-left">
-                  <span className="text-sm text-white/70 font-medium">{awayName}</span>
+                  {isKnockout && !game.awayTeam && !game.awayTeamPlaceholder ? (
+                    <Select value={game.awayTeamId ? String(game.awayTeamId) : ""} onValueChange={v => assignTeam(game.id, "away", Number(v))}>
+                      <SelectTrigger className="w-44 h-7 text-xs premium-input text-white" data-testid={`select-away-team-${game.id}`}>
+                        <SelectValue placeholder="Assign team" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sortedTeams.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className="text-sm text-white/70 font-medium">{awayName}</span>
+                  )}
                 </td>
                 <td className="px-2 py-2.5">
                   <div className="flex items-center gap-1 justify-end">
@@ -550,6 +594,15 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
           <div className="flex items-center gap-2 mb-3">
             <h3 className="text-sm font-semibold text-white">Knockout & Finals</h3>
             <span className="text-[10px] text-white/20 bg-white/5 px-2 py-0.5 rounded-full">{knockoutAndFinalGames.length} games</span>
+            <button
+              onClick={() => resolveBracketsMut.mutate()}
+              disabled={resolveBracketsMut.isPending}
+              className="ml-auto text-[10px] px-2.5 py-1 rounded-md bg-blue-500/15 text-blue-300 hover:bg-blue-500/25 disabled:opacity-50 flex items-center gap-1"
+              title="Fill knockout slots from current pool standings & results"
+              data-testid="button-resolve-brackets"
+            >
+              <RefreshCw className={`w-3 h-3 ${resolveBracketsMut.isPending ? "animate-spin" : ""}`} /> Recompute brackets
+            </button>
           </div>
           {Array.from(knockoutByDate.entries()).map(([dateKey, gamesForDate]) => (
             <div key={dateKey} className="mb-4">

@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Plus, X, Handshake, TrendingUp, DollarSign, Award, Filter, Check, Trash2,
   CheckCircle2, Circle, Clock, AlertCircle, Link as LinkIcon, GripVertical, ListChecks,
+  Target, ExternalLink, ArrowUpRight, Search, Star, Mail, Phone,
 } from "lucide-react";
 
 // Stages mirror Daniel's existing Pipedrive flow exactly so muscle memory carries over.
@@ -102,7 +103,7 @@ export default function GroupSponsorship() {
   const [dealModal, setDealModal] = useState<{ mode: "create" | "edit"; deal?: Partial<SponsorshipDeal> } | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<StageKey | null>(null);
-  const [view, setView] = useState<"pipeline" | "deliverables" | "onboarding" | "billboards">("pipeline");
+  const [view, setView] = useState<"pipeline" | "prospects" | "deliverables" | "onboarding" | "billboards">("pipeline");
 
   const { data: me } = useQuery<{ id: number }>({ queryKey: ["/api/auth/me"] });
 
@@ -194,6 +195,7 @@ export default function GroupSponsorship() {
         <div className="flex items-center gap-1 mt-4 border-b border-white/[0.06] -mb-4">
           {([
             { key: "pipeline",     label: "Pipeline",     icon: TrendingUp },
+            { key: "prospects",    label: "Prospects",    icon: Target },
             { key: "deliverables", label: "Deliverables", icon: ListChecks },
             { key: "onboarding",   label: "Onboarding",   icon: CheckCircle2 },
             { key: "billboards",   label: "Billboards",   icon: DollarSign },
@@ -268,6 +270,7 @@ export default function GroupSponsorship() {
       </div>
 
       <div className="flex-1 overflow-x-auto overflow-y-auto">
+        {view === "prospects" && orgId && <ProspectsView orgId={orgId} team={team} currentUserId={me?.id} />}
         {view === "deliverables" && orgId && <CrossDeliverablesView orgId={orgId} team={team} category="contract" />}
         {view === "onboarding" && orgId && <OnboardingMatrixView orgId={orgId} team={team} deals={deals} />}
         {view === "billboards" && orgId && <BillboardsView orgId={orgId} team={team} currentUserId={me?.id} />}

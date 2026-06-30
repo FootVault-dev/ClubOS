@@ -21,7 +21,7 @@ const VENDORS: Record<string, { category: string; isOurs?: boolean; contractStat
   "Flamin Tomahawks": { category: "meal" },
   "Bacon Bros": { category: "meal" },
   "Rollicious": { category: "meal" },
-  "Frankie's Coffee Cart": { category: "coffee", contractStatus: "pending", contactEmail: null }, // email pending her reply
+  "Frankie's Coffee Cart": { category: "coffee", contractStatus: "pending", contactEmail: "frankiescoffeecart@gmail.com" }, // confirmed; contract not sent yet
 };
 
 // External meal-truck assignments per day (Truck 1 / 2 / 3 from the roster).
@@ -57,6 +57,13 @@ async function main() {
       const found = await client.query(`SELECT id FROM cic_vendors WHERE organization_id = $1 AND name = $2`, [orgId, name]);
       if (found.rows[0]) {
         vendorId[name] = found.rows[0].id;
+        // Keep contact email / contract status in sync on re-run.
+        if (def.contactEmail !== undefined || def.contractStatus) {
+          await client.query(
+            `UPDATE cic_vendors SET contact_email = COALESCE($2, contact_email), contract_status = COALESCE($3, contract_status) WHERE id = $1`,
+            [found.rows[0].id, def.contactEmail ?? null, def.contractStatus ?? null],
+          );
+        }
       } else {
         const ins = await client.query(
           `INSERT INTO cic_vendors (organization_id, name, category, is_ours, contact_email, contract_status)
