@@ -95,6 +95,10 @@ const tournamentTabs: TabDef[] = [
   { slug: "clubs", title: "Clubs", url: "/admin/clubs" },
   { slug: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge" },
   { slug: "food-truck", title: "Food Truck", url: "/admin/food-truck" },
+  { slug: "vendors", title: "Vendors", url: "/admin/vendors" },
+  { slug: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations" },
+  // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
+  { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
   { slug: "settings", title: "Settings", url: "/admin/tournament-settings", secondary: true },
@@ -103,6 +107,7 @@ const tournamentTabs: TabDef[] = [
 const gymnasticsTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
   { slug: "programs", title: "Programs", url: "/admin/programs" },
+  { slug: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
   { slug: "settings", title: "Settings", url: "/admin/gymnastics-settings", secondary: true },

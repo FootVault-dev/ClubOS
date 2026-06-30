@@ -72,6 +72,8 @@ import LeagueMailer from "@/pages/league-mailer";
 import LeagueRewards from "@/pages/league-rewards";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
+import CicInbox from "@/pages/cic-inbox";
+import CugcInbox from "@/pages/cugc-inbox";
 import LeagueBuilderPage from "@/pages/league-builder-page";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
@@ -85,6 +87,8 @@ import TournamentDetail from "@/pages/tournament-detail";
 import TournamentTeamDetail from "@/pages/tournament-team-detail";
 import TournamentSkillsChallenge from "@/pages/tournament-skills-challenge";
 import TournamentFoodTruck from "@/pages/tournament-food-truck";
+import TournamentVendors from "@/pages/tournament-vendors";
+import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
 import PrintsCRM from "@/pages/prints-crm";
@@ -187,6 +191,7 @@ function AdminRouter() {
       <Switch>
         <Route path="/admin" component={GymnasticsDashboard} />
         <Route path="/admin/programs" component={GymnasticsPrograms} />
+        <Route path="/admin/cugc-inbox" component={CugcInbox} />
         <Route path="/admin/terms" component={GymnasticsTerms} />
         {/* Reuse the camps detail + landing-page editor — they take a
             program id and don't care what type the program is. */}
@@ -211,6 +216,8 @@ function AdminRouter() {
         <Route path="/admin/clubs" component={ClubsList} />
         <Route path="/admin/skills-challenge" component={TournamentSkillsChallenge} />
         <Route path="/admin/food-truck" component={TournamentFoodTruck} />
+        <Route path="/admin/vendors" component={TournamentVendors} />
+        <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />
@@ -231,6 +238,7 @@ function AdminRouter() {
         <Route path="/admin/rewards" component={LeagueRewards} />
         <Route path="/admin/analytics" component={LeagueAnalytics} />
         <Route path="/admin/inbox" component={LeagueInbox} />
+        <Route path="/admin/cic-registrations" component={CicInbox} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
         <Route path="/admin/discounts" component={AdminDiscounts} />

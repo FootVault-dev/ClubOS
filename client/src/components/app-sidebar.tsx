@@ -47,6 +47,7 @@ import {
   Moon,
   Zap,
   Truck,
+  UtensilsCrossed,
   Inbox,
   School,
 } from "lucide-react";
@@ -133,6 +134,8 @@ const tournamentNav = [
   { tab: "clubs", title: "Clubs", url: "/admin/clubs", icon: Shield },
   { tab: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge", icon: Zap },
   { tab: "food-truck", title: "Food Truck", url: "/admin/food-truck", icon: Truck },
+  { tab: "vendors", title: "Vendors", url: "/admin/vendors", icon: UtensilsCrossed },
+  { tab: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations", icon: Inbox },
 ];
 
 const tournamentSecondary = [
@@ -141,9 +144,15 @@ const tournamentSecondary = [
   { tab: "settings", title: "Settings", url: "/admin/tournament-settings", icon: Settings },
 ];
 
+// CIC 7's view (toggled from the youth tournament via the Youth/7's switcher).
+const tournament7sNav = [
+  { tab: "cic7s-registrations", title: "Registrations", url: "/admin/cic7s-registrations", icon: ClipboardCheck },
+];
+
 const gymnasticsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "programs", title: "Programs", url: "/admin/programs", icon: GraduationCap },
+  { tab: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox", icon: Inbox },
 ];
 
 const gymnasticsSecondary = [
@@ -291,6 +300,33 @@ function WorkspaceSwitcher() {
   );
 }
 
+// Youth ⇄ CIC 7's sub-view toggle — only shown inside the CIC (tournament)
+// workspace. Switching also navigates so the page matches the selected view.
+function CicViewToggle() {
+  const { cicView, setCicView } = useWorkspace();
+  const [, setLocation] = useLocation();
+  const select = (v: "youth" | "7s") => {
+    setCicView(v);
+    setLocation(v === "7s" ? "/admin/cic7s-registrations" : "/admin");
+  };
+  return (
+    <div className="flex items-center gap-1 p-1 rounded-xl bg-white/[0.03] border border-white/[0.06]" data-testid="toggle-cic-view">
+      {(["youth", "7s"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => select(v)}
+          className={`flex-1 text-[11px] font-semibold uppercase tracking-wider py-1.5 rounded-lg transition-all cursor-pointer ${
+            cicView === v ? "bg-blue-500/15 text-blue-300 border border-blue-500/25" : "text-white/40 hover:text-white/60"
+          }`}
+          data-testid={`button-cic-view-${v}`}
+        >
+          {v === "youth" ? "CIC Youth" : "CIC 7's"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function isVenueWorkspace(slug: string | undefined) {
   return slug === "united-sports-centre";
 }
@@ -337,7 +373,7 @@ function getWorkspaceInitials(slug: string | undefined) {
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { currentOrg } = useWorkspace();
+  const { currentOrg, cicView } = useWorkspace();
   const { resolved: themeResolved, toggle: toggleTheme } = useTheme();
   const { data: user } = useQuery<{ firstName: string; lastName: string; role: string }>({ queryKey: ["/api/auth/me"] });
 
@@ -347,7 +383,8 @@ export function AppSidebar() {
   const isGymnastics = isGymnasticsWorkspace(currentOrg?.slug);
   const isGroup = isGroupWorkspace(currentOrg?.slug);
   const isPrints = isPrintsWorkspace(currentOrg?.slug);
-  const allMainNav = isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentNav : isLeague ? leagueNav : isVenue ? venueNav : campsNav;
+  const tournamentMainNav = cicView === "7s" ? tournament7sNav : tournamentNav;
+  const allMainNav = isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : campsNav;
   const allSecondaryNav = isPrints ? printsSecondary : isGroup ? groupSecondary : isGymnastics ? gymnasticsSecondary : isTournament ? tournamentSecondary : isLeague ? leagueSecondary : isVenue ? venueSecondary : campsSecondary;
 
   // Filter nav by the user's tab whitelist for this workspace.
@@ -385,6 +422,7 @@ export function AppSidebar() {
           </div>
         </div>
         <WorkspaceSwitcher />
+        {isTournament && <CicViewToggle />}
         {isVenue && currentOrg?.slug && (
           <PreviewPublicSiteLink orgId={currentOrg.id} orgSlug={currentOrg.slug} />
         )}

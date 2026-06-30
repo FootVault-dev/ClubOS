@@ -2263,6 +2263,27 @@ export const insertSkillsChallengeEntrySchema = createInsertSchema(skillsChallen
 export type InsertSkillsChallengeEntry = z.infer<typeof insertSkillsChallengeEntrySchema>;
 export type SkillsChallengeEntry = typeof skillsChallengeEntries.$inferSelect;
 
+// ---- CIC 7's register-interest submissions (from the cic7s.com marketing site) ----
+// Lives under the same CIC organization as the youth tournament; surfaced in the
+// "CIC 7's" view of the Tournament workspace.
+export const cic7sRegistrations = pgTable("cic7s_registrations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  location: text("location"),
+  phone: text("phone"),
+  category: text("category"), // "Mens" | "Masters" | "Social"
+  sourceUrl: text("source_url"),
+  status: text("status").notNull().default("new"), // "new" | "contacted" | "confirmed" | "archived"
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCic7sRegistrationSchema = createInsertSchema(cic7sRegistrations).omit({ id: true, createdAt: true });
+export type InsertCic7sRegistration = z.infer<typeof insertCic7sRegistrationSchema>;
+export type Cic7sRegistration = typeof cic7sRegistrations.$inferSelect;
+
 // ---- Football Institute Applications ----
 // Enrolment enquiries for the Football Institute (Christchurch United × Ao
 // Tawhiti Unlimited Discovery). One row per application. Submissions come from
@@ -2310,3 +2331,44 @@ export const foodTruckShifts = pgTable("food_truck_shifts", {
 export const insertFoodTruckShiftSchema = createInsertSchema(foodTruckShifts).omit({ id: true, createdAt: true });
 export type InsertFoodTruckShift = z.infer<typeof insertFoodTruckShiftSchema>;
 export type FoodTruckShift = typeof foodTruckShifts.$inferSelect;
+
+// ---- CIC Vendors (incoming food trucks & carts) ----
+// Directory of the EXTERNAL food/beverage vendors trading at the Christchurch
+// International Cup (Empire Chicken, Bangkok Wok, Frankie's Coffee Cart, …),
+// plus our own truck, and a per-day booking roster. This is distinct from
+// food_truck_shifts above (which rosters OUR truck's staff by position).
+// Internal-only — ClubOS "vendors" tab.
+// category:       "meal" | "coffee" | "dessert" | "drinks" | "other"
+// contractStatus: "none" | "pending" | "sent" | "signed"  (sets up the e-sign phase)
+export const cicVendors = pgTable("cic_vendors", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  category: text("category").notNull().default("meal"),
+  isOurs: boolean("is_ours").notNull().default(false), // our own CIC truck
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  contactPhone: text("contact_phone"),
+  contractStatus: text("contract_status").notNull().default("none"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCicVendorSchema = createInsertSchema(cicVendors).omit({ id: true, createdAt: true });
+export type InsertCicVendor = z.infer<typeof insertCicVendorSchema>;
+export type CicVendor = typeof cicVendors.$inferSelect;
+
+// One row per (vendor, day) the vendor is rostered to trade at the tournament.
+export const cicVendorBookings = pgTable("cic_vendor_bookings", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vendorId: integer("vendor_id").notNull().references(() => cicVendors.id, { onDelete: "cascade" }),
+  bookingDate: date("booking_date").notNull(), // YYYY-MM-DD
+  slot: integer("slot"), // optional ordering (Truck 1 / 2 / 3)
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCicVendorBookingSchema = createInsertSchema(cicVendorBookings).omit({ id: true, createdAt: true });
+export type InsertCicVendorBooking = z.infer<typeof insertCicVendorBookingSchema>;
+export type CicVendorBooking = typeof cicVendorBookings.$inferSelect;

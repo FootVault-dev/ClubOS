@@ -12,11 +12,17 @@ type Org = {
   userTabs: string[] | null;
 };
 
+// Sub-view inside the CIC (tournament) workspace — toggles between the youth
+// tournament and the CIC 7's adult tournament. Persisted separately from the org.
+export type CicView = "youth" | "7s";
+
 type WorkspaceContextType = {
   currentOrg: Org | null;
   setCurrentOrg: (org: Org) => void;
   organizations: Org[];
   setOrganizations: (orgs: Org[]) => void;
+  cicView: CicView;
+  setCicView: (v: CicView) => void;
 };
 
 const WorkspaceContext = createContext<WorkspaceContextType>({
@@ -24,15 +30,25 @@ const WorkspaceContext = createContext<WorkspaceContextType>({
   setCurrentOrg: () => {},
   organizations: [],
   setOrganizations: () => {},
+  cicView: "youth",
+  setCicView: () => {},
 });
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [organizations, setOrganizations] = useState<Org[]>([]);
   const [currentOrg, setCurrentOrgState] = useState<Org | null>(null);
+  const [cicView, setCicViewState] = useState<CicView>(
+    () => (typeof localStorage !== "undefined" && localStorage.getItem("clubos_cic_view") === "7s" ? "7s" : "youth"),
+  );
 
   const setCurrentOrg = (org: Org) => {
     setCurrentOrgState(org);
     localStorage.setItem("clubos_workspace", org.slug);
+  };
+
+  const setCicView = (v: CicView) => {
+    setCicViewState(v);
+    localStorage.setItem("clubos_cic_view", v);
   };
 
   useEffect(() => {
@@ -44,7 +60,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [organizations, currentOrg]);
 
   return (
-    <WorkspaceContext.Provider value={{ currentOrg, setCurrentOrg, organizations, setOrganizations }}>
+    <WorkspaceContext.Provider value={{ currentOrg, setCurrentOrg, organizations, setOrganizations, cicView, setCicView }}>
       {children}
     </WorkspaceContext.Provider>
   );

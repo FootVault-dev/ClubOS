@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, footballInstituteApplications, bookingRequests } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, footballInstituteApplications, bookingRequests, cic7sRegistrations } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification } from "./email";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -8193,8 +8193,21 @@ export async function registerRoutes(
   }
 
   // -- Public: registration (landing page) + leaderboard (mobile app) --
+  // The registration page now lives on cicyouth.com (cross-origin to this API),
+  // so allow that origin (+ Vercel previews) for the public skills endpoints.
+  const setSkillsCors = (req: any, res: any) => {
+    const origin = req.headers.origin || "";
+    if (/^https:\/\/(www\.)?cicyouth\.com$/.test(origin) || /\.vercel\.app$/.test(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+    }
+    res.header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  };
+  app.options("/api/public/skills-challenge/register", (req, res) => { setSkillsCors(req, res); res.sendStatus(204); });
+  app.options("/api/public/skills-challenge/leaderboard", (req, res) => { setSkillsCors(req, res); res.sendStatus(204); });
 
   app.post("/api/public/skills-challenge/register", async (req, res) => {
+    setSkillsCors(req, res);
     try {
       const result = await skillsCreateEntry(req.body, "public", null);
       if ("error" in result) return res.status(400).json({ message: result.error });
@@ -8204,7 +8217,8 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/public/skills-challenge/leaderboard", async (_req, res) => {
+  app.get("/api/public/skills-challenge/leaderboard", async (req, res) => {
+    setSkillsCors(req, res);
     try {
       const entries = await skillsListEntries();
       res.json({ categories: skillsLeaderboards(entries) });
@@ -8212,6 +8226,20 @@ export async function registerRoutes(
       res.status(500).json({ message: e.message });
     }
   });
+
+  // ── Skills Challenge moved to cicyouth.com — redirect old promoted links ──
+  // join.cicyouth.com was promoted before the page moved to the marketing site
+  // we control. 308-redirect ONLY the HTML page routes ("/" and "/skills") on
+  // the CIC host — never /api/* (the website + CIC Youth app still call those here).
+  const cicSkillsRedirect = (req: Request, res: Response, next: NextFunction) => {
+    const host = (req.headers.host || "").toLowerCase();
+    if (host.startsWith("join.cicyouth.com")) {
+      return res.redirect(308, "https://cicyouth.com/skills-challenge");
+    }
+    next();
+  };
+  app.get("/", cicSkillsRedirect);
+  app.get("/skills", cicSkillsRedirect);
 
   // -- Mobile admin: login + scoring (bearer token) --
 
@@ -8675,6 +8703,171 @@ export async function registerRoutes(
   });
 
   // ───────────────────────────── END CIC FOOD TRUCK ─────────────────────────────
+
+  // ─────────────────────────────── CIC VENDORS ───────────────────────────────
+  // Directory + per-day roster for the INCOMING food/beverage vendors at the
+  // Christchurch International Cup (Empire Chicken, Bangkok Wok, Frankie's
+  // Coffee Cart, our own truck, …). Distinct from the Food Truck staff roster
+  // above. ClubOS-only (session + "vendors" tab permission). Reuses the CIC
+  // org-id resolver (foodTruckOrgId) — same workspace.
+  const VENDOR_CATEGORIES = ["meal", "coffee", "dessert", "drinks", "other"] as const;
+  const VENDOR_CONTRACT_STATUSES = ["none", "pending", "sent", "signed"] as const;
+  const vendorClean = (v: any, max: number) =>
+    v == null ? null : (String(v).trim().slice(0, max) || null);
+
+  function serializeVendor(v: typeof cicVendors.$inferSelect) {
+    return {
+      id: v.id,
+      name: v.name,
+      category: v.category,
+      isOurs: v.isOurs,
+      contactName: v.contactName,
+      contactEmail: v.contactEmail,
+      contactPhone: v.contactPhone,
+      contractStatus: v.contractStatus,
+      notes: v.notes,
+    };
+  }
+  function serializeVendorBooking(b: typeof cicVendorBookings.$inferSelect) {
+    return { id: b.id, vendorId: b.vendorId, bookingDate: b.bookingDate, slot: b.slot, notes: b.notes };
+  }
+
+  app.get("/api/admin/vendors", requireAuth, requireTab("vendors"), async (_req, res) => {
+    try {
+      const orgId = await foodTruckOrgId();
+      const rows = await db.select().from(cicVendors)
+        .where(eq(cicVendors.organizationId, orgId))
+        .orderBy(desc(cicVendors.isOurs), cicVendors.name);
+      res.json(rows.map(serializeVendor));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/admin/vendors", requireAuth, requireTab("vendors"), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      const name = String(b.name ?? "").trim();
+      if (!name || name.length > 80) return res.status(400).json({ message: "Vendor name required (max 80 characters)" });
+      const category = (VENDOR_CATEGORIES as readonly string[]).includes(String(b.category)) ? String(b.category) : "meal";
+      const contractStatus = (VENDOR_CONTRACT_STATUSES as readonly string[]).includes(String(b.contractStatus)) ? String(b.contractStatus) : "none";
+      const orgId = await foodTruckOrgId();
+      const [row] = await db.insert(cicVendors).values({
+        organizationId: orgId,
+        name,
+        category,
+        isOurs: !!b.isOurs,
+        contactName: vendorClean(b.contactName, 80),
+        contactEmail: vendorClean(b.contactEmail, 120),
+        contactPhone: vendorClean(b.contactPhone, 40),
+        contractStatus,
+        notes: vendorClean(b.notes, 300),
+      }).returning();
+      res.json(serializeVendor(row));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/admin/vendors/:id", requireAuth, requireTab("vendors"), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      const updates: Record<string, any> = {};
+      if ("name" in b) {
+        const v = String(b.name ?? "").trim();
+        if (!v || v.length > 80) return res.status(400).json({ message: "Vendor name required (max 80 characters)" });
+        updates.name = v;
+      }
+      if ("category" in b && (VENDOR_CATEGORIES as readonly string[]).includes(String(b.category))) updates.category = String(b.category);
+      if ("isOurs" in b) updates.isOurs = !!b.isOurs;
+      if ("contactName" in b) updates.contactName = vendorClean(b.contactName, 80);
+      if ("contactEmail" in b) updates.contactEmail = vendorClean(b.contactEmail, 120);
+      if ("contactPhone" in b) updates.contactPhone = vendorClean(b.contactPhone, 40);
+      if ("contractStatus" in b && (VENDOR_CONTRACT_STATUSES as readonly string[]).includes(String(b.contractStatus))) updates.contractStatus = String(b.contractStatus);
+      if ("notes" in b) updates.notes = vendorClean(b.notes, 300);
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
+      const orgId = await foodTruckOrgId();
+      const [row] = await db.update(cicVendors).set(updates)
+        .where(and(eq(cicVendors.id, parseInt(String(req.params.id))), eq(cicVendors.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Vendor not found" });
+      res.json(serializeVendor(row));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/admin/vendors/:id", requireAuth, requireTab("vendors"), async (req, res) => {
+    try {
+      const orgId = await foodTruckOrgId();
+      const [row] = await db.delete(cicVendors)
+        .where(and(eq(cicVendors.id, parseInt(String(req.params.id))), eq(cicVendors.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Vendor not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/admin/vendors/bookings", requireAuth, requireTab("vendors"), async (_req, res) => {
+    try {
+      const orgId = await foodTruckOrgId();
+      const rows = await db.select().from(cicVendorBookings)
+        .where(eq(cicVendorBookings.organizationId, orgId))
+        .orderBy(cicVendorBookings.bookingDate, cicVendorBookings.slot);
+      res.json(rows.map(serializeVendorBooking));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Create a booking. Idempotent per (vendor, day) — re-posting returns the
+  // existing row, so the calendar can safely "toggle on".
+  app.post("/api/admin/vendors/bookings", requireAuth, requireTab("vendors"), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      const bookingDate = String(b.bookingDate ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(bookingDate)) return res.status(400).json({ message: "bookingDate must be YYYY-MM-DD" });
+      const vendorId = parseInt(String(b.vendorId));
+      if (!Number.isFinite(vendorId)) return res.status(400).json({ message: "vendorId required" });
+      const orgId = await foodTruckOrgId();
+      const [vendor] = await db.select().from(cicVendors)
+        .where(and(eq(cicVendors.id, vendorId), eq(cicVendors.organizationId, orgId)));
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+      const existing = await db.select().from(cicVendorBookings).where(and(
+        eq(cicVendorBookings.organizationId, orgId),
+        eq(cicVendorBookings.vendorId, vendorId),
+        eq(cicVendorBookings.bookingDate, bookingDate),
+      ));
+      if (existing.length) return res.json(serializeVendorBooking(existing[0]));
+      const slotRaw = b.slot == null || b.slot === "" ? null : parseInt(String(b.slot));
+      const [row] = await db.insert(cicVendorBookings).values({
+        organizationId: orgId,
+        vendorId,
+        bookingDate,
+        slot: Number.isFinite(slotRaw as any) ? slotRaw : null,
+        notes: vendorClean(b.notes, 200),
+      }).returning();
+      res.json(serializeVendorBooking(row));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/admin/vendors/bookings/:id", requireAuth, requireTab("vendors"), async (req, res) => {
+    try {
+      const orgId = await foodTruckOrgId();
+      const [row] = await db.delete(cicVendorBookings)
+        .where(and(eq(cicVendorBookings.id, parseInt(String(req.params.id))), eq(cicVendorBookings.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Booking not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+  // ───────────────────────────── END CIC VENDORS ─────────────────────────────
 
   app.get("/api/public/camps", async (_req, res) => {
     try {
@@ -11549,6 +11742,178 @@ export async function registerRoutes(
       } catch (e) { console.error("[MFL contact] email failed:", e); }
       res.json({ ok: true });
     } catch (e: any) { console.error("[MFL contact] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // ── CIC 7's "Register Your Interest" → cic7s_registrations + email info@cic7s.com ──
+  // Posted cross-origin from the cic7s.com marketing site (Vercel), so set CORS for it.
+  const CIC7S_SITE_ORIGINS = ["https://cic7s.com", "https://www.cic7s.com"];
+  const setCic7sCors = (req: any, res: any) => {
+    const origin = req.headers.origin || "";
+    if (CIC7S_SITE_ORIGINS.includes(origin) || /\.vercel\.app$/.test(origin)) res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  };
+  app.options("/api/public/cic7s/register-interest", (req, res) => { setCic7sCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cic7s/register-interest", async (req, res) => {
+    setCic7sCors(req, res);
+    try {
+      const firstName = String(req.body.firstName || "").trim();
+      const lastName = String(req.body.lastName || "").trim();
+      const email = String(req.body.email || "").trim();
+      const location = String(req.body.location || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const category = String(req.body.category || "").trim();
+      if (!firstName || !/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Please add your name and a valid email." });
+
+      const orgId = await skillsOrgId(); // CIC org — CIC 7's lives under it
+      await db.insert(cic7sRegistrations).values({
+        organizationId: orgId, firstName, lastName: lastName || null, email,
+        location: location || null, phone: phone || null, category: category || null,
+        sourceUrl: String(req.body.sourceUrl || "cic7s.com"), status: "new",
+      });
+      try {
+        await sendCic7sRegistrationNotification({
+          to: "info@cic7s.com", firstName, lastName: lastName || undefined, email,
+          location: location || undefined, phone: phone || undefined, category: category || undefined,
+          sourceUrl: String(req.body.sourceUrl || ""),
+        });
+      } catch (e) { console.error("[CIC7s register] email failed:", e); }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[CIC7s register] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // Web admin: list CIC 7's registrations (Tournament workspace → CIC 7's view → Registrations).
+  app.get("/api/admin/cic7s/registrations", requireAuth, requireTab("cic7s-registrations"), async (_req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const rows = await db.select().from(cic7sRegistrations)
+        .where(eq(cic7sRegistrations.organizationId, orgId))
+        .orderBy(desc(cic7sRegistrations.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── CIC Youth "Register Your Interest" → CIC inbox + email info@cicyouth.com ──
+  // Posted cross-origin from the cicyouth.com marketing site (Vercel). CIC Youth
+  // registrations land in the shared inbox_messages table under the CIC org and
+  // are viewable in Tournaments → CIC → Registrations.
+  const CIC_SITE_ORIGINS = ["https://cicyouth.com", "https://www.cicyouth.com"];
+  const setCicCors = (req: any, res: any) => {
+    const origin = req.headers.origin || "";
+    if (CIC_SITE_ORIGINS.includes(origin) || /\.vercel\.app$/.test(origin)) res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  };
+  app.options("/api/public/cic/contact", (req, res) => { setCicCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cic/contact", async (req, res) => {
+    setCicCors(req, res);
+    try {
+      const name = String(req.body.name || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const subject = String(req.body.subject || "").trim();
+      const message = String(req.body.message || "").trim();
+      if (!name || !/.+@.+\..+/.test(email) || !message) return res.status(400).json({ message: "Please add your name, a valid email and a message." });
+
+      const orgId = await skillsOrgId(); // CIC org — CIC Youth lives under it
+      await db.insert(inboxMessages).values({
+        organizationId: orgId, channel: "web_form",
+        name, email, phone: phone || null, subject: subject || null, body: message,
+        sourceUrl: String(req.body.sourceUrl || "cicyouth.com"), status: "new",
+      });
+      try {
+        await sendCicContactNotification({ to: "info@cicyouth.com", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
+      } catch (e) { console.error("[CIC contact] email failed:", e); }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[CIC contact] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // Web admin: CIC Youth registrations of interest (Tournaments → CIC → Registrations).
+  app.get("/api/admin/cic/inbox", requireAuth, async (_req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const rows = await db.select().from(inboxMessages)
+        .where(eq(inboxMessages.organizationId, orgId))
+        .orderBy(desc(inboxMessages.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/cic/inbox/:id/status", requireAuth, async (req, res) => {
+    try {
+      const status = String(req.body.status || "");
+      if (!["new", "read", "replied", "archived"].includes(status)) return res.status(400).json({ message: "invalid status" });
+      const orgId = await skillsOrgId();
+      await db.update(inboxMessages).set({ status }).where(and(eq(inboxMessages.id, parseInt(req.params.id)), eq(inboxMessages.organizationId, orgId)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── CUGC (Christchurch United Gymnastics Club) website contact → CUGC inbox ──
+  // Posted cross-origin from the cugc.co.nz marketing site (Vercel). Contact /
+  // Register / Newsletter form submissions land in the shared inbox_messages
+  // table under the CUGC org and are viewable in Gymnastics → Inbox. They're
+  // also emailed to info@cugc.co.nz. Mirrors the CIC Youth contact flow.
+  // CUGC already exists in ClubOS as the "united-gymnastics" org (the gymnastics
+  // workspace). Reuse it — do NOT create a separate org.
+  const CUGC_ORG_SLUG = "united-gymnastics";
+  let cugcOrgIdCache: number | null = null;
+  async function cugcOrgId(): Promise<number> {
+    if (cugcOrgIdCache) return cugcOrgIdCache;
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, CUGC_ORG_SLUG));
+    if (!org) throw new Error("CUGC organization not found");
+    cugcOrgIdCache = org.id;
+    return org.id;
+  }
+
+  const CUGC_SITE_ORIGINS = ["https://cugc.co.nz", "https://www.cugc.co.nz"];
+  const setCugcCors = (req: any, res: any) => {
+    const origin = req.headers.origin || "";
+    if (CUGC_SITE_ORIGINS.includes(origin) || /\.vercel\.app$/.test(origin)) res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  };
+  app.options("/api/public/cugc/contact", (req, res) => { setCugcCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cugc/contact", async (req, res) => {
+    setCugcCors(req, res);
+    try {
+      const name = String(req.body.name || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const subject = String(req.body.subject || "").trim();
+      const message = String(req.body.message || "").trim();
+      if (!name || !/.+@.+\..+/.test(email) || !message) return res.status(400).json({ message: "Please add your name, a valid email and a message." });
+
+      const orgId = await cugcOrgId();
+      await db.insert(inboxMessages).values({
+        organizationId: orgId, channel: "web_form",
+        name, email, phone: phone || null, subject: subject || null, body: message,
+        sourceUrl: String(req.body.sourceUrl || "cugc.co.nz"), status: "new",
+      });
+      try {
+        await sendCugcContactNotification({ to: "info@cugc.co.nz", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
+      } catch (e) { console.error("[CUGC contact] email failed:", e); }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[CUGC contact] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // Web admin: CUGC website enquiries (Gymnastics → Inbox).
+  app.get("/api/admin/cugc/inbox", requireAuth, async (_req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const rows = await db.select().from(inboxMessages)
+        .where(eq(inboxMessages.organizationId, orgId))
+        .orderBy(desc(inboxMessages.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/cugc/inbox/:id/status", requireAuth, async (req, res) => {
+    try {
+      const status = String(req.body.status || "");
+      if (!["new", "read", "replied", "archived"].includes(status)) return res.status(400).json({ message: "invalid status" });
+      const orgId = await cugcOrgId();
+      await db.update(inboxMessages).set({ status }).where(and(eq(inboxMessages.id, parseInt(req.params.id)), eq(inboxMessages.organizationId, orgId)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Public one-click unsubscribe from MFL broadcasts (link in every newsletter).

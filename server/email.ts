@@ -422,6 +422,123 @@ export async function sendMflContactNotification(params: {
   });
 }
 
+/** CIC 7's "Register Your Interest" submission → the tournament team (info@cic7s.com).
+ *  Reply-To is the registrant so staff can reply straight from their inbox. */
+export async function sendCic7sRegistrationNotification(params: {
+  to: string; firstName: string; lastName?: string; email: string;
+  location?: string; phone?: string; category?: string; sourceUrl?: string;
+}): Promise<boolean> {
+  const fullName = `${params.firstName}${params.lastName ? ` ${params.lastName}` : ""}`.trim();
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#9aa0a6;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("Name", fullName || "—"),
+    row("Email", params.email || "—"),
+    ...(params.phone ? [row("Phone", params.phone)] : []),
+    ...(params.location ? [row("Location", params.location)] : []),
+    ...(params.category ? [row("Category", params.category)] : []),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0a1122;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <h1 style="color:#cffd5a;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">CIC 7's — New Registration of Interest</h1>
+      </div>
+      <div style="background:#10131c;border:1px solid #252a38;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        ${params.sourceUrl ? `<p style="color:#5a5a5a;font-size:11px;margin:16px 0 0;">via ${params.sourceUrl}</p>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        CIC Summer 7's · Christchurch United Football Club<br/>This registration is also saved in ClubOS → Tournaments → CIC 7's → Registrations.
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "CIC 7's <noreply@cufc.co.nz>",
+    replyTo: params.email || undefined,
+    subject: `New CIC 7's registration${fullName ? ` — ${fullName}` : ""}${params.category ? ` (${params.category})` : ""}`,
+    html,
+  });
+}
+
+/** CIC Youth (cicyouth.com) "Register Your Interest" enquiry → the CIC inbox
+ *  (info@cicyouth.com). Black + gold shell. Reply-To is the enquirer so staff
+ *  can reply straight from their inbox. */
+export async function sendCicContactNotification(params: {
+  to: string; name: string; email: string; phone?: string; subject?: string; message: string; sourceUrl?: string;
+}): Promise<boolean> {
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#9aa0a6;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("From", params.name || "—"),
+    row("Email", params.email || "—"),
+    ...(params.phone ? [row("Phone", params.phone)] : []),
+    ...(params.subject ? [row("Subject", params.subject)] : []),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#c9a43e;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch International Cup</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">New Registration of Interest</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:18px 0 0;white-space:pre-wrap;">${(params.message || "").replace(/</g, "&lt;")}</p>
+        ${params.sourceUrl ? `<p style="color:#5a5a5a;font-size:11px;margin:16px 0 0;">via ${params.sourceUrl}</p>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch International Cup · Christchurch United Football Club<br/>This registration is also saved in ClubOS → Tournaments → CIC → Registrations.
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch International Cup <noreply@cufc.co.nz>",
+    replyTo: params.email || "info@cicyouth.com",
+    subject: `New interest registration${params.name ? ` from ${params.name}` : ""} — cicyouth.com`,
+    html,
+  });
+}
+
+export async function sendCugcContactNotification(params: {
+  to: string; name: string; email: string; phone?: string; subject?: string; message: string; sourceUrl?: string;
+}): Promise<boolean> {
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("From", params.name || "—"),
+    row("Email", params.email || "—"),
+    ...(params.phone ? [row("Phone", params.phone)] : []),
+    ...(params.subject ? [row("Subject", params.subject)] : []),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#020a18;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#d9b10f;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United Gymnastics Club</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">New Website Enquiry</h1>
+      </div>
+      <div style="background:#013590;border:1px solid #1c4aa8;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:18px 0 0;white-space:pre-wrap;">${(params.message || "").replace(/</g, "&lt;")}</p>
+        ${params.sourceUrl ? `<p style="color:#7d8ba8;font-size:11px;margin:16px 0 0;">via ${params.sourceUrl}</p>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Gymnastics Club · Christchurch United Football Club<br/>This enquiry is also saved in ClubOS → Gymnastics → Inbox.
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    replyTo: params.email || "info@cugc.co.nz",
+    subject: `New website enquiry${params.name ? ` from ${params.name}` : ""} — cugc.co.nz`,
+    html,
+  });
+}
+
 /** Balance instalment successfully collected. */
 export async function sendLeagueBalancePaidEmail(params: {
   registrationId: number;
