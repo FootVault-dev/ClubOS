@@ -16,13 +16,16 @@ declare module "http" {
 
 app.use(
   express.json({
+    // 25mb so base64-encoded uploads (e.g. e-Sign PDF documents) fit — the
+    // Express default is 100kb, which 413s on any real PDF.
+    limit: "25mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "25mb" }));
 
 setupAuth(app);
 

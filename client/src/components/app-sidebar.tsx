@@ -158,6 +158,8 @@ const tournament7sNav = [
 const gymnasticsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "programs", title: "Programs", url: "/admin/programs", icon: GraduationCap },
+  { tab: "cugc-registrations", title: "Registrations", url: "/admin/cugc-registrations", icon: ClipboardCheck },
+  { tab: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics", icon: BarChart3 },
   { tab: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox", icon: Inbox },
 ];
 

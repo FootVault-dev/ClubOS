@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, pgEnum, uniqueIndex, unique, time, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, time, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -2377,6 +2377,44 @@ export const insertCic7sRegistrationSchema = createInsertSchema(cic7sRegistratio
 export type InsertCic7sRegistration = z.infer<typeof insertCic7sRegistrationSchema>;
 export type Cic7sRegistration = typeof cic7sRegistrations.$inferSelect;
 
+// ---- CUGC gymnastics enrolments (from the cugc.co.nz marketing site) ----
+// One row per enrolment. Created 'pending_payment' when the family submits the
+// enrol form; flipped to 'paid' by the CUGC Stripe webhook. CUGC has its OWN
+// Stripe account (separate from the main ClubOS one). Lives under the
+// "united-gymnastics" org and is surfaced in the Gymnastics workspace →
+// Registrations tab. priceCents is the (possibly prorated) amount actually paid;
+// fullPriceCents is the advertised full-term price.
+export const cugcRegistrations = pgTable("cugc_registrations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  programSlug: text("program_slug").notNull(),
+  programName: text("program_name").notNull(),
+  optionLabel: text("option_label").notNull(),
+  sessionTime: text("session_time"),
+  priceCents: integer("price_cents").notNull(),          // what they pay today
+  fullPriceCents: integer("full_price_cents").notNull(), // advertised full-term price
+  term: text("term"),
+  gymnastName: text("gymnast_name").notNull(),
+  gymnastDob: text("gymnast_dob"),
+  parentName: text("parent_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  emergencyName: text("emergency_name"),
+  emergencyPhone: text("emergency_phone"),
+  medical: text("medical"),
+  photoConsent: text("photo_consent"),
+  heardVia: text("heard_via"),
+  status: text("status").notNull().default("pending_payment"), // 'pending_payment' | 'paid' | 'cancelled'
+  stripeSessionId: text("stripe_session_id"),
+  stripePaymentIntent: text("stripe_payment_intent"),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const insertCugcRegistrationSchema = createInsertSchema(cugcRegistrations).omit({ id: true, createdAt: true });
+export type InsertCugcRegistration = z.infer<typeof insertCugcRegistrationSchema>;
+export type CugcRegistration = typeof cugcRegistrations.$inferSelect;
+
 // ---- Football Institute Applications ----
 // Enrolment enquiries for the Football Institute (Christchurch United × Ao
 // Tawhiti Unlimited Discovery). One row per application. Submissions come from
@@ -2535,3 +2573,29 @@ export const esignEvents = pgTable("esign_events", {
 export const insertEsignEventSchema = createInsertSchema(esignEvents).omit({ id: true, createdAt: true });
 export type InsertEsignEvent = z.infer<typeof insertEsignEventSchema>;
 export type EsignEvent = typeof esignEvents.$inferSelect;
+
+// Fillable fields placed on a document (DocuSign-style). Coordinates are
+// normalized 0..1 relative to the page (x,y = top-left corner, screen
+// convention — flipped to PDF space when stamping). One field is filled by
+// one signer.
+// type: signature | initials | text | date | checkbox
+export const esignFields = pgTable("esign_fields", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  documentId: integer("document_id").notNull().references(() => esignDocuments.id, { onDelete: "cascade" }),
+  signerId: integer("signer_id").notNull().references(() => esignSigners.id, { onDelete: "cascade" }),
+  page: integer("page").notNull().default(0), // 0-based page index
+  x: doublePrecision("x").notNull(),
+  y: doublePrecision("y").notNull(),
+  w: doublePrecision("w").notNull(),
+  h: doublePrecision("h").notNull(),
+  type: text("type").notNull(),
+  required: boolean("required").notNull().default(true),
+  label: text("label"),
+  value: text("value"),             // filled text / date / "true" for checkbox
+  valueImage: text("value_image"),  // base64 png for signature / initials
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertEsignFieldSchema = createInsertSchema(esignFields).omit({ id: true, createdAt: true });
+export type InsertEsignField = z.infer<typeof insertEsignFieldSchema>;
+export type EsignField = typeof esignFields.$inferSelect;

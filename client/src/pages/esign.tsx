@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { EsignPrepare } from "@/pages/esign-prepare";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -68,6 +69,7 @@ export default function ESign() {
   const { toast } = useToast();
   const [newOpen, setNewOpen] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [prepareId, setPrepareId] = useState<number | null>(null);
 
   const { data: docs = [], isLoading } = useQuery<Doc[]>({ queryKey: ["/api/admin/esign"] });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/esign"] });
@@ -125,7 +127,7 @@ export default function ESign() {
             return (
               <button
                 key={d.id}
-                onClick={() => setDetailId(d.id)}
+                onClick={() => (d.status === "draft" ? setPrepareId(d.id) : setDetailId(d.id))}
                 className="w-full text-left bg-white/[0.03] border border-white/5 rounded-2xl p-4 hover:bg-white/[0.05] transition-colors flex items-center gap-4"
               >
                 <div className="w-10 h-10 rounded-xl bg-amber-400/10 text-amber-400 flex items-center justify-center shrink-0">
@@ -145,14 +147,15 @@ export default function ESign() {
         </div>
       )}
 
-      {newOpen && <NewDocDialog onClose={() => setNewOpen(false)} onDone={() => { setNewOpen(false); invalidate(); }} onErr={onErr} />}
+      {newOpen && <NewDocDialog onClose={() => setNewOpen(false)} onDone={(id) => { setNewOpen(false); invalidate(); setPrepareId(id); }} onErr={onErr} />}
       {detailId != null && <DetailDialog id={detailId} onClose={() => setDetailId(null)} onChanged={invalidate} onErr={onErr} />}
+      {prepareId != null && <EsignPrepare docId={prepareId} onClose={() => { setPrepareId(null); invalidate(); }} onSent={() => { setPrepareId(null); invalidate(); }} />}
     </div>
   );
 }
 
 // ── New document ─────────────────────────────────────────────────────────────
-function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone: () => void; onErr: (e: any) => void }) {
+function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone: (id: number) => void; onErr: (e: any) => void }) {
   const { toast } = useToast();
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
@@ -173,18 +176,17 @@ function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone:
   const valid = title.trim() && pdfBase64 && signers.some((s) => s.name.trim() && s.email.trim());
 
   const create = useMutation({
-    mutationFn: (send: boolean) => apiRequest("POST", "/api/admin/esign", {
-      title: title.trim(),
-      message: message.trim() || null,
-      fileName,
-      pdfBase64,
-      signers: signers.filter((s) => s.name.trim() && s.email.trim()).map((s) => ({ name: s.name.trim(), email: s.email.trim() })),
-      send,
-    }),
-    onSuccess: async (_res, send) => {
-      toast({ title: send ? "Sent for signature" : "Draft saved", description: send ? "Signers have been emailed their link." : undefined });
-      onDone();
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/esign", {
+        title: title.trim(),
+        message: message.trim() || null,
+        fileName,
+        pdfBase64,
+        signers: signers.filter((s) => s.name.trim() && s.email.trim()).map((s) => ({ name: s.name.trim(), email: s.email.trim() })),
+      });
+      return res.json();
     },
+    onSuccess: (doc: any) => onDone(doc.id),
     onError: onErr,
   });
 
@@ -227,10 +229,9 @@ function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone:
             </div>
           </div>
         </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" disabled={!valid || create.isPending} onClick={() => create.mutate(false)}>Save draft</Button>
-          <Button disabled={!valid || create.isPending} onClick={() => create.mutate(true)} className="gap-1.5">
-            <Send className="w-4 h-4" /> Send for signature
+        <DialogFooter>
+          <Button disabled={!valid || create.isPending} onClick={() => create.mutate()} className="gap-1.5">
+            <Send className="w-4 h-4" /> Create &amp; add fields
           </Button>
         </DialogFooter>
       </DialogContent>

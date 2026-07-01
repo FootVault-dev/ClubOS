@@ -581,6 +581,58 @@ export async function sendCugcContactNotification(params: {
   });
 }
 
+/**
+ * CUGC enrolment confirmation — fired by the CUGC Stripe webhook once payment
+ * clears. Sent to the parent (and, as a copy, to info@cugc.co.nz). Navy/gold
+ * branded to match sendCugcContactNotification. `amount` is in cents.
+ */
+export async function sendCugcEnrolmentConfirmation(params: {
+  to: string;
+  parentName: string;
+  gymnastName: string;
+  programName: string;
+  optionLabel: string;
+  sessionTime?: string;
+  term?: string;
+  amount: number; // cents
+}): Promise<boolean> {
+  const money = `$${Math.round(params.amount / 100).toLocaleString("en-NZ")}`;
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("Gymnast", params.gymnastName || "—"),
+    row("Program", params.programName || "—"),
+    row("Option", params.optionLabel || "—"),
+    ...(params.sessionTime ? [row("Session", params.sessionTime)] : []),
+    ...(params.term ? [row("Term", params.term)] : []),
+    row("Paid", money),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#020a18;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#d9b10f;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United Gymnastics Club</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">Enrolment Confirmed</h1>
+      </div>
+      <div style="background:#013590;border:1px solid #1c4aa8;border-radius:18px;padding:24px;">
+        <p style="color:#e6e6e6;font-size:15px;line-height:1.6;margin:0 0 16px;">Hi ${(params.parentName || "there").replace(/</g, "&lt;")}, thanks for enrolling with us — your gymnast's place is confirmed. Here are the details:</p>
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#bcd0f0;font-size:13px;line-height:1.6;margin:18px 0 0;">We'll be in touch before the term starts with everything you need. Questions? Just reply to this email.</p>
+      </div>
+      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Gymnastics Club · Christchurch United Football Club<br/>A copy of this confirmation is saved in ClubOS → Gymnastics → Registrations.
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    replyTo: "info@cugc.co.nz",
+    subject: `Enrolment confirmed — ${params.gymnastName} · ${params.programName}`,
+    html,
+  });
+}
+
 /** Balance instalment successfully collected. */
 export async function sendLeagueBalancePaidEmail(params: {
   registrationId: number;

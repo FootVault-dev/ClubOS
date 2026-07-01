@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, footballInstituteApplications, bookingRequests, cic7sRegistrations, passwordResetTokens, clubLogoConsents } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -13,7 +13,9 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendClubLogoConsentNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendClubLogoConsentNotification } from "./email";
+import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
+import { computeCugcEnrolPrice, CUGC_TERM } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -9114,6 +9116,14 @@ export async function registerRoutes(
       })),
     };
   }
+  const ESIGN_FIELD_TYPES = ["signature", "initials", "text", "date", "checkbox"] as const;
+  function esignSerializeField(f: typeof esignFields.$inferSelect) {
+    return {
+      id: f.id, signerId: f.signerId, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h,
+      type: f.type, required: f.required, label: f.label,
+      value: f.value, valueImage: f.valueImage,
+    };
+  }
   const esignInviteHtml = (p: { signerName: string; title: string; message: string | null; link: string; fromName: string }) => `
     <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
       <div style="height:6px;background:linear-gradient(90deg,#937224,#C9A43E,#E4C56A)"></div>
@@ -9164,6 +9174,7 @@ export async function registerRoutes(
     if (!doc || doc.status === "completed") return;
     const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, docId)).orderBy(esignSigners.signingOrder, esignSigners.id);
     if (!signers.length || !signers.every((s) => s.status === "signed")) return;
+    const fields = await db.select().from(esignFields).where(eq(esignFields.documentId, docId));
     const { buildSignedPdf } = await import("./esign-pdf");
     const signedBytes = await buildSignedPdf({
       sourcePdf: Buffer.from(doc.sourcePdf, "base64"),
@@ -9171,6 +9182,7 @@ export async function registerRoutes(
       docHash: doc.docHash || "",
       envelopeId: doc.id,
       signers: signers.map((s) => ({ name: s.name, email: s.email, signatureName: s.signatureName, signatureImage: s.signatureImage, signedAt: s.signedAt, ip: s.ip })),
+      fields: fields.map((f) => ({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, type: f.type, value: f.value, valueImage: f.valueImage })),
     });
     const signedB64 = Buffer.from(signedBytes).toString("base64");
     await db.update(esignDocuments).set({ status: "completed", completedAt: new Date(), signedPdf: signedB64 }).where(eq(esignDocuments.id, docId));
@@ -9209,7 +9221,40 @@ export async function registerRoutes(
       if (!doc) return res.status(404).json({ message: "Not found" });
       const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, id)).orderBy(esignSigners.signingOrder, esignSigners.id);
       const events = await db.select().from(esignEvents).where(eq(esignEvents.documentId, id)).orderBy(desc(esignEvents.createdAt));
-      res.json({ ...esignSerializeDoc(doc, signers), events: events.map((e) => ({ id: e.id, type: e.type, actorEmail: e.actorEmail, ip: e.ip, createdAt: e.createdAt })) });
+      const fields = await db.select().from(esignFields).where(eq(esignFields.documentId, id));
+      res.json({ ...esignSerializeDoc(doc, signers), fields: fields.map(esignSerializeField), events: events.map((e) => ({ id: e.id, type: e.type, actorEmail: e.actorEmail, ip: e.ip, createdAt: e.createdAt })) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Replace all placed fields for a document (draft prep). Body: { fields: [...] }.
+  app.put("/api/admin/esign/:id/fields", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.status !== "draft") return res.status(400).json({ message: "Fields can only be edited while the document is a draft" });
+      const validSigners = await db.select().from(esignSigners).where(eq(esignSigners.documentId, id));
+      const signerIds = new Set(validSigners.map((s) => s.id));
+      const incoming = Array.isArray(req.body?.fields) ? req.body.fields : [];
+      const rows = incoming
+        .filter((f: any) => signerIds.has(Number(f.signerId)) && (ESIGN_FIELD_TYPES as readonly string[]).includes(String(f.type)))
+        .map((f: any) => ({
+          documentId: id,
+          signerId: Number(f.signerId),
+          page: Math.max(0, parseInt(String(f.page)) || 0),
+          x: Math.min(1, Math.max(0, Number(f.x) || 0)),
+          y: Math.min(1, Math.max(0, Number(f.y) || 0)),
+          w: Math.min(1, Math.max(0.01, Number(f.w) || 0.15)),
+          h: Math.min(1, Math.max(0.01, Number(f.h) || 0.04)),
+          type: String(f.type),
+          required: f.required !== false,
+          label: esignClean(f.label, 80),
+        }));
+      await db.delete(esignFields).where(eq(esignFields.documentId, id));
+      if (rows.length) await db.insert(esignFields).values(rows);
+      const saved = await db.select().from(esignFields).where(eq(esignFields.documentId, id));
+      res.json(saved.map(esignSerializeField));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -9307,22 +9352,35 @@ export async function registerRoutes(
     res.send(buf);
   }
 
-  app.get("/api/admin/esign/:id/source.pdf", requireAuth, requireTab("esign"), async (req, res) => {
+  // Access check for PDF endpoints opened via a plain browser tab (which does
+  // NOT send the x-workspace-slug header). Resolve access from the document's
+  // own org instead: super_admin, or a member of that org.
+  async function esignCanAccessDoc(req: any, doc: typeof esignDocuments.$inferSelect): Promise<boolean> {
+    const uid = req.session?.userId;
+    if (!uid) return false;
+    const user = await storage.getUser(uid);
+    if (!user) return false;
+    if (user.role === "super_admin") return true;
+    const orgs = await storage.getUserOrganizations(uid);
+    return orgs.some((o: any) => o.id === doc.organizationId);
+  }
+
+  app.get("/api/admin/esign/:id/source.pdf", requireAuth, async (req, res) => {
     try {
-      const orgId = await esignOrgId(req);
       const id = parseInt(String(req.params.id));
-      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, id));
       if (!doc) return res.status(404).json({ message: "Not found" });
+      if (!(await esignCanAccessDoc(req, doc))) return res.status(403).json({ message: "Access denied" });
       esignSendPdf(res, doc.sourcePdf, `${esignSafeName(doc.title)}.pdf`, false);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  app.get("/api/admin/esign/:id/signed.pdf", requireAuth, requireTab("esign"), async (req, res) => {
+  app.get("/api/admin/esign/:id/signed.pdf", requireAuth, async (req, res) => {
     try {
-      const orgId = await esignOrgId(req);
       const id = parseInt(String(req.params.id));
-      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, id));
       if (!doc || !doc.signedPdf) return res.status(404).json({ message: "Signed document not ready" });
+      if (!(await esignCanAccessDoc(req, doc))) return res.status(403).json({ message: "Access denied" });
       await esignLog(id, null, "downloaded", { ip: esignIp(req) });
       esignSendPdf(res, doc.signedPdf, `${esignSafeName(doc.title)}-signed.pdf`, true);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -9344,6 +9402,7 @@ export async function registerRoutes(
       const { signer, doc } = loaded;
       const allSigners = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id)).orderBy(esignSigners.signingOrder, esignSigners.id);
       const [org] = await db.select().from(organizations).where(eq(organizations.id, doc.organizationId));
+      const myFields = await db.select().from(esignFields).where(and(eq(esignFields.documentId, doc.id), eq(esignFields.signerId, signer.id))).orderBy(esignFields.page);
       if (signer.status === "pending" && doc.status !== "voided") {
         await db.update(esignSigners).set({ status: "viewed", viewedAt: new Date(), ip: esignIp(req), userAgent: String(req.headers["user-agent"] || "").slice(0, 300) }).where(eq(esignSigners.id, signer.id));
         if (doc.status === "sent") await db.update(esignDocuments).set({ status: "viewed" }).where(eq(esignDocuments.id, doc.id));
@@ -9356,6 +9415,7 @@ export async function registerRoutes(
         orgName: org?.name || "Christchurch United",
         signer: { name: signer.name, email: signer.email, status: signer.status },
         parties: allSigners.map((s) => ({ name: s.name, status: s.status })),
+        fields: myFields.map(esignSerializeField),
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -9379,13 +9439,28 @@ export async function registerRoutes(
       const signatureName = String(b.signatureName ?? "").trim();
       if (!signatureName) return res.status(400).json({ message: "Please type your full name to sign." });
       if (b.consent !== true) return res.status(400).json({ message: "You must agree to sign electronically." });
-      const signatureImage = typeof b.signatureImage === "string" && b.signatureImage.startsWith("data:image") ? b.signatureImage.slice(0, 400000) : null;
       const now = new Date();
+
+      // Save any placed field values for this signer, validating required ones.
+      const myFields = await db.select().from(esignFields).where(and(eq(esignFields.documentId, doc.id), eq(esignFields.signerId, signer.id)));
+      const incoming: Record<string, { value?: string; valueImage?: string }> = {};
+      if (Array.isArray(b.fields)) for (const f of b.fields) incoming[String(f.id)] = { value: f.value, valueImage: f.valueImage };
+      let signatureImage: string | null = typeof b.signatureImage === "string" && b.signatureImage.startsWith("data:image") ? b.signatureImage.slice(0, 400000) : null;
+      for (const f of myFields) {
+        const inp = incoming[String(f.id)] || {};
+        const img = typeof inp.valueImage === "string" && inp.valueImage.startsWith("data:image") ? inp.valueImage.slice(0, 400000) : null;
+        const val = inp.value == null ? null : String(inp.value).slice(0, 500);
+        const filled = !!img || (f.type === "checkbox" ? val === "true" : !!(val && val.trim()));
+        if (f.required && !filled) return res.status(400).json({ message: `Please complete all required fields before signing.` });
+        await db.update(esignFields).set({ value: val, valueImage: img }).where(eq(esignFields.id, f.id));
+        if ((f.type === "signature" || f.type === "initials") && img && !signatureImage) signatureImage = img;
+      }
+
       await db.update(esignSigners).set({
         status: "signed", signatureName: signatureName.slice(0, 120), signatureImage,
         signedAt: now, consentedAt: now, ip: esignIp(req), userAgent: String(req.headers["user-agent"] || "").slice(0, 300),
       }).where(eq(esignSigners.id, signer.id));
-      await esignLog(doc.id, signer.id, "signed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"] });
+      await esignLog(doc.id, signer.id, "signed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"], meta: { fields: myFields.length } });
       const all = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
       const allComplete = all.every((s) => s.status === "signed");
       if (allComplete) await esignFinalize(doc.id);
@@ -12539,6 +12614,196 @@ export async function registerRoutes(
       await db.update(inboxMessages).set({ status }).where(and(eq(inboxMessages.id, parseInt(req.params.id)), eq(inboxMessages.organizationId, orgId)));
       res.json({ ok: true });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── CUGC gymnastics enrolment → Stripe Checkout (CUGC's OWN Stripe account) ──
+  // The cugc.co.nz enrol form POSTs here. We recompute the price server-side (the
+  // client-sent price is NEVER trusted — see server/cugc-pricing.ts), create a
+  // 'pending_payment' registration, open a Stripe Checkout Session on the SEPARATE
+  // CUGC Stripe account, and return { url } for the browser to redirect to. The
+  // webhook below flips the row to 'paid' once payment clears.
+  app.options("/api/public/cugc/enrol", (req, res) => { setCugcCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cugc/enrol", async (req, res) => {
+    setCugcCors(req, res);
+    try {
+      const programSlug = String(req.body.programSlug || "").trim();
+      const optionIndex = Number(req.body.optionIndex);
+      const parentName = String(req.body.parentName || "").trim();
+      const email = String(req.body.email || "").trim();
+      const gymnastName = String(req.body.gymnastName || "").trim();
+
+      // Server-authoritative price. Anything the client sent is ignored.
+      const priced = computeCugcEnrolPrice(programSlug, optionIndex);
+      if (!priced) return res.status(400).json({ message: "That program or option isn't available." });
+      if (!parentName || !/.+@.+\..+/.test(email) || !gymnastName) {
+        return res.status(400).json({ message: "Please add the gymnast's name, your name and a valid email." });
+      }
+
+      const { program, option, pricing } = priced;
+      const priceCents = pricing.price * 100;
+      const fullPriceCents = pricing.fullPrice * 100;
+      const termName = String(req.body.term || "").trim() || CUGC_TERM.name;
+      const orgId = await cugcOrgId();
+
+      const [row] = await db.insert(cugcRegistrations).values({
+        organizationId: orgId,
+        programSlug: program.slug,
+        programName: program.title,
+        optionLabel: option.label,
+        sessionTime: String(req.body.sessionTime || "").trim() || null,
+        priceCents,
+        fullPriceCents,
+        term: termName,
+        gymnastName,
+        gymnastDob: String(req.body.gymnastDob || "").trim() || null,
+        parentName,
+        email,
+        phone: String(req.body.phone || "").trim() || null,
+        emergencyName: String(req.body.emergencyName || "").trim() || null,
+        emergencyPhone: String(req.body.emergencyPhone || "").trim() || null,
+        medical: String(req.body.medical || "").trim() || null,
+        photoConsent: String(req.body.photoConsent || "").trim() || null,
+        heardVia: String(req.body.heardVia || "").trim() || null,
+        status: "pending_payment",
+      }).returning();
+
+      // Custom EMBEDDED checkout — return a PaymentIntent clientSecret for our own
+      // on-brand card form (Stripe Elements). NO hosted Checkout, NO redirect.
+      const intent = await cugcStripe.paymentIntents.create({
+        amount: priceCents,
+        currency: "nzd",
+        automatic_payment_methods: { enabled: true },
+        receipt_email: email,
+        description: `${program.title} — ${option.label} (${termName})`,
+        metadata: { registrationId: String(row.id) },
+      });
+
+      await db.update(cugcRegistrations).set({ stripePaymentIntent: intent.id }).where(eq(cugcRegistrations.id, row.id));
+      res.json({ clientSecret: intent.client_secret, registrationId: row.id, amount: pricing.price });
+    } catch (e: any) {
+      console.error("[CUGC enrol] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // CUGC Stripe webhook (CUGC's OWN Stripe account). Mirrors the main
+  // /api/stripe/webhook raw-body pattern: express.json({ verify }) in
+  // server/index.ts captures req.rawBody on every request, so signature
+  // verification uses that buffer (no separate express.raw() route needed).
+  // On checkout.session.completed we flip the matching registration → 'paid'
+  // and email the family + info@cugc.co.nz. All other event types are 200'd.
+  app.post("/api/public/cugc/stripe-webhook", async (req: Request, res: Response) => {
+    try {
+      const sig = req.headers["stripe-signature"] as string;
+      if (!sig || !process.env.CUGC_STRIPE_WEBHOOK_SECRET) {
+        console.warn("[CUGC Webhook] Missing signature or webhook secret — rejecting event");
+        return res.status(400).json({ message: "Webhook signature verification required" });
+      }
+
+      const event = constructCugcWebhookEvent(req.rawBody as Buffer, sig);
+
+      // Embedded checkout uses PaymentIntents → payment_intent.succeeded.
+      // (checkout.session.completed kept as a harmless fallback for any legacy session.)
+      if (event.type === "payment_intent.succeeded" || event.type === "checkout.session.completed") {
+        const obj = event.data.object as any;
+        const registrationId = parseInt(obj.metadata?.registrationId || "");
+        const piId = event.type === "payment_intent.succeeded"
+          ? obj.id
+          : (typeof obj.payment_intent === "string" ? obj.payment_intent : obj.payment_intent?.id || null);
+        let reg = registrationId
+          ? (await db.select().from(cugcRegistrations).where(eq(cugcRegistrations.id, registrationId)))[0]
+          : undefined;
+        if (!reg && piId) {
+          reg = (await db.select().from(cugcRegistrations).where(eq(cugcRegistrations.stripePaymentIntent, piId)))[0];
+        }
+        if (reg && reg.status !== "paid") {
+          await db.update(cugcRegistrations)
+            .set({ status: "paid", stripePaymentIntent: piId, paidAt: new Date() })
+            .where(eq(cugcRegistrations.id, reg.id));
+          const confirm = {
+            parentName: reg.parentName,
+            gymnastName: reg.gymnastName,
+            programName: reg.programName,
+            optionLabel: reg.optionLabel,
+            sessionTime: reg.sessionTime || undefined,
+            term: reg.term || undefined,
+            amount: reg.priceCents,
+          };
+          try { await sendCugcEnrolmentConfirmation({ to: reg.email, ...confirm }); }
+          catch (e) { console.error("[CUGC Webhook] parent confirmation email failed:", e); }
+          try { await sendCugcEnrolmentConfirmation({ to: "info@cugc.co.nz", ...confirm }); }
+          catch (e) { console.error("[CUGC Webhook] club copy email failed:", e); }
+        }
+      }
+
+      res.json({ received: true });
+    } catch (e: any) {
+      console.error("[CUGC Webhook] error:", e);
+      res.status(400).json({ message: `Webhook Error: ${e.message}` });
+    }
+  });
+
+  // Web admin: list CUGC enrolments (Gymnastics → Registrations).
+  app.get("/api/admin/cugc/registrations", requireAuth, requireTab("cugc-registrations"), async (_req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const rows = await db.select().from(cugcRegistrations)
+        .where(eq(cugcRegistrations.organizationId, orgId))
+        .orderBy(desc(cugcRegistrations.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/cugc/registrations/:id/status", requireAuth, requireTab("cugc-registrations"), async (req, res) => {
+    try {
+      const status = String(req.body.status || "");
+      if (!["pending_payment", "paid", "cancelled"].includes(status)) return res.status(400).json({ message: "invalid status" });
+      const orgId = await cugcOrgId();
+      await db.update(cugcRegistrations).set({ status })
+        .where(and(eq(cugcRegistrations.id, parseInt(req.params.id)), eq(cugcRegistrations.organizationId, orgId)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Web admin: CUGC enrolment analytics (Gymnastics → Analytics). Aggregates are
+  // computed from the registrations table. Page-view / ad analytics come from the
+  // Meta Pixel and are out of scope for this DB view.
+  app.get("/api/admin/cugc/analytics", requireAuth, requireTab("cugc-analytics"), async (_req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const rows = await db.select().from(cugcRegistrations)
+        .where(eq(cugcRegistrations.organizationId, orgId))
+        .orderBy(desc(cugcRegistrations.createdAt));
+
+      const paid = rows.filter((r) => r.status === "paid");
+      const pending = rows.filter((r) => r.status === "pending_payment");
+      const cancelled = rows.filter((r) => r.status === "cancelled");
+      const revenueCents = paid.reduce((s, r) => s + (r.priceCents || 0), 0);
+
+      const byProgramMap = new Map<string, { programSlug: string; programName: string; total: number; paid: number; revenueCents: number }>();
+      for (const r of rows) {
+        const cur = byProgramMap.get(r.programSlug) || { programSlug: r.programSlug, programName: r.programName, total: 0, paid: 0, revenueCents: 0 };
+        cur.total += 1;
+        if (r.status === "paid") { cur.paid += 1; cur.revenueCents += r.priceCents || 0; }
+        byProgramMap.set(r.programSlug, cur);
+      }
+
+      const byDayMap = new Map<string, number>();
+      for (const r of rows) {
+        const day = new Date(r.createdAt as any).toISOString().slice(0, 10);
+        byDayMap.set(day, (byDayMap.get(day) || 0) + 1);
+      }
+      const overTime = Array.from(byDayMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, count]) => ({ date, count }));
+
+      res.json({
+        totals: { total: rows.length, paid: paid.length, pending: pending.length, cancelled: cancelled.length, revenueCents },
+        byProgram: Array.from(byProgramMap.values()).sort((a, b) => b.total - a.total),
+        overTime,
+        recent: rows.slice(0, 10),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // Public one-click unsubscribe from MFL broadcasts (link in every newsletter).

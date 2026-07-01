@@ -112,6 +112,8 @@ const tournamentTabs: TabDef[] = [
 const gymnasticsTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
   { slug: "programs", title: "Programs", url: "/admin/programs" },
+  { slug: "cugc-registrations", title: "Registrations", url: "/admin/cugc-registrations" },
+  { slug: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics" },
   { slug: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox" },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },

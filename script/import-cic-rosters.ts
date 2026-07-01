@@ -73,6 +73,7 @@ async function main() {
 
   // Dedupe within team + against existing DB, then insert.
   let inserted = 0, skipped = 0;
+  const perTeamFinal = new Map<number, number>(); // distinct players per team after dedupe (existing + new)
   await pool.query("BEGIN");
   for (const [teamId, players] of byTeam) {
     const existing = (await pool.query(`SELECT first_name, last_name, date_of_birth FROM tournament_players WHERE team_id=$1`, [teamId])).rows;
@@ -85,14 +86,14 @@ async function main() {
         [teamId, p.first || p.last, p.last || "", p.dob, p.shirt]);
       inserted++;
     }
+    perTeamFinal.set(teamId, seen.size);
     await pool.query(`UPDATE tournament_teams SET roster_status='submitted' WHERE id=$1 AND roster_status IS DISTINCT FROM 'missing'`, [teamId]);
   }
   if (commit) { await pool.query("COMMIT"); } else { await pool.query("ROLLBACK"); }
 
-  // Coverage report (post-insert counts within the txn view were committed or rolled back;
-  // recompute from what we would have / did import for the report).
-  const counts = new Map<number, number>();
-  for (const [teamId, players] of byTeam) counts.set(teamId, (counts.get(teamId) || 0) + players.length);
+  // Coverage report — distinct players per team after dedupe (accurate across
+  // overlapping age-folder + club-folder sources).
+  const counts = perTeamFinal;
   console.log(`\n${commit ? "🟢 COMMITTED" : "🟡 DRY RUN"} — inserted ${inserted}, skipped(dupe) ${skipped}\n`);
   if (unresolved.length) { console.log(`⚠ UNRESOLVED team entries (${unresolved.length}):`); unresolved.forEach(u => console.log("   " + u)); console.log(""); }
   console.log("=== COVERAGE (extracted players per team) ===");

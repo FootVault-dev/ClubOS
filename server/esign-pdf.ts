@@ -38,8 +38,14 @@ function decodePng(b64: string): Uint8Array {
   return Uint8Array.from(Buffer.from(raw, "base64"));
 }
 
+export interface FieldStamp {
+  page: number; x: number; y: number; w: number; h: number;
+  type: string; value: string | null; valueImage: string | null;
+}
+
 /**
- * Build the final signed PDF. Appends one or more certificate pages.
+ * Build the final signed PDF: stamps the filled fields onto the original
+ * pages, then appends the Certificate of Completion.
  */
 export async function buildSignedPdf(opts: {
   sourcePdf: Uint8Array | Buffer;
@@ -47,10 +53,41 @@ export async function buildSignedPdf(opts: {
   docHash: string;
   envelopeId: number;
   signers: CertSigner[];
+  fields?: FieldStamp[];
 }): Promise<Uint8Array> {
   const pdf = await PDFDocument.load(opts.sourcePdf);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  // ── Stamp filled fields onto the original pages (before the certificate). ──
+  // Coordinates arrive normalized 0..1 with y from the top; PDF origin is
+  // bottom-left, so we flip y.
+  if (opts.fields?.length) {
+    const pages = pdf.getPages();
+    for (const f of opts.fields) {
+      const pg = pages[f.page];
+      if (!pg) continue;
+      const { width: pw, height: ph } = pg.getSize();
+      const bx = f.x * pw, bw = f.w * pw, bh = f.h * ph;
+      const byBottom = ph - (f.y * ph) - bh;
+      try {
+        if (f.type === "signature" || f.type === "initials") {
+          if (f.valueImage) {
+            const img = await pdf.embedPng(decodePng(f.valueImage));
+            const scale = Math.min(bw / img.width, bh / img.height);
+            const dw = img.width * scale, dh = img.height * scale;
+            pg.drawImage(img, { x: bx + (bw - dw) / 2, y: byBottom + (bh - dh) / 2, width: dw, height: dh });
+          } else if (f.value) {
+            pg.drawText(f.value, { x: bx + 2, y: byBottom + bh * 0.28, size: Math.min(bh * 0.7, 16), font, color: INK });
+          }
+        } else if (f.type === "checkbox") {
+          if (f.value === "true") pg.drawText("X", { x: bx + bw * 0.2, y: byBottom + bh * 0.15, size: Math.min(bh, bw) * 0.85, font: bold, color: INK });
+        } else if (f.value) { // text | date
+          pg.drawText(String(f.value).slice(0, 200), { x: bx + 2, y: byBottom + bh * 0.28, size: Math.min(bh * 0.62, 11), font, color: INK });
+        }
+      } catch { /* skip a bad field/image, keep going */ }
+    }
+  }
 
   const A4 = { w: 595.28, h: 841.89 };
   const margin = 48;

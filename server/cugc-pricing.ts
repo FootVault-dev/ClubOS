@@ -1,0 +1,105 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// CUGC term pricing — SERVER-AUTHORITATIVE.
+// A faithful mirror of apps/cugc-website/src/lib/pricing.ts (the proration
+// engine) plus the Term 3 program/option/price data from
+// apps/cugc-website/src/site.ts. The enrol endpoint computes the price from
+// THIS module — the client-sent price is always ignored.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const CUGC_TERM = {
+  name: "Term 3 2026",
+  start: "2026-07-20", // Mon 20 Jul
+  end: "2026-09-25",   // Fri 25 Sep
+  weeks: 10,
+};
+
+export type CugcOption = { label: string; price: number }; // full-term price in NZD
+export type CugcProgram = { slug: string; title: string; options: CugcOption[] };
+
+// Mirrors apps/cugc-website/src/site.ts `programs` (slug, title, options[].label/price).
+export const CUGC_PROGRAMS: CugcProgram[] = [
+  {
+    slug: "gymplay",
+    title: "GymPlay",
+    options: [{ label: "1–2 sessions per week", price: 165 }],
+  },
+  {
+    slug: "gymbasics",
+    title: "GymBasics",
+    options: [
+      { label: "Ages 5–7 · once a week", price: 250 },
+      { label: "Ages 5–7 · twice a week", price: 350 },
+      { label: "Ages 8+ · once a week", price: 195 },
+    ],
+  },
+  {
+    slug: "competitive",
+    title: "Competitive Stream — Level 1",
+    options: [
+      { label: "1× per week (2 hours)", price: 295 },
+      { label: "2× per week (4.5 hours)", price: 565 },
+    ],
+  },
+];
+
+const MS_WEEK = 7 * 24 * 60 * 60 * 1000;
+
+/** Parse a YYYY-MM-DD as a local date (avoids TZ off-by-one). */
+function d(iso: string): Date {
+  const [y, m, day] = iso.split("-").map(Number);
+  return new Date(y, m - 1, day);
+}
+
+export type CugcPricing = {
+  status: "upcoming" | "active" | "ended";
+  fullPrice: number;
+  price: number;
+  weeksTotal: number;
+  weeksLeft: number;
+  discountPct: number;
+  prorated: boolean;
+};
+
+/**
+ * Compute today's price for a term-priced program. Identical logic to the
+ * website's proratedTermPrice so the price the family saw matches the charge.
+ */
+export function proratedTermPrice(
+  fullPrice: number,
+  startIso: string,
+  endIso: string,
+  weeksTotal: number,
+  now: Date = new Date(),
+): CugcPricing {
+  const start = d(startIso);
+  const end = d(endIso);
+  const base = { fullPrice, weeksTotal, price: fullPrice, weeksLeft: weeksTotal, discountPct: 0, prorated: false };
+
+  if (now < start) return { ...base, status: "upcoming" };
+  if (now >= end) return { ...base, status: "ended", price: fullPrice, weeksLeft: 0 };
+
+  const weeksElapsed = Math.floor((now.getTime() - start.getTime()) / MS_WEEK);
+  const weeksLeft = Math.max(1, weeksTotal - weeksElapsed); // always at least 1 week's value
+  const price = Math.round((fullPrice * weeksLeft) / weeksTotal);
+  const discountPct = Math.round(((fullPrice - price) / fullPrice) * 100);
+
+  return { status: "active", fullPrice, price, weeksTotal, weeksLeft, discountPct, prorated: price < fullPrice };
+}
+
+/**
+ * Resolve a program + option from the enrol form and price it server-side.
+ * Returns null if the program slug or option index is invalid.
+ */
+export function computeCugcEnrolPrice(
+  programSlug: string,
+  optionIndex: number,
+  now: Date = new Date(),
+): { program: CugcProgram; option: CugcOption; pricing: CugcPricing } | null {
+  const program = CUGC_PROGRAMS.find((p) => p.slug === programSlug);
+  if (!program) return null;
+  if (!Number.isInteger(optionIndex)) return null;
+  const option = program.options[optionIndex];
+  if (!option) return null;
+  const pricing = proratedTermPrice(option.price, CUGC_TERM.start, CUGC_TERM.end, CUGC_TERM.weeks, now);
+  return { program, option, pricing };
+}

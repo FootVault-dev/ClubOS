@@ -77,6 +77,8 @@ import LeagueInbox from "@/pages/league-inbox";
 import CicInbox from "@/pages/cic-inbox";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import CugcInbox from "@/pages/cugc-inbox";
+import CugcRegistrations from "@/pages/cugc-registrations";
+import CugcAnalytics from "@/pages/cugc-analytics";
 import LeagueBuilderPage from "@/pages/league-builder-page";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
@@ -198,6 +200,8 @@ function AdminRouter() {
       <Switch>
         <Route path="/admin" component={GymnasticsDashboard} />
         <Route path="/admin/programs" component={GymnasticsPrograms} />
+        <Route path="/admin/cugc-registrations" component={CugcRegistrations} />
+        <Route path="/admin/cugc-analytics" component={CugcAnalytics} />
         <Route path="/admin/cugc-inbox" component={CugcInbox} />
         <Route path="/admin/terms" component={GymnasticsTerms} />
         {/* Reuse the camps detail + landing-page editor — they take a

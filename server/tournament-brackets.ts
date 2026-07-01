@@ -3,6 +3,11 @@
 // Pool-stage games carry no placeholders. Knockout games carry text
 // placeholders that say where each slot's team comes from:
 //   • "A1".."E4"   → finishing position in a pool (letter = pool, digit = rank)
+//   • "R2#3"       → CROSS-POOL: the 3rd-best 2nd-placed team across all pools
+//                    (rank 1-4 = pool finishing position, #n = nth-best at that
+//                    rank, ranked by pts→GD→GF). Used by the 20-team grades
+//                    (5 winners + 3 best 2nds → Cup; 2 remaining 2nds + all
+//                    3rds + best 4th → Plate; remaining 4ths → placement).
 //   • "W G27"      → winner of game number 27
 //   • "L G30"      → loser  of game number 30
 //
@@ -20,6 +25,7 @@
 import { storage } from "./storage";
 
 const POOL_RE = /^([A-E])\s*([1-9])$/i;
+const RANK_RE = /^R\s*([1-4])\s*#\s*([1-9])$/i;
 const WL_RE = /^([WL])\s*G\s*0*(\d+)$/i;
 
 export async function resolveTournamentBrackets(tournamentId: number): Promise<number> {
@@ -69,6 +75,19 @@ export async function resolveTournamentBrackets(tournamentId: number): Promise<n
     return table[rank - 1].teamId;
   }
 
+  // Cross-pool: the nth-best team finishing `rank`-th across ALL pools. Only
+  // resolves once EVERY pool's group stage is complete (so the cross-pool order
+  // is stable). Ties broken by pts → GD → GF (matches the standings sort).
+  function resolveCrossPool(rank: number, n: number): number | null {
+    let anyPool = false;
+    for (const [, prog] of poolProgress) { anyPool = true; if (prog.total === 0 || prog.final < prog.total) return null; }
+    if (!anyPool) return null;
+    const atRank: typeof standings = [];
+    for (const [, table] of standingsByGid) if (table.length >= rank) atRank.push(table[rank - 1]);
+    atRank.sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
+    return atRank.length >= n ? atRank[n - 1].teamId : null;
+  }
+
   function winnerLoser(gameNum: number, want: "W" | "L"): number | null {
     const g = byNum.get(gameNum);
     if (!g || g.status !== "final" || g.homeScore == null || g.awayScore == null) return null;
@@ -90,6 +109,8 @@ export async function resolveTournamentBrackets(tournamentId: number): Promise<n
     const s = ph.trim();
     let m = POOL_RE.exec(s);
     if (m) return resolvePoolPos(m[1], parseInt(m[2], 10));
+    m = RANK_RE.exec(s);
+    if (m) return resolveCrossPool(parseInt(m[1], 10), parseInt(m[2], 10));
     m = WL_RE.exec(s);
     if (m) return winnerLoser(parseInt(m[2], 10), m[1].toUpperCase() as "W" | "L");
     return null;
