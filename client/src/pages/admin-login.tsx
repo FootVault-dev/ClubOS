@@ -74,6 +74,15 @@ export default function AdminLogin() {
           >
             {loginMutation.isPending ? "Signing in..." : "Sign In"}
           </Button>
+          <div className="text-center pt-1">
+            <a
+              href="/forgot-password"
+              className="text-[12px] text-blue-300/50 hover:text-blue-300 transition-colors"
+              data-testid="link-forgot-password"
+            >
+              Forgot password?
+            </a>
+          </div>
         </div>
       </div>
     </div>

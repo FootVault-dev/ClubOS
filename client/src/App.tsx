@@ -9,6 +9,8 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import NotFound from "@/pages/not-found";
 import AdminLogin from "@/pages/admin-login";
+import ForgotPassword from "@/pages/forgot-password";
+import ResetPassword from "@/pages/reset-password";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminCamps from "@/pages/admin-camps";
 import AdminCampDetail from "@/pages/admin-camp-detail";
@@ -73,6 +75,7 @@ import LeagueRewards from "@/pages/league-rewards";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import CicInbox from "@/pages/cic-inbox";
+import CicLogoConsents from "@/pages/cic-logo-consents";
 import CugcInbox from "@/pages/cugc-inbox";
 import LeagueBuilderPage from "@/pages/league-builder-page";
 import LeagueSettings from "@/pages/league-settings";
@@ -88,6 +91,8 @@ import TournamentTeamDetail from "@/pages/tournament-team-detail";
 import TournamentSkillsChallenge from "@/pages/tournament-skills-challenge";
 import TournamentFoodTruck from "@/pages/tournament-food-truck";
 import TournamentVendors from "@/pages/tournament-vendors";
+import ESign from "@/pages/esign";
+import SignPage from "@/pages/sign";
 import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
@@ -161,6 +166,7 @@ function AdminRouter() {
         <Route path="/admin/print-landing" component={PrintsLanding} />
         <Route path="/admin/print-email" component={PrintsEmail} />
         <Route path="/admin/integrations" component={PrintsIntegrations} />
+        <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/settings" component={AdminSettings} />
         <Route path="/admin/team" component={AdminTeam} />
@@ -179,6 +185,7 @@ function AdminRouter() {
         <Route path="/admin/budget/cost-centres/:slug" component={GroupBudgetCostCentre} />
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
+        <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />
@@ -198,6 +205,7 @@ function AdminRouter() {
         <Route path="/admin/camps/:id/edit-page" component={AdminEditPage} />
         <Route path="/admin/camps/:id" component={AdminCampDetail} />
         <Route path="/admin/camps/:campId/session/:dateId/:sessionType" component={AdminSessionRoll} />
+        <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />
@@ -218,6 +226,7 @@ function AdminRouter() {
         <Route path="/admin/food-truck" component={TournamentFoodTruck} />
         <Route path="/admin/vendors" component={TournamentVendors} />
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
+        <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />
@@ -239,10 +248,12 @@ function AdminRouter() {
         <Route path="/admin/analytics" component={LeagueAnalytics} />
         <Route path="/admin/inbox" component={LeagueInbox} />
         <Route path="/admin/cic-registrations" component={CicInbox} />
+        <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
         <Route path="/admin/discounts" component={AdminDiscounts} />
         <Route path="/admin/league-settings" component={LeagueSettings} />
+        <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />
@@ -264,6 +275,7 @@ function AdminRouter() {
         <Route path="/admin/payments" component={VenuePayments} />
         <Route path="/admin/venue-settings" component={VenueSettings} />
         <Route path="/admin/website" component={VenueWebsite} />
+        <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />
@@ -382,7 +394,11 @@ function App() {
             </Route>
             <Route path="/terms" component={TermsPage} />
             <Route path="/privacy" component={PrivacyPage} />
+            {/* Self-service password reset (public, must precede /:slug) */}
+            <Route path="/forgot-password" component={ForgotPassword} />
+            <Route path="/reset-password" component={ResetPassword} />
             <Route path="/calendar/rsvp/:token" component={RsvpPage} />
+            <Route path="/sign/:token" component={SignPage} />
             <Route path="/book" component={VenueBookPage} />
             <Route path="/book/success" component={VenueBookSuccess} />
             <Route path="/book/split/:code" component={VenueSplitPage} />

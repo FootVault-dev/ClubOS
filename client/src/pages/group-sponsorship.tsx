@@ -270,7 +270,7 @@ export default function GroupSponsorship() {
       </div>
 
       <div className="flex-1 overflow-x-auto overflow-y-auto">
-        {view === "prospects" && orgId && <ProspectsView orgId={orgId} team={team} currentUserId={me?.id} />}
+        {view === "prospects" && orgId && <ProspectsView orgId={orgId} />}
         {view === "deliverables" && orgId && <CrossDeliverablesView orgId={orgId} team={team} category="contract" />}
         {view === "onboarding" && orgId && <OnboardingMatrixView orgId={orgId} team={team} deals={deals} />}
         {view === "billboards" && orgId && <BillboardsView orgId={orgId} team={team} currentUserId={me?.id} />}
@@ -2076,6 +2076,327 @@ function BillboardDealModal({ mode, deal, team, onClose, onSave, onDelete }: {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Prospect database (raw scraped leads, separate from the pipeline) ─────────
+interface SponsorshipProspect {
+  id: number;
+  organizationId: number;
+  company: string;
+  website: string | null;
+  sector: string | null;
+  location: string | null;
+  brandTags: string[];
+  segment: string | null;
+  category: string | null;
+  tier: string | null;
+  fitScore: number | null;
+  spendCapacityScore: number | null;
+  reachabilityScore: number | null;
+  capacityEstimate: string | null;
+  alreadyBacksSport: boolean | null;
+  sportEvidence: string | null;
+  whyFit: string | null;
+  brief: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  emailConfidence: string | null;
+  contactPhone: string | null;
+  decisionMakerName: string | null;
+  decisionMakerRole: string | null;
+  decisionMakerLinkedin: string | null;
+  linkedinUrl: string | null;
+  sources: string[];
+  gradeRationale: string | null;
+  detail: string | null;
+  status: "new" | "reviewing" | "shortlisted" | "promoted" | "dismissed";
+  promotedDealId: number | null;
+  ownerId: number | null;
+  notes: string | null;
+}
+
+const PROSPECT_STATUSES = [
+  { key: "new",         label: "New",         color: "#64748b" },
+  { key: "reviewing",   label: "Reviewing",   color: "#3b82f6" },
+  { key: "shortlisted", label: "Shortlisted", color: "#f59e0b" },
+  { key: "promoted",    label: "Promoted",    color: "#22c55e" },
+  { key: "dismissed",   label: "Dismissed",   color: "#ef4444" },
+] as const;
+const TIER_COLOR: Record<string, string> = { A: "#22c55e", B: "#3b82f6", C: "#94a3b8" };
+
+function ProspectsView({ orgId }: { orgId: number }) {
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [tierFilter, setTierFilter] = useState<string | null>(null);
+  const [brandFilter, setBrandFilter] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [selected, setSelected] = useState<SponsorshipProspect | null>(null);
+
+  const { data: prospects = [], isLoading } = useQuery<SponsorshipProspect[]>({
+    queryKey: ["/api/admin/sponsorship/prospects", orgId],
+    queryFn: async () => {
+      const r = await fetch(`/api/admin/sponsorship/prospects?organizationId=${orgId}`, { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to load prospects");
+      return r.json();
+    },
+  });
+
+  const update = useMutation({
+    mutationFn: async ({ id, patch }: { id: number; patch: any }) => (await apiRequest("PATCH", `/api/admin/sponsorship/prospects/${id}`, patch)).json(),
+    onSuccess: (row: SponsorshipProspect) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/sponsorship/prospects", orgId] });
+      setSelected(s => (s && s.id === row.id ? row : s));
+    },
+    onError: (e: any) => toast({ title: "Couldn't update", description: e.message, variant: "destructive" }),
+  });
+
+  const promote = useMutation({
+    mutationFn: async (id: number) => (await apiRequest("POST", `/api/admin/sponsorship/prospects/${id}/promote`, {})).json(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/sponsorship/prospects", orgId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/sponsorship/deals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/sponsorship/summary", orgId] });
+      setSelected(null);
+      toast({ title: "Promoted to pipeline", description: "Added to the pipeline as a New Lead." });
+    },
+    onError: (e: any) => toast({ title: "Couldn't promote", description: e.message, variant: "destructive" }),
+  });
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return prospects.filter(p => {
+      if (tierFilter && (p.tier || "").toUpperCase() !== tierFilter) return false;
+      if (brandFilter && !(p.brandTags || []).map(b => b.toLowerCase()).includes(brandFilter)) return false;
+      if (statusFilter && p.status !== statusFilter) return false;
+      if (q && !`${p.company} ${p.sector || ""} ${p.location || ""} ${p.decisionMakerName || ""} ${p.whyFit || ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [prospects, search, tierFilter, brandFilter, statusFilter]);
+
+  const counts = useMemo(() => ({
+    total: prospects.length,
+    a: prospects.filter(p => (p.tier || "").toUpperCase() === "A").length,
+    email: prospects.filter(p => p.contactEmail).length,
+    promoted: prospects.filter(p => p.status === "promoted").length,
+  }), [prospects]);
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-4 sm:px-6 pt-4 pb-3 border-b border-white/[0.06]">
+        <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Outreach prospect database · raw scraped leads · promote to pipeline when actioned</div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Kpi label="Prospects" value={String(counts.total)} icon={<Target className="w-4 h-4" />} accent="#3b82f6" />
+          <Kpi label="Tier A" value={String(counts.a)} icon={<Star className="w-4 h-4" />} accent="#22c55e" />
+          <Kpi label="With email" value={String(counts.email)} icon={<Mail className="w-4 h-4" />} accent="#a855f7" />
+          <Kpi label="Promoted" value={String(counts.promoted)} icon={<ArrowUpRight className="w-4 h-4" />} accent="#f59e0b" />
+        </div>
+
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-white/30" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search company, sector, person…"
+              className="bg-white/[0.04] border border-white/10 rounded-md pl-7 pr-2 py-1.5 text-xs text-white placeholder:text-white/30 w-60 focus:outline-none focus:border-blue-500/50" />
+          </div>
+          <div className="flex items-center gap-1">
+            {["A", "B", "C"].map(t => {
+              const active = tierFilter === t;
+              return <button key={t} onClick={() => setTierFilter(active ? null : t)} className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
+                style={{ borderColor: active ? TIER_COLOR[t] : "rgba(255,255,255,0.1)", background: active ? `${TIER_COLOR[t]}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.55)" }}>Tier {t}</button>;
+            })}
+          </div>
+          <div className="flex items-center gap-1 flex-wrap">
+            {BRANDS.map(b => {
+              const active = brandFilter === b.slug;
+              return <button key={b.slug} onClick={() => setBrandFilter(active ? null : b.slug)} className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
+                style={{ borderColor: active ? b.color : "rgba(255,255,255,0.1)", background: active ? `${b.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.5)" }}>{b.label}</button>;
+            })}
+          </div>
+          <div className="flex items-center gap-1">
+            {PROSPECT_STATUSES.map(s => {
+              const active = statusFilter === s.key;
+              return <button key={s.key} onClick={() => setStatusFilter(active ? null : s.key)} className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
+                style={{ borderColor: active ? s.color : "rgba(255,255,255,0.1)", background: active ? `${s.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.5)" }}>{s.label}</button>;
+            })}
+          </div>
+          <span className="text-[10px] text-white/30 ml-auto">{filtered.length} of {prospects.length}</span>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        {isLoading ? (
+          <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}</div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center text-white/40 gap-2 p-8">
+            <Target className="w-8 h-8 text-white/20" />
+            <p className="text-sm">{prospects.length === 0 ? "No prospects imported yet." : "No prospects match these filters."}</p>
+          </div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-[#0e0f12] z-10 text-white/40 text-[10px] uppercase tracking-wider">
+              <tr className="border-b border-white/[0.06]">
+                <th className="text-left font-medium px-4 py-2">Company</th>
+                <th className="text-left font-medium px-2 py-2">Brands</th>
+                <th className="text-center font-medium px-2 py-2">Tier</th>
+                <th className="text-center font-medium px-2 py-2" title="Fit · Spend · Reach">F·S·R</th>
+                <th className="text-left font-medium px-2 py-2">Capacity</th>
+                <th className="text-left font-medium px-2 py-2">Best contact</th>
+                <th className="text-left font-medium px-2 py-2">Status</th>
+                <th className="px-2 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(p => {
+                const st = PROSPECT_STATUSES.find(s => s.key === p.status);
+                const tc = p.tier ? TIER_COLOR[p.tier.toUpperCase()] || "#94a3b8" : "#64748b";
+                return (
+                  <tr key={p.id} onClick={() => setSelected(p)} className="border-b border-white/[0.04] hover:bg-white/[0.03] cursor-pointer">
+                    <td className="px-4 py-2.5">
+                      <div className="font-semibold text-white/90">{p.company}</div>
+                      <div className="text-[10px] text-white/40 truncate max-w-[220px]">{[p.sector, p.location].filter(Boolean).join(" · ")}</div>
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <div className="flex gap-1 flex-wrap max-w-[150px]">
+                        {(p.brandTags || []).map(b => { const br = BRANDS.find(x => x.slug === b.toLowerCase()); return <span key={b} className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: `${br?.color || "#64748b"}22`, color: br?.color || "#94a3b8" }}>{br?.label || b}</span>; })}
+                      </div>
+                    </td>
+                    <td className="px-2 py-2.5 text-center">{p.tier && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: `${tc}22`, color: tc }}>{p.tier.toUpperCase()}</span>}</td>
+                    <td className="px-2 py-2.5 text-center text-white/50 tabular-nums">{[p.fitScore, p.spendCapacityScore, p.reachabilityScore].map(x => x ?? "–").join("·")}</td>
+                    <td className="px-2 py-2.5 text-white/60 truncate max-w-[150px]">{p.capacityEstimate || "—"}</td>
+                    <td className="px-2 py-2.5">
+                      <div className="text-white/80 truncate max-w-[190px]">{p.decisionMakerName || p.contactName || "—"}{p.decisionMakerRole ? <span className="text-white/40"> · {p.decisionMakerRole}</span> : null}</div>
+                      <div className="text-[10px] text-white/40 truncate max-w-[190px]">{p.contactEmail || p.contactPhone || "no direct contact"}</div>
+                    </td>
+                    <td className="px-2 py-2.5">{st && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: `${st.color}22`, color: st.color }}>{st.label}</span>}</td>
+                    <td className="px-2 py-2.5 text-right whitespace-nowrap">
+                      {p.status !== "promoted"
+                        ? <button onClick={e => { e.stopPropagation(); promote.mutate(p.id); }} className="text-[10px] font-semibold text-blue-300 hover:text-white border border-blue-500/30 hover:border-blue-500/60 rounded px-2 py-1 inline-flex items-center gap-1"><ArrowUpRight className="w-3 h-3" />Promote</button>
+                        : <span className="text-[10px] text-emerald-400/70 inline-flex items-center gap-1"><Check className="w-3 h-3" />In pipeline</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && (
+        <ProspectDetail prospect={selected} onClose={() => setSelected(null)} onUpdate={(patch) => update.mutate({ id: selected.id, patch })} onPromote={() => promote.mutate(selected.id)} />
+      )}
+    </div>
+  );
+}
+
+function ProspectDetail({ prospect, onClose, onUpdate, onPromote }: {
+  prospect: SponsorshipProspect; onClose: () => void; onUpdate: (patch: any) => void; onPromote: () => void;
+}) {
+  const p = prospect;
+  const [notes, setNotes] = useState(p.notes || "");
+  let dms: any[] = [];
+  let socials: Record<string, string> = {};
+  try { const d = p.detail ? JSON.parse(p.detail) : {}; dms = d.decision_makers || d.decisionMakers || []; socials = d.socials || {}; } catch {}
+  if (dms.length === 0 && p.decisionMakerName) dms = [{ name: p.decisionMakerName, role: p.decisionMakerRole, linkedin: p.decisionMakerLinkedin }];
+  const tc = p.tier ? TIER_COLOR[p.tier.toUpperCase()] || "#94a3b8" : "#64748b";
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
+      <div className="w-full max-w-xl h-full bg-[#0e0f12] border-l border-white/10 overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-[#0e0f12] border-b border-white/[0.06] px-5 py-4 flex items-start justify-between gap-3 z-10">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-white">{p.company}</h2>
+              {p.tier && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: `${tc}22`, color: tc }}>Tier {p.tier.toUpperCase()}</span>}
+            </div>
+            <div className="text-[11px] text-white/40 mt-0.5">{[p.sector, p.location].filter(Boolean).join(" · ")}</div>
+            {p.website && <a href={p.website} target="_blank" rel="noreferrer" className="text-[11px] text-blue-400 hover:text-blue-300 inline-flex items-center gap-1 mt-1">{p.website.replace(/^https?:\/\/(www\.)?/, "")}<ExternalLink className="w-3 h-3" /></a>}
+          </div>
+          <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="p-5 space-y-4 text-sm">
+          <div className="grid grid-cols-3 gap-2">
+            {([["Fit", p.fitScore], ["Spend", p.spendCapacityScore], ["Reach", p.reachabilityScore]] as [string, number | null][]).map(([l, v]) => (
+              <div key={l} className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 text-center">
+                <div className="text-[9px] uppercase tracking-wider text-white/40">{l}</div>
+                <div className="text-lg font-semibold text-white tabular-nums">{v ?? "–"}<span className="text-xs text-white/30">/5</span></div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {(p.brandTags || []).map(b => { const br = BRANDS.find(x => x.slug === b.toLowerCase()); return <span key={b} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: `${br?.color || "#64748b"}22`, color: br?.color || "#94a3b8" }}>{br?.label || b}</span>; })}
+            {p.capacityEstimate && <span className="text-[11px] text-white/50 ml-auto">Est. {p.capacityEstimate}</span>}
+          </div>
+
+          {p.whyFit && <ProspectSection title="Why they fit">{p.whyFit}</ProspectSection>}
+          {p.sportEvidence && <ProspectSection title="Existing sport / community investment">{p.sportEvidence}</ProspectSection>}
+          {p.brief && <ProspectSection title="Brief">{p.brief}</ProspectSection>}
+
+          {dms.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Decision-makers</div>
+              <div className="space-y-1.5">
+                {dms.map((d, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="text-white/80">{d.name || "—"}</span>
+                    {d.role && <span className="text-white/40">{d.role}</span>}
+                    {d.linkedin && <a href={d.linkedin} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 ml-auto inline-flex items-center gap-1">LinkedIn<ExternalLink className="w-3 h-3" /></a>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 space-y-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-white/40">Best contact</div>
+            <div className="text-white/85">{p.contactName || p.decisionMakerName || "—"}</div>
+            {p.contactEmail && <div className="flex items-center gap-2 text-white/60"><Mail className="w-3.5 h-3.5 text-white/30" /><a href={`mailto:${p.contactEmail}`} className="text-blue-400 hover:text-blue-300">{p.contactEmail}</a>{p.emailConfidence && <span className="text-[10px] text-white/30">({p.emailConfidence})</span>}</div>}
+            {p.contactPhone && <div className="flex items-center gap-2 text-white/60"><Phone className="w-3.5 h-3.5 text-white/30" />{p.contactPhone}</div>}
+            {!p.contactEmail && !p.contactPhone && <div className="text-[11px] text-white/30 italic">No direct contact found — verify before outreach.</div>}
+          </div>
+
+          {p.sources?.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Sources</div>
+              <div className="space-y-1">{p.sources.map((s, i) => <a key={i} href={s} target="_blank" rel="noreferrer" className="block text-[11px] text-blue-400/80 hover:text-blue-300 truncate">{s.replace(/^https?:\/\/(www\.)?/, "")}</a>)}</div>
+            </div>
+          )}
+
+          <div className="pt-2 border-t border-white/[0.06] space-y-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Status</div>
+              <div className="flex gap-1 flex-wrap">
+                {PROSPECT_STATUSES.map(s => (
+                  <button key={s.key} onClick={() => onUpdate({ status: s.key })} className="text-[10px] font-semibold px-2.5 py-1 rounded-md border transition"
+                    style={{ borderColor: p.status === s.key ? s.color : "rgba(255,255,255,0.1)", background: p.status === s.key ? `${s.color}25` : "transparent", color: p.status === s.key ? "white" : "rgba(255,255,255,0.55)" }}>{s.label}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Notes</div>
+              <Textarea value={notes} onChange={e => setNotes(e.target.value)} onBlur={() => { if (notes !== (p.notes || "")) onUpdate({ notes }); }} rows={3} placeholder="Internal notes…" className="bg-white/[0.04] border-white/10 text-xs" />
+            </div>
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 bg-[#0e0f12] border-t border-white/[0.06] px-5 py-3 flex items-center justify-between gap-2">
+          {p.promotedDealId
+            ? <span className="text-[11px] text-emerald-400 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5" />Already in pipeline (deal #{p.promotedDealId})</span>
+            : <span className="text-[11px] text-white/30">Promote to add this as a deal in the pipeline.</span>}
+          <Button onClick={onPromote} disabled={!!p.promotedDealId} className="bg-blue-600 hover:bg-blue-700 text-white"><ArrowUpRight className="w-4 h-4 mr-1.5" />{p.promotedDealId ? "In pipeline" : "Promote to pipeline"}</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProspectSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">{title}</div>
+      <p className="text-[13px] text-white/70 leading-relaxed whitespace-pre-wrap">{children}</p>
     </div>
   );
 }

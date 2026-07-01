@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, footballInstituteApplications, bookingRequests, cic7sRegistrations } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, footballInstituteApplications, bookingRequests, cic7sRegistrations, passwordResetTokens, clubLogoConsents } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendClubLogoConsentNotification } from "./email";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -52,6 +52,98 @@ export async function registerRoutes(
     req.session.destroy(() => {
       res.json({ ok: true });
     });
+  });
+
+  // ── Self-service password reset ────────────────────────────────────────────
+  // Public "Forgot password" flow. A user enters their email, we email them a
+  // one-time link; they click it and choose a new password. Zero admin
+  // involvement — this is the path everyone (including new team members) uses.
+  //
+  // Security: the raw token only ever lives in the email + URL. We store its
+  // SHA-256 hash, so a DB leak can't be replayed. Tokens are single-use and
+  // expire after RESET_TOKEN_TTL_MINUTES. The request endpoint always returns
+  // 200 with the same message whether or not the email matches an account, so
+  // it can't be used to enumerate who has a login.
+
+  app.post("/api/auth/forgot-password", async (req, res) => {
+    const generic = { ok: true, message: "If that email has a ClubOS account, a reset link is on its way." };
+    try {
+      const rawEmail = (req.body?.email as string | undefined)?.trim().toLowerCase();
+      if (!rawEmail) return res.status(400).json({ message: "Email is required" });
+
+      const user = await storage.getUserByEmail(rawEmail);
+      // Silently no-op for unknown/inactive accounts — same response either way.
+      if (!user || !user.active) return res.json(generic);
+
+      // Throttle: if we issued a token for this user in the last 60s, don't
+      // spam them with another. Still return the generic success.
+      const [recent] = await db
+        .select({ createdAt: passwordResetTokens.createdAt })
+        .from(passwordResetTokens)
+        .where(eq(passwordResetTokens.userId, user.id))
+        .orderBy(desc(passwordResetTokens.createdAt))
+        .limit(1);
+      if (recent && Date.now() - new Date(recent.createdAt).getTime() < 60_000) {
+        return res.json(generic);
+      }
+
+      const { rawToken, tokenHash, expiresAt } = makeResetToken();
+      await db.insert(passwordResetTokens).values({ userId: user.id, tokenHash, expiresAt });
+
+      const resetUrl = `${appBaseUrl()}/reset-password?token=${rawToken}`;
+      await sendForgotPasswordEmail({ email: user.email, firstName: user.firstName, resetUrl });
+
+      return res.json(generic);
+    } catch (error: any) {
+      console.error("[forgot-password] failed:", error);
+      // Don't leak internals; still respond generically so the UI is consistent.
+      return res.json(generic);
+    }
+  });
+
+  // Validate a reset token without consuming it — lets the page greet the user
+  // and decide whether to show the form or an "expired link" message.
+  app.get("/api/auth/reset-password/:token", async (req, res) => {
+    try {
+      const row = await findValidResetToken(req.params.token);
+      if (!row) return res.status(400).json({ valid: false, message: "This reset link is invalid or has expired." });
+      const user = await storage.getUser(row.userId);
+      if (!user || !user.active) return res.status(400).json({ valid: false, message: "This account is no longer active." });
+      return res.json({ valid: true, email: user.email, firstName: user.firstName });
+    } catch (error: any) {
+      return res.status(400).json({ valid: false, message: "This reset link is invalid or has expired." });
+    }
+  });
+
+  // Consume a reset token and set the new password. Logs the user straight in
+  // on success so there's no second login step.
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const token = (req.body?.token as string | undefined) || "";
+      const password = (req.body?.password as string | undefined) || "";
+      if (password.length < 8) return res.status(400).json({ message: "Password must be at least 8 characters." });
+
+      const row = await findValidResetToken(token);
+      if (!row) return res.status(400).json({ message: "This reset link is invalid or has expired." });
+      const user = await storage.getUser(row.userId);
+      if (!user || !user.active) return res.status(400).json({ message: "This account is no longer active." });
+
+      const hashed = await hashPassword(password);
+      await storage.updateUser(user.id, { password: hashed });
+
+      // Burn this token, and invalidate any other outstanding tokens for the
+      // user so old links in old emails stop working too.
+      const now = new Date();
+      await db.update(passwordResetTokens)
+        .set({ usedAt: now })
+        .where(and(eq(passwordResetTokens.userId, user.id), isNull(passwordResetTokens.usedAt)));
+
+      req.session.userId = user.id;
+      return res.json({ ok: true, id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role });
+    } catch (error: any) {
+      console.error("[reset-password] failed:", error);
+      return res.status(500).json({ message: error.message });
+    }
   });
 
   // Google sign-in. Client (mobile or web) gets a Google ID token via
@@ -5172,8 +5264,12 @@ export async function registerRoutes(
 
   app.get("/api/admin/tournament/tournaments/:id/teams", requireAuth, async (req, res) => {
     try {
-      const teams = await storage.getTournamentTeams(parseInt(req.params.id));
-      res.json(teams);
+      const tid = parseInt(req.params.id);
+      const [teams, counts] = await Promise.all([
+        storage.getTournamentTeams(tid),
+        storage.getTournamentPlayerCounts(tid),
+      ]);
+      res.json(teams.map(t => ({ ...t, playerCount: counts[t.id] || 0 })));
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -5454,7 +5550,15 @@ export async function registerRoutes(
 
   app.post("/api/admin/tournament/goals", requireAuth, async (req, res) => {
     try {
-      const goal = await storage.createTournamentGoal(req.body);
+      // Accept either a pre-loaded playerId OR a typed scorer name + their team
+      // (playerTeamId) — the latter find-or-creates the player so the Golden
+      // Boot works even when squads aren't loaded.
+      const { playerName, playerTeamId, ...body } = req.body;
+      if (!body.playerId && playerName && playerTeamId) {
+        body.playerId = await storage.findOrCreateTournamentPlayerByName(Number(playerTeamId), String(playerName));
+      }
+      if (!body.playerId) return res.status(400).json({ message: "playerId or a scorer name is required" });
+      const goal = await storage.createTournamentGoal(body);
       res.status(201).json(goal);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -7093,6 +7197,75 @@ export async function registerRoutes(
       if (!deal) return res.status(403).json({ message: "Forbidden" });
       await db.delete(sponsorshipDeliverables).where(eq(sponsorshipDeliverables.id, id));
       res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // ── Sponsorship prospect database (raw scraped leads, separate from pipeline) ─
+  app.get("/api/admin/sponsorship/prospects", requireAuth, requireTab("sponsorship"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(sponsorshipProspects)
+        .where(eq(sponsorshipProspects.organizationId, orgId))
+        .orderBy(asc(sponsorshipProspects.tier), desc(sponsorshipProspects.fitScore));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/sponsorship/prospects/:id", requireAuth, requireTab("sponsorship"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(sponsorshipProspects).where(eq(sponsorshipProspects.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = { updatedAt: new Date() };
+      for (const k of ["status", "notes", "tier", "category", "ownerId", "contactName", "contactEmail", "contactPhone", "decisionMakerName", "decisionMakerRole"]) {
+        if (k in (req.body || {})) patch[k] = req.body[k];
+      }
+      const [updated] = await db.update(sponsorshipProspects).set(patch).where(eq(sponsorshipProspects.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/sponsorship/prospects/:id", requireAuth, requireTab("sponsorship"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(sponsorshipProspects).where(eq(sponsorshipProspects.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(sponsorshipProspects).where(eq(sponsorshipProspects.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Promote a prospect into the live pipeline as a sponsorship deal (New Lead).
+  app.post("/api/admin/sponsorship/prospects/:id/promote", requireAuth, requireTab("sponsorship"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [p] = await db.select().from(sponsorshipProspects).where(eq(sponsorshipProspects.id, id));
+      if (!p) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, p.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      if (p.promotedDealId) return res.status(409).json({ message: "already promoted", dealId: p.promotedDealId });
+      const [deal] = await db.insert(sponsorshipDeals).values({
+        organizationId: p.organizationId,
+        title: String(req.body?.title || `${p.company} — sponsorship`),
+        sponsorCompany: p.company,
+        primaryContactName: p.decisionMakerName || p.contactName || null,
+        primaryContactEmail: p.contactEmail || null,
+        primaryContactPhone: p.contactPhone || null,
+        stage: "new_lead",
+        brandTags: p.brandTags || [],
+        source: "cold_outreach",
+        ownerId: req.body?.ownerId ?? null,
+        probability: STAGE_DEFAULT_PROBABILITY["new_lead"] ?? 10,
+        notes: [p.whyFit, p.brief, p.website ? `Website: ${p.website}` : null, `Promoted from prospect #${p.id}`].filter(Boolean).join("\n\n"),
+        createdBy: req.session.userId!,
+      }).returning();
+      const [updated] = await db.update(sponsorshipProspects)
+        .set({ status: "promoted", promotedDealId: deal.id, updatedAt: new Date() })
+        .where(eq(sponsorshipProspects.id, id)).returning();
+      res.json({ deal, prospect: updated });
     } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 
@@ -8902,6 +9075,338 @@ export async function registerRoutes(
     }
   });
   // ───────────────────────────── END CIC VENDORS ─────────────────────────────
+
+  // ─────────────────────────────────── E-SIGN ───────────────────────────────────
+  // DocuSign replacement. Admin sends any PDF for electronic signature; signers
+  // sign on a public token link (no login); we generate a signed PDF + a
+  // Certificate of Completion and keep a full audit trail. Org-scoped to the
+  // current workspace. Legal basis: Contract and Commercial Law Act 2017 Pt 4.
+
+  async function esignOrgId(req: any): Promise<number> {
+    const slug = String(req.headers["x-workspace-slug"] || "").trim();
+    if (!slug) throw new Error("No workspace selected");
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug));
+    if (!org) throw new Error("Workspace not found");
+    return org.id;
+  }
+  const esignIp = (req: any): string | null =>
+    (String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()) || req.ip || req.socket?.remoteAddress || null;
+  const esignToken = () => crypto.randomBytes(24).toString("hex");
+  const esignSha = (buf: Buffer) => crypto.createHash("sha256").update(buf).digest("hex");
+  const esignStrip = (b64: string) => (b64.includes(",") ? b64.split(",")[1] : b64);
+  const esignClean = (v: any, max: number) => (v == null ? null : (String(v).trim().slice(0, max) || null));
+  const esignSafeName = (s: string) => s.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 60) || "document";
+
+  async function esignLog(documentId: number, signerId: number | null, type: string, o?: { actorEmail?: string | null; ip?: string | null; userAgent?: string | null; meta?: any }) {
+    await db.insert(esignEvents).values({
+      documentId, signerId: signerId ?? null, type,
+      actorEmail: o?.actorEmail ?? null, ip: o?.ip ?? null,
+      userAgent: o?.userAgent ? String(o.userAgent).slice(0, 300) : null, meta: o?.meta ?? null,
+    });
+  }
+  function esignSerializeDoc(d: typeof esignDocuments.$inferSelect, signers: (typeof esignSigners.$inferSelect)[]) {
+    return {
+      id: d.id, title: d.title, message: d.message, status: d.status,
+      sourceFileName: d.sourceFileName, createdAt: d.createdAt, sentAt: d.sentAt, completedAt: d.completedAt,
+      signers: signers.map((s) => ({
+        id: s.id, name: s.name, email: s.email, status: s.status, token: s.token,
+        signedAt: s.signedAt, viewedAt: s.viewedAt, declineReason: s.declineReason,
+      })),
+    };
+  }
+  const esignInviteHtml = (p: { signerName: string; title: string; message: string | null; link: string; fromName: string }) => `
+    <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <div style="height:6px;background:linear-gradient(90deg,#937224,#C9A43E,#E4C56A)"></div>
+      <div style="padding:28px 24px">
+        <p style="font-size:15px">Kia ora ${p.signerName},</p>
+        <p style="font-size:15px;line-height:1.6">${p.fromName} has sent you a document to review and sign electronically:</p>
+        <p style="font-size:17px;font-weight:700;margin:16px 0">${p.title}</p>
+        ${p.message ? `<p style="font-size:14px;color:#555;font-style:italic;border-left:3px solid #C9A43E;padding-left:12px">${p.message}</p>` : ""}
+        <p style="margin:26px 0"><a href="${p.link}" style="background:#C9A43E;color:#1a1a1a;font-weight:700;text-decoration:none;padding:13px 26px;border-radius:10px;display:inline-block">Review &amp; sign</a></p>
+        <p style="font-size:12px;color:#888;line-height:1.6">Or paste this link into your browser:<br>${p.link}</p>
+        <p style="font-size:11px;color:#aaa;margin-top:24px">You're receiving this because ${p.fromName} requested your signature. Signing is electronic and legally valid under the Contract and Commercial Law Act 2017 (NZ).</p>
+      </div>
+    </div>`;
+  const esignDoneHtml = (p: { title: string; fromName: string }) => `
+    <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <div style="height:6px;background:linear-gradient(90deg,#937224,#C9A43E,#E4C56A)"></div>
+      <div style="padding:28px 24px">
+        <p style="font-size:17px;font-weight:700">✓ Fully signed</p>
+        <p style="font-size:15px;line-height:1.6"><strong>${p.title}</strong> has been signed by all parties. The completed PDF, including the Certificate of Completion, is attached for your records.</p>
+        <p style="font-size:12px;color:#aaa;margin-top:24px">Sent by ${p.fromName} · ClubOS e-Sign</p>
+      </div>
+    </div>`;
+
+  // Email pending signers their signing link. Used by send + remind.
+  async function esignEmailSigners(docId: number, orgId: number, onlyPending: boolean) {
+    const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, docId));
+    if (!doc) return;
+    const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, docId)).orderBy(esignSigners.signingOrder, esignSigners.id);
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));
+    const fromName = org?.name || "Christchurch United";
+    const base = appBaseUrl();
+    const { sendEmail } = await import("./email");
+    for (const s of signers) {
+      if (s.status === "signed" || s.status === "declined") continue;
+      if (onlyPending && s.status !== "pending" && s.status !== "viewed") continue;
+      await sendEmail({
+        to: s.email,
+        from: `${fromName} <noreply@cufc.co.nz>`,
+        subject: `Please sign: ${doc.title}`,
+        html: esignInviteHtml({ signerName: s.name, title: doc.title, message: doc.message, link: `${base}/sign/${s.token}`, fromName }),
+      });
+    }
+  }
+
+  // Generate the signed PDF + email all parties when everyone has signed.
+  async function esignFinalize(docId: number) {
+    const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, docId));
+    if (!doc || doc.status === "completed") return;
+    const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, docId)).orderBy(esignSigners.signingOrder, esignSigners.id);
+    if (!signers.length || !signers.every((s) => s.status === "signed")) return;
+    const { buildSignedPdf } = await import("./esign-pdf");
+    const signedBytes = await buildSignedPdf({
+      sourcePdf: Buffer.from(doc.sourcePdf, "base64"),
+      title: doc.title,
+      docHash: doc.docHash || "",
+      envelopeId: doc.id,
+      signers: signers.map((s) => ({ name: s.name, email: s.email, signatureName: s.signatureName, signatureImage: s.signatureImage, signedAt: s.signedAt, ip: s.ip })),
+    });
+    const signedB64 = Buffer.from(signedBytes).toString("base64");
+    await db.update(esignDocuments).set({ status: "completed", completedAt: new Date(), signedPdf: signedB64 }).where(eq(esignDocuments.id, docId));
+    await esignLog(docId, null, "completed", { meta: { signers: signers.length } });
+    // email all parties + sender the completed PDF
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, doc.organizationId));
+    const fromName = org?.name || "Christchurch United";
+    const recipients = new Set(signers.map((s) => s.email));
+    if (doc.createdBy) {
+      const [u] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdBy));
+      if (u?.email) recipients.add(u.email);
+    }
+    const attachment = { filename: `${esignSafeName(doc.title)}-signed.pdf`, content: signedB64, contentType: "application/pdf" };
+    const { sendEmail } = await import("./email");
+    for (const to of recipients) {
+      try { await sendEmail({ to, from: `${fromName} <noreply@cufc.co.nz>`, subject: `Completed: ${doc.title}`, html: esignDoneHtml({ title: doc.title, fromName }), attachments: [attachment] }); } catch { /* keep going */ }
+    }
+  }
+
+  // ---- Admin endpoints ----
+  app.get("/api/admin/esign", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const docs = await db.select().from(esignDocuments).where(eq(esignDocuments.organizationId, orgId)).orderBy(desc(esignDocuments.createdAt));
+      const ids = docs.map((d) => d.id);
+      const signers = ids.length ? await db.select().from(esignSigners).where(inArray(esignSigners.documentId, ids)) : [];
+      res.json(docs.map((d) => esignSerializeDoc(d, signers.filter((s) => s.documentId === d.id))));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/esign/:id", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, id)).orderBy(esignSigners.signingOrder, esignSigners.id);
+      const events = await db.select().from(esignEvents).where(eq(esignEvents.documentId, id)).orderBy(desc(esignEvents.createdAt));
+      res.json({ ...esignSerializeDoc(doc, signers), events: events.map((e) => ({ id: e.id, type: e.type, actorEmail: e.actorEmail, ip: e.ip, createdAt: e.createdAt })) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/esign", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const b = req.body ?? {};
+      const title = String(b.title ?? "").trim();
+      if (!title || title.length > 160) return res.status(400).json({ message: "Title is required (max 160 characters)" });
+      const pdfRaw = esignStrip(String(b.pdfBase64 ?? ""));
+      if (!pdfRaw) return res.status(400).json({ message: "A PDF document is required" });
+      let pdfBuf: Buffer;
+      try { pdfBuf = Buffer.from(pdfRaw, "base64"); } catch { return res.status(400).json({ message: "Invalid PDF data" }); }
+      if (pdfBuf.subarray(0, 5).toString("latin1") !== "%PDF-") return res.status(400).json({ message: "File is not a valid PDF" });
+      const signersIn = Array.isArray(b.signers) ? b.signers : [];
+      const cleanSigners = signersIn
+        .map((s: any) => ({ name: String(s?.name ?? "").trim(), email: String(s?.email ?? "").trim().toLowerCase() }))
+        .filter((s: any) => s.name && /.+@.+\..+/.test(s.email));
+      if (!cleanSigners.length) return res.status(400).json({ message: "At least one signer (name + email) is required" });
+      const [doc] = await db.insert(esignDocuments).values({
+        organizationId: orgId, title, message: esignClean(b.message, 500), status: "draft",
+        sourceFileName: esignClean(b.fileName, 200), sourcePdf: pdfRaw, docHash: esignSha(pdfBuf),
+        createdBy: req.session.userId ?? null,
+      }).returning();
+      for (let i = 0; i < cleanSigners.length; i++) {
+        await db.insert(esignSigners).values({ documentId: doc.id, organizationId: orgId, name: cleanSigners[i].name, email: cleanSigners[i].email, signingOrder: i, token: esignToken() });
+      }
+      const sender = req.session.userId ? (await db.select().from(usersTable).where(eq(usersTable.id, req.session.userId)))[0] : null;
+      await esignLog(doc.id, null, "created", { actorEmail: sender?.email, ip: esignIp(req), userAgent: req.headers["user-agent"], meta: { signers: cleanSigners.length } });
+      if (b.send) {
+        await db.update(esignDocuments).set({ status: "sent", sentAt: new Date() }).where(eq(esignDocuments.id, doc.id));
+        await esignEmailSigners(doc.id, orgId, false);
+        await esignLog(doc.id, null, "sent", { actorEmail: sender?.email, ip: esignIp(req) });
+      }
+      const [fresh] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, doc.id));
+      const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
+      res.json(esignSerializeDoc(fresh, signers));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/esign/:id/send", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.status === "completed" || doc.status === "voided") return res.status(400).json({ message: "Document is closed" });
+      if (doc.status === "draft") await db.update(esignDocuments).set({ status: "sent", sentAt: new Date() }).where(eq(esignDocuments.id, id));
+      await esignEmailSigners(id, orgId, false);
+      await esignLog(id, null, "sent", { ip: esignIp(req) });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/esign/:id/remind", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      await esignEmailSigners(id, orgId, true);
+      await esignLog(id, null, "reminded", { ip: esignIp(req) });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/esign/:id/void", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [row] = await db.update(esignDocuments).set({ status: "voided", voidedAt: new Date() })
+        .where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId))).returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      await esignLog(id, null, "voided", { ip: esignIp(req) });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/esign/:id", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.status !== "draft" && doc.status !== "voided") return res.status(400).json({ message: "Only drafts or voided documents can be deleted" });
+      await db.delete(esignDocuments).where(eq(esignDocuments.id, id));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  function esignSendPdf(res: any, b64: string, name: string, download: boolean) {
+    const buf = Buffer.from(b64, "base64");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `${download ? "attachment" : "inline"}; filename="${name}"`);
+    res.send(buf);
+  }
+
+  app.get("/api/admin/esign/:id/source.pdf", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      esignSendPdf(res, doc.sourcePdf, `${esignSafeName(doc.title)}.pdf`, false);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/esign/:id/signed.pdf", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId)));
+      if (!doc || !doc.signedPdf) return res.status(404).json({ message: "Signed document not ready" });
+      await esignLog(id, null, "downloaded", { ip: esignIp(req) });
+      esignSendPdf(res, doc.signedPdf, `${esignSafeName(doc.title)}-signed.pdf`, true);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ---- Public signing endpoints (token-gated, no login) ----
+  async function esignLoadByToken(token: string) {
+    const [signer] = await db.select().from(esignSigners).where(eq(esignSigners.token, token));
+    if (!signer) return null;
+    const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, signer.documentId));
+    if (!doc) return null;
+    return { signer, doc };
+  }
+
+  app.get("/api/sign/:token", async (req, res) => {
+    try {
+      const loaded = await esignLoadByToken(String(req.params.token));
+      if (!loaded) return res.status(404).json({ message: "This signing link is invalid or has expired." });
+      const { signer, doc } = loaded;
+      const allSigners = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id)).orderBy(esignSigners.signingOrder, esignSigners.id);
+      const [org] = await db.select().from(organizations).where(eq(organizations.id, doc.organizationId));
+      if (signer.status === "pending" && doc.status !== "voided") {
+        await db.update(esignSigners).set({ status: "viewed", viewedAt: new Date(), ip: esignIp(req), userAgent: String(req.headers["user-agent"] || "").slice(0, 300) }).where(eq(esignSigners.id, signer.id));
+        if (doc.status === "sent") await db.update(esignDocuments).set({ status: "viewed" }).where(eq(esignDocuments.id, doc.id));
+        await esignLog(doc.id, signer.id, "viewed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"] });
+      }
+      res.json({
+        documentStatus: doc.status,
+        title: doc.title,
+        message: doc.message,
+        orgName: org?.name || "Christchurch United",
+        signer: { name: signer.name, email: signer.email, status: signer.status },
+        parties: allSigners.map((s) => ({ name: s.name, status: s.status })),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/sign/:token/document.pdf", async (req, res) => {
+    try {
+      const loaded = await esignLoadByToken(String(req.params.token));
+      if (!loaded) return res.status(404).json({ message: "Invalid link" });
+      esignSendPdf(res, loaded.doc.sourcePdf, `${esignSafeName(loaded.doc.title)}.pdf`, false);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/sign/:token", async (req, res) => {
+    try {
+      const loaded = await esignLoadByToken(String(req.params.token));
+      if (!loaded) return res.status(404).json({ message: "This signing link is invalid or has expired." });
+      const { signer, doc } = loaded;
+      if (doc.status === "voided") return res.status(400).json({ message: "This document has been voided." });
+      if (signer.status === "signed") return res.status(400).json({ message: "You have already signed this document." });
+      const b = req.body ?? {};
+      const signatureName = String(b.signatureName ?? "").trim();
+      if (!signatureName) return res.status(400).json({ message: "Please type your full name to sign." });
+      if (b.consent !== true) return res.status(400).json({ message: "You must agree to sign electronically." });
+      const signatureImage = typeof b.signatureImage === "string" && b.signatureImage.startsWith("data:image") ? b.signatureImage.slice(0, 400000) : null;
+      const now = new Date();
+      await db.update(esignSigners).set({
+        status: "signed", signatureName: signatureName.slice(0, 120), signatureImage,
+        signedAt: now, consentedAt: now, ip: esignIp(req), userAgent: String(req.headers["user-agent"] || "").slice(0, 300),
+      }).where(eq(esignSigners.id, signer.id));
+      await esignLog(doc.id, signer.id, "signed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"] });
+      const all = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
+      const allComplete = all.every((s) => s.status === "signed");
+      if (allComplete) await esignFinalize(doc.id);
+      res.json({ ok: true, allComplete });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/sign/:token/decline", async (req, res) => {
+    try {
+      const loaded = await esignLoadByToken(String(req.params.token));
+      if (!loaded) return res.status(404).json({ message: "Invalid link" });
+      const { signer, doc } = loaded;
+      if (signer.status === "signed") return res.status(400).json({ message: "Already signed." });
+      const reason = esignClean(req.body?.reason, 300);
+      await db.update(esignSigners).set({ status: "declined", declineReason: reason, ip: esignIp(req) }).where(eq(esignSigners.id, signer.id));
+      await db.update(esignDocuments).set({ status: "declined" }).where(eq(esignDocuments.id, doc.id));
+      await esignLog(doc.id, signer.id, "declined", { actorEmail: signer.email, ip: esignIp(req), meta: { reason } });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  // ───────────────────────────────── END E-SIGN ─────────────────────────────────
 
   app.get("/api/public/camps", async (_req, res) => {
     try {
@@ -11882,6 +12387,92 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
+  // ── CIC club logo licence consent (cicyouth.com/club-logo-agreement) ──
+  // A participating club's rep signs, granting CIC use of their crest on the
+  // website + app. Optional logo upload. Stored as the auditable proof record +
+  // emailed to info@cicyouth.com. Viewable in Tournaments → CIC → Logo Consents.
+  app.options("/api/public/cic/logo-consent", (req, res) => { setCicCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cic/logo-consent", clubLogoUpload.single("logo"), async (req, res) => {
+    setCicCors(req, res);
+    try {
+      const clubName = String(req.body.clubName || "").trim();
+      const repName = String(req.body.repName || "").trim();
+      const repRole = String(req.body.repRole || "").trim();
+      const repEmail = String(req.body.repEmail || "").trim();
+      const repPhone = String(req.body.repPhone || "").trim();
+      const licenceVersion = String(req.body.licenceVersion || "1.0").trim();
+      const agreed = String(req.body.agreed || "") === "true";
+      if (!clubName || !repName || !/.+@.+\..+/.test(repEmail) || !agreed) {
+        return res.status(400).json({ message: "Please add your club, name, a valid email, and confirm the agreement." });
+      }
+      const orgId = await skillsOrgId(); // CIC org
+
+      // Optional logo upload → object storage (same pipeline as club logos).
+      let logoUrl: string | null = null;
+      if (req.file) {
+        const svc = new ObjectStorageService();
+        const uploaded: { gcsFile: any; objectPath: string }[] = [];
+        try {
+          const meta = await sharp(req.file.buffer, { failOn: "error", animated: false, limitInputPixels: 50_000_000 }).metadata();
+          if (!meta.format || !["jpeg", "jpg", "png", "webp", "gif", "tiff", "heif", "heic", "avif"].includes(meta.format)) {
+            throw new Error("Unsupported image format");
+          }
+          const webpBuf = await sharp(req.file.buffer, { failOn: "error", animated: false, limitInputPixels: 50_000_000 })
+            .rotate().resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true })
+            .webp({ quality: 92, effort: 4 }).toBuffer();
+          const u = await svc.uploadBufferToUploads(webpBuf, "image/webp", "webp", crypto.randomUUID());
+          uploaded.push({ gcsFile: u.file, objectPath: u.objectPath });
+          await setObjectAclPolicy(u.file, { owner: "cic-logo-consent", visibility: "public" });
+          logoUrl = u.objectPath;
+        } catch (e) {
+          await Promise.allSettled(uploaded.map((u) => u.gcsFile.delete({ ignoreNotFound: true })));
+          console.error("[CIC logo consent] logo upload failed:", e);
+          // Don't fail the whole consent if only the optional logo upload fails.
+        }
+      }
+
+      const [row] = await db.insert(clubLogoConsents).values({
+        organizationId: orgId,
+        clubName, repName, repRole: repRole || null, repEmail, repPhone: repPhone || null,
+        licenceVersion, signatureName: repName, logoUrl,
+        sourceUrl: String(req.body.sourceUrl || "cicyouth.com/club-logo-agreement"),
+        ipAddress: ((req.headers["x-forwarded-for"] as string) || req.ip || "").split(",")[0].trim() || null,
+        userAgent: String(req.headers["user-agent"] || "").slice(0, 300) || null,
+        status: "agreed",
+      }).returning();
+
+      try {
+        await sendClubLogoConsentNotification({
+          to: "info@cicyouth.com", clubName, repName, repRole: repRole || undefined, repEmail,
+          repPhone: repPhone || undefined, licenceVersion, logoUploaded: !!logoUrl,
+          agreedAt: new Date().toISOString(),
+        });
+      } catch (e) { console.error("[CIC logo consent] email failed:", e); }
+
+      res.json({ ok: true, id: row.id });
+    } catch (e: any) { console.error("[CIC logo consent] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // Web admin: CIC club logo consents (Tournaments → CIC → Logo Consents).
+  app.get("/api/admin/cic/logo-consents", requireAuth, async (_req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const rows = await db.select().from(clubLogoConsents)
+        .where(eq(clubLogoConsents.organizationId, orgId))
+        .orderBy(desc(clubLogoConsents.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/cic/logo-consents/:id/status", requireAuth, async (req, res) => {
+    try {
+      const status = String(req.body.status || "");
+      if (!["agreed", "withdrawn"].includes(status)) return res.status(400).json({ message: "invalid status" });
+      const orgId = await skillsOrgId();
+      await db.update(clubLogoConsents).set({ status }).where(and(eq(clubLogoConsents.id, parseInt(req.params.id)), eq(clubLogoConsents.organizationId, orgId)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
   // ── CUGC (Christchurch United Gymnastics Club) website contact → CUGC inbox ──
   // Posted cross-origin from the cugc.co.nz marketing site (Vercel). Contact /
   // Register / Newsletter form submissions land in the shared inbox_messages
@@ -12854,6 +13445,89 @@ async function sendPasswordResetEmail(params: {
     from: "ClubOS <noreply@cufc.co.nz>",
     replyTo: "info@cufc.co.nz",
     subject: "Your ClubOS password was reset",
+    html,
+  });
+}
+
+// ── Password-reset helpers ──────────────────────────────────────────────────
+const RESET_TOKEN_TTL_MINUTES = 120;
+
+function appBaseUrl(): string {
+  // Always use the canonical admin host so reset links can't be poisoned via a
+  // spoofed Host header (the classic password-reset-poisoning attack). Override
+  // with APP_URL only for local testing.
+  return (process.env.APP_URL || "https://app.usg.co.nz").replace(/\/+$/, "");
+}
+
+function sha256Hex(s: string): string {
+  return crypto.createHash("sha256").update(s).digest("hex");
+}
+
+// Fresh single-use reset token: random raw value goes in the email link; only
+// its hash is persisted; expires after the TTL.
+function makeResetToken(): { rawToken: string; tokenHash: string; expiresAt: Date } {
+  const rawToken = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = sha256Hex(rawToken);
+  const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60_000);
+  return { rawToken, tokenHash, expiresAt };
+}
+
+// Resolve a raw token to its row, only if usable (exists, unused, unexpired).
+async function findValidResetToken(rawToken: string): Promise<{ id: number; userId: number } | null> {
+  if (!rawToken || rawToken.length < 16) return null;
+  const tokenHash = sha256Hex(rawToken);
+  const [row] = await db
+    .select({
+      id: passwordResetTokens.id,
+      userId: passwordResetTokens.userId,
+      expiresAt: passwordResetTokens.expiresAt,
+      usedAt: passwordResetTokens.usedAt,
+    })
+    .from(passwordResetTokens)
+    .where(eq(passwordResetTokens.tokenHash, tokenHash))
+    .limit(1);
+  if (!row || row.usedAt) return null;
+  if (new Date(row.expiresAt).getTime() < Date.now()) return null;
+  return { id: row.id, userId: row.userId };
+}
+
+// "Set your password" email — sent for both first-time invites and forgotten
+// passwords. Same branded shell as the other ClubOS account emails, but the
+// payload is a secure button instead of a plaintext password.
+async function sendForgotPasswordEmail(params: {
+  email: string;
+  firstName: string;
+  resetUrl: string;
+}): Promise<boolean> {
+  const { sendEmail } = await import("./email");
+  const html = `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:560px;margin:0 auto;padding:20px;color:#111">
+      <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:32px;border-radius:16px 16px 0 0;text-align:center;color:#fff">
+        <h1 style="margin:0;font-size:22px">Set your ClubOS password</h1>
+        <p style="margin:6px 0 0;color:rgba(255,255,255,.85);font-size:14px">United Sports Group</p>
+      </div>
+      <div style="background:#f8fafc;padding:32px;border:1px solid #e2e8f0;border-top:0;border-radius:0 0 16px 16px">
+        <p style="font-size:16px;margin:0 0 16px">Hi ${params.firstName},</p>
+        <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 20px">
+          Click the button below to choose your own password for ClubOS. For your security this link works once and expires in 2 hours.
+        </p>
+        <div style="text-align:center;margin:0 0 24px">
+          <a href="${params.resetUrl}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#1e3a5f);color:#fff;text-decoration:none;font-weight:600;font-size:15px;padding:14px 28px;border-radius:12px">Choose my password</a>
+        </div>
+        <p style="font-size:12px;line-height:1.6;color:#94a3b8;margin:0 0 6px">If the button doesn't work, paste this link into your browser:</p>
+        <p style="font-size:12px;line-height:1.5;color:#2563eb;word-break:break-all;margin:0 0 20px">${params.resetUrl}</p>
+        <p style="font-size:14px;line-height:1.6;color:#475569;margin:0">
+          Didn't request this? You can safely ignore this email — your password won't change until someone opens the link above.
+        </p>
+      </div>
+      <p style="text-align:center;color:#94a3b8;font-size:11px;margin:16px 0 0">United Sports Group · Christchurch United Football Club Inc.</p>
+    </div>
+  `;
+  return sendEmail({
+    to: params.email,
+    from: "ClubOS <noreply@cufc.co.nz>",
+    replyTo: "info@cufc.co.nz",
+    subject: "Set your ClubOS password",
     html,
   });
 }

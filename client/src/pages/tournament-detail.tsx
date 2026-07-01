@@ -77,6 +77,7 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
   const { toast } = useToast();
   const [pickerSide, setPickerSide] = useState<"home" | "away" | null>(null);
   const [pickedPlayerId, setPickedPlayerId] = useState<string>("");
+  const [typedName, setTypedName] = useState<string>("");
   const [minute, setMinute] = useState<string>("");
   const [isOwnGoal, setIsOwnGoal] = useState(false);
   const [isPenalty, setIsPenalty] = useState(false);
@@ -100,8 +101,12 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
     mutationFn: (data: any) => apiRequest("POST", "/api/admin/tournament/goals", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/games", game.id, "goals"] });
+      // A typed scorer creates a player — refresh rosters so the name resolves.
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/teams", game.homeTeamId, "players"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/teams", game.awayTeamId, "players"] });
       setPickerSide(null);
       setPickedPlayerId("");
+      setTypedName("");
       setMinute("");
       setIsOwnGoal(false);
       setIsPenalty(false);
@@ -124,21 +129,26 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
   }, [homePlayers, awayPlayers]);
 
   const submit = () => {
-    if (!pickedPlayerId || !pickerSide) return;
-    const p = playerById.get(parseInt(pickedPlayerId));
-    if (!p) return;
-    addGoalMut.mutate({
+    if (!pickerSide) return;
+    if (!pickedPlayerId && !typedName.trim()) return;
+    const scorerTeamId = pickerSide === "home" ? game.homeTeamId : game.awayTeamId;
+    const common = {
       gameId: game.id,
-      playerId: p.id,
       // Own goals: the goal counts AGAINST the scorer's team, so the team
       // logged on the goal row is the OPPOSITE side from where the player plays.
       teamId: isOwnGoal
         ? (pickerSide === "home" ? game.awayTeamId : game.homeTeamId)
-        : (pickerSide === "home" ? game.homeTeamId : game.awayTeamId),
+        : scorerTeamId,
       minute: minute ? parseInt(minute) : null,
       isOwnGoal,
       isPenalty,
-    });
+    };
+    if (pickedPlayerId) {
+      addGoalMut.mutate({ ...common, playerId: parseInt(pickedPlayerId) });
+    } else {
+      // Typed name → server find-or-creates the player on the scorer's team.
+      addGoalMut.mutate({ ...common, playerName: typedName.trim(), playerTeamId: scorerTeamId });
+    }
   };
 
   const homeName = game.homeTeam?.name || game.homeTeamPlaceholder || "Home";
@@ -208,21 +218,31 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
 
             {pickerSide && (
               <>
-                <select
-                  value={pickedPlayerId}
-                  onChange={e => setPickedPlayerId(e.target.value)}
-                  className="w-full bg-white/[0.02] border border-white/10 text-white text-sm rounded-md px-3 py-2"
-                >
-                  <option value="">Pick scorer…</option>
-                  {(pickerSide === "home" ? homePlayers : awayPlayers).map(p => (
-                    <option key={p.id} value={p.id}>
-                      #{p.shirtNumber ?? "—"} {p.firstName} {p.lastName}
-                    </option>
-                  ))}
-                </select>
-                {((pickerSide === "home" ? homePlayers : awayPlayers).length === 0) && (
-                  <p className="text-[11px] text-yellow-400/70">
-                    No roster yet for {pickerSide === "home" ? homeName : awayName}. Add players first via the team's Players tab.
+                {(pickerSide === "home" ? homePlayers : awayPlayers).length > 0 && (
+                  <select
+                    value={pickedPlayerId}
+                    onChange={e => { setPickedPlayerId(e.target.value); if (e.target.value) setTypedName(""); }}
+                    className="w-full bg-white/[0.02] border border-white/10 text-white text-sm rounded-md px-3 py-2"
+                  >
+                    <option value="">Pick scorer…</option>
+                    {(pickerSide === "home" ? homePlayers : awayPlayers).map(p => (
+                      <option key={p.id} value={p.id}>
+                        #{p.shirtNumber ?? "—"} {p.firstName} {p.lastName}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <Input
+                  type="text"
+                  placeholder={(pickerSide === "home" ? homePlayers : awayPlayers).length > 0 ? "…or type a scorer's name" : "Type the scorer's name"}
+                  value={typedName}
+                  onChange={e => { setTypedName(e.target.value); if (e.target.value) setPickedPlayerId(""); }}
+                  className="w-full text-sm"
+                  data-testid="input-typed-scorer"
+                />
+                {(pickerSide === "home" ? homePlayers : awayPlayers).length === 0 && (
+                  <p className="text-[11px] text-white/40">
+                    No squad loaded — just type the scorer and we'll track them on the Golden Boot.
                   </p>
                 )}
 
@@ -243,7 +263,7 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
                 <Button
                   size="sm"
                   onClick={submit}
-                  disabled={!pickedPlayerId || addGoalMut.isPending}
+                  disabled={(!pickedPlayerId && !typedName.trim()) || addGoalMut.isPending}
                   className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                 >
                   {addGoalMut.isPending ? "Saving…" : "Add goal"}
@@ -818,10 +838,11 @@ function TeamsTab({ tournament }: { tournament: Tournament }) {
   const [showModal, setShowModal] = useState(false);
   const [teamForm, setTeamForm] = useState({ name: "", clubName: "", contactName: "", contactEmail: "", contactPhone: "" });
 
-  const { data: teams = [], isLoading } = useQuery<(TournamentTeam & { group?: TournamentGroup })[]>({
+  const { data: teams = [], isLoading } = useQuery<(TournamentTeam & { group?: TournamentGroup; playerCount?: number; rosterStatus?: string | null })[]>({
     queryKey: ["/api/admin/tournament/tournaments", tournamentId, "teams"],
     queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/teams`).then(r => r.json()),
   });
+  const missingRosters = teams.filter(t => t.rosterStatus === "missing").length;
 
   const createMut = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/admin/tournament/teams", data),
@@ -845,7 +866,14 @@ function TeamsTab({ tournament }: { tournament: Tournament }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-white/40">{teams.length} team{teams.length !== 1 ? "s" : ""}</p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-white/40">{teams.length} team{teams.length !== 1 ? "s" : ""}</p>
+          {missingRosters > 0 && (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 font-medium" data-testid="badge-missing-rosters">
+              ⚠ {missingRosters} missing squad{missingRosters === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
         <Button onClick={() => setShowModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white gap-2" data-testid="button-add-team">
           <Plus className="w-4 h-4" />Add Team
         </Button>
@@ -866,6 +894,7 @@ function TeamsTab({ tournament }: { tournament: Tournament }) {
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-2.5">Team</th>
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-2.5 hidden sm:table-cell">Club</th>
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-2.5">Group</th>
+                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-2.5">Roster</th>
                 <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-2.5 hidden sm:table-cell">Contact</th>
                 <th className="w-10" />
               </tr>
@@ -892,6 +921,15 @@ function TeamsTab({ tournament }: { tournament: Tournament }) {
                       <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400/70">{t.group.name}</span>
                     ) : (
                       <span className="text-xs text-white/20">Unassigned</span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3">
+                    {t.rosterStatus === "missing" ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400 font-medium whitespace-nowrap" title="No squad list submitted — follow up with the club">⚠ No squad</span>
+                    ) : (t.playerCount ?? 0) > 0 ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-400/80 whitespace-nowrap">{t.playerCount} player{t.playerCount === 1 ? "" : "s"}</span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400/80 whitespace-nowrap" title="Squad submitted but not entered into ClubOS yet">Pending entry</span>
                     )}
                   </td>
                   <td className="px-5 py-3 text-xs text-white/40 hidden sm:table-cell">{t.contactName || "—"}</td>

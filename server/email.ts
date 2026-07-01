@@ -502,6 +502,48 @@ export async function sendCicContactNotification(params: {
   });
 }
 
+/** Club logo licence — a participating club's rep signed the CIC logo agreement
+ *  (cicyouth.com/club-logo-agreement). Emails info@cicyouth.com the proof record. */
+export async function sendClubLogoConsentNotification(params: {
+  to: string; clubName: string; repName: string; repRole?: string; repEmail: string;
+  repPhone?: string; licenceVersion: string; logoUploaded?: boolean; agreedAt: string;
+}): Promise<boolean> {
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#9aa0a6;font-size:13px;width:130px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("Club", params.clubName),
+    row("Representative", params.repName),
+    ...(params.repRole ? [row("Role", params.repRole)] : []),
+    row("Email", params.repEmail),
+    ...(params.repPhone ? [row("Phone", params.repPhone)] : []),
+    row("Licence version", `v${params.licenceVersion}`),
+    row("Digital signature", params.repName),
+    row("Signed at", new Date(params.agreedAt).toLocaleString("en-NZ")),
+    ...(params.logoUploaded ? [row("Logo uploaded", "Yes")] : []),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#c9a43e;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch International Cup</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">Club Logo Licence — Signed</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#8a8f98;font-size:13px;line-height:1.6;margin:18px 0 0;">${params.repName} confirmed they are authorised to sign, that the club owns or is licensed to use its marks, and agreed to licence v${params.licenceVersion} granting CIC use of the club's crest on the CIC website and app.</p>
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">Recorded in ClubOS → Tournaments → CIC → Logo Consents.</p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch International Cup <noreply@cufc.co.nz>",
+    replyTo: params.repEmail,
+    subject: `Club logo licence signed — ${params.clubName}`,
+    html,
+  });
+}
+
 export async function sendCugcContactNotification(params: {
   to: string; name: string; email: string; phone?: string; subject?: string; message: string; sourceUrl?: string;
 }): Promise<boolean> {

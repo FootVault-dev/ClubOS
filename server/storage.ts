@@ -1868,6 +1868,36 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(tournamentPlayers).where(eq(tournamentPlayers.teamId, teamId)).orderBy(asc(tournamentPlayers.shirtNumber));
   }
 
+  // Find (case-insensitive on full name) or create a player on a team — lets
+  // admins log a goal scorer by name when the squad isn't pre-loaded. Returns
+  // the playerId so the same scorer aggregates correctly in the Golden Boot.
+  async findOrCreateTournamentPlayerByName(teamId: number, fullName: string): Promise<number> {
+    const name = (fullName || "").trim().replace(/\s+/g, " ");
+    if (!name) throw new Error("Scorer name is empty");
+    const sp = name.indexOf(" ");
+    const firstName = sp === -1 ? name : name.slice(0, sp);
+    const lastName = sp === -1 ? "" : name.slice(sp + 1);
+    const existing = await db.select({ id: tournamentPlayers.id }).from(tournamentPlayers)
+      .where(and(eq(tournamentPlayers.teamId, teamId),
+        sql`lower(trim(${tournamentPlayers.firstName} || ' ' || ${tournamentPlayers.lastName})) = lower(${name})`));
+    if (existing.length) return existing[0].id;
+    const [p] = await db.insert(tournamentPlayers).values({ teamId, firstName, lastName }).returning({ id: tournamentPlayers.id });
+    return p.id;
+  }
+
+  // teamId → number of players, for every team in a tournament (roster coverage).
+  async getTournamentPlayerCounts(tournamentId: number): Promise<Record<number, number>> {
+    const rows = await db
+      .select({ teamId: tournamentPlayers.teamId, n: sql<number>`count(*)::int` })
+      .from(tournamentPlayers)
+      .innerJoin(tournamentTeams, eq(tournamentPlayers.teamId, tournamentTeams.id))
+      .where(eq(tournamentTeams.tournamentId, tournamentId))
+      .groupBy(tournamentPlayers.teamId);
+    const m: Record<number, number> = {};
+    for (const r of rows) m[r.teamId] = r.n;
+    return m;
+  }
+
   async getTournamentPlayer(id: number): Promise<TournamentPlayer | undefined> {
     const [p] = await db.select().from(tournamentPlayers).where(eq(tournamentPlayers.id, id));
     return p;

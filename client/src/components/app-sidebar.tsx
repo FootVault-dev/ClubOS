@@ -41,6 +41,7 @@ import {
   ShoppingCart,
   FolderKanban,
   FileText,
+  FileSignature,
   Send,
   ExternalLink,
   Sun,
@@ -99,6 +100,7 @@ const venueNav = [
 ];
 
 const campsSecondary = [
+  { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/settings", icon: Settings },
@@ -117,12 +119,14 @@ const leagueNav = [
 ];
 
 const venueSecondary = [
+  { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/venue-settings", icon: Settings },
 ];
 
 const leagueSecondary = [
+  { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/league-settings", icon: Settings },
@@ -136,9 +140,11 @@ const tournamentNav = [
   { tab: "food-truck", title: "Food Truck", url: "/admin/food-truck", icon: Truck },
   { tab: "vendors", title: "Vendors", url: "/admin/vendors", icon: UtensilsCrossed },
   { tab: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations", icon: Inbox },
+  { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
 ];
 
 const tournamentSecondary = [
+  { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/tournament-settings", icon: Settings },
@@ -156,6 +162,7 @@ const gymnasticsNav = [
 ];
 
 const gymnasticsSecondary = [
+  { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/gymnastics-settings", icon: Settings },
@@ -170,6 +177,7 @@ const groupNav = [
 ];
 
 const groupSecondary = [
+  { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/settings", icon: Settings },
@@ -189,6 +197,7 @@ const printsNav = [
 
 const printsSecondary = [
   { tab: "integrations", title: "Integrations", url: "/admin/integrations", icon: Globe },
+  { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/settings", icon: Settings },

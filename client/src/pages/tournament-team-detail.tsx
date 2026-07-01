@@ -7,6 +7,7 @@ import { ArrowLeft, Users, UserCog, Plus, Trash2, X, FileText, Upload, Image as 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { TournamentTeam, TournamentPlayer, TournamentStaff, Club, Tournament } from "@shared/schema";
 
 // Swap a /objects/uploads/<id>.webp URL for its .avif sibling. <picture>

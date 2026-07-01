@@ -51,6 +51,22 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Self-service password reset. A user requests a reset, we email them a
+// one-time link carrying a random token; only the SHA-256 hash is stored here
+// (never the raw token), so a DB leak can't be replayed. Single-use (usedAt)
+// and short-lived (expiresAt). Rows are disposable — cascade-deleted with the
+// user and safe to prune once used/expired.
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  // timestamptz so expiry/throttle comparisons against Date.now() are correct
+  // regardless of the server's local timezone (the box runs NZ time).
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const contacts = pgTable("contacts", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   type: contactTypeEnum("type").notNull(),
@@ -1003,6 +1019,30 @@ export const clubs = pgTable("clubs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Club logo licence consents — a participating club's rep signs (via the public
+// cicyouth.com/club-logo-agreement page) granting CIC permission to display their
+// crest on the website + app. This is the auditable proof record (name, version,
+// timestamp, IP). clubId is optional (the rep types their club name on a public
+// form); an admin can link it to a clubs row later.
+export const clubLogoConsents = pgTable("club_logo_consents", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  clubId: integer("club_id"),
+  clubName: text("club_name").notNull(),
+  repName: text("rep_name").notNull(),
+  repRole: text("rep_role"),
+  repEmail: text("rep_email").notNull(),
+  repPhone: text("rep_phone"),
+  licenceVersion: text("licence_version").notNull(),
+  signatureName: text("signature_name").notNull(), // typed-name e-signature
+  logoUrl: text("logo_url"),                        // optional uploaded logo
+  sourceUrl: text("source_url"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  status: text("status").notNull().default("agreed"), // agreed | withdrawn
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const tournamentTeams = pgTable("tournament_teams", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   tournamentId: integer("tournament_id").notNull().references(() => tournaments.id, { onDelete: "cascade" }),
@@ -1022,6 +1062,9 @@ export const tournamentTeams = pgTable("tournament_teams", {
   secondaryColor: text("secondary_color"),
   seedNumber: integer("seed_number"),
   registrationStatus: text("registration_status").default("registered"),
+  // Squad-list coverage: "missing" = no squad submitted (chase the club),
+  // "submitted" = squad provided (may still need entering). Null = unknown.
+  rosterStatus: text("roster_status"),
   paidAmountCents: integer("paid_amount_cents").default(0),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -2422,3 +2465,73 @@ export const cicVendorBookings = pgTable("cic_vendor_bookings", {
 export const insertCicVendorBookingSchema = createInsertSchema(cicVendorBookings).omit({ id: true, createdAt: true });
 export type InsertCicVendorBooking = z.infer<typeof insertCicVendorBookingSchema>;
 export type CicVendorBooking = typeof cicVendorBookings.$inferSelect;
+
+// ---- E-Sign (DocuSign replacement) ----
+// Org-wide electronic signature module. Send any PDF for signature, track
+// status, generate a signed PDF + completion certificate, full audit trail.
+// Reusable for staff contracts, sponsors, vendors, and any documentation.
+// Legal basis: Contract and Commercial Law Act 2017 (Part 4).
+// status: draft | sent | viewed | completed | voided | declined
+export const esignDocuments = pgTable("esign_documents", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  message: text("message"),
+  status: text("status").notNull().default("draft"),
+  sourceFileName: text("source_file_name"),
+  sourcePdf: text("source_pdf").notNull(), // base64 of the original PDF
+  signedPdf: text("signed_pdf"),           // base64 of final (original + certificate)
+  docHash: text("doc_hash"),               // sha256 hex of source bytes
+  createdBy: integer("created_by"),        // users.id of the sender
+  sentAt: timestamp("sent_at"),
+  completedAt: timestamp("completed_at"),
+  voidedAt: timestamp("voided_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertEsignDocumentSchema = createInsertSchema(esignDocuments).omit({ id: true, createdAt: true });
+export type InsertEsignDocument = z.infer<typeof insertEsignDocumentSchema>;
+export type EsignDocument = typeof esignDocuments.$inferSelect;
+
+// One row per signer on a document. token gates the public signing link.
+// status: pending | viewed | signed | declined
+export const esignSigners = pgTable("esign_signers", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  documentId: integer("document_id").notNull().references(() => esignDocuments.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  signingOrder: integer("signing_order").notNull().default(0),
+  status: text("status").notNull().default("pending"),
+  token: text("token").notNull().unique(),
+  signatureName: text("signature_name"),   // typed name
+  signatureImage: text("signature_image"), // base64 png (drawn)
+  consentedAt: timestamp("consented_at"),
+  viewedAt: timestamp("viewed_at"),
+  signedAt: timestamp("signed_at"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  declineReason: text("decline_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertEsignSignerSchema = createInsertSchema(esignSigners).omit({ id: true, createdAt: true });
+export type InsertEsignSigner = z.infer<typeof insertEsignSignerSchema>;
+export type EsignSigner = typeof esignSigners.$inferSelect;
+
+// Immutable audit trail for each document.
+export const esignEvents = pgTable("esign_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  documentId: integer("document_id").notNull().references(() => esignDocuments.id, { onDelete: "cascade" }),
+  signerId: integer("signer_id"),
+  type: text("type").notNull(), // created|sent|viewed|signed|completed|downloaded|voided|declined|reminded
+  actorEmail: text("actor_email"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  meta: jsonb("meta").$type<Record<string, any> | null>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertEsignEventSchema = createInsertSchema(esignEvents).omit({ id: true, createdAt: true });
+export type InsertEsignEvent = z.infer<typeof insertEsignEventSchema>;
+export type EsignEvent = typeof esignEvents.$inferSelect;
