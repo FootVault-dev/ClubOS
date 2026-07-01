@@ -2170,7 +2170,10 @@ function ProspectsView({ orgId }: { orgId: number }) {
       if (tierFilter && (p.tier || "").toUpperCase() !== tierFilter) return false;
       if (brandFilter && !(p.brandTags || []).map(b => b.toLowerCase()).includes(brandFilter)) return false;
       if (statusFilter && p.status !== statusFilter) return false;
-      if (q && !`${p.company} ${p.sector || ""} ${p.location || ""} ${p.decisionMakerName || ""} ${p.whyFit || ""}`.toLowerCase().includes(q)) return false;
+      if (q) {
+        const hay = `${p.company} ${p.sector || ""} ${p.location || ""} ${p.category || ""} ${p.capacityEstimate || ""} ${(p.brandTags || []).join(" ")} ${p.decisionMakerName || ""} ${p.decisionMakerRole || ""} ${p.contactName || ""} ${p.contactEmail || ""} ${p.contactPhone || ""} ${p.whyFit || ""} ${p.brief || ""} ${p.detail || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
       return true;
     });
   }, [prospects, search, tierFilter, brandFilter, statusFilter]);
@@ -2196,8 +2199,8 @@ function ProspectsView({ orgId }: { orgId: number }) {
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-white/30" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search company, sector, person…"
-              className="bg-white/[0.04] border border-white/10 rounded-md pl-7 pr-2 py-1.5 text-xs text-white placeholder:text-white/30 w-60 focus:outline-none focus:border-blue-500/50" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search company, person, email, category…"
+              className="bg-white/[0.04] border border-white/10 rounded-md pl-7 pr-2 py-1.5 text-xs text-white placeholder:text-white/30 w-64 sm:w-80 focus:outline-none focus:border-blue-500/50" />
           </div>
           <div className="flex items-center gap-1">
             {["A", "B", "C"].map(t => {
