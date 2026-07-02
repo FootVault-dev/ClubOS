@@ -4579,26 +4579,15 @@ export async function registerRoutes(
         recipientCount: recipients.length, status: "sending",
       }).returning();
 
-      let sent = 0, failed = 0;
-      const BATCH = 40, DELAY_MS = 1100;
-      for (let i = 0; i < recipients.length; i += BATCH) {
-        const slice = recipients.slice(i, i + BATCH);
-        const results = await Promise.all(slice.map(async (r) => {
-          try {
-            return await sendLeagueBroadcastEmail({
-              to: r.email, subject: subj, bodyHtml: String(body), replyTo: replyTo || undefined,
-              unsubscribeUrl: mflUnsubUrl(MFL_ORG_ID, r.email), campId: undefined,
-            });
-          } catch { return false; }
-        }));
-        sent += results.filter(Boolean).length;
-        failed += results.filter((x) => !x).length;
-        if (i + BATCH < recipients.length) await new Promise((res2) => setTimeout(res2, DELAY_MS));
-      }
+      // Queue runs after the response (see runBroadcastQueue — Resend 2 req/s).
+      void runBroadcastQueue(campaign.id, recipients.map((r) => r.email), (email) =>
+        sendLeagueBroadcastEmail({
+          to: email, subject: subj, bodyHtml: String(body), replyTo: replyTo || undefined,
+          unsubscribeUrl: mflUnsubUrl(MFL_ORG_ID, email), campId: undefined,
+        }),
+      ).catch((e) => console.error("[League mailer queue] error:", e));
 
-      await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed, status: "sent", sentAt: new Date() })
-        .where(eq(emailCampaigns.id, campaign.id));
-      res.json({ recipientCount: recipients.length, sentCount: sent, failedCount: failed });
+      res.json({ queued: true, recipientCount: recipients.length });
     } catch (e: any) {
       console.error("[League mailer send] error:", e);
       res.status(400).json({ message: e.message });
@@ -12559,26 +12548,16 @@ export async function registerRoutes(
         recipientCount: recipients.length, status: "sending",
       }).returning();
 
-      let sent = 0, failed = 0;
-      const BATCH = 40, DELAY_MS = 1100;
-      for (let i = 0; i < recipients.length; i += BATCH) {
-        const slice = recipients.slice(i, i + BATCH);
-        const results = await Promise.all(slice.map(async (r) => {
-          try {
-            return await sendCicBroadcastEmail({
-              to: r.email, subject: subj, bodyHtml: String(body), brand: source,
-              replyTo: replyTo || undefined, unsubscribeUrl: cicUnsubUrl(orgId, r.email),
-            });
-          } catch { return false; }
-        }));
-        sent += results.filter(Boolean).length;
-        failed += results.filter((x) => !x).length;
-        if (i + BATCH < recipients.length) await new Promise((res2) => setTimeout(res2, DELAY_MS));
-      }
+      // Queue runs after the response — a big audience takes minutes at
+      // Resend's rate limit, far longer than a request should hang.
+      void runBroadcastQueue(campaign.id, recipients.map((r) => r.email), (email) =>
+        sendCicBroadcastEmail({
+          to: email, subject: subj, bodyHtml: String(body), brand: source,
+          replyTo: replyTo || undefined, unsubscribeUrl: cicUnsubUrl(orgId, email),
+        }),
+      ).catch((e) => console.error("[CIC mailer queue] error:", e));
 
-      await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed, status: "sent", sentAt: new Date() })
-        .where(eq(emailCampaigns.id, campaign.id));
-      res.json({ recipientCount: recipients.length, sentCount: sent, failedCount: failed });
+      res.json({ queued: true, recipientCount: recipients.length });
     } catch (e: any) {
       console.error("[CIC mailer send] error:", e);
       res.status(400).json({ message: e.message });
@@ -14686,6 +14665,35 @@ function mflUnsubPage(message: string): string {
 
 function cicUnsubUrl(orgId: number, email: string): string {
   return `https://cicyouth.com/api/public/unsubscribe?o=${orgId}&e=${encodeURIComponent(email)}&t=${mflUnsubToken(orgId, email)}`;
+}
+
+// Run a broadcast as a sequential queue AFTER the HTTP response has gone back.
+// Resend rate-limits at ~2 requests/second — a concurrent batch gets a burst
+// of acceptances then a wall of 429s (Isaac's first CIC send: 8/147 delivered).
+// So: one email at a time, spaced under the limit, 3 retries with backoff on
+// failure, progress written to the campaign row so the UI can poll it.
+const broadcastSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function runBroadcastQueue(campaignId: number, recipients: string[], sendOne: (email: string) => Promise<boolean>): Promise<void> {
+  const SPACING_MS = 650;   // ~1.5 req/s — safely under Resend's 2/s
+  const RETRIES = 3;
+  let sent = 0, failed = 0;
+  for (let i = 0; i < recipients.length; i++) {
+    let ok = false;
+    for (let attempt = 0; attempt <= RETRIES && !ok; attempt++) {
+      if (attempt > 0) await broadcastSleep(1500 * attempt);
+      try { ok = await sendOne(recipients[i]); } catch { ok = false; }
+    }
+    ok ? sent++ : failed++;
+    if ((i + 1) % 10 === 0) {
+      try {
+        await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed })
+          .where(eq(emailCampaigns.id, campaignId));
+      } catch { /* progress write is best-effort — keep sending */ }
+    }
+    if (i < recipients.length - 1) await broadcastSleep(SPACING_MS);
+  }
+  await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed, status: "sent", sentAt: new Date() })
+    .where(eq(emailCampaigns.id, campaignId));
 }
 
 // Parse a manually-entered recipient list (textarea or array) — split on

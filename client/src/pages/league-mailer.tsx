@@ -185,9 +185,12 @@ function ComposeView({ termId, setTermId, audience, setAudience, terms, toast }:
     queryFn: () => apiRequest("POST", "/api/admin/league/mailer/preview", { competitionId: compId, audience }).then((r) => r.json()),
   });
 
+  // Poll while a broadcast is in flight — the send runs as a background queue
+  // on the server (Resend rate limit), so progress lands on the campaign row.
   const { data: campaigns = [] } = useQuery<Campaign[]>({
     queryKey: ["/api/admin/league/mailer/campaigns"],
     queryFn: () => fetch("/api/admin/league/mailer/campaigns").then((r) => r.json()),
+    refetchInterval: (query) => (query.state.data ?? []).some((c) => c.status === "sending") ? 3000 : false,
   });
 
   const body = () => editorRef.current?.innerHTML || "";
@@ -201,9 +204,9 @@ function ComposeView({ termId, setTermId, audience, setAudience, terms, toast }:
 
   const send = useMutation({
     mutationFn: () => apiRequest("POST", "/api/admin/league/mailer/send", { subject, body: body(), competitionId: compId, audience }).then((r) => r.json()),
-    onSuccess: (r: { recipientCount: number; sentCount: number; failedCount: number }) => {
+    onSuccess: (r: { queued: boolean; recipientCount: number }) => {
       setConfirmOpen(false);
-      toast({ title: "Newsletter sent 🎉", description: `${r.sentCount} sent${r.failedCount ? ` · ${r.failedCount} failed` : ""} of ${r.recipientCount}` });
+      toast({ title: "Sending now 📤", description: `Queued to ${r.recipientCount} recipients — watch the progress under Recent sends.` });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/league/mailer/campaigns"] });
       setSubject(""); if (editorRef.current) editorRef.current.innerHTML = "";
     },
@@ -289,9 +292,11 @@ function ComposeView({ termId, setTermId, audience, setAudience, terms, toast }:
           <div key={c.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-3.5">
             <div className="text-sm font-medium text-white/85 truncate">{c.subject}</div>
             <div className="flex items-center gap-2 mt-1 text-[11px] text-white/40">
-              <CheckCircle2 className="w-3 h-3 text-green-400" /> {c.sentCount ?? 0}/{c.recipientCount ?? 0} sent
+              {c.status === "sending"
+                ? <><Loader2 className="w-3 h-3 text-amber-400 animate-spin" /> {c.sentCount ?? 0}/{c.recipientCount ?? 0} sent · sending…</>
+                : <><CheckCircle2 className="w-3 h-3 text-green-400" /> {c.sentCount ?? 0}/{c.recipientCount ?? 0} sent</>}
               {(c.failedCount ?? 0) > 0 && <span className="text-red-400">· {c.failedCount} failed</span>}
-              <span className="ml-auto">{c.sentAt ? new Date(c.sentAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" }) : "draft"}</span>
+              <span className="ml-auto">{c.status === "sending" ? "" : c.sentAt ? new Date(c.sentAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" }) : "draft"}</span>
             </div>
           </div>
         ))}
