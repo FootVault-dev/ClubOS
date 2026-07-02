@@ -1,12 +1,14 @@
 // Create a DRAFT e-Sign envelope for a CIC food-truck vendor agreement:
-// personalised PDF + pre-placed fields (vendor signer + club counter-signer),
-// linked to the vendor row so contract_status syncs (pending -> sent -> signed).
+// the MASTER blank template + pre-placed fields (vendor signer fills everything
+// themselves + club counter-signer), linked to the vendor row so
+// contract_status syncs (pending -> sent -> signed).
 //
 // Creates DRAFTS only — nothing is emailed. Daniel reviews in the e-Sign tab
 // (Prepare shows the pre-placed fields) and hits "Send" there.
 //
-// The PDFs + fields.json come from the AIOS generator:
+// The single master PDF + fields.json come from the AIOS generator:
 //   outputs/cic-food-vendor-agreement/make_vendor_agreement.py
+//   -> outputs/cic-food-vendor-agreement/master/
 //
 // Usage (from apps/clubos):
 //   npx tsx --env-file=.env script/create-vendor-esign-drafts.ts \
@@ -25,19 +27,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set");
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const AGREEMENTS_DIR = path.resolve(
+const MASTER_DIR = path.resolve(
   process.env.VENDOR_AGREEMENTS_DIR ??
-    path.join(__dirname, "../../../outputs/cic-food-vendor-agreement/vendors"),
+    path.join(__dirname, "../../../outputs/cic-food-vendor-agreement/master"),
 );
 const CLUB_SIGNER = { name: "Daniel Meyn", email: "danielmeyn963@gmail.com" };
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
   return i >= 0 ? process.argv[i + 1] : undefined;
-}
-
-function slugify(name: string) {
-  return name.toLowerCase().replace(/['’]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 async function main() {
@@ -48,10 +46,8 @@ async function main() {
   }
   const contactName = arg("--contact")?.trim() || `${vendorName} (Authorised Signatory)`;
 
-  const slug = slugify(vendorName);
-  const dir = path.join(AGREEMENTS_DIR, slug);
-  const meta = JSON.parse(fs.readFileSync(path.join(dir, "fields.json"), "utf8"));
-  const pdfBuf = fs.readFileSync(path.join(dir, meta.pdf));
+  const meta = JSON.parse(fs.readFileSync(path.join(MASTER_DIR, "fields.json"), "utf8"));
+  const pdfBuf = fs.readFileSync(path.join(MASTER_DIR, meta.pdf));
   if (pdfBuf.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error("Generated file is not a PDF");
   const pdfB64 = pdfBuf.toString("base64");
   const docHash = crypto.createHash("sha256").update(pdfBuf).digest("hex");
@@ -77,7 +73,7 @@ async function main() {
        VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7) RETURNING id`,
       [
         vendor.organization_id,
-        `CIC 2026 Vendor Agreement — ${meta.vendor}`,
+        `CIC 2026 Vendor Agreement — ${vendorName}`,
         `Kia ora — please review and sign the attached Food & Beverage Vendor Agreement for the Christchurch International Cup 2026 (${meta.terms.trading_period}). Any questions, reply to this email.`,
         meta.pdf,
         pdfB64,
@@ -113,7 +109,7 @@ async function main() {
     await client.query(
       `INSERT INTO esign_events (document_id, type, actor_email, meta)
        VALUES ($1, 'created', $2, $3)`,
-      [docId, CLUB_SIGNER.email, JSON.stringify({ signers: 2, source: "create-vendor-esign-drafts", vendor: meta.vendor })],
+      [docId, CLUB_SIGNER.email, JSON.stringify({ signers: 2, source: "create-vendor-esign-drafts", vendor: vendorName })],
     );
 
     await client.query(
@@ -122,7 +118,7 @@ async function main() {
     );
     await client.query("COMMIT");
 
-    console.log(`Draft created: e-Sign doc #${docId} — "${meta.vendor}" (${meta.fields.length} fields, signer ${email} + club counter-sign).`);
+    console.log(`Draft created: e-Sign doc #${docId} — "${vendorName}" (${meta.fields.length} fields, signer ${email} + club counter-sign).`);
     console.log(`Review + send from the CIC workspace e-Sign tab on app.usg.co.nz.`);
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});

@@ -174,7 +174,9 @@ export default function SignPage() {
           <div className="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <div className="text-sm font-semibold">{doneCount}/{requiredFields.length}</div>
-              <div className="text-xs text-slate-500">required fields</div>
+              <div className="text-xs text-slate-500">
+                required fields{fields.length > requiredFields.length ? ` · ${fields.length - requiredFields.length} optional` : ""}
+              </div>
               <div className="w-28 h-1.5 bg-slate-200 rounded-full overflow-hidden ml-1">
                 <div className="h-full bg-[#C9A43E]" style={{ width: `${requiredFields.length ? (doneCount / requiredFields.length) * 100 : 100}%` }} />
               </div>
@@ -263,7 +265,11 @@ function FieldWidget({ field, value, filled, onText, onToggle, onSign }: {
   onText: (v: string) => void; onToggle: () => void; onSign: () => void;
 }) {
   const style: CSSProperties = { left: `${field.x * 100}%`, top: `${field.y * 100}%`, width: `${field.w * 100}%`, height: `${field.h * 100}%`, position: "absolute" };
-  const base = `rounded-sm ${field.required && !filled ? "ring-2 ring-[#C9A43E]" : "ring-1 ring-[#C9A43E]/40"} bg-[#C9A43E]/10`;
+  // Required = gold; optional = neutral grey so the two are obviously different.
+  const base = field.required
+    ? `rounded-sm ${!filled ? "ring-2 ring-[#C9A43E]" : "ring-1 ring-[#C9A43E]/40"} bg-[#C9A43E]/10`
+    : `rounded-sm border ${!filled ? "border-dashed border-slate-400/80" : "border-slate-300"} bg-slate-400/10`;
+  const labelText = field.label || (field.type === "date" ? "DD/MM/YYYY" : "Type here");
 
   if (field.type === "text" || field.type === "date") {
     return (
@@ -271,14 +277,15 @@ function FieldWidget({ field, value, filled, onText, onToggle, onSign }: {
         style={{ ...style, fontSize: 12 }}
         value={value?.value ?? ""}
         onChange={(e) => onText(e.target.value)}
-        placeholder={field.label || (field.type === "date" ? "DD/MM/YYYY" : "Type here")}
-        className={`${base} px-1 text-slate-900 placeholder:text-[#937224]/50 focus:outline-none focus:ring-2 focus:ring-[#C9A43E]`}
+        placeholder={field.required ? `${labelText} *` : `${labelText} — optional`}
+        title={field.required ? `${labelText} (required)` : `${labelText} (optional)`}
+        className={`${base} px-1 text-slate-900 ${field.required ? "placeholder:text-[#937224]/50" : "placeholder:text-slate-400 placeholder:italic"} focus:outline-none focus:ring-2 focus:ring-[#C9A43E]`}
       />
     );
   }
   if (field.type === "checkbox") {
     return (
-      <button style={style} onClick={onToggle} className={`${base} flex items-center justify-center`} title={field.label || "Tick"}>
+      <button style={style} onClick={onToggle} className={`${base} flex items-center justify-center`} title={`${field.label || "Tick"}${field.required ? " (required)" : " (optional)"}`}>
         {value?.value === "true" && <CheckCircle2 className="w-4 h-4 text-[#937224]" />}
       </button>
     );
