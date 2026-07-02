@@ -28,7 +28,7 @@ export default function CicMailer() {
   // whichever CIC view (Youth / 7's) the sidebar toggle is on.
   const [source, setSource] = useState<Source>(cicView === "7s" ? "7s" : "youth");
   const [tournamentId, setTournamentId] = useState<string>("all");
-  const [audience, setAudience] = useState<"contacts" | "all">("all");
+  const [audience, setAudience] = useState<"contacts" | "all" | "staff">("all");
 
   const { data: tournaments = [] } = useQuery<Tournament[]>({
     queryKey: ["/api/admin/tournament/tournaments", { orgId }],
@@ -204,7 +204,7 @@ function ContactsView({ source, tournamentId, setTournamentId, tournaments }: {
 // ── Compose ───────────────────────────────────────────────────────────────────
 function ComposeView({ source, tournamentId, setTournamentId, audience, setAudience, tournaments, toast }: {
   source: Source; tournamentId: string; setTournamentId: (s: string) => void;
-  audience: "contacts" | "all"; setAudience: (a: "contacts" | "all") => void;
+  audience: "contacts" | "all" | "staff"; setAudience: (a: "contacts" | "all" | "staff") => void;
   tournaments: Tournament[]; toast: ReturnType<typeof useToast>["toast"];
 }) {
   const [subject, setSubject] = useState("");
@@ -248,7 +248,7 @@ function ComposeView({ source, tournamentId, setTournamentId, audience, setAudie
 
   const audienceLabel = source === "7s"
     ? "everyone who registered interest in CIC 7's"
-    : `${audience === "all" ? "team + club contacts and squad staff" : "team + club contacts only"}${tournamentId === "all" ? " · all tournaments" : ` · ${tournaments.find((t) => String(t.id) === tournamentId)?.name || "tournament"}`}`;
+    : `${audience === "all" ? "team + club contacts and squad staff" : audience === "staff" ? "coaches + managers only" : "team + club contacts only"}${tournamentId === "all" ? " · all tournaments" : ` · ${tournaments.find((t) => String(t.id) === tournamentId)?.name || "tournament"}`}`;
 
   return (
     <div className="grid lg:grid-cols-3 gap-6">
@@ -267,8 +267,8 @@ function ComposeView({ source, tournamentId, setTournamentId, audience, setAudie
                   </SelectContent>
                 </Select>
                 <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5">
-                  {([["all", "Everyone"], ["contacts", "Contacts only"]] as const).map(([v, label]) => (
-                    <button key={v} onClick={() => setAudience(v)}
+                  {([["all", "Everyone"], ["contacts", "Contacts only"], ["staff", "Coaches + managers"]] as const).map(([v, label]) => (
+                    <button key={v} onClick={() => setAudience(v)} data-testid={`mailer-audience-${v}`}
                       className={`text-xs font-medium px-2.5 py-1 rounded-md transition-colors ${audience === v ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"}`}>{label}</button>
                   ))}
                 </div>

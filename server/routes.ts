@@ -12496,7 +12496,7 @@ export async function registerRoutes(
       const orgId = await skillsOrgId();
       const source = req.body.source === "7s" ? "7s" as const : "youth" as const;
       const tournamentId = req.body.tournamentId ? parseInt(String(req.body.tournamentId)) : null;
-      const audience = req.body.audience === "contacts" ? "contacts" as const : "all" as const;
+      const audience = req.body.audience === "contacts" ? "contacts" as const : req.body.audience === "staff" ? "staff" as const : "all" as const;
       const recipients = await resolveCicAudience(orgId, { source, tournamentId, audience });
       const unsub = await getUnsubscribedEmails(orgId);
       res.json({ count: recipients.filter((r) => !unsub.has(r.email)).length });
@@ -12530,7 +12530,7 @@ export async function registerRoutes(
       const subj = String(subject || "").trim();
       if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
       if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
-      const aud = audience === "contacts" ? "contacts" as const : "all" as const;
+      const aud = audience === "contacts" ? "contacts" as const : audience === "staff" ? "staff" as const : "all" as const;
       const tournId = tournamentId ? parseInt(String(tournamentId)) : null;
 
       const all = await resolveCicAudience(orgId, { source, tournamentId: tournId, audience: aud });
@@ -14681,9 +14681,11 @@ type CicContact = { name: string; email: string; phone: string; role: string; te
 // Build the CIC contact database, deduped by email.
 // source "youth": per-team contacts + participating clubs' contacts from the
 //   tournament tables; audience "all" adds squad-list team staff (coaches /
-//   managers) who have an email. tournamentId narrows to one age group.
+//   managers) who have an email, "staff" is ONLY those coaches/managers, and
+//   "contacts" is only the team/club contacts. tournamentId narrows to one
+//   age group.
 // source "7s": every Summer 7's register-interest submission (except archived).
-async function resolveCicAudience(orgId: number, opts: { source: "youth" | "7s"; tournamentId: number | null; audience: "contacts" | "all" }): Promise<CicContact[]> {
+async function resolveCicAudience(orgId: number, opts: { source: "youth" | "7s"; tournamentId: number | null; audience: "contacts" | "all" | "staff" }): Promise<CicContact[]> {
   const byEmail = new Map<string, CicContact>();
   const add = (c: CicContact) => {
     const email = c.email.trim().toLowerCase();
@@ -14709,20 +14711,22 @@ async function resolveCicAudience(orgId: number, opts: { source: "youth" | "7s";
       if (team.active === false) continue;
       teamMeta.set(team.id, { team: team.name, term: t.name });
       if (team.clubId) clubIds.add(team.clubId);
-      if (team.contactEmail) add({ name: team.contactName || "", email: team.contactEmail, phone: team.contactPhone || "", role: "Team contact", team: team.name, term: t.name });
+      if (opts.audience !== "staff" && team.contactEmail) add({ name: team.contactName || "", email: team.contactEmail, phone: team.contactPhone || "", role: "Team contact", team: team.name, term: t.name });
     }
   }
 
   // Club-roster contacts. When narrowed to one tournament, only clubs with a
   // team in it; the all-tournaments view includes the whole club roster.
-  const allClubs = await storage.getClubs(orgId);
-  for (const club of allClubs) {
-    if (!club.active || !club.contactEmail) continue;
-    if (opts.tournamentId && !clubIds.has(club.id)) continue;
-    add({ name: club.contactName || "", email: club.contactEmail, phone: club.contactPhone || "", role: "Club contact", team: club.name, term: "" });
+  if (opts.audience !== "staff") {
+    const allClubs = await storage.getClubs(orgId);
+    for (const club of allClubs) {
+      if (!club.active || !club.contactEmail) continue;
+      if (opts.tournamentId && !clubIds.has(club.id)) continue;
+      add({ name: club.contactName || "", email: club.contactEmail, phone: club.contactPhone || "", role: "Club contact", team: club.name, term: "" });
+    }
   }
 
-  if (opts.audience === "all" && teamMeta.size > 0) {
+  if (opts.audience !== "contacts" && teamMeta.size > 0) {
     const staff = await db.select().from(tournamentStaff).where(inArray(tournamentStaff.teamId, Array.from(teamMeta.keys())));
     for (const s of staff) {
       if (!s.email) continue;

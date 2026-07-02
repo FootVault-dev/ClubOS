@@ -231,6 +231,9 @@ function AdminRouter() {
         <Route path="/admin/food-truck" component={TournamentFoodTruck} />
         <Route path="/admin/vendors" component={TournamentVendors} />
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
+        <Route path="/admin/cic-registrations" component={CicInbox} />
+        <Route path="/admin/cic-mailer" component={CicMailer} />
+        <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />
         <Route path="/admin/team" component={AdminTeam} />
@@ -252,9 +255,6 @@ function AdminRouter() {
         <Route path="/admin/rewards" component={LeagueRewards} />
         <Route path="/admin/analytics" component={LeagueAnalytics} />
         <Route path="/admin/inbox" component={LeagueInbox} />
-        <Route path="/admin/cic-registrations" component={CicInbox} />
-        <Route path="/admin/cic-mailer" component={CicMailer} />
-        <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
         <Route path="/admin/discounts" component={AdminDiscounts} />
