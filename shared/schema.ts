@@ -2607,6 +2607,7 @@ export const esignDocuments = pgTable("esign_documents", {
   title: text("title").notNull(),
   message: text("message"),
   status: text("status").notNull().default("draft"),
+  sequential: boolean("sequential").notNull().default(false), // invite signers one at a time, in signing_order
   sourceFileName: text("source_file_name"),
   sourcePdf: text("source_pdf").notNull(), // base64 of the original PDF
   signedPdf: text("signed_pdf"),           // base64 of final (original + certificate)

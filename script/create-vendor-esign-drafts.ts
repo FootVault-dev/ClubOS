@@ -68,9 +68,11 @@ async function main() {
     const createdBy = ures.rows[0]?.id ?? null;
 
     await client.query("BEGIN");
+    // Sequential: Daniel (club) signs FIRST, then the vendor gets their invite
+    // with the club signature already on the document.
     const dres = await client.query(
-      `INSERT INTO esign_documents (organization_id, title, message, status, source_file_name, source_pdf, doc_hash, created_by)
-       VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7) RETURNING id`,
+      `INSERT INTO esign_documents (organization_id, title, message, status, sequential, source_file_name, source_pdf, doc_hash, created_by)
+       VALUES ($1, $2, $3, 'draft', true, $4, $5, $6, $7) RETURNING id`,
       [
         vendor.organization_id,
         `CIC 2026 Vendor Agreement — ${vendorName}`,
@@ -85,8 +87,8 @@ async function main() {
 
     const signerIds: Record<string, number> = {};
     const signerList = [
-      { name: contactName, email, owner: "vendor" },
       { name: CLUB_SIGNER.name, email: CLUB_SIGNER.email, owner: "club" },
+      { name: contactName, email, owner: "vendor" },
     ];
     for (const [order, s] of signerList.entries()) {
       const token = crypto.randomBytes(24).toString("hex");
@@ -118,8 +120,8 @@ async function main() {
     );
     await client.query("COMMIT");
 
-    console.log(`Draft created: e-Sign doc #${docId} — "${vendorName}" (${meta.fields.length} fields, signer ${email} + club counter-sign).`);
-    console.log(`Review + send from the CIC workspace e-Sign tab on app.usg.co.nz.`);
+    console.log(`Draft created: e-Sign doc #${docId} — "${vendorName}" (${meta.fields.length} fields, SEQUENTIAL: club signs first, then ${email}).`);
+    console.log(`Review + send from the CIC workspace e-Sign tab on app.usg.co.nz — Daniel gets the first signing email on send.`);
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;

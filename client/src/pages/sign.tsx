@@ -13,11 +13,17 @@ interface Field {
   id: number; type: string; page: number; x: number; y: number; w: number; h: number;
   required: boolean; label: string | null; value: string | null; valueImage: string | null;
 }
+interface OtherField {
+  page: number; x: number; y: number; w: number; h: number;
+  type: string; value: string | null; valueImage: string | null;
+}
 interface SignData {
   documentStatus: string; title: string; message: string | null; orgName: string;
+  sequential?: boolean;
   signer: { name: string; email: string; status: string };
   parties: { name: string; status: string }[];
   fields: Field[];
+  othersFields?: OtherField[];
 }
 
 const initialsOf = (name: string) => name.trim().split(/\s+/).map((w) => w[0] || "").join("").toUpperCase().slice(0, 4);
@@ -159,6 +165,18 @@ export default function SignPage() {
             width={760}
             renderOverlay={(pageIndex, _pw, ph) => (
               <>
+                {(data.othersFields ?? []).filter((f) => f.page === pageIndex).map((f, i) => (
+                  <div key={`o${i}`} className="absolute flex items-center overflow-hidden pointer-events-none"
+                    style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` }}>
+                    {f.valueImage ? (
+                      <img src={f.valueImage} alt="signed" className="max-h-full max-w-full object-contain" />
+                    ) : (
+                      <span
+                        style={f.type === "signature" || f.type === "initials" ? { fontFamily: "'Brush Script MT', cursive", fontSize: Math.max(12, f.h * ph * 0.6) } : { fontSize: Math.max(8, Math.min(13, f.h * ph * 0.62)) }}
+                        className="text-slate-900 truncate leading-none">{f.value}</span>
+                    )}
+                  </div>
+                ))}
                 {fields.filter((f) => f.page === pageIndex).map((f) => (
                   <FieldWidget key={f.id} field={f} value={vals[f.id]} pageH={ph}
                     filled={isFilled(f)}

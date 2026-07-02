@@ -9,7 +9,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
   FileSignature, Plus, X, Upload, Send, Copy, Download, Trash2, Ban,
-  Clock, CheckCircle2, Eye, FileText, ChevronRight, Users,
+  Clock, CheckCircle2, Eye, FileText, ChevronRight, ChevronUp, ChevronDown, Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -162,6 +162,16 @@ function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone:
   const [fileName, setFileName] = useState("");
   const [pdfBase64, setPdfBase64] = useState("");
   const [signers, setSigners] = useState([{ name: "", email: "" }]);
+  const [sequential, setSequential] = useState(true);
+
+  const moveSigner = (i: number, dir: -1 | 1) =>
+    setSigners((p) => {
+      const j = i + dir;
+      if (j < 0 || j >= p.length) return p;
+      const next = [...p];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
 
   const pickFile = (f: File | null) => {
     if (!f) return;
@@ -182,6 +192,7 @@ function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone:
         message: message.trim() || null,
         fileName,
         pdfBase64,
+        sequential,
         signers: signers.filter((s) => s.name.trim() && s.email.trim()).map((s) => ({ name: s.name.trim(), email: s.email.trim() })),
       });
       return res.json();
@@ -216,16 +227,31 @@ function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone:
             <div className="space-y-2 mt-1">
               {signers.map((s, i) => (
                 <div key={i} className="flex items-center gap-2">
+                  {sequential && signers.length > 1 && (
+                    <span className="w-5 h-5 shrink-0 rounded-full bg-amber-400/15 text-amber-500 text-[11px] font-bold flex items-center justify-center">{i + 1}</span>
+                  )}
                   <Input value={s.name} onChange={(e) => setSigners((p) => p.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} placeholder="Full name" className="h-9" />
                   <Input value={s.email} onChange={(e) => setSigners((p) => p.map((x, j) => j === i ? { ...x, email: e.target.value } : x))} placeholder="email@example.com" className="h-9" />
                   {signers.length > 1 && (
-                    <button onClick={() => setSigners((p) => p.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-red-500"><X className="w-4 h-4" /></button>
+                    <div className="flex flex-col shrink-0">
+                      <button onClick={() => moveSigner(i, -1)} disabled={i === 0} className="text-muted-foreground hover:text-foreground disabled:opacity-20"><ChevronUp className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => moveSigner(i, 1)} disabled={i === signers.length - 1} className="text-muted-foreground hover:text-foreground disabled:opacity-20"><ChevronDown className="w-3.5 h-3.5" /></button>
+                    </div>
+                  )}
+                  {signers.length > 1 && (
+                    <button onClick={() => setSigners((p) => p.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-red-500 shrink-0"><X className="w-4 h-4" /></button>
                   )}
                 </div>
               ))}
               <button onClick={() => setSigners((p) => [...p, { name: "", email: "" }])} className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1">
                 <Plus className="w-3.5 h-3.5" /> Add signer
               </button>
+              {signers.length > 1 && (
+                <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer pt-1">
+                  <input type="checkbox" checked={sequential} onChange={(e) => setSequential(e.target.checked)} className="mt-0.5 accent-amber-400" />
+                  <span><strong className="text-foreground">Sign in order</strong> — signer 2 is only invited after signer 1 has signed (their signature already on the document). Untick to invite everyone at once.</span>
+                </label>
+              )}
             </div>
           </div>
         </div>

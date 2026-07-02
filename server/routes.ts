@@ -9,7 +9,7 @@ import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
-import { eq, and, or, sql, asc, desc, inArray, isNull } from "drizzle-orm";
+import { eq, ne, and, or, sql, asc, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
@@ -9100,7 +9100,7 @@ export async function registerRoutes(
   }
   function esignSerializeDoc(d: typeof esignDocuments.$inferSelect, signers: (typeof esignSigners.$inferSelect)[]) {
     return {
-      id: d.id, title: d.title, message: d.message, status: d.status,
+      id: d.id, title: d.title, message: d.message, status: d.status, sequential: d.sequential,
       sourceFileName: d.sourceFileName, createdAt: d.createdAt, sentAt: d.sentAt, completedAt: d.completedAt,
       signers: signers.map((s) => ({
         id: s.id, name: s.name, email: s.email, status: s.status, token: s.token,
@@ -9157,7 +9157,36 @@ export async function registerRoutes(
         subject: `Please sign: ${doc.title}`,
         html: esignInviteHtml({ signerName: s.name, title: doc.title, message: doc.message, link: `${base}/sign/${s.token}`, fromName }),
       });
+      if (doc.sequential) break; // sequential: only the next signer in line
     }
+  }
+
+  // Tell the sender what just happened (signed / declined) so they can action
+  // next steps without watching the dashboard. Skips the sender's own actions.
+  async function esignNotifySender(docId: number, actorEmail: string, subject: string, bodyLine: string) {
+    try {
+      const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, docId));
+      if (!doc?.createdBy) return;
+      const [sender] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdBy));
+      if (!sender?.email || sender.email.toLowerCase() === actorEmail.toLowerCase()) return;
+      const [org] = await db.select().from(organizations).where(eq(organizations.id, doc.organizationId));
+      const fromName = org?.name || "Christchurch United";
+      const { sendEmail } = await import("./email");
+      await sendEmail({
+        to: sender.email,
+        from: `${fromName} <noreply@cufc.co.nz>`,
+        subject,
+        html: `
+    <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <div style="height:6px;background:linear-gradient(90deg,#937224,#C9A43E,#E4C56A)"></div>
+      <div style="padding:28px 24px">
+        <p style="font-size:15px;line-height:1.6">${bodyLine}</p>
+        <p style="font-size:13px;color:#666">Document: <strong>${doc.title}</strong></p>
+        <p style="font-size:12px;color:#aaa;margin-top:24px">${fromName} · ClubOS e-Sign</p>
+      </div>
+    </div>`,
+      });
+    } catch { /* notification is best-effort */ }
   }
 
   // Keep the CIC Vendors tab in sync with a linked vendor-agreement document.
@@ -9276,6 +9305,7 @@ export async function registerRoutes(
       if (!cleanSigners.length) return res.status(400).json({ message: "At least one signer (name + email) is required" });
       const [doc] = await db.insert(esignDocuments).values({
         organizationId: orgId, title, message: esignClean(b.message, 500), status: "draft",
+        sequential: b.sequential === true,
         sourceFileName: esignClean(b.fileName, 200), sourcePdf: pdfRaw, docHash: esignSha(pdfBuf),
         createdBy: req.session.userId ?? null,
       }).returning();
@@ -9411,14 +9441,22 @@ export async function registerRoutes(
         if (doc.status === "sent") await db.update(esignDocuments).set({ status: "viewed" }).where(eq(esignDocuments.id, doc.id));
         await esignLog(doc.id, signer.id, "viewed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"] });
       }
+      // Other signers' completed entries — shown read-only so e.g. the club's
+      // signature is already visible when the vendor opens the document.
+      const otherFields = await db.select().from(esignFields)
+        .where(and(eq(esignFields.documentId, doc.id), ne(esignFields.signerId, signer.id)));
       res.json({
         documentStatus: doc.status,
         title: doc.title,
         message: doc.message,
         orgName: org?.name || "Christchurch United",
+        sequential: doc.sequential,
         signer: { name: signer.name, email: signer.email, status: signer.status },
         parties: allSigners.map((s) => ({ name: s.name, status: s.status })),
         fields: myFields.map(esignSerializeField),
+        othersFields: otherFields
+          .filter((f) => f.value || f.valueImage)
+          .map((f) => ({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, type: f.type, value: f.value, valueImage: f.valueImage })),
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -9438,6 +9476,11 @@ export async function registerRoutes(
       const { signer, doc } = loaded;
       if (doc.status === "voided") return res.status(400).json({ message: "This document has been voided." });
       if (signer.status === "signed") return res.status(400).json({ message: "You have already signed this document." });
+      if (doc.sequential) {
+        const others = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
+        const waitingOn = others.find((s) => s.signingOrder < signer.signingOrder && s.status !== "signed");
+        if (waitingOn) return res.status(400).json({ message: `It's not your turn to sign yet — this document is with ${waitingOn.name} first. You'll be emailed when it's ready.` });
+      }
       const b = req.body ?? {};
       const signatureName = String(b.signatureName ?? "").trim();
       if (!signatureName) return res.status(400).json({ message: "Please type your full name to sign." });
@@ -9466,7 +9509,17 @@ export async function registerRoutes(
       await esignLog(doc.id, signer.id, "signed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"], meta: { fields: myFields.length } });
       const all = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
       const allComplete = all.every((s) => s.status === "signed");
-      if (allComplete) await esignFinalize(doc.id);
+      if (allComplete) {
+        await esignFinalize(doc.id);
+      } else {
+        // sequential: hand the envelope to the next signer in line
+        if (doc.sequential) await esignEmailSigners(doc.id, doc.organizationId, false);
+        // tell the sender who just signed and how many are left
+        const signedCount = all.filter((s) => s.status === "signed").length;
+        await esignNotifySender(doc.id, signer.email,
+          `Signed: ${signer.name} (${signedCount}/${all.length}) — ${doc.title}`,
+          `<strong>${signer.name}</strong> has signed (${signedCount} of ${all.length} signatures in). Still waiting on: ${all.filter((s) => s.status !== "signed").map((s) => s.name).join(", ")}.`);
+      }
       res.json({ ok: true, allComplete });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -9481,6 +9534,9 @@ export async function registerRoutes(
       await db.update(esignSigners).set({ status: "declined", declineReason: reason, ip: esignIp(req) }).where(eq(esignSigners.id, signer.id));
       await db.update(esignDocuments).set({ status: "declined" }).where(eq(esignDocuments.id, doc.id));
       await esignLog(doc.id, signer.id, "declined", { actorEmail: signer.email, ip: esignIp(req), meta: { reason } });
+      await esignNotifySender(doc.id, signer.email,
+        `Declined: ${signer.name} — ${doc.title}`,
+        `<strong>${signer.name}</strong> has declined to sign${reason ? ` — “${reason}”` : ""}. The document is now closed; void or re-issue it from the e-Sign tab.`);
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
