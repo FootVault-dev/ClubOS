@@ -15,7 +15,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -13460,6 +13460,21 @@ export async function registerRoutes(
   // 'pending_payment' registration, open a Stripe Checkout Session on the SEPARATE
   // CUGC Stripe account, and return { url } for the browser to redirect to. The
   // webhook below flips the row to 'paid' once payment clears.
+  // Instant discount-code check for the enrol form (UX only — the enrol endpoint
+  // below re-validates server-side and stays the source of truth for pricing).
+  app.options("/api/public/cugc/discount", (req, res) => { setCugcCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cugc/discount", async (req, res) => {
+    setCugcCors(req, res);
+    try {
+      const code = String(req.body.code || "").trim().toUpperCase();
+      const discount = code ? CUGC_DISCOUNT_CODES[code] : undefined;
+      if (!discount) return res.json({ valid: false, message: "That discount code isn't valid." });
+      const priced = computeCugcEnrolPrice(String(req.body.programSlug || "").trim(), Number(req.body.optionIndex));
+      if (!priced) return res.status(400).json({ valid: false, message: "That program or option isn't available." });
+      res.json({ valid: true, amount: discount.priceCentsOverride / 100, label: discount.label });
+    } catch (e: any) { res.status(400).json({ valid: false, message: e.message }); }
+  });
+
   app.options("/api/public/cugc/enrol", (req, res) => { setCugcCors(req, res); res.sendStatus(204); });
   app.post("/api/public/cugc/enrol", async (req, res) => {
     setCugcCors(req, res);
@@ -13568,19 +13583,39 @@ export async function registerRoutes(
           await db.update(cugcRegistrations)
             .set({ status: "paid", stripePaymentIntent: piId, paidAt: new Date() })
             .where(eq(cugcRegistrations.id, reg.id));
-          const confirm = {
-            parentName: reg.parentName,
-            gymnastName: reg.gymnastName,
-            programName: reg.programName,
-            optionLabel: reg.optionLabel,
-            sessionTime: reg.sessionTime || undefined,
-            term: reg.term || undefined,
-            amount: reg.priceCents,
-          };
-          try { await sendCugcEnrolmentConfirmation({ to: reg.email, ...confirm }); }
-          catch (e) { console.error("[CUGC Webhook] parent confirmation email failed:", e); }
-          try { await sendCugcEnrolmentConfirmation({ to: "info@cugc.co.nz", ...confirm }); }
-          catch (e) { console.error("[CUGC Webhook] club copy email failed:", e); }
+          try {
+            await sendCugcEnrolmentConfirmation({
+              to: reg.email,
+              parentName: reg.parentName,
+              gymnastName: reg.gymnastName,
+              programName: reg.programName,
+              optionLabel: reg.optionLabel,
+              sessionTime: reg.sessionTime || undefined,
+              term: reg.term || undefined,
+              amount: reg.priceCents,
+            });
+          } catch (e) { console.error("[CUGC Webhook] parent confirmation email failed:", e); }
+          try {
+            await sendCugcEnrolmentNotification({
+              to: "info@cugc.co.nz",
+              gymnastName: reg.gymnastName,
+              gymnastDob: reg.gymnastDob || undefined,
+              programName: reg.programName,
+              optionLabel: reg.optionLabel,
+              sessionTime: reg.sessionTime || undefined,
+              term: reg.term || undefined,
+              amount: reg.priceCents,
+              fullAmount: reg.fullPriceCents ?? undefined,
+              parentName: reg.parentName,
+              parentEmail: reg.email,
+              phone: reg.phone || undefined,
+              emergencyName: reg.emergencyName || undefined,
+              emergencyPhone: reg.emergencyPhone || undefined,
+              medical: reg.medical || undefined,
+              photoConsent: reg.photoConsent || undefined,
+              heardVia: reg.heardVia || undefined,
+            });
+          } catch (e) { console.error("[CUGC Webhook] admin notification email failed:", e); }
         }
       }
 
@@ -13732,6 +13767,13 @@ export async function registerRoutes(
       if (!row) return res.status(404).json({ message: "booking not found" });
       res.json(row);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Web admin: the live CUGC program structure (Gymnastics → Registrations).
+  // Served from server/cugc-pricing.ts — the same source of truth that prices
+  // the website's enrol flow, so the dashboard always mirrors cugc.co.nz.
+  app.get("/api/admin/cugc/programs", requireAuth, requireTab("cugc-registrations"), async (_req, res) => {
+    res.json({ term: CUGC_TERM, programs: CUGC_PROGRAMS });
   });
 
   // Web admin: list CUGC enrolments (Gymnastics → Registrations).

@@ -14,18 +14,20 @@ export const CUGC_TERM = {
 };
 
 export type CugcOption = { label: string; price: number }; // full-term price in NZD
-export type CugcProgram = { slug: string; title: string; options: CugcOption[] };
+export type CugcProgram = { slug: string; title: string; ages: string; options: CugcOption[] };
 
-// Mirrors apps/cugc-website/src/site.ts `programs` (slug, title, options[].label/price).
+// Mirrors apps/cugc-website/src/site.ts `programs` (slug, title, ages, options[].label/price).
 export const CUGC_PROGRAMS: CugcProgram[] = [
   {
     slug: "gymplay",
     title: "GymPlay",
+    ages: "3–6 years",
     options: [{ label: "1–2 sessions per week", price: 165 }],
   },
   {
     slug: "gymbasics",
     title: "GymBasics",
+    ages: "5–7 & 8+ years",
     options: [
       { label: "Ages 5–7 · once a week", price: 250 },
       { label: "Ages 5–7 · twice a week", price: 350 },
@@ -35,6 +37,7 @@ export const CUGC_PROGRAMS: CugcProgram[] = [
   {
     slug: "competitive",
     title: "Competitive Stream — Level 1",
+    ages: "By invitation",
     options: [
       { label: "1× per week (2 hours)", price: 295 },
       { label: "2× per week (4.5 hours)", price: 565 },

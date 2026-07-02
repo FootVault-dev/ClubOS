@@ -44,8 +44,16 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+interface ProgramConfig {
+  term: { name: string; start: string; end: string; weeks: number };
+  programs: { slug: string; title: string; ages: string; options: { label: string; price: number }[] }[];
+}
+
 function money(cents: number): string {
-  return `$${Math.round((cents || 0) / 100).toLocaleString("en-NZ")}`;
+  const dollars = (cents || 0) / 100;
+  return dollars % 1 === 0
+    ? `$${dollars.toLocaleString("en-NZ")}`
+    : `$${dollars.toLocaleString("en-NZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function fmtDate(iso: string): string {
   try {
@@ -57,16 +65,28 @@ function fmtDate(iso: string): string {
 
 export default function CugcRegistrations() {
   const { data: regos = [], isLoading } = useQuery<Registration[]>({ queryKey: ["/api/admin/cugc/registrations"] });
+  const { data: cfg } = useQuery<ProgramConfig>({ queryKey: ["/api/admin/cugc/programs"] });
   const [filter, setFilter] = useState<"all" | "paid" | "pending_payment" | "cancelled">("all");
+  const [progFilter, setProgFilter] = useState<string>("all");
   const [selected, setSelected] = useState<Registration | null>(null);
 
+  const inProgram = progFilter === "all" ? regos : regos.filter((r) => r.programSlug === progFilter);
   const counts = {
-    all: regos.length,
-    paid: regos.filter((r) => r.status === "paid").length,
-    pending_payment: regos.filter((r) => r.status === "pending_payment").length,
-    cancelled: regos.filter((r) => r.status === "cancelled").length,
+    all: inProgram.length,
+    paid: inProgram.filter((r) => r.status === "paid").length,
+    pending_payment: inProgram.filter((r) => r.status === "pending_payment").length,
+    cancelled: inProgram.filter((r) => r.status === "cancelled").length,
   };
-  const shown = filter === "all" ? regos : regos.filter((r) => r.status === filter);
+  const shown = filter === "all" ? inProgram : inProgram.filter((r) => r.status === filter);
+
+  const statsFor = (slug: string | "all") => {
+    const rows = slug === "all" ? regos : regos.filter((r) => r.programSlug === slug);
+    return {
+      paid: rows.filter((r) => r.status === "paid").length,
+      pending: rows.filter((r) => r.status === "pending_payment").length,
+      revenue: rows.filter((r) => r.status === "paid").reduce((sum, r) => sum + (r.priceCents || 0), 0),
+    };
+  };
 
   return (
     <div className="p-6 space-y-6">
@@ -74,9 +94,9 @@ export default function CugcRegistrations() {
         <div>
           <h1 className="text-2xl font-semibold text-white/90 flex items-center gap-2.5">
             <ClipboardCheck className="w-6 h-6 text-blue-400" />
-            CUGC — Enrolments
+            CUGC — Enrolments{cfg ? ` · ${cfg.term.name}` : ""}
           </h1>
-          <p className="text-sm text-white/40 mt-1">Enrolments from the cugc.co.nz enrol form. Paid via CUGC's Stripe account.</p>
+          <p className="text-sm text-white/40 mt-1">Enrolments from the cugc.co.nz enrol form. Paid via CUGC's Stripe account. Pick a program to see its roster.</p>
         </div>
         <div className="flex items-center gap-2 text-xs">
           {([
@@ -98,12 +118,43 @@ export default function CugcRegistrations() {
         </div>
       </div>
 
+      {/* Program dashboard cards — mirror the live cugc.co.nz program structure */}
+      {cfg && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[{ slug: "all", title: "All programs", ages: "" }, ...cfg.programs].map((p) => {
+            const s = statsFor(p.slug as string);
+            const active = progFilter === p.slug;
+            return (
+              <button
+                key={p.slug}
+                onClick={() => setProgFilter(p.slug)}
+                className={`rounded-2xl border p-4 text-left transition-colors ${
+                  active ? "bg-blue-500/15 border-blue-400/40" : "bg-white/[0.03] border-white/[0.08] hover:border-white/20"
+                }`}
+                data-testid={`card-program-${p.slug}`}
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className={`text-sm font-semibold truncate ${active ? "text-blue-200" : "text-white/85"}`}>{p.title}</p>
+                  {p.ages && <p className="text-[11px] text-white/35 whitespace-nowrap">{p.ages}</p>}
+                </div>
+                <div className="mt-3 flex items-baseline gap-2">
+                  <span className="text-2xl font-semibold text-white/90">{s.paid}</span>
+                  <span className="text-xs text-white/40">enrolled</span>
+                  {s.pending > 0 && <span className="text-xs text-amber-300/80">+{s.pending} pending</span>}
+                </div>
+                <p className="mt-1 text-xs text-emerald-300/80">{money(s.revenue)} paid</p>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {isLoading ? (
         <div className="text-white/40 text-sm py-16 text-center">Loading enrolments…</div>
       ) : shown.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <Inbox className="w-10 h-10 text-white/20 mb-3" />
-          <p className="text-white/60 font-medium">No enrolments {filter === "all" ? "yet" : "in this view"}</p>
+          <p className="text-white/60 font-medium">No enrolments {filter === "all" && progFilter === "all" ? "yet" : "in this view"}</p>
           <p className="text-white/35 text-sm mt-1">New enrolments from cugc.co.nz will appear here.</p>
         </div>
       ) : (

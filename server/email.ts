@@ -633,10 +633,45 @@ export async function sendCugcContactNotification(params: {
   });
 }
 
+// ── CUGC branded email shell ─────────────────────────────────────────────────
+// White card + navy (#013590) crest header + gold (#d9b10f) eyebrow — the exact
+// cugc.co.nz palette. Crest served from the live site (public URL, email-safe).
+const CUGC_LOGO_URL = "https://cugc.co.nz/img/logo.png";
+const cugcEsc = (s: string) => (s || "").replace(/</g, "&lt;");
+const cugcMoney = (cents: number) =>
+  `$${(cents / 100).toLocaleString("en-NZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const cugcRow = (label: string, value: string, opts?: { strong?: boolean }) =>
+  `<tr>
+    <td style="padding:8px 0;color:#64748b;font-size:13px;width:140px;vertical-align:top;border-bottom:1px solid #eef2f9;">${label}</td>
+    <td style="padding:8px 0;color:${opts?.strong ? "#013590" : "#191919"};font-size:14px;font-weight:${opts?.strong ? "800" : "600"};border-bottom:1px solid #eef2f9;">${value}</td>
+  </tr>`;
+function cugcEmailShell(opts: { headline: string; body: string; footerNote?: string }): string {
+  return `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f1f4fa;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="background:#ffffff;border:1px solid #e3e9f5;border-radius:18px;overflow:hidden;">
+        <div style="background:#013590;text-align:center;padding:30px 24px 26px;">
+          <img src="${CUGC_LOGO_URL}" width="76" height="76" alt="United Gymnastics crest" style="display:block;margin:0 auto 14px;border:0;" />
+          <p style="color:#d9b10f;margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">Christchurch United Gymnastics Club</p>
+          <h1 style="color:#ffffff;margin:0;font-size:23px;font-weight:800;letter-spacing:-0.2px;">${opts.headline}</h1>
+        </div>
+        <div style="padding:28px 28px 26px;">${opts.body}</div>
+      </div>
+      <p style="text-align:center;color:#8492af;font-size:11px;line-height:1.8;margin:20px 0 0;">
+        ${opts.footerNote ? `${opts.footerNote}<br/>` : ""}Christchurch United Gymnastics Club · 466 Yaldhurst Rd, Christchurch<br/>
+        <a href="https://cugc.co.nz" style="color:#013590;text-decoration:none;font-weight:600;">cugc.co.nz</a> ·
+        <a href="https://www.instagram.com/unitedgymnasticsnz/" style="color:#013590;text-decoration:none;">Instagram</a> ·
+        <a href="https://www.facebook.com/chchunitedRG/" style="color:#013590;text-decoration:none;">Facebook</a>
+      </p>
+    </div>
+  </div>`;
+}
+
 /**
  * CUGC enrolment confirmation — fired by the CUGC Stripe webhook once payment
- * clears. Sent to the parent (and, as a copy, to info@cugc.co.nz). Navy/gold
- * branded to match sendCugcContactNotification. `amount` is in cents.
+ * clears. Sent to the PARENT. Clean white-card CUGC branding with the crest;
+ * the club's internal copy is the fuller sendCugcEnrolmentNotification below.
+ * `amount` is in cents.
  */
 export async function sendCugcEnrolmentConfirmation(params: {
   to: string;
@@ -648,40 +683,83 @@ export async function sendCugcEnrolmentConfirmation(params: {
   term?: string;
   amount: number; // cents
 }): Promise<boolean> {
-  const money = `$${Math.round(params.amount / 100).toLocaleString("en-NZ")}`;
-  const row = (label: string, value: string) =>
-    `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
   const rows = [
-    row("Gymnast", params.gymnastName || "—"),
-    row("Program", params.programName || "—"),
-    row("Option", params.optionLabel || "—"),
-    ...(params.sessionTime ? [row("Session", params.sessionTime)] : []),
-    ...(params.term ? [row("Term", params.term)] : []),
-    row("Paid", money),
+    cugcRow("Gymnast", cugcEsc(params.gymnastName) || "—"),
+    cugcRow("Program", cugcEsc(params.programName) || "—"),
+    cugcRow("Option", cugcEsc(params.optionLabel) || "—"),
+    ...(params.sessionTime ? [cugcRow("Session", cugcEsc(params.sessionTime))] : []),
+    ...(params.term ? [cugcRow("Term", cugcEsc(params.term))] : []),
+    cugcRow("Paid", cugcMoney(params.amount), { strong: true }),
   ].join("");
-  const html = `
-  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#020a18;padding:36px 16px;">
-    <div style="max-width:560px;margin:0 auto;">
-      <div style="text-align:center;padding:4px 0 22px;">
-        <p style="color:#d9b10f;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United Gymnastics Club</p>
-        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">Enrolment Confirmed</h1>
-      </div>
-      <div style="background:#013590;border:1px solid #1c4aa8;border-radius:18px;padding:24px;">
-        <p style="color:#e6e6e6;font-size:15px;line-height:1.6;margin:0 0 16px;">Hi ${(params.parentName || "there").replace(/</g, "&lt;")}, thanks for enrolling with us — your gymnast's place is confirmed. Here are the details:</p>
-        <table style="width:100%;border-collapse:collapse;">${rows}</table>
-        <p style="color:#bcd0f0;font-size:13px;line-height:1.6;margin:18px 0 0;">We'll be in touch before the term starts with everything you need. Questions? Just reply to this email.</p>
-      </div>
-      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
-        Christchurch United Gymnastics Club · Christchurch United Football Club<br/>A copy of this confirmation is saved in ClubOS → Gymnastics → Registrations.
-      </p>
-    </div>
-  </div>`;
+  const body = `
+    <p style="color:#191919;font-size:15px;line-height:1.65;margin:0 0 6px;font-weight:700;">Hi ${cugcEsc(params.parentName) || "there"},</p>
+    <p style="color:#3d3d3d;font-size:15px;line-height:1.65;margin:0 0 18px;">Thank you for enrolling with us — <strong style="color:#013590;">${cugcEsc(params.gymnastName)}'s place is confirmed</strong> and we can't wait to welcome them to the gym. Here are the details:</p>
+    <table style="width:100%;border-collapse:collapse;margin:0 0 18px;">${rows}</table>
+    <p style="color:#3d3d3d;font-size:14px;line-height:1.65;margin:0 0 4px;">We'll be in touch before the term starts with everything you need for the first session. Questions in the meantime? Just reply to this email or call us on <a href="tel:+6421535005" style="color:#013590;font-weight:600;text-decoration:none;">021 535 005</a>.</p>
+    <p style="text-align:center;color:#013590;font-size:15px;font-style:italic;font-weight:600;margin:22px 0 0;">Be Bright, Be Beautiful, Be You.</p>`;
   return sendEmail({
     to: params.to,
     from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
     replyTo: "info@cugc.co.nz",
     subject: `Enrolment confirmed — ${params.gymnastName} · ${params.programName}`,
-    html,
+    html: cugcEmailShell({ headline: "Enrolment Confirmed ✓", body }),
+  });
+}
+
+/**
+ * CUGC enrolment notification — the CLUB's copy, sent to info@cugc.co.nz the
+ * moment a paid registration lands. Full admin detail (contact, DOB, emergency,
+ * medical, consent, source) so the team can action it without opening ClubOS.
+ * Reply-to is the parent, so "Reply" goes straight to the family.
+ */
+export async function sendCugcEnrolmentNotification(params: {
+  to: string;
+  gymnastName: string;
+  gymnastDob?: string;
+  programName: string;
+  optionLabel: string;
+  sessionTime?: string;
+  term?: string;
+  amount: number;      // cents actually paid
+  fullAmount?: number; // cents full price (shows a discount note when lower was paid)
+  parentName: string;
+  parentEmail: string;
+  phone?: string;
+  emergencyName?: string;
+  emergencyPhone?: string;
+  medical?: string;
+  photoConsent?: string;
+  heardVia?: string;
+}): Promise<boolean> {
+  const discounted = typeof params.fullAmount === "number" && params.fullAmount > params.amount;
+  const rows = [
+    cugcRow("Gymnast", cugcEsc(params.gymnastName) || "—"),
+    ...(params.gymnastDob ? [cugcRow("Date of birth", cugcEsc(params.gymnastDob))] : []),
+    cugcRow("Program", cugcEsc(params.programName) || "—"),
+    cugcRow("Option", cugcEsc(params.optionLabel) || "—"),
+    ...(params.sessionTime ? [cugcRow("Session", cugcEsc(params.sessionTime))] : []),
+    ...(params.term ? [cugcRow("Term", cugcEsc(params.term))] : []),
+    cugcRow("Paid", `${cugcMoney(params.amount)}${discounted ? ` <span style="color:#64748b;font-weight:400;">(full price ${cugcMoney(params.fullAmount!)} — discount code used)</span>` : ""}`, { strong: true }),
+    cugcRow("Parent / caregiver", cugcEsc(params.parentName) || "—"),
+    cugcRow("Email", `<a href="mailto:${cugcEsc(params.parentEmail)}" style="color:#013590;text-decoration:none;font-weight:600;">${cugcEsc(params.parentEmail)}</a>`),
+    ...(params.phone ? [cugcRow("Phone", cugcEsc(params.phone))] : []),
+    ...(params.emergencyName || params.emergencyPhone
+      ? [cugcRow("Emergency contact", cugcEsc([params.emergencyName, params.emergencyPhone].filter(Boolean).join(" · ")))]
+      : []),
+    ...(params.medical ? [cugcRow("Medical notes", cugcEsc(params.medical))] : []),
+    ...(params.photoConsent ? [cugcRow("Photo consent", cugcEsc(params.photoConsent))] : []),
+    ...(params.heardVia ? [cugcRow("Heard about us via", cugcEsc(params.heardVia))] : []),
+  ].join("");
+  const body = `
+    <p style="color:#3d3d3d;font-size:15px;line-height:1.65;margin:0 0 18px;">A new enrolment has just come through <a href="https://cugc.co.nz" style="color:#013590;font-weight:600;text-decoration:none;">cugc.co.nz</a> — <strong style="color:#013590;">paid and confirmed</strong>. The family has received their confirmation email.</p>
+    <table style="width:100%;border-collapse:collapse;margin:0 0 18px;">${rows}</table>
+    <p style="color:#64748b;font-size:13px;line-height:1.65;margin:0;">Hit reply to email ${cugcEsc(params.parentName) || "the family"} directly, or manage this registration in <a href="https://app.usg.co.nz" style="color:#013590;font-weight:600;text-decoration:none;">ClubOS → Gymnastics → Registrations</a>.</p>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    replyTo: params.parentEmail || "info@cugc.co.nz",
+    subject: `New enrolment — ${params.gymnastName} · ${params.programName} · ${cugcMoney(params.amount)}`,
+    html: cugcEmailShell({ headline: "New Enrolment 🎉", body, footerNote: "Internal notification for CUGC admins." }),
   });
 }
 
@@ -725,7 +803,7 @@ export async function sendCugcFreeSessionConfirmation(params: {
       <div style="background:#013590;border:1px solid #1c4aa8;border-radius:18px;padding:24px;">
         <p style="color:#e6e6e6;font-size:15px;line-height:1.6;margin:0 0 16px;">Hi ${(params.parentName || "there").replace(/</g, "&lt;")}, you're booked in — we'll see ${(params.childName || "your gymnast").replace(/</g, "&lt;")} at this class:</p>
         <table style="width:100%;border-collapse:collapse;">${rows}</table>
-        <p style="color:#bcd0f0;font-size:13px;line-height:1.6;margin:18px 0 0;">Comfy clothes, bare feet, and a drink bottle — that's all they need. Arrive 10 minutes early so we can say hello and get them settled. Need to change the day? Just reply to this email.</p>
+        <p style="color:#bcd0f0;font-size:13px;line-height:1.6;margin:18px 0 0;">Comfy clothes and a drink bottle — that's all they need. Arrive 10 minutes early so we can say hello and get them settled. Need to change the day? Just reply to this email.</p>
       </div>
       <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
         Christchurch United Gymnastics Club · United Sports Centre, Hornby<br/>This booking is saved in ClubOS → Gymnastics → Free Sessions.
