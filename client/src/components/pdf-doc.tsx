@@ -42,10 +42,13 @@ export function PdfDoc({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const displayW = Math.min(width, containerW ?? width);
+  const displayW = containerW === null ? null : Math.min(width, containerW);
 
-  // Load doc + compute per-page display dimensions.
+  // Load doc + compute per-page display dimensions (wait for the container
+  // measurement so we never do a first paint at the wrong width).
   useEffect(() => {
+    if (displayW === null) return;
+    const w = displayW;
     let cancelled = false;
     setPages([]);
     setError(null);
@@ -58,8 +61,8 @@ export function PdfDoc({
         for (let i = 1; i <= pdf.numPages; i++) {
           const p = await pdf.getPage(i);
           const vp = p.getViewport({ scale: 1 });
-          const scale = displayW / vp.width;
-          dims.push({ w: displayW, h: vp.height * scale, scale });
+          const scale = w / vp.width;
+          dims.push({ w, h: vp.height * scale, scale });
         }
         if (cancelled) return;
         setPages(dims);
