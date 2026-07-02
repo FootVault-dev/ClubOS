@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Users, Settings, Plus, Trash2, X, Shield, ShieldCheck, UserCog, User, Pencil, Key, Copy, Check, Eye, EyeOff, ExternalLink } from "lucide-react";
+import { API_SCOPES } from "@shared/api-scopes";
 
 type UserAccount = {
   id: number;
@@ -497,12 +498,15 @@ type ApiKeyData = {
   name: string;
   keyPrefix: string;
   organizationId: number;
+  allowedOrgIds: number[] | null;
   scopes: string[];
   lastUsedAt: string | null;
   expiresAt: string | null;
   active: boolean;
   createdAt: string;
 };
+
+type OrgOption = { id: number; name: string; slug: string };
 
 function ApiKeysTab() {
   const { toast } = useToast();
@@ -669,10 +673,23 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const { toast } = useToast();
   const [name, setName] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<number[]>([]);
+  const { data: orgs } = useQuery<OrgOption[]>({ queryKey: ["/api/admin/organizations"] });
+
+  const toggleScope = (scope: string) =>
+    setSelectedScopes(prev => prev.includes(scope) ? prev.filter(s => s !== scope) : [...prev, scope]);
+  const toggleOrg = (id: number) =>
+    setSelectedOrgIds(prev => prev.includes(id) ? prev.filter(o => o !== id) : [...prev, id]);
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const body: any = { name, organizationId: 1, scopes: ["read"] };
+      const body: any = {
+        name,
+        organizationId: selectedOrgIds[0],
+        allowedOrgIds: selectedOrgIds,
+        scopes: selectedScopes,
+      };
       if (expiresInDays) body.expiresInDays = parseInt(expiresInDays);
       const res = await apiRequest("POST", "/api/admin/api-keys", body);
       return res.json();
@@ -687,7 +704,7 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-[#0a0e1a] border border-amber-500/15 rounded-2xl w-full max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()} data-testid="modal-create-api-key">
+      <div className="bg-[#0a0e1a] border border-amber-500/15 rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="modal-create-api-key">
         <div className="flex items-center justify-between px-6 py-4 border-b border-amber-500/10">
           <h2 className="text-[15px] font-semibold text-white/80">Generate API Key</h2>
           <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/5 transition-colors cursor-pointer">
@@ -700,10 +717,53 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
             <Input
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="e.g. AIOS Production"
+              placeholder="e.g. Isaac AIOS — CIC + MFL"
               className="premium-input text-white/80 rounded-xl"
               data-testid="input-api-key-name"
             />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[11px] text-amber-300/30 uppercase tracking-wider font-semibold">Workspaces</label>
+            <p className="text-[11px] text-white/25">The key can only read data belonging to these workspaces.</p>
+            <div className="grid grid-cols-2 gap-1.5">
+              {(orgs || []).map(org => (
+                <button
+                  key={org.id}
+                  onClick={() => toggleOrg(org.id)}
+                  className={`text-left px-3 py-2 rounded-xl border text-[12px] transition-colors cursor-pointer ${
+                    selectedOrgIds.includes(org.id)
+                      ? "border-amber-500/40 bg-amber-500/10 text-amber-200/80"
+                      : "border-white/8 bg-white/[0.02] text-white/40 hover:bg-white/5"
+                  }`}
+                  data-testid={`toggle-org-${org.id}`}
+                >
+                  {org.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[11px] text-amber-300/30 uppercase tracking-wider font-semibold">Scopes</label>
+            <p className="text-[11px] text-white/25">Least privilege — grant only what the connected system needs.</p>
+            <div className="space-y-1.5">
+              {API_SCOPES.map(s => (
+                <button
+                  key={s.scope}
+                  onClick={() => toggleScope(s.scope)}
+                  className={`w-full text-left px-3 py-2 rounded-xl border transition-colors cursor-pointer ${
+                    selectedScopes.includes(s.scope)
+                      ? "border-amber-500/40 bg-amber-500/10"
+                      : "border-white/8 bg-white/[0.02] hover:bg-white/5"
+                  }`}
+                  data-testid={`toggle-scope-${s.scope}`}
+                >
+                  <span className={`text-[12px] font-medium ${selectedScopes.includes(s.scope) ? "text-amber-200/80" : "text-white/50"}`}>
+                    {s.label} <span className="font-mono text-[10px] opacity-60">{s.scope}</span>
+                  </span>
+                  <span className="block text-[10px] text-white/25 mt-0.5">{s.description}</span>
+                </button>
+              ))}
+            </div>
           </div>
           <div className="space-y-1.5">
             <label className="text-[11px] text-amber-300/30 uppercase tracking-wider font-semibold">Expires In (Days)</label>
@@ -718,7 +778,7 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
           </div>
           <div className="rounded-xl bg-amber-500/5 border border-amber-500/10 p-3">
             <p className="text-[11px] text-amber-400/60">
-              This key will have read-only access to revenue, analytics, registrations, customers, camps, and split test data for the Christchurch United workspace.
+              Read-only. Every request this key makes is audit-logged and rate-limited. Sponsorship, budget, inbox, e-sign and payment data are never accessible via API keys.
             </p>
           </div>
         </div>
@@ -728,7 +788,7 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
           </Button>
           <Button
             onClick={() => createMutation.mutate()}
-            disabled={!name || createMutation.isPending}
+            disabled={!name || selectedScopes.length === 0 || selectedOrgIds.length === 0 || createMutation.isPending}
             className="bg-gradient-to-r from-amber-500 to-amber-600 text-black border-0 rounded-xl h-9 text-[13px] font-semibold"
             data-testid="button-generate-key"
           >

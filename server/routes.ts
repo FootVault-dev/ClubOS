@@ -1,10 +1,11 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs } from "@shared/schema";
+import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
-import { canAccessTab } from "@shared/tabs";
+import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
@@ -10237,6 +10238,10 @@ export async function registerRoutes(
     return { raw, prefix, hash };
   }
 
+  // Per-key sliding-window rate limit (in-memory — single Fly machine).
+  const API_KEY_RATE_LIMIT_PER_MIN = 240;
+  const apiKeyHits = new Map<number, number[]>();
+
   async function requireApiKey(req: Request, res: Response, next: NextFunction) {
     try {
       const authHeader = req.headers.authorization;
@@ -10252,30 +10257,116 @@ export async function registerRoutes(
       if (apiKey.expiresAt && new Date(apiKey.expiresAt) < new Date()) {
         return res.status(401).json({ error: "API key has expired" });
       }
-      await db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, apiKey.id));
+
+      const now = Date.now();
+      const hits = (apiKeyHits.get(apiKey.id) || []).filter((t) => now - t < 60_000);
+      if (hits.length >= API_KEY_RATE_LIMIT_PER_MIN) {
+        res.setHeader("Retry-After", "60");
+        return res.status(429).json({ error: `Rate limit exceeded (${API_KEY_RATE_LIMIT_PER_MIN} requests/minute per key)` });
+      }
+      hits.push(now);
+      apiKeyHits.set(apiKey.id, hits);
+
+      // Stamp last-used at most once a minute — every request already writes
+      // an audit row below, so this stays a cheap coarse signal for the UI.
+      if (!apiKey.lastUsedAt || now - new Date(apiKey.lastUsedAt).getTime() > 60_000) {
+        db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, apiKey.id)).catch(() => {});
+      }
+
+      (req as any).apiKeyId = apiKey.id;
       (req as any).apiKeyOrg = apiKey.organizationId;
-      (req as any).apiKeyScopes = apiKey.scopes;
+      (req as any).apiKeyScopes = apiKey.scopes || [];
+      (req as any).apiKeyOrgIds =
+        apiKey.allowedOrgIds && apiKey.allowedOrgIds.length > 0
+          ? apiKey.allowedOrgIds
+          : [apiKey.organizationId];
+
+      // Audit trail — one row per request, written after the response settles.
+      res.on("finish", () => {
+        db.insert(apiKeyRequestLogs).values({
+          apiKeyId: apiKey.id,
+          method: req.method,
+          path: (req.originalUrl || req.path || "").slice(0, 500),
+          status: res.statusCode,
+          ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket?.remoteAddress || null,
+        }).catch(() => {});
+      });
+
       next();
     } catch (error: any) {
       res.status(500).json({ error: "Authentication error" });
     }
   }
 
+  // Scope gate — every /api/v1/* endpoint names the scope it requires.
+  function requireScope(scope: string) {
+    return (req: Request, res: Response, next: NextFunction) => {
+      const scopes: string[] = (req as any).apiKeyScopes || [];
+      if (!scopes.includes(scope)) {
+        return res.status(403).json({
+          error: `This API key does not have the '${scope}' scope`,
+          grantedScopes: scopes,
+        });
+      }
+      next();
+    };
+  }
+
+  // Resolve which of the key's allowed orgs are a given workspace type
+  // (league endpoints only ever see league orgs, tournament endpoints only
+  // tournament orgs, etc.). Optional ?org=<slug> narrows within the allowed set.
+  async function apiKeyOrgsOfType(req: Request, type: WorkspaceType): Promise<{ id: number; slug: string; name: string }[]> {
+    const orgIds: number[] = (req as any).apiKeyOrgIds || [];
+    if (orgIds.length === 0) return [];
+    const rows = await db
+      .select({ id: organizations.id, slug: organizations.slug, name: organizations.name })
+      .from(organizations)
+      .where(inArray(organizations.id, orgIds));
+    let matches = rows.filter((o) => workspaceTypeFor(o.slug) === type);
+    const requested = typeof req.query.org === "string" ? req.query.org : null;
+    if (requested) matches = matches.filter((o) => o.slug === requested);
+    return matches;
+  }
+
   // ── Admin: API Key Management (super_admin only) ──
+  // Workspace list for the key-creation UI (super_admin only).
+  app.get("/api/admin/organizations", requireSuperAdmin, async (_req, res) => {
+    try {
+      const orgs = await db
+        .select({ id: organizations.id, name: organizations.name, slug: organizations.slug })
+        .from(organizations)
+        .where(eq(organizations.active, true))
+        .orderBy(asc(organizations.id));
+      res.json(orgs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/admin/api-keys", requireSuperAdmin, async (req, res) => {
     try {
-      const orgId = parseInt(req.query.orgId as string) || 1;
-      const keys = await db.select({
+      // Keys are workspace-spanning (a key can be bound to several orgs), so
+      // list them all; ?orgId= narrows to keys whose allowed set includes it.
+      const orgFilter = parseInt(req.query.orgId as string) || null;
+      let keys = await db.select({
         id: apiKeys.id,
         name: apiKeys.name,
         keyPrefix: apiKeys.keyPrefix,
         organizationId: apiKeys.organizationId,
+        allowedOrgIds: apiKeys.allowedOrgIds,
         scopes: apiKeys.scopes,
         lastUsedAt: apiKeys.lastUsedAt,
         expiresAt: apiKeys.expiresAt,
         active: apiKeys.active,
         createdAt: apiKeys.createdAt,
-      }).from(apiKeys).where(eq(apiKeys.organizationId, orgId)).orderBy(desc(apiKeys.createdAt));
+      }).from(apiKeys).orderBy(desc(apiKeys.createdAt));
+      if (orgFilter) {
+        keys = keys.filter((k) =>
+          k.allowedOrgIds && k.allowedOrgIds.length > 0
+            ? k.allowedOrgIds.includes(orgFilter)
+            : k.organizationId === orgFilter
+        );
+      }
       res.json(keys);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -10284,21 +10375,58 @@ export async function registerRoutes(
 
   app.post("/api/admin/api-keys", requireSuperAdmin, async (req, res) => {
     try {
-      const { name, organizationId, expiresInDays } = req.body;
+      const { name, organizationId, allowedOrgIds, scopes, expiresInDays } = req.body;
       if (!name) return res.status(400).json({ message: "name is required" });
-      const orgId = parseInt(organizationId) || 1;
+
+      // Explicit least-privilege: scopes are required and must all be known.
+      if (!Array.isArray(scopes) || scopes.length === 0) {
+        return res.status(400).json({ message: "scopes is required — pick at least one scope", validScopes: API_SCOPES.map((s) => s.scope) });
+      }
+      const badScopes = scopes.filter((s: any) => typeof s !== "string" || !isValidApiScope(s));
+      if (badScopes.length > 0) {
+        return res.status(400).json({ message: `Unknown scopes: ${badScopes.join(", ")}`, validScopes: API_SCOPES.map((s) => s.scope) });
+      }
+
+      // Org binding — every requested org must exist.
+      const requestedOrgIds: number[] = Array.isArray(allowedOrgIds)
+        ? allowedOrgIds.map((v: any) => parseInt(v)).filter((v: number) => !isNaN(v))
+        : [];
+      const primaryOrgId = parseInt(organizationId) || requestedOrgIds[0] || 1;
+      const bindOrgIds = requestedOrgIds.length > 0 ? Array.from(new Set([primaryOrgId, ...requestedOrgIds])) : [primaryOrgId];
+      const existingOrgs = await db.select({ id: organizations.id }).from(organizations).where(inArray(organizations.id, bindOrgIds));
+      if (existingOrgs.length !== bindOrgIds.length) {
+        return res.status(400).json({ message: "One or more organization IDs do not exist" });
+      }
+
       const { raw, prefix, hash } = generateApiKey();
       const expiresAt = expiresInDays && parseInt(expiresInDays) > 0 ? new Date(Date.now() + parseInt(expiresInDays) * 86400000) : null;
       const [created] = await db.insert(apiKeys).values({
         name: String(name).slice(0, 100),
         keyHash: hash,
         keyPrefix: prefix,
-        organizationId: orgId,
+        organizationId: primaryOrgId,
+        allowedOrgIds: bindOrgIds,
         createdById: (req as any).session.userId,
-        scopes: ["read"],
+        scopes,
         expiresAt,
       }).returning();
-      res.json({ id: created.id, name: created.name, key: raw, keyPrefix: prefix, expiresAt: created.expiresAt, scopes: created.scopes, message: "Save this key now — it won't be shown again." });
+      res.json({ id: created.id, name: created.name, key: raw, keyPrefix: prefix, expiresAt: created.expiresAt, scopes: created.scopes, allowedOrgIds: created.allowedOrgIds, message: "Save this key now — it won't be shown again." });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Audit trail viewer — recent requests per key (super_admin only).
+  app.get("/api/admin/api-keys/:id/logs", requireSuperAdmin, async (req, res) => {
+    try {
+      const keyId = parseInt(req.params.id as string);
+      if (isNaN(keyId)) return res.status(400).json({ message: "Invalid key ID" });
+      const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+      const logs = await db.select().from(apiKeyRequestLogs)
+        .where(eq(apiKeyRequestLogs.apiKeyId, keyId))
+        .orderBy(desc(apiKeyRequestLogs.createdAt))
+        .limit(limit);
+      res.json(logs);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -10316,7 +10444,7 @@ export async function registerRoutes(
   });
 
   // ── External API v1 (authenticated by API key) ──
-  app.get("/api/v1/overview", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/overview", requireApiKey, requireScope("overview:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
       const days = parseInt(req.query.days as string) || 30;
@@ -10374,7 +10502,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/v1/revenue", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/revenue", requireApiKey, requireScope("overview:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
       const days = parseInt(req.query.days as string) || 30;
@@ -10413,7 +10541,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/v1/analytics", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/analytics", requireApiKey, requireScope("analytics:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
       const days = parseInt(req.query.days as string) || 30;
@@ -10501,7 +10629,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/v1/customers", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/customers", requireApiKey, requireScope("customers:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
@@ -10551,7 +10679,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/v1/camps", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/camps", requireApiKey, requireScope("camps:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
 
@@ -10591,7 +10719,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/v1/split-tests", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/split-tests", requireApiKey, requireScope("analytics:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
 
@@ -10646,7 +10774,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/v1/registrations", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/registrations", requireApiKey, requireScope("registrations:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
       const days = parseInt(req.query.days as string) || 30;
@@ -10698,7 +10826,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/v1/order-timing", requireApiKey, async (req: Request, res: Response) => {
+  app.get("/api/v1/order-timing", requireApiKey, requireScope("overview:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
       const days = parseInt(req.query.days as string) || 30;
@@ -10734,6 +10862,470 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  // ── External API v1 — League (MFL), scope league:read ──────────────────────
+  // Only ever reads league-type orgs within the key's allowed set. Team rows
+  // expose the captain's contact details + payment status (what a coordinator
+  // chases) — never split-pay member cards or Stripe identifiers.
+
+  app.get("/api/v1/league/summary", requireApiKey, requireScope("league:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "league");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no league workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT lc.id, lc.name, lc.start_date, lc.end_date, lc.registration_status, lc.youth_league, lc.archived,
+               COUNT(DISTINCT ld.id) as divisions,
+               COUNT(DISTINCT lt.id) FILTER (WHERE lt.active) as teams,
+               COUNT(DISTINCT lt.id) FILTER (WHERE lt.active AND lt.payment_status = 'paid_in_full') as teams_paid,
+               COUNT(DISTINCT lt.id) FILTER (WHERE lt.active AND lt.payment_status = 'deposit_paid') as teams_deposit,
+               COUNT(DISTINCT lt.id) FILTER (WHERE lt.active AND COALESCE(lt.payment_status, 'unpaid') = 'unpaid') as teams_unpaid
+        FROM league_competitions lc
+        LEFT JOIN league_divisions ld ON ld.competition_id = lc.id
+        LEFT JOIN league_teams lt ON lt.competition_id = lc.id
+        WHERE lc.organization_id IN (${orgIdList}) AND lc.active = true
+        GROUP BY lc.id
+        ORDER BY lc.created_at DESC
+      `));
+
+      res.json({
+        organizations: orgs,
+        competitions: rows.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          startDate: c.start_date,
+          endDate: c.end_date,
+          registrationStatus: c.registration_status,
+          youthLeague: c.youth_league,
+          archived: c.archived,
+          divisions: Number(c.divisions),
+          teams: Number(c.teams),
+          teamsPaidInFull: Number(c.teams_paid),
+          teamsDepositPaid: Number(c.teams_deposit),
+          teamsUnpaid: Number(c.teams_unpaid),
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/v1/league/teams", requireApiKey, requireScope("league:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "league");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no league workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+      const competitionId = parseInt(req.query.competition_id as string) || null;
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT lt.id, lt.name, lt.contact_name, lt.contact_email, lt.contact_phone,
+               lt.payment_status, lt.active, lt.created_at,
+               lc.id as competition_id, lc.name as competition, ld.name as division, ld.day_of_week
+        FROM league_teams lt
+        JOIN league_competitions lc ON lt.competition_id = lc.id
+        LEFT JOIN league_divisions ld ON lt.division_id = ld.id
+        WHERE lt.organization_id IN (${orgIdList})
+          ${competitionId ? `AND lt.competition_id = ${competitionId}` : ""}
+        ORDER BY lc.created_at DESC, ld.sort_order NULLS LAST, lt.name
+      `));
+
+      res.json({
+        teams: rows.map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          competitionId: t.competition_id,
+          competition: t.competition,
+          division: t.division,
+          dayOfWeek: t.day_of_week,
+          contactName: t.contact_name,
+          contactEmail: t.contact_email,
+          contactPhone: t.contact_phone,
+          paymentStatus: t.payment_status,
+          active: t.active,
+          createdAt: t.created_at,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/v1/league/games", requireApiKey, requireScope("league:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "league");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no league workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+      const days = Math.min(parseInt(req.query.days as string) || 14, 120);
+      const competitionId = parseInt(req.query.competition_id as string) || null;
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT lg.id, lg.game_date, lg.start_time, lg.end_time, lg.location, lg.surface,
+               lg.status, lg.home_score, lg.away_score,
+               ht.name as home_team, aw.name as away_team,
+               lc.name as competition, ld.name as division
+        FROM league_games lg
+        JOIN league_competitions lc ON lg.competition_id = lc.id
+        LEFT JOIN league_divisions ld ON lg.division_id = ld.id
+        LEFT JOIN league_teams ht ON lg.home_team_id = ht.id
+        LEFT JOIN league_teams aw ON lg.away_team_id = aw.id
+        WHERE lc.organization_id IN (${orgIdList})
+          AND lg.game_date BETWEEN current_date - ${days} AND current_date + ${days}
+          ${competitionId ? `AND lg.competition_id = ${competitionId}` : ""}
+        ORDER BY lg.game_date, lg.start_time
+      `));
+
+      res.json({
+        windowDays: days,
+        games: rows.map((g: any) => ({
+          id: g.id,
+          date: g.game_date,
+          startTime: g.start_time,
+          endTime: g.end_time,
+          location: g.location,
+          surface: g.surface,
+          status: g.status,
+          competition: g.competition,
+          division: g.division,
+          homeTeam: g.home_team,
+          awayTeam: g.away_team,
+          homeScore: g.home_score,
+          awayScore: g.away_score,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── External API v1 — Tournament (CIC), scope tournament:read ──────────────
+  // Team rows expose the manager contact + paid amount (what a tournament
+  // director chases). Player squads, DOBs and ID documents are NEVER exposed
+  // through API keys — age verification stays inside the admin UI.
+
+  app.get("/api/v1/tournament/summary", requireApiKey, requireScope("tournament:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "tournament");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT t.id, t.name, t.age_group, t.start_date, t.end_date, t.status, t.registration_status,
+               COUNT(DISTINCT tt.id) FILTER (WHERE tt.active) as teams,
+               COUNT(DISTINCT tg.id) as games,
+               COUNT(DISTINCT tg.id) FILTER (WHERE tg.home_score IS NOT NULL AND tg.away_score IS NOT NULL) as games_completed
+        FROM tournaments t
+        LEFT JOIN tournament_teams tt ON tt.tournament_id = t.id
+        LEFT JOIN tournament_games tg ON tg.tournament_id = t.id
+        WHERE t.organization_id IN (${orgIdList}) AND t.archived = false
+        GROUP BY t.id
+        ORDER BY t.start_date DESC NULLS LAST, t.id DESC
+      `));
+
+      res.json({
+        organizations: orgs,
+        tournaments: rows.map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          ageGroup: t.age_group,
+          startDate: t.start_date,
+          endDate: t.end_date,
+          status: t.status,
+          registrationStatus: t.registration_status,
+          teams: Number(t.teams),
+          games: Number(t.games),
+          gamesCompleted: Number(t.games_completed),
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/v1/tournament/teams", requireApiKey, requireScope("tournament:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "tournament");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+      const tournamentId = parseInt(req.query.tournament_id as string) || null;
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT tt.id, tt.name, tt.club_name, tt.contact_name, tt.contact_email, tt.contact_phone,
+               tt.registration_status, tt.roster_status, tt.paid_amount_cents, tt.active, tt.created_at,
+               t.id as tournament_id, t.name as tournament, t.age_group,
+               grp.name as group_name, cl.name as club_roster_name
+        FROM tournament_teams tt
+        JOIN tournaments t ON tt.tournament_id = t.id
+        LEFT JOIN tournament_groups grp ON tt.group_id = grp.id
+        LEFT JOIN clubs cl ON tt.club_id = cl.id
+        WHERE t.organization_id IN (${orgIdList})
+          ${tournamentId ? `AND tt.tournament_id = ${tournamentId}` : ""}
+        ORDER BY t.start_date DESC NULLS LAST, t.id DESC, grp.name NULLS LAST, tt.name
+      `));
+
+      res.json({
+        teams: rows.map((t: any) => ({
+          id: t.id,
+          tournamentId: t.tournament_id,
+          tournament: t.tournament,
+          ageGroup: t.age_group,
+          name: t.name,
+          clubName: t.club_name || t.club_roster_name,
+          group: t.group_name,
+          registrationStatus: t.registration_status,
+          rosterStatus: t.roster_status,
+          paidAmountCents: t.paid_amount_cents,
+          contactName: t.contact_name,
+          contactEmail: t.contact_email,
+          contactPhone: t.contact_phone,
+          active: t.active,
+          createdAt: t.created_at,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/v1/tournament/fixtures", requireApiKey, requireScope("tournament:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "tournament");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+      const tournamentId = parseInt(req.query.tournament_id as string) || null;
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT tg.id, tg.game_number, tg.round_number, tg.stage, tg.stage_detail,
+               tg.game_date, tg.start_time, tg.end_time, tg.field, tg.status,
+               tg.home_score, tg.away_score, tg.home_penalties, tg.away_penalties,
+               COALESCE(ht.name, tg.home_team_placeholder) as home_team,
+               COALESCE(aw.name, tg.away_team_placeholder) as away_team,
+               t.id as tournament_id, t.name as tournament, t.age_group,
+               grp.name as group_name
+        FROM tournament_games tg
+        JOIN tournaments t ON tg.tournament_id = t.id
+        LEFT JOIN tournament_groups grp ON tg.group_id = grp.id
+        LEFT JOIN tournament_teams ht ON tg.home_team_id = ht.id
+        LEFT JOIN tournament_teams aw ON tg.away_team_id = aw.id
+        WHERE t.organization_id IN (${orgIdList})
+          ${tournamentId ? `AND tg.tournament_id = ${tournamentId}` : ""}
+        ORDER BY tg.game_date NULLS LAST, tg.start_time NULLS LAST, tg.game_number
+      `));
+
+      res.json({
+        fixtures: rows.map((g: any) => ({
+          id: g.id,
+          tournamentId: g.tournament_id,
+          tournament: g.tournament,
+          ageGroup: g.age_group,
+          gameNumber: g.game_number,
+          roundNumber: g.round_number,
+          stage: g.stage,
+          stageDetail: g.stage_detail,
+          group: g.group_name,
+          date: g.game_date,
+          startTime: g.start_time,
+          endTime: g.end_time,
+          field: g.field,
+          status: g.status,
+          homeTeam: g.home_team,
+          awayTeam: g.away_team,
+          homeScore: g.home_score,
+          awayScore: g.away_score,
+          homePenalties: g.home_penalties,
+          awayPenalties: g.away_penalties,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/v1/tournament/skills", requireApiKey, requireScope("tournament:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "tournament");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+      const ageGroup = typeof req.query.age_group === "string" && /^U\d{1,2}$/i.test(req.query.age_group) ? req.query.age_group.toUpperCase() : null;
+      const challenge = typeof req.query.challenge === "string" && ["juggling", "dribble_pass_finish"].includes(req.query.challenge) ? req.query.challenge : null;
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT id, player_name, club_name, age_group, challenge, score, scored_at, source, created_at
+        FROM skills_challenge_entries
+        WHERE organization_id IN (${orgIdList})
+          ${ageGroup ? `AND age_group = '${ageGroup}'` : ""}
+          ${challenge ? `AND challenge = '${challenge}'` : ""}
+        ORDER BY created_at DESC
+      `));
+
+      res.json({
+        entries: rows.map((e: any) => ({
+          id: e.id,
+          playerName: e.player_name,
+          clubName: e.club_name,
+          ageGroup: e.age_group,
+          challenge: e.challenge,
+          score: e.score !== null ? Number(e.score) : null,
+          scoredAt: e.scored_at,
+          source: e.source,
+          createdAt: e.created_at,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── External API v1 — CIC Summer 7s, scope cic7s:read ──────────────────────
+  app.get("/api/v1/cic7s/registrations", requireApiKey, requireScope("cic7s:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "tournament");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+      const status = typeof req.query.status === "string" && ["new", "contacted", "confirmed", "archived"].includes(req.query.status) ? req.query.status : null;
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT id, first_name, last_name, email, phone, location, category, status, created_at
+        FROM cic7s_registrations
+        WHERE organization_id IN (${orgIdList})
+          ${status ? `AND status = '${status}'` : ""}
+        ORDER BY created_at DESC
+      `));
+
+      res.json({
+        registrations: rows.map((r: any) => ({
+          id: r.id,
+          firstName: r.first_name,
+          lastName: r.last_name,
+          email: r.email,
+          phone: r.phone,
+          location: r.location,
+          category: r.category,
+          status: r.status,
+          createdAt: r.created_at,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── External API v1 — Sporty / NZF registration export, scope sporty:read ──
+  // Exactly the Integration-1 field set from the CUFC × Sporty brief: identity,
+  // contact, guardian + emergency (for minors), registration details, and a
+  // paid/outstanding flag. Deliberately excluded: medical data (allergies,
+  // epi-pen, notes), school details, Stripe/payment identifiers, marketing
+  // attribution. Defaults to academy programmes (the NZF-registrable cohort).
+  app.get("/api/v1/sporty/registrations", requireApiKey, requireScope("sporty:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "camps");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no club workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+
+      const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+      const offset = parseInt(req.query.offset as string) || 0;
+      const updatedSince = typeof req.query.updated_since === "string" && !isNaN(Date.parse(req.query.updated_since))
+        ? new Date(req.query.updated_since).toISOString()
+        : null;
+      const programTypeParam = typeof req.query.program_type === "string" ? req.query.program_type : "academy";
+      const programType = ["academy", "holiday_camp", "league_team", "all"].includes(programTypeParam) ? programTypeParam : "academy";
+
+      const whereClauses = [
+        `p.organization_id IN (${orgIdList})`,
+        `r.status IN ('confirmed', 'pending')`,
+        programType !== "all" ? `p.type = '${programType}'` : null,
+        updatedSince ? `r.registered_at >= '${updatedSince}'` : null,
+      ].filter(Boolean).join(" AND ");
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT DISTINCT
+               r.id as registration_id, r.status, r.registered_at,
+               p.name as program_name, p.type as program_type,
+               p.age_min, p.age_max, p.start_date as season_start, p.end_date as season_end,
+               ch.id as child_id, ch.first_name as child_first, ch.last_name as child_last,
+               ch.date_of_birth as child_dob, ch.gender as child_gender,
+               g.first_name as guardian_first, g.last_name as guardian_last,
+               g.email as guardian_email, g.phone as guardian_phone, g.address as guardian_address,
+               g.date_of_birth as contact_dob, g.gender as contact_gender,
+               g.emergency_contact, g.emergency_phone
+        FROM registrations r
+        JOIN programs p ON r.program_id = p.id
+        JOIN contacts g ON r.contact_id = g.id
+        LEFT JOIN registration_items ri ON ri.registration_id = r.id
+        LEFT JOIN children ch ON ri.child_id = ch.id
+        WHERE ${whereClauses}
+        ORDER BY r.registered_at DESC, r.id, ch.id
+        LIMIT ${limit} OFFSET ${offset}
+      `));
+
+      const { rows: countRows } = await db.execute(sql.raw(`
+        SELECT COUNT(DISTINCT (r.id, ch.id)) as total
+        FROM registrations r
+        JOIN programs p ON r.program_id = p.id
+        LEFT JOIN registration_items ri ON ri.registration_id = r.id
+        LEFT JOIN children ch ON ri.child_id = ch.id
+        WHERE ${whereClauses}
+      `));
+
+      res.json({
+        programType,
+        updatedSince,
+        registrations: rows.map((row: any) => {
+          const isChild = row.child_id !== null;
+          return {
+            registrationId: row.registration_id,
+            registrantType: isChild ? "child" : "adult",
+            player: {
+              firstName: isChild ? row.child_first : row.guardian_first,
+              lastName: isChild ? row.child_last : row.guardian_last,
+              dateOfBirth: isChild ? row.child_dob : row.contact_dob,
+              gender: isChild ? row.child_gender : row.contact_gender,
+            },
+            guardian: isChild ? {
+              name: `${row.guardian_first} ${row.guardian_last}`,
+              email: row.guardian_email,
+              phone: row.guardian_phone,
+              address: row.guardian_address,
+            } : null,
+            contact: !isChild ? {
+              email: row.guardian_email,
+              phone: row.guardian_phone,
+              address: row.guardian_address,
+            } : null,
+            emergency: (row.emergency_contact || row.emergency_phone) ? {
+              name: row.emergency_contact,
+              phone: row.emergency_phone,
+            } : null,
+            registration: {
+              program: row.program_name,
+              programType: row.program_type,
+              ageMin: row.age_min,
+              ageMax: row.age_max,
+              seasonStart: row.season_start,
+              seasonEnd: row.season_end,
+              registeredAt: row.registered_at,
+            },
+            financial: {
+              paid: row.status === "confirmed",
+              status: row.status,
+            },
+          };
+        }),
+        total: Number(countRows[0]?.total || 0),
+        limit,
+        offset,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Machine-readable spec of the whole /api/v1 surface (for Sporty's devs and
+  // any future integration partner). Any valid key can read it.
+  app.get("/api/v1/openapi.json", requireApiKey, async (_req: Request, res: Response) => {
+    const { OPENAPI_V1_SPEC } = await import("./openapi-v1");
+    res.json(OPENAPI_V1_SPEC);
   });
 
   // ─── United Prints Routes ───────────────────────────────────

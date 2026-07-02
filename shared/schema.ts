@@ -1383,11 +1383,29 @@ export const apiKeys = pgTable("api_keys", {
   organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   createdById: integer("created_by_id").notNull().references(() => users.id),
   scopes: text("scopes").array().notNull().default(sql`ARRAY['read']::text[]`),
+  // Orgs this key may read. NULL/empty = just organizationId (legacy single-org
+  // keys). Enforced in requireApiKey; scopes gate WHAT, this gates WHOSE.
+  allowedOrgIds: integer("allowed_org_ids").array(),
   lastUsedAt: timestamp("last_used_at"),
   expiresAt: timestamp("expires_at"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// One row per authenticated /api/v1/* request — the audit trail for every
+// external system holding a key (staff AIOS collectors, Sporty). Written
+// fire-and-forget after the response settles.
+export const apiKeyRequestLogs = pgTable("api_key_request_logs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  apiKeyId: integer("api_key_id").notNull().references(() => apiKeys.id, { onDelete: "cascade" }),
+  method: text("method").notNull(),
+  path: text("path").notNull(),
+  status: integer("status"),
+  ip: text("ip"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ApiKeyRequestLog = typeof apiKeyRequestLogs.$inferSelect;
 
 export const insertDiscountSchema2 = createInsertSchema(discounts).omit({ id: true, createdAt: true, updatedAt: true, timesUsed: true, totalDiscountedCents: true });
 export type InsertDiscount2 = z.infer<typeof insertDiscountSchema2>;
