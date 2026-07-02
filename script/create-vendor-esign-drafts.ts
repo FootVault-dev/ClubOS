@@ -18,6 +18,9 @@ import { Pool } from "pg";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set");
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
