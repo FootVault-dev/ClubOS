@@ -685,6 +685,102 @@ export async function sendCugcEnrolmentConfirmation(params: {
   });
 }
 
+/**
+ * CUGC free session (trial) booking confirmation — sent to the parent the
+ * moment they book. Mirrors the enrolment-confirmation branding. The booking
+ * is for a CONCRETE class date/time so coaches can plan and attendance can be
+ * marked off in Gymnastics → Free Sessions.
+ */
+export async function sendCugcFreeSessionConfirmation(params: {
+  to: string;
+  parentName: string;
+  childName: string;
+  programName: string;
+  sessionLabel: string;
+  sessionDate: string; // ISO date
+}): Promise<boolean> {
+  const niceDate = (() => {
+    try {
+      return new Date(`${params.sessionDate}T09:00:00+12:00`).toLocaleDateString("en-NZ", {
+        weekday: "long", day: "numeric", month: "long",
+      });
+    } catch { return params.sessionDate; }
+  })();
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("Gymnast", params.childName || "—"),
+    row("Program", params.programName || "—"),
+    row("Date", niceDate),
+    row("Session", params.sessionLabel || "—"),
+    row("Cost", "Free"),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#020a18;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#d9b10f;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United Gymnastics Club</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">Free Session Booked</h1>
+      </div>
+      <div style="background:#013590;border:1px solid #1c4aa8;border-radius:18px;padding:24px;">
+        <p style="color:#e6e6e6;font-size:15px;line-height:1.6;margin:0 0 16px;">Hi ${(params.parentName || "there").replace(/</g, "&lt;")}, you're booked in — we'll see ${(params.childName || "your gymnast").replace(/</g, "&lt;")} at this class:</p>
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#bcd0f0;font-size:13px;line-height:1.6;margin:18px 0 0;">Comfy clothes, bare feet, and a drink bottle — that's all they need. Arrive 10 minutes early so we can say hello and get them settled. Need to change the day? Just reply to this email.</p>
+      </div>
+      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Gymnastics Club · United Sports Centre, Hornby<br/>This booking is saved in ClubOS → Gymnastics → Free Sessions.
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    replyTo: "info@cugc.co.nz",
+    subject: `Free session booked — ${params.childName} · ${niceDate}`,
+    html,
+  });
+}
+
+/** Internal heads-up to the club when a free session is booked. */
+export async function sendCugcFreeSessionNotification(params: {
+  to: string;
+  childName: string;
+  childAge?: number | null;
+  parentName: string;
+  email: string;
+  phone?: string | null;
+  programName: string;
+  sessionLabel: string;
+  sessionDate: string;
+  notes?: string | null;
+}): Promise<boolean> {
+  const line = (label: string, value: string) =>
+    `<p style="margin:4px 0;color:#e6e6e6;font-size:14px;"><span style="color:#7d8ba8;">${label}:</span> ${value}</p>`;
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#020a18;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="background:#013590;border:1px solid #1c4aa8;border-radius:18px;padding:24px;">
+        <p style="color:#d9b10f;margin:0 0 10px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">New free session booking</p>
+        ${line("Gymnast", `${params.childName}${params.childAge ? ` (age ${params.childAge})` : ""}`)}
+        ${line("Program", params.programName)}
+        ${line("Class", `${params.sessionLabel} — ${params.sessionDate}`)}
+        ${line("Parent", params.parentName)}
+        ${line("Email", params.email)}
+        ${params.phone ? line("Phone", params.phone) : ""}
+        ${params.notes ? line("Notes", params.notes.replace(/</g, "&lt;")) : ""}
+        <p style="color:#bcd0f0;font-size:13px;line-height:1.6;margin:14px 0 0;">Manage it in ClubOS → Gymnastics → Free Sessions (mark attended / no-show / reschedule).</p>
+      </div>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    replyTo: params.email,
+    subject: `Free session: ${params.childName} · ${params.sessionLabel} ${params.sessionDate}`,
+    html,
+  });
+}
+
 /** Balance instalment successfully collected. */
 export async function sendLeagueBalancePaidEmail(params: {
   registrationId: number;

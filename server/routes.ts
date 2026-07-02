@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
@@ -15,9 +15,9 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendClubLogoConsentNotification, sendCicBroadcastEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
-import { computeCugcEnrolPrice, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
+import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -13510,6 +13510,9 @@ export async function registerRoutes(
         photoConsent: String(req.body.photoConsent || "").trim() || null,
         heardVia: String(req.body.heardVia || "").trim() || null,
         status: "pending_payment",
+        // First/last-touch ad attribution captured client-side on cugc.co.nz
+        // (utm_*, fbclid, referrer, landing, visits) — feeds CAC/LTV reporting.
+        attribution: req.body.attribution && typeof req.body.attribution === "object" ? req.body.attribution : null,
       }).returning();
 
       // Custom EMBEDDED checkout — return a PaymentIntent clientSecret for our own
@@ -13586,6 +13589,149 @@ export async function registerRoutes(
       console.error("[CUGC Webhook] error:", e);
       res.status(400).json({ message: `Webhook Error: ${e.message}` });
     }
+  });
+
+  // ── CUGC Free Sessions (trial bookings) ─────────────────────────────────────
+  // cugc.co.nz/free-session POSTs here. The visitor books a CONCRETE class
+  // (program + date + time) so coaches know exactly who's coming — no more
+  // untracked walk-in trials. Fires a server-side Meta Lead (event_id
+  // `cugc_trial_<id>`, deduped against the browser pixel's matching eventID)
+  // so the always-on Free Session ad campaign optimises on real bookings.
+  app.options("/api/public/cugc/free-session", (req, res) => { setCugcCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cugc/free-session", async (req, res) => {
+    setCugcCors(req, res);
+    try {
+      const programSlug = String(req.body.programSlug || "").trim();
+      const sessionLabel = String(req.body.sessionLabel || "").trim().slice(0, 80);
+      const sessionDate = String(req.body.sessionDate || "").trim();
+      const childName = String(req.body.childName || "").trim().slice(0, 80);
+      const parentName = String(req.body.parentName || "").trim().slice(0, 80);
+      const email = String(req.body.email || "").trim().slice(0, 120);
+      const phone = String(req.body.phone || "").trim().slice(0, 40);
+      const notes = String(req.body.notes || "").trim().slice(0, 1000);
+      const ageNum = Number(req.body.childAge);
+      const childAge = Number.isInteger(ageNum) && ageNum >= 1 && ageNum <= 16 ? ageNum : null;
+
+      const program = CUGC_PROGRAMS.find((p) => p.slug === programSlug);
+      if (!program || program.slug === "competitive") return res.status(400).json({ message: "That program isn't available for free sessions." });
+      if (!childName || !parentName || !/.+@.+\..+/.test(email)) {
+        return res.status(400).json({ message: "Please add your gymnast's name, your name and a valid email." });
+      }
+      if (!sessionLabel || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
+        return res.status(400).json({ message: "Please pick a class date and time." });
+      }
+      const when = new Date(`${sessionDate}T23:59:59+12:00`);
+      const daysOut = (when.getTime() - Date.now()) / 86400000;
+      if (Number.isNaN(when.getTime()) || daysOut < 0 || daysOut > 120) {
+        return res.status(400).json({ message: "That class date isn't bookable — please pick an upcoming session." });
+      }
+
+      const orgId = await cugcOrgId();
+
+      // Soft dedupe: a double-tap (same child + email + date) returns the
+      // existing booking instead of creating a twin row.
+      const existing = await db.select().from(cugcFreeSessions).where(and(
+        eq(cugcFreeSessions.organizationId, orgId),
+        sql`lower(${cugcFreeSessions.email}) = ${email.toLowerCase()}`,
+        sql`lower(${cugcFreeSessions.childName}) = ${childName.toLowerCase()}`,
+        eq(cugcFreeSessions.sessionDate, sessionDate),
+      ));
+      const live = existing.find((r) => r.status !== "cancelled");
+      if (live) return res.json({ ok: true, id: live.id, alreadyBooked: true });
+
+      const [row] = await db.insert(cugcFreeSessions).values({
+        organizationId: orgId,
+        programSlug: program.slug,
+        programName: program.title,
+        sessionLabel,
+        sessionDate,
+        childName,
+        childAge,
+        parentName,
+        email,
+        phone: phone || null,
+        notes: notes || null,
+        status: "booked",
+        sourceUrl: String(req.body.sourceUrl || "").slice(0, 500) || null,
+        attribution: req.body.attribution && typeof req.body.attribution === "object" ? req.body.attribution : null,
+      }).returning();
+
+      // Emails: confirmation to the parent + heads-up to the club. Never block
+      // the booking on email failures.
+      try {
+        await sendCugcFreeSessionConfirmation({
+          to: email, parentName, childName,
+          programName: program.title, sessionLabel, sessionDate,
+        });
+      } catch (e) { console.error("[CUGC free session] confirmation email failed:", e); }
+      try {
+        await sendCugcFreeSessionNotification({
+          to: "info@cugc.co.nz", childName, childAge, parentName, email,
+          phone: phone || null, programName: program.title, sessionLabel, sessionDate, notes: notes || null,
+        });
+      } catch (e) { console.error("[CUGC free session] notify email failed:", e); }
+
+      // Server-side Meta Lead (CAPI). Browser fires the same eventID for dedup.
+      const nameParts = parentName.split(/\s+/);
+      sendLeadEvent({
+        email, phone: phone || undefined,
+        firstName: nameParts[0], lastName: nameParts.slice(1).join(" ") || undefined,
+        userAgent: req.headers["user-agent"] as string | undefined,
+        ipAddress: (req.headers["x-forwarded-for"] as string || "").split(",")[0].trim() || req.socket?.remoteAddress || undefined,
+        sourceUrl: String(req.body.sourceUrl || "https://cugc.co.nz/free-session"),
+        eventId: `cugc_trial_${row.id}`,
+        contentName: `CUGC Free Session — ${program.title}`,
+        contentIds: [program.slug],
+      }).catch((e) => console.error("[CUGC free session] Meta Lead failed:", e));
+
+      res.json({ ok: true, id: row.id });
+    } catch (e: any) {
+      console.error("[CUGC free session] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Web admin: CUGC free-session bookings (Gymnastics → Free Sessions).
+  app.get("/api/admin/cugc/free-sessions", requireAuth, requireTab("cugc-free-sessions"), async (_req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const rows = await db.select().from(cugcFreeSessions)
+        .where(eq(cugcFreeSessions.organizationId, orgId))
+        .orderBy(desc(cugcFreeSessions.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Update a booking: mark attended / no-show / cancelled / enrolled, reschedule
+  // (new sessionDate/sessionLabel → status back to 'booked'), or edit staff notes.
+  app.patch("/api/admin/cugc/free-sessions/:id", requireAuth, requireTab("cugc-free-sessions"), async (req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const id = parseInt(String(req.params.id));
+      const updates: Record<string, any> = {};
+      if (req.body.status !== undefined) {
+        const status = String(req.body.status);
+        if (!["booked", "attended", "no_show", "cancelled", "enrolled"].includes(status)) {
+          return res.status(400).json({ message: "invalid status" });
+        }
+        updates.status = status;
+        updates.attendedAt = status === "attended" ? new Date() : null;
+      }
+      if (req.body.sessionDate !== undefined) {
+        const d = String(req.body.sessionDate);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ message: "invalid date" });
+        updates.sessionDate = d;
+      }
+      if (req.body.sessionLabel !== undefined) updates.sessionLabel = String(req.body.sessionLabel).slice(0, 80);
+      if (req.body.staffNotes !== undefined) updates.staffNotes = String(req.body.staffNotes).slice(0, 2000) || null;
+      if (!Object.keys(updates).length) return res.status(400).json({ message: "nothing to update" });
+
+      const [row] = await db.update(cugcFreeSessions).set(updates)
+        .where(and(eq(cugcFreeSessions.id, id), eq(cugcFreeSessions.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "booking not found" });
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Web admin: list CUGC enrolments (Gymnastics → Registrations).

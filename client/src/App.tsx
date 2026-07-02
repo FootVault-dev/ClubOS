@@ -80,6 +80,7 @@ import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
 import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
+import CugcFreeSessions from "@/pages/cugc-free-sessions";
 import CugcAnalytics from "@/pages/cugc-analytics";
 import LeagueBuilderPage from "@/pages/league-builder-page";
 import LeagueSettings from "@/pages/league-settings";
@@ -203,6 +204,7 @@ function AdminRouter() {
         <Route path="/admin" component={GymnasticsDashboard} />
         <Route path="/admin/programs" component={GymnasticsPrograms} />
         <Route path="/admin/cugc-registrations" component={CugcRegistrations} />
+        <Route path="/admin/cugc-free-sessions" component={CugcFreeSessions} />
         <Route path="/admin/cugc-analytics" component={CugcAnalytics} />
         <Route path="/admin/cugc-inbox" component={CugcInbox} />
         <Route path="/admin/terms" component={GymnasticsTerms} />

@@ -2462,12 +2462,48 @@ export const cugcRegistrations = pgTable("cugc_registrations", {
   stripeSessionId: text("stripe_session_id"),
   stripePaymentIntent: text("stripe_payment_intent"),
   paidAt: timestamp("paid_at", { withTimezone: true }),
+  // First/last-touch ad attribution captured on cugc.co.nz (utm_*, fbclid,
+  // referrer, landing page, visit count) — the "which ad created this customer"
+  // record that CAC/LTV reporting is built on.
+  attribution: jsonb("attribution"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const insertCugcRegistrationSchema = createInsertSchema(cugcRegistrations).omit({ id: true, createdAt: true });
 export type InsertCugcRegistration = z.infer<typeof insertCugcRegistrationSchema>;
 export type CugcRegistration = typeof cugcRegistrations.$inferSelect;
+
+// ---- CUGC Free Sessions (trial bookings) ----
+// One row per booked free trial session from cugc.co.nz/free-session. The
+// visitor picks a program AND a concrete class date/time, so coaches know
+// exactly who is coming to which session. Staff manage the lifecycle in
+// Gymnastics → Free Sessions: booked → attended / no_show / cancelled, and
+// mark 'enrolled' once the family converts to a paid term place (the funnel
+// stage that closes the ad → trial → member loop).
+export const cugcFreeSessions = pgTable("cugc_free_sessions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  programSlug: text("program_slug").notNull(),
+  programName: text("program_name").notNull(),
+  sessionLabel: text("session_label").notNull(), // e.g. "Wednesday 4:00–4:45pm"
+  sessionDate: text("session_date").notNull(),   // ISO date of the booked class, e.g. "2026-07-22"
+  childName: text("child_name").notNull(),
+  childAge: integer("child_age"),
+  parentName: text("parent_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  notes: text("notes"),          // anything the parent told us
+  staffNotes: text("staff_notes"),
+  status: text("status").notNull().default("booked"), // 'booked' | 'attended' | 'no_show' | 'cancelled' | 'enrolled'
+  attendedAt: timestamp("attended_at", { withTimezone: true }),
+  sourceUrl: text("source_url"),
+  attribution: jsonb("attribution"), // same first/last-touch shape as cugc_registrations
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const insertCugcFreeSessionSchema = createInsertSchema(cugcFreeSessions).omit({ id: true, createdAt: true });
+export type InsertCugcFreeSession = z.infer<typeof insertCugcFreeSessionSchema>;
+export type CugcFreeSession = typeof cugcFreeSessions.$inferSelect;
 
 // ---- Football Institute Applications ----
 // Enrolment enquiries for the Football Institute (Christchurch United × Ao
