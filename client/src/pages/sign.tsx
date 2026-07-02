@@ -22,6 +22,24 @@ interface SignData {
 
 const initialsOf = (name: string) => name.trim().split(/\s+/).map((w) => w[0] || "").join("").toUpperCase().slice(0, 4);
 
+// Page chrome — module-level so its identity is stable across renders.
+// (Defining these inside the component remounted the whole tree on every
+// keystroke: canvases reloaded and the page jumped to the top.)
+const Shell = ({ children }: { children: ReactNode }) => (
+  <div className="min-h-screen bg-[#f4f2ec] text-slate-900">
+    <div className="h-1.5 bg-gradient-to-r from-[#937224] via-[#C9A43E] to-[#E4C56A]" />
+    <div className="max-w-5xl mx-auto px-3 md:px-4 py-5 md:py-8">{children}</div>
+    <footer className="max-w-5xl mx-auto px-4 pb-44 md:pb-28 text-xs text-slate-400 text-center">
+      Secure electronic signing · ClubOS e-Sign · Valid under the Contract and Commercial Law Act 2017 (NZ)
+    </footer>
+  </div>
+);
+const Card = ({ icon, title, sub }: { icon: ReactNode; title: string; sub?: string }) => (
+  <div className="bg-white rounded-2xl border p-10 text-center max-w-md mx-auto mt-10">
+    {icon}<h1 className="text-lg font-semibold mt-2">{title}</h1>{sub && <p className="text-slate-500 mt-1 text-sm">{sub}</p>}
+  </div>
+);
+
 export default function SignPage() {
   const [, params] = useRoute("/sign/:token");
   const token = params?.token ?? "";
@@ -112,21 +130,6 @@ export default function SignPage() {
     } finally { setSubmitting(false); }
   };
 
-  const Shell = ({ children }: { children: ReactNode }) => (
-    <div className="min-h-screen bg-[#f4f2ec] text-slate-900">
-      <div className="h-1.5 bg-gradient-to-r from-[#937224] via-[#C9A43E] to-[#E4C56A]" />
-      <div className="max-w-5xl mx-auto px-4 py-6 md:py-8">{children}</div>
-      <footer className="max-w-5xl mx-auto px-4 pb-28 text-xs text-slate-400 text-center">
-        Secure electronic signing · ClubOS e-Sign · Valid under the Contract and Commercial Law Act 2017 (NZ)
-      </footer>
-    </div>
-  );
-  const Card = ({ icon, title, sub }: { icon: ReactNode; title: string; sub?: string }) => (
-    <div className="bg-white rounded-2xl border p-10 text-center max-w-md mx-auto mt-10">
-      {icon}<h1 className="text-lg font-semibold mt-2">{title}</h1>{sub && <p className="text-slate-500 mt-1 text-sm">{sub}</p>}
-    </div>
-  );
-
   if (loading) return <Shell><div className="py-32 text-center text-slate-400"><Loader2 className="w-6 h-6 animate-spin mx-auto mb-3" />Loading document…</div></Shell>;
   if (error && !data) return <Shell><Card icon={<AlertTriangle className="w-8 h-8 text-amber-500 mx-auto" />} title="Link unavailable" sub={error} /></Shell>;
   if (declined) return <Shell><Card icon={<X className="w-8 h-8 text-slate-400 mx-auto" />} title="Signing declined" sub={`We've let ${data?.orgName} know you declined to sign.`} /></Shell>;
@@ -150,14 +153,14 @@ export default function SignPage() {
     return (
       <Shell>
         {head}
-        <div className="bg-white rounded-2xl border p-3 md:p-5 shadow-sm">
+        <div className="bg-white rounded-2xl border p-2 md:p-5 shadow-sm">
           <PdfDoc
             url={`/api/sign/${token}/document.pdf`}
             width={760}
-            renderOverlay={(pageIndex) => (
+            renderOverlay={(pageIndex, _pw, ph) => (
               <>
                 {fields.filter((f) => f.page === pageIndex).map((f) => (
-                  <FieldWidget key={f.id} field={f} value={vals[f.id]}
+                  <FieldWidget key={f.id} field={f} value={vals[f.id]} pageH={ph}
                     filled={isFilled(f)}
                     onText={(v) => setVal(f.id, { value: v, valueImage: null })}
                     onToggle={() => setVal(f.id, { value: vals[f.id]?.value === "true" ? "false" : "true" })}
@@ -171,7 +174,7 @@ export default function SignPage() {
 
         {/* Sticky action bar */}
         <div className="fixed bottom-0 inset-x-0 bg-white border-t shadow-[0_-4px_20px_rgba(0,0,0,0.06)] z-40">
-          <div className="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3">
+          <div className="max-w-5xl mx-auto px-3 md:px-4 py-2.5 md:py-3 flex flex-wrap items-center gap-x-3 gap-y-2" style={{ paddingBottom: "max(0.65rem, env(safe-area-inset-bottom))" }}>
             <div className="flex items-center gap-2">
               <div className="text-sm font-semibold">{doneCount}/{requiredFields.length}</div>
               <div className="text-xs text-slate-500">
@@ -260,11 +263,13 @@ export default function SignPage() {
 }
 
 // A single fillable field overlaid on the PDF.
-function FieldWidget({ field, value, filled, onText, onToggle, onSign }: {
+function FieldWidget({ field, value, filled, pageH, onText, onToggle, onSign }: {
   field: Field; value?: { value?: string | null; valueImage?: string | null }; filled: boolean;
-  onText: (v: string) => void; onToggle: () => void; onSign: () => void;
+  pageH: number; onText: (v: string) => void; onToggle: () => void; onSign: () => void;
 }) {
   const style: CSSProperties = { left: `${field.x * 100}%`, top: `${field.y * 100}%`, width: `${field.w * 100}%`, height: `${field.h * 100}%`, position: "absolute" };
+  // Text scales with the box so it stays legible at any page width (mobile).
+  const fontSize = Math.max(8, Math.min(13, Math.round(field.h * pageH * 0.62)));
   // Required = gold; optional = neutral grey so the two are obviously different.
   const base = field.required
     ? `rounded-sm ${!filled ? "ring-2 ring-[#C9A43E]" : "ring-1 ring-[#C9A43E]/40"} bg-[#C9A43E]/10`
@@ -274,7 +279,7 @@ function FieldWidget({ field, value, filled, onText, onToggle, onSign }: {
   if (field.type === "text" || field.type === "date") {
     return (
       <input
-        style={{ ...style, fontSize: 12 }}
+        style={{ ...style, fontSize }}
         value={value?.value ?? ""}
         onChange={(e) => onText(e.target.value)}
         placeholder={field.required ? `${labelText} *` : `${labelText} — optional`}
