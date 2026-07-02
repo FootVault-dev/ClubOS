@@ -8923,6 +8923,7 @@ export async function registerRoutes(
       contactEmail: v.contactEmail,
       contactPhone: v.contactPhone,
       contractStatus: v.contractStatus,
+      esignDocumentId: v.esignDocumentId,
       notes: v.notes,
     };
   }
@@ -9157,6 +9158,13 @@ export async function registerRoutes(
     }
   }
 
+  // Keep the CIC Vendors tab in sync with a linked vendor-agreement document.
+  async function esignSyncVendorStatus(docId: number, status: "pending" | "sent" | "signed") {
+    try {
+      await db.update(cicVendors).set({ contractStatus: status }).where(eq(cicVendors.esignDocumentId, docId));
+    } catch { /* vendors sync is best-effort — never block the signing flow */ }
+  }
+
   // Generate the signed PDF + email all parties when everyone has signed.
   async function esignFinalize(docId: number) {
     const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, docId));
@@ -9176,6 +9184,7 @@ export async function registerRoutes(
     const signedB64 = Buffer.from(signedBytes).toString("base64");
     await db.update(esignDocuments).set({ status: "completed", completedAt: new Date(), signedPdf: signedB64 }).where(eq(esignDocuments.id, docId));
     await esignLog(docId, null, "completed", { meta: { signers: signers.length } });
+    await esignSyncVendorStatus(docId, "signed");
     // email all parties + sender the completed PDF
     const [org] = await db.select().from(organizations).where(eq(organizations.id, doc.organizationId));
     const fromName = org?.name || "Christchurch United";
@@ -9277,6 +9286,7 @@ export async function registerRoutes(
         await db.update(esignDocuments).set({ status: "sent", sentAt: new Date() }).where(eq(esignDocuments.id, doc.id));
         await esignEmailSigners(doc.id, orgId, false);
         await esignLog(doc.id, null, "sent", { actorEmail: sender?.email, ip: esignIp(req) });
+        await esignSyncVendorStatus(doc.id, "sent");
       }
       const [fresh] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, doc.id));
       const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
@@ -9294,6 +9304,7 @@ export async function registerRoutes(
       if (doc.status === "draft") await db.update(esignDocuments).set({ status: "sent", sentAt: new Date() }).where(eq(esignDocuments.id, id));
       await esignEmailSigners(id, orgId, false);
       await esignLog(id, null, "sent", { ip: esignIp(req) });
+      await esignSyncVendorStatus(id, "sent");
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -9318,6 +9329,7 @@ export async function registerRoutes(
         .where(and(eq(esignDocuments.id, id), eq(esignDocuments.organizationId, orgId))).returning();
       if (!row) return res.status(404).json({ message: "Not found" });
       await esignLog(id, null, "voided", { ip: esignIp(req) });
+      await esignSyncVendorStatus(id, "pending");
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

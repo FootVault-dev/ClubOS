@@ -2481,6 +2481,7 @@ export const cicVendors = pgTable("cic_vendors", {
   contactEmail: text("contact_email"),
   contactPhone: text("contact_phone"),
   contractStatus: text("contract_status").notNull().default("none"),
+  esignDocumentId: integer("esign_document_id"), // linked e-Sign vendor agreement — status syncs from it
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

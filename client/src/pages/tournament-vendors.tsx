@@ -68,6 +68,7 @@ interface Vendor {
   contactEmail: string | null;
   contactPhone: string | null;
   contractStatus: string;
+  esignDocumentId: number | null;
   notes: string | null;
 }
 interface Booking {
@@ -472,6 +473,11 @@ function VendorCard({
       {/* Contract status */}
       <div className="flex items-center gap-2">
         <span className={`text-[11px] font-medium px-2 py-1 rounded border ${status.color}`}>{status.label}</span>
+        {vendor.esignDocumentId != null && (
+          <a href="/admin/esign" className="text-[11px] text-amber-300/80 hover:text-amber-300 underline underline-offset-2">
+            Agreement
+          </a>
+        )}
         <select
           value={vendor.contractStatus}
           onChange={(e) => onPatch({ contractStatus: e.target.value })}
