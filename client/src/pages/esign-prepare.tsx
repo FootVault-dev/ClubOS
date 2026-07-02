@@ -41,6 +41,7 @@ export function EsignPrepare({ docId, onClose, onSent }: { docId: number; onClos
   const [armedType, setArmedType] = useState<string | null>("signature");
   const [signerIdx, setSignerIdx] = useState(0);
   const [required, setRequired] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // seed local fields from the loaded doc once
   const seeded = useRef(false);
@@ -136,12 +137,12 @@ export function EsignPrepare({ docId, onClose, onSent }: { docId: number; onClos
 
           <label className="flex items-center gap-2 text-sm text-white/70">
             <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} className="accent-amber-400" />
-            Required field
+            New fields required
           </label>
 
           <div className="text-xs text-white/40 leading-relaxed border-t border-white/10 pt-3 flex gap-2">
             <MousePointerClick className="w-4 h-4 shrink-0 mt-0.5" />
-            Pick a signer &amp; field type, then click on the document to drop it. Drag to move, use the corner to resize.
+            Pick a signer &amp; field type, then click on the document to drop it. Drag to move, corner to resize. <span className="text-white/60">Click a placed field to toggle Required / Optional or delete it</span> — required boxes show a solid border and *, optional are dashed.
           </div>
         </div>
 
@@ -157,14 +158,19 @@ export function EsignPrepare({ docId, onClose, onSent }: { docId: number; onClos
                 <div
                   className={armedType ? "absolute inset-0 cursor-crosshair" : "absolute inset-0"}
                   onClick={(e) => {
-                    if (!armedType || e.target !== e.currentTarget) return;
+                    if (e.target !== e.currentTarget) return;
+                    if (selectedId) { setSelectedId(null); return; }
+                    if (!armedType) return;
                     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
                     placeField(pageIndex, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
                   }}
                 >
                   {(fields ?? []).filter((f) => f.page === pageIndex).map((f) => (
                     <FieldBox key={f.tempId} field={f} pageW={pw} pageH={ph} color={colorFor(f.signerId)}
-                      onChange={(patch) => updateField(f.tempId, patch)} onDelete={() => deleteField(f.tempId)} />
+                      selected={selectedId === f.tempId}
+                      onSelect={() => setSelectedId((cur) => (cur === f.tempId ? null : f.tempId))}
+                      onChange={(patch) => updateField(f.tempId, patch)}
+                      onDelete={() => { setSelectedId(null); deleteField(f.tempId); }} />
                   ))}
                 </div>
               )}
@@ -176,20 +182,22 @@ export function EsignPrepare({ docId, onClose, onSent }: { docId: number; onClos
   );
 }
 
-function FieldBox({ field, pageW, pageH, color, onChange, onDelete }: {
-  field: Field; pageW: number; pageH: number; color: string;
-  onChange: (patch: Partial<Field>) => void; onDelete: () => void;
+function FieldBox({ field, pageW, pageH, color, selected, onSelect, onChange, onDelete }: {
+  field: Field; pageW: number; pageH: number; color: string; selected: boolean;
+  onSelect: () => void; onChange: (patch: Partial<Field>) => void; onDelete: () => void;
 }) {
-  const drag = useRef<{ mode: "move" | "resize"; sx: number; sy: number; ox: number; oy: number; ow: number; oh: number } | null>(null);
+  const drag = useRef<{ mode: "move" | "resize"; sx: number; sy: number; ox: number; oy: number; ow: number; oh: number; moved: boolean } | null>(null);
 
   const onDown = (mode: "move" | "resize") => (e: ReactPointerEvent) => {
     e.stopPropagation(); e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    drag.current = { mode, sx: e.clientX, sy: e.clientY, ox: field.x, oy: field.y, ow: field.w, oh: field.h };
+    drag.current = { mode, sx: e.clientX, sy: e.clientY, ox: field.x, oy: field.y, ow: field.w, oh: field.h, moved: false };
   };
   const onMove = (e: ReactPointerEvent) => {
     if (!drag.current) return;
     const d = drag.current;
+    if (Math.abs(e.clientX - d.sx) > 3 || Math.abs(e.clientY - d.sy) > 3) d.moved = true;
+    if (!d.moved) return;
     const dx = (e.clientX - d.sx) / pageW, dy = (e.clientY - d.sy) / pageH;
     if (d.mode === "move") {
       onChange({ x: Math.min(1 - field.w, Math.max(0, d.ox + dx)), y: Math.min(1 - field.h, Math.max(0, d.oy + dy)) });
@@ -197,7 +205,11 @@ function FieldBox({ field, pageW, pageH, color, onChange, onDelete }: {
       onChange({ w: Math.min(1 - field.x, Math.max(0.03, d.ow + dx)), h: Math.min(1 - field.y, Math.max(0.015, d.oh + dy)) });
     }
   };
-  const onUp = () => { drag.current = null; };
+  const onUp = () => {
+    const wasClick = drag.current && drag.current.mode === "move" && !drag.current.moved;
+    drag.current = null;
+    if (wasClick) onSelect();
+  };
 
   const label = FIELD_TYPES.find((t) => t.key === field.type)?.label ?? field.type;
   return (
@@ -206,16 +218,39 @@ function FieldBox({ field, pageW, pageH, color, onChange, onDelete }: {
       className="absolute rounded-sm border-2 flex items-center justify-center text-[10px] font-semibold select-none cursor-move group"
       style={{
         left: `${field.x * 100}%`, top: `${field.y * 100}%`, width: `${field.w * 100}%`, height: `${field.h * 100}%`,
-        borderColor: color, background: `${color}22`, color,
+        borderColor: color, borderStyle: field.required ? "solid" : "dashed",
+        background: `${color}22`, color,
+        boxShadow: selected ? `0 0 0 2px #fff, 0 0 0 4px ${color}` : undefined,
+        zIndex: selected ? 30 : undefined,
       }}
-      title={`${label}${field.required ? " (required)" : ""}`}
     >
-      <span className="truncate px-1 pointer-events-none">{label}</span>
-      <button onPointerDown={(e) => { e.stopPropagation(); }} onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute -top-2 -right-2 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100">
-        <Trash2 className="w-2.5 h-2.5" />
-      </button>
+      <span className="truncate px-1 pointer-events-none">{label}{field.required ? " *" : ""}</span>
       <span onPointerDown={onDown("resize")} className="absolute -bottom-1 -right-1 w-3 h-3 rounded-sm cursor-se-resize" style={{ background: color }} />
+
+      {selected && (
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute left-0 z-40 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#1c1e24] border border-white/20 shadow-2xl whitespace-nowrap cursor-default"
+          style={field.y < 0.08 ? { top: "calc(100% + 6px)" } : { bottom: "calc(100% + 6px)" }}
+        >
+          <span className="text-[11px] text-white/70 font-medium">{label}</span>
+          <button
+            onClick={() => onChange({ required: !field.required })}
+            title="Click to toggle"
+            className={`text-[11px] font-bold px-2.5 py-1 rounded-full border transition-colors ${
+              field.required
+                ? "bg-amber-400/20 border-amber-400/60 text-amber-300"
+                : "bg-white/5 border-white/20 border-dashed text-white/60"
+            }`}
+          >
+            {field.required ? "Required" : "Optional"}
+          </button>
+          <button onClick={onDelete} title="Delete field" className="text-red-400/70 hover:text-red-400 p-1">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
