@@ -140,6 +140,7 @@ const tournamentNav = [
   { tab: "food-truck", title: "Food Truck", url: "/admin/food-truck", icon: Truck },
   { tab: "vendors", title: "Vendors", url: "/admin/vendors", icon: UtensilsCrossed },
   { tab: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations", icon: Inbox },
+  { tab: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer", icon: Mail },
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
 ];
 
@@ -153,6 +154,7 @@ const tournamentSecondary = [
 // CIC 7's view (toggled from the youth tournament via the Youth/7's switcher).
 const tournament7sNav = [
   { tab: "cic7s-registrations", title: "Registrations", url: "/admin/cic7s-registrations", icon: ClipboardCheck },
+  { tab: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer", icon: Mail },
 ];
 
 const gymnasticsNav = [

@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents, tournamentStaff } from "@shared/schema";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendClubLogoConsentNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendClubLogoConsentNotification, sendCicBroadcastEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_TERM } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -12462,6 +12462,117 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
+  // ── CIC Mailer / CRM ────────────────────────────────────────────────────────
+  // The CIC contact database + broadcast sender, shared by the CIC Youth and
+  // CIC 7's views of the tournament workspace (both live under the same org).
+  // source "youth" = per-team contacts + participating clubs' contacts from the
+  // tournament tables (audience "all" adds squad-list team staff); source "7s" =
+  // the Summer 7's register-interest list. Reuses the org-scoped unsubscribe
+  // suppression list the MFL mailer established.
+
+  app.get("/api/admin/cic/mailer/contacts", requireAuth, async (req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const source = req.query.source === "7s" ? "7s" as const : "youth" as const;
+      const tournamentId = req.query.tournamentId ? parseInt(String(req.query.tournamentId)) : null;
+      const recipients = await resolveCicAudience(orgId, { source, tournamentId, audience: "all" });
+      const unsub = await getUnsubscribedEmails(orgId);
+      const contacts = recipients.map((r) => ({ ...r, unsubscribed: unsub.has(r.email) }));
+      res.json({ contacts, total: contacts.length, unsubscribedCount: contacts.filter((c) => c.unsubscribed).length });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Recent broadcasts (history) — CIC campaigns only.
+  app.get("/api/admin/cic/mailer/campaigns", requireAuth, async (_req, res) => {
+    try {
+      const all = await storage.getEmailCampaigns();
+      res.json(all.filter((c) => String(c.segmentType || "").startsWith("cic")));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Live recipient count for the chosen audience (excludes unsubscribed).
+  app.post("/api/admin/cic/mailer/preview", requireAuth, async (req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const source = req.body.source === "7s" ? "7s" as const : "youth" as const;
+      const tournamentId = req.body.tournamentId ? parseInt(String(req.body.tournamentId)) : null;
+      const audience = req.body.audience === "contacts" ? "contacts" as const : "all" as const;
+      const recipients = await resolveCicAudience(orgId, { source, tournamentId, audience });
+      const unsub = await getUnsubscribedEmails(orgId);
+      res.json({ count: recipients.filter((r) => !unsub.has(r.email)).length });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send a single test (to the admin's own address) — safe preview, no DB blast.
+  app.post("/api/admin/cic/mailer/test-send", requireAuth, async (req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const { to, subject, body, replyTo } = req.body || {};
+      const source = req.body?.source === "7s" ? "7s" as const : "youth" as const;
+      const dest = String(to || "").trim();
+      if (!dest || !String(subject || "").trim() || !String(body || "").trim()) {
+        return res.status(400).json({ message: "to, subject and body are required" });
+      }
+      const ok = await sendCicBroadcastEmail({
+        to: dest, subject: `[TEST] ${String(subject).trim()}`, bodyHtml: String(body), brand: source,
+        replyTo: replyTo || undefined, unsubscribeUrl: cicUnsubUrl(orgId, dest),
+      });
+      res.json({ ok });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send the broadcast to the resolved audience (batched, CIC-branded, logged).
+  app.post("/api/admin/cic/mailer/send", requireAuth, async (req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const { subject, body, tournamentId, audience, replyTo } = req.body || {};
+      const source = req.body?.source === "7s" ? "7s" as const : "youth" as const;
+      const subj = String(subject || "").trim();
+      if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
+      if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
+      const aud = audience === "contacts" ? "contacts" as const : "all" as const;
+      const tournId = tournamentId ? parseInt(String(tournamentId)) : null;
+
+      const all = await resolveCicAudience(orgId, { source, tournamentId: tournId, audience: aud });
+      const unsub = await getUnsubscribedEmails(orgId);
+      const recipients = all.filter((r) => !unsub.has(r.email));
+      if (recipients.length === 0) return res.status(400).json({ message: "No recipients in this audience" });
+
+      const [campaign] = await db.insert(emailCampaigns).values({
+        subject: subj, body: String(body),
+        fromEmail: source === "7s" ? "CIC 7's <noreply@cufc.co.nz>" : "Christchurch International Cup <noreply@cufc.co.nz>",
+        replyTo: replyTo || "info@cicyouth.com",
+        segmentType: `cic_${source}_${aud}`,
+        segmentConfig: JSON.stringify({ orgId, source, tournamentId: tournId, audience: aud }),
+        recipientCount: recipients.length, status: "sending",
+      }).returning();
+
+      let sent = 0, failed = 0;
+      const BATCH = 40, DELAY_MS = 1100;
+      for (let i = 0; i < recipients.length; i += BATCH) {
+        const slice = recipients.slice(i, i + BATCH);
+        const results = await Promise.all(slice.map(async (r) => {
+          try {
+            return await sendCicBroadcastEmail({
+              to: r.email, subject: subj, bodyHtml: String(body), brand: source,
+              replyTo: replyTo || undefined, unsubscribeUrl: cicUnsubUrl(orgId, r.email),
+            });
+          } catch { return false; }
+        }));
+        sent += results.filter(Boolean).length;
+        failed += results.filter((x) => !x).length;
+        if (i + BATCH < recipients.length) await new Promise((res2) => setTimeout(res2, DELAY_MS));
+      }
+
+      await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed, status: "sent", sentAt: new Date() })
+        .where(eq(emailCampaigns.id, campaign.id));
+      res.json({ recipientCount: recipients.length, sentCount: sent, failedCount: failed });
+    } catch (e: any) {
+      console.error("[CIC mailer send] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // ── CIC club logo licence consent (cicyouth.com/club-logo-agreement) ──
   // A participating club's rep signs, granting CIC use of their crest on the
   // website + app. Optional logo upload. Stored as the auditable proof record +
@@ -12813,11 +12924,18 @@ export async function registerRoutes(
       const orgId = parseInt(String(req.query.o || ""));
       const email = String(req.query.e || "").trim().toLowerCase();
       const token = String(req.query.t || "");
+      // Brand the page by org — CIC (Youth + 7's) links land on the CIC page,
+      // everything else keeps the MFL page.
+      const cicId = await skillsOrgId().catch(() => null);
+      const isCic = !!orgId && orgId === cicId;
+      const page = isCic ? cicUnsubPage : mflUnsubPage;
       if (!orgId || !email || mflUnsubToken(orgId, email) !== token) {
-        return res.status(400).send(mflUnsubPage("This unsubscribe link is invalid or has expired. Reply to any email and we'll remove you."));
+        return res.status(400).send(page("This unsubscribe link is invalid or has expired. Reply to any email and we'll remove you."));
       }
-      await db.insert(emailUnsubscribes).values({ organizationId: orgId, email, source: "league_broadcast" }).onConflictDoNothing();
-      res.send(mflUnsubPage("You've been unsubscribed. You won't receive any more Mini Football Leagues newsletters. You'll still get essential emails about teams you've registered."));
+      await db.insert(emailUnsubscribes).values({ organizationId: orgId, email, source: isCic ? "cic_broadcast" : "league_broadcast" }).onConflictDoNothing();
+      res.send(page(isCic
+        ? "You've been unsubscribed. You won't receive any more Christchurch International Cup newsletters. You'll still get essential emails about teams you've entered."
+        : "You've been unsubscribed. You won't receive any more Mini Football Leagues newsletters. You'll still get essential emails about teams you've registered."));
     } catch (e: any) {
       res.status(500).send(mflUnsubPage("Something went wrong. Reply to any email and we'll remove you manually."));
     }
@@ -14545,6 +14663,82 @@ function mflUnsubPage(message: string): string {
   <body style="margin:0;background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
     <div style="max-width:480px;margin:0 auto;padding:64px 24px;text-align:center;">
       <img src="https://join.minifootball.co.nz/logos/mini-football-leagues.png" alt="Mini Football Leagues" width="72" height="72" style="margin:0 0 20px;" />
+      <p style="font-size:16px;line-height:1.6;color:#e6e6e6;">${message}</p>
+    </div>
+  </body></html>`;
+}
+
+// ── CIC Mailer helpers ────────────────────────────────────────────────────────
+// The CIC (Youth + Summer 7's) equivalent of the MFL helpers above. Same signed
+// per-org+email unsubscribe tokens; CIC-branded link host + landing page.
+
+function cicUnsubUrl(orgId: number, email: string): string {
+  return `https://cicyouth.com/api/public/unsubscribe?o=${orgId}&e=${encodeURIComponent(email)}&t=${mflUnsubToken(orgId, email)}`;
+}
+
+type CicContact = { name: string; email: string; phone: string; role: string; team: string; term: string };
+
+// Build the CIC contact database, deduped by email.
+// source "youth": per-team contacts + participating clubs' contacts from the
+//   tournament tables; audience "all" adds squad-list team staff (coaches /
+//   managers) who have an email. tournamentId narrows to one age group.
+// source "7s": every Summer 7's register-interest submission (except archived).
+async function resolveCicAudience(orgId: number, opts: { source: "youth" | "7s"; tournamentId: number | null; audience: "contacts" | "all" }): Promise<CicContact[]> {
+  const byEmail = new Map<string, CicContact>();
+  const add = (c: CicContact) => {
+    const email = c.email.trim().toLowerCase();
+    if (!email || byEmail.has(email)) return;
+    byEmail.set(email, { ...c, email });
+  };
+
+  if (opts.source === "7s") {
+    const regs = await db.select().from(cic7sRegistrations).where(eq(cic7sRegistrations.organizationId, orgId));
+    for (const r of regs) {
+      if (r.status === "archived") continue;
+      add({ name: `${r.firstName || ""}${r.lastName ? ` ${r.lastName}` : ""}`.trim(), email: r.email || "", phone: r.phone || "", role: r.category || "Interest", team: "", term: "CIC Summer 7's" });
+    }
+    return Array.from(byEmail.values());
+  }
+
+  const tourns = (await storage.getTournaments(orgId)).filter((t) => !t.archived && (!opts.tournamentId || t.id === opts.tournamentId));
+  const teamMeta = new Map<number, { team: string; term: string }>();
+  const clubIds = new Set<number>();
+  for (const t of tourns) {
+    const teams = await storage.getTournamentTeams(t.id);
+    for (const team of teams) {
+      if (team.active === false) continue;
+      teamMeta.set(team.id, { team: team.name, term: t.name });
+      if (team.clubId) clubIds.add(team.clubId);
+      if (team.contactEmail) add({ name: team.contactName || "", email: team.contactEmail, phone: team.contactPhone || "", role: "Team contact", team: team.name, term: t.name });
+    }
+  }
+
+  // Club-roster contacts. When narrowed to one tournament, only clubs with a
+  // team in it; the all-tournaments view includes the whole club roster.
+  const allClubs = await storage.getClubs(orgId);
+  for (const club of allClubs) {
+    if (!club.active || !club.contactEmail) continue;
+    if (opts.tournamentId && !clubIds.has(club.id)) continue;
+    add({ name: club.contactName || "", email: club.contactEmail, phone: club.contactPhone || "", role: "Club contact", team: club.name, term: "" });
+  }
+
+  if (opts.audience === "all" && teamMeta.size > 0) {
+    const staff = await db.select().from(tournamentStaff).where(inArray(tournamentStaff.teamId, Array.from(teamMeta.keys())));
+    for (const s of staff) {
+      if (!s.email) continue;
+      const meta = teamMeta.get(s.teamId);
+      add({ name: `${s.firstName || ""} ${s.lastName || ""}`.trim(), email: s.email, phone: s.phone || "", role: s.role || "Staff", team: meta?.team || "", term: meta?.term || "" });
+    }
+  }
+
+  return Array.from(byEmail.values());
+}
+
+function cicUnsubPage(message: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Christchurch International Cup</title></head>
+  <body style="margin:0;background:#0b0b08;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <div style="max-width:480px;margin:0 auto;padding:64px 24px;text-align:center;">
+      <p style="color:#c9a43e;margin:0 0 14px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch International Cup</p>
       <p style="font-size:16px;line-height:1.6;color:#e6e6e6;">${message}</p>
     </div>
   </body></html>`;

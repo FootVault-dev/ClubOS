@@ -244,6 +244,58 @@ export async function sendLeagueBroadcastEmail(params: {
   });
 }
 
+/**
+ * CIC broadcast / newsletter — wraps the composer's rich HTML in the CIC shell
+ * (black + gold for the Youth tournament, navy + lime for Summer 7's) with the
+ * subject as the heading and a per-recipient signed unsubscribe link. Sent
+ * one-per-recipient (the mailer route batches).
+ */
+export async function sendCicBroadcastEmail(params: {
+  to: string;
+  subject: string;
+  bodyHtml: string;
+  brand: "youth" | "7s";
+  replyTo?: string;
+  unsubscribeUrl: string;
+}): Promise<boolean> {
+  const is7s = params.brand === "7s";
+  const accent = is7s ? "#cffd5a" : "#c9a43e";
+  const bg = is7s ? "#0a1122" : "#0b0b08";
+  const card = is7s ? "#10131c" : "#141511";
+  const border = is7s ? "#252a38" : "#2c2d23";
+  const eyebrow = is7s ? "CIC Summer 7's" : "Christchurch International Cup";
+  const from = is7s ? "CIC 7's <noreply@cufc.co.nz>" : "Christchurch International Cup <noreply@cufc.co.nz>";
+  const audienceLine = is7s
+    ? "You're receiving this because you registered your interest in CIC Summer 7's."
+    : "You're receiving this because your club or team is part of the Christchurch International Cup.";
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:${bg};padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:${accent};margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${eyebrow}</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">${params.subject}</h1>
+      </div>
+      <div style="background:${card};border:1px solid ${border};border-radius:18px;padding:26px;color:#e6e6e6;font-size:14px;line-height:1.65;">
+        ${params.bodyHtml}
+        <p style="color:#5a5a5a;font-size:11px;line-height:1.6;margin:20px 0 0;border-top:1px solid ${border};padding-top:14px;">
+          ${audienceLine}
+          <a href="${params.unsubscribeUrl}" style="color:#8a8a8a;text-decoration:underline;">Unsubscribe</a>
+        </p>
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        ${eyebrow} · Christchurch United Football Club<br/>United Sports Centre, Christchurch
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from,
+    replyTo: params.replyTo || "info@cicyouth.com",
+    subject: params.subject,
+    html,
+  });
+}
+
 /** Registration confirmation — adapts to pay-in-full / deposit+weekly / deposit+balance. */
 export async function sendLeagueConfirmationEmail(params: {
   registrationId: number;

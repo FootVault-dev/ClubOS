@@ -100,6 +100,7 @@ const tournamentTabs: TabDef[] = [
   { slug: "food-truck", title: "Food Truck", url: "/admin/food-truck" },
   { slug: "vendors", title: "Vendors", url: "/admin/vendors" },
   { slug: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations" },
+  { slug: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer" },
   { slug: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
