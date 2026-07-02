@@ -74,7 +74,7 @@ async function main() {
       [
         vendor.organization_id,
         `CIC 2026 Vendor Agreement — ${vendorName}`,
-        `Kia ora — please review and sign the attached Food & Beverage Vendor Agreement for the Christchurch International Cup 2026 (${meta.terms.trading_period}). Any questions, reply to this email.`,
+        `Kia ora — please review and sign the attached Food & Beverage Vendor Agreement for the Christchurch International Cup 2026 (${meta.terms.trading_period}). You'll just need your registration and certificate numbers — no documents to upload. Any questions, reply to this email.`,
         meta.pdf,
         pdfB64,
         docHash,
