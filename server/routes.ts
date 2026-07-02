@@ -12491,14 +12491,19 @@ export async function registerRoutes(
   });
 
   // Live recipient count for the chosen audience (excludes unsubscribed).
+  // audience "custom" counts the manually-entered list instead of the DB.
   app.post("/api/admin/cic/mailer/preview", requireAuth, async (req, res) => {
     try {
       const orgId = await skillsOrgId();
+      const unsub = await getUnsubscribedEmails(orgId);
+      if (req.body.audience === "custom") {
+        const emails = parseCustomEmails(req.body.customEmails);
+        return res.json({ count: emails.filter((e) => !unsub.has(e)).length });
+      }
       const source = req.body.source === "7s" ? "7s" as const : "youth" as const;
       const tournamentId = req.body.tournamentId ? parseInt(String(req.body.tournamentId)) : null;
       const audience = req.body.audience === "contacts" ? "contacts" as const : req.body.audience === "staff" ? "staff" as const : "all" as const;
       const recipients = await resolveCicAudience(orgId, { source, tournamentId, audience });
-      const unsub = await getUnsubscribedEmails(orgId);
       res.json({ count: recipients.filter((r) => !unsub.has(r.email)).length });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
@@ -12530,10 +12535,17 @@ export async function registerRoutes(
       const subj = String(subject || "").trim();
       if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
       if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
-      const aud = audience === "contacts" ? "contacts" as const : audience === "staff" ? "staff" as const : "all" as const;
+      const aud = audience === "custom" ? "custom" as const : audience === "contacts" ? "contacts" as const : audience === "staff" ? "staff" as const : "all" as const;
       const tournId = tournamentId ? parseInt(String(tournamentId)) : null;
 
-      const all = await resolveCicAudience(orgId, { source, tournamentId: tournId, audience: aud });
+      let all: { email: string }[];
+      if (aud === "custom") {
+        const emails = parseCustomEmails(req.body?.customEmails);
+        if (emails.length > 500) return res.status(400).json({ message: "Custom sends are capped at 500 addresses" });
+        all = emails.map((email) => ({ email }));
+      } else {
+        all = await resolveCicAudience(orgId, { source, tournamentId: tournId, audience: aud });
+      }
       const unsub = await getUnsubscribedEmails(orgId);
       const recipients = all.filter((r) => !unsub.has(r.email));
       if (recipients.length === 0) return res.status(400).json({ message: "No recipients in this audience" });
@@ -12543,7 +12555,7 @@ export async function registerRoutes(
         fromEmail: source === "7s" ? "CIC 7's <noreply@cufc.co.nz>" : "Christchurch International Cup <noreply@cufc.co.nz>",
         replyTo: replyTo || "info@cicyouth.com",
         segmentType: `cic_${source}_${aud}`,
-        segmentConfig: JSON.stringify({ orgId, source, tournamentId: tournId, audience: aud }),
+        segmentConfig: JSON.stringify({ orgId, source, tournamentId: tournId, audience: aud, ...(aud === "custom" ? { customEmails: recipients.map((r) => r.email) } : {}) }),
         recipientCount: recipients.length, status: "sending",
       }).returning();
 
@@ -14674,6 +14686,21 @@ function mflUnsubPage(message: string): string {
 
 function cicUnsubUrl(orgId: number, email: string): string {
   return `https://cicyouth.com/api/public/unsubscribe?o=${orgId}&e=${encodeURIComponent(email)}&t=${mflUnsubToken(orgId, email)}`;
+}
+
+// Parse a manually-entered recipient list (textarea or array) — split on
+// whitespace/commas/semicolons, validate, lowercase, dedupe. Order preserved.
+function parseCustomEmails(input: unknown): string[] {
+  const raw = Array.isArray(input) ? input.join(",") : String(input || "");
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of raw.split(/[\s,;]+/)) {
+    const email = token.trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || seen.has(email)) continue;
+    seen.add(email);
+    out.push(email);
+  }
+  return out;
 }
 
 type CicContact = { name: string; email: string; phone: string; role: string; team: string; term: string };

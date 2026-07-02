@@ -13,7 +13,27 @@ type Contact = { name: string; email: string; phone: string; role: string; team:
 type Campaign = { id: number; subject: string; recipientCount: number | null; sentCount: number | null; failedCount: number | null; status: string; sentAt: string | null; createdAt: string };
 type Tournament = { id: number; name: string; ageGroup: string | null; archived: boolean };
 type Source = "youth" | "7s";
+type Audience = "contacts" | "all" | "staff" | "custom";
 type View = "compose" | "contacts";
+
+// Split a hand-typed recipient list on whitespace/commas/semicolons — returns
+// deduped valid emails plus whatever didn't look like an address.
+function parseEmails(input: string): { valid: string[]; invalid: string[] } {
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+  for (const token of input.split(/[\s,;]+/)) {
+    const t = token.trim();
+    if (!t) continue;
+    const email = t.toLowerCase();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      if (!seen.has(email)) { seen.add(email); valid.push(email); }
+    } else {
+      invalid.push(t);
+    }
+  }
+  return { valid, invalid };
+}
 
 // The CIC Mailer — one page shared by the CIC Youth and CIC 7's views of the
 // tournament workspace. Youth pulls team + club contacts from the tournament
@@ -28,7 +48,7 @@ export default function CicMailer() {
   // whichever CIC view (Youth / 7's) the sidebar toggle is on.
   const [source, setSource] = useState<Source>(cicView === "7s" ? "7s" : "youth");
   const [tournamentId, setTournamentId] = useState<string>("all");
-  const [audience, setAudience] = useState<"contacts" | "all" | "staff">("all");
+  const [audience, setAudience] = useState<Audience>("all");
 
   const { data: tournaments = [] } = useQuery<Tournament[]>({
     queryKey: ["/api/admin/tournament/tournaments", { orgId }],
@@ -37,7 +57,12 @@ export default function CicMailer() {
   });
   const activeTournaments = useMemo(() => tournaments.filter((t) => !t.archived), [tournaments]);
 
-  const pickSource = (s: Source) => { setSource(s); setTournamentId("all"); };
+  const pickSource = (s: Source) => {
+    setSource(s);
+    setTournamentId("all");
+    // Youth-only segments don't exist on the 7's list — fall back to everyone.
+    if (s === "7s" && (audience === "staff" || audience === "contacts")) setAudience("all");
+  };
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
@@ -204,20 +229,24 @@ function ContactsView({ source, tournamentId, setTournamentId, tournaments }: {
 // ── Compose ───────────────────────────────────────────────────────────────────
 function ComposeView({ source, tournamentId, setTournamentId, audience, setAudience, tournaments, toast }: {
   source: Source; tournamentId: string; setTournamentId: (s: string) => void;
-  audience: "contacts" | "all" | "staff"; setAudience: (a: "contacts" | "all" | "staff") => void;
+  audience: Audience; setAudience: (a: Audience) => void;
   tournaments: Tournament[]; toast: ReturnType<typeof useToast>["toast"];
 }) {
   const [subject, setSubject] = useState("");
   const [testEmail, setTestEmail] = useState("");
+  const [customText, setCustomText] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
 
   const tournId = source === "youth" && tournamentId !== "all" ? parseInt(tournamentId) : null;
+  const custom = useMemo(() => parseEmails(customText), [customText]);
 
   const { data: preview } = useQuery<{ count: number }>({
-    queryKey: ["/api/admin/cic/mailer/preview", source, tournamentId, audience],
-    queryFn: () => apiRequest("POST", "/api/admin/cic/mailer/preview", { source, tournamentId: tournId, audience }).then((r) => r.json()),
+    queryKey: ["/api/admin/cic/mailer/preview", source, tournamentId, audience, audience === "custom" ? custom.valid.join(",") : ""],
+    queryFn: () => apiRequest("POST", "/api/admin/cic/mailer/preview", { source, tournamentId: tournId, audience, customEmails: custom.valid }).then((r) => r.json()),
+    enabled: audience !== "custom" || custom.valid.length > 0,
   });
+  const recipientCount = audience === "custom" && custom.valid.length === 0 ? 0 : preview?.count;
 
   const { data: campaigns = [] } = useQuery<Campaign[]>({
     queryKey: ["/api/admin/cic/mailer/campaigns"],
@@ -234,7 +263,7 @@ function ComposeView({ source, tournamentId, setTournamentId, audience, setAudie
   });
 
   const send = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/admin/cic/mailer/send", { subject, body: body(), source, tournamentId: tournId, audience }).then((r) => r.json()),
+    mutationFn: () => apiRequest("POST", "/api/admin/cic/mailer/send", { subject, body: body(), source, tournamentId: tournId, audience, customEmails: custom.valid }).then((r) => r.json()),
     onSuccess: (r: { recipientCount: number; sentCount: number; failedCount: number }) => {
       setConfirmOpen(false);
       toast({ title: "Newsletter sent 🎉", description: `${r.sentCount} sent${r.failedCount ? ` · ${r.failedCount} failed` : ""} of ${r.recipientCount}` });
@@ -244,9 +273,12 @@ function ComposeView({ source, tournamentId, setTournamentId, audience, setAudie
     onError: (e: any) => { setConfirmOpen(false); toast({ title: "Send failed", description: e.message, variant: "destructive" }); },
   });
 
-  const canSend = subject.trim().length > 0 && body().replace(/<[^>]*>/g, "").trim().length > 0;
+  const canSend = subject.trim().length > 0 && body().replace(/<[^>]*>/g, "").trim().length > 0
+    && (audience !== "custom" || custom.valid.length > 0);
 
-  const audienceLabel = source === "7s"
+  const audienceLabel = audience === "custom"
+    ? "your custom email list"
+    : source === "7s"
     ? "everyone who registered interest in CIC 7's"
     : `${audience === "all" ? "team + club contacts and squad staff" : audience === "staff" ? "coaches + managers only" : "team + club contacts only"}${tournamentId === "all" ? " · all tournaments" : ` · ${tournaments.find((t) => String(t.id) === tournamentId)?.name || "tournament"}`}`;
 
@@ -257,27 +289,40 @@ function ComposeView({ source, tournamentId, setTournamentId, audience, setAudie
         <div className="rounded-xl border border-white/5 bg-white/[0.02] p-4 space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
             <div className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Audience</div>
-            {source === "youth" ? (
-              <>
-                <Select value={tournamentId} onValueChange={setTournamentId}>
-                  <SelectTrigger className="premium-input text-white w-[200px] h-8 text-xs"><SelectValue placeholder="Tournament" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All tournaments</SelectItem>
-                    {tournaments.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5">
-                  {([["all", "Everyone"], ["contacts", "Contacts only"], ["staff", "Coaches + managers"]] as const).map(([v, label]) => (
-                    <button key={v} onClick={() => setAudience(v)} data-testid={`mailer-audience-${v}`}
-                      className={`text-xs font-medium px-2.5 py-1 rounded-md transition-colors ${audience === v ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"}`}>{label}</button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <span className="text-xs text-white/50">CIC 7's register-interest list</span>
+            {source === "youth" && audience !== "custom" && (
+              <Select value={tournamentId} onValueChange={setTournamentId}>
+                <SelectTrigger className="premium-input text-white w-[200px] h-8 text-xs"><SelectValue placeholder="Tournament" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All tournaments</SelectItem>
+                  {tournaments.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             )}
-            <span className="text-xs text-white/50 ml-auto flex items-center gap-1.5"><Users className="w-3.5 h-3.5" /> {preview?.count ?? "…"} recipients</span>
+            <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5">
+              {(source === "youth"
+                ? ([["all", "Everyone"], ["contacts", "Contacts only"], ["staff", "Coaches + managers"], ["custom", "Custom"]] as const)
+                : ([["all", "Interest list"], ["custom", "Custom"]] as const)
+              ).map(([v, label]) => (
+                <button key={v} onClick={() => setAudience(v)} data-testid={`mailer-audience-${v}`}
+                  className={`text-xs font-medium px-2.5 py-1 rounded-md transition-colors ${audience === v ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"}`}>{label}</button>
+              ))}
+            </div>
+            <span className="text-xs text-white/50 ml-auto flex items-center gap-1.5"><Users className="w-3.5 h-3.5" /> {recipientCount ?? "…"} recipients</span>
           </div>
+          {audience === "custom" && (
+            <div className="space-y-1.5">
+              <textarea value={customText} onChange={(e) => setCustomText(e.target.value)} rows={3}
+                placeholder="Type or paste email addresses — separated by commas, spaces or new lines"
+                className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/25 resize-y"
+                data-testid="mailer-custom-emails" />
+              <p className="text-[11px] text-white/40">
+                {custom.valid.length} valid address{custom.valid.length === 1 ? "" : "es"}
+                {custom.invalid.length > 0 && (
+                  <span className="text-red-400"> · ignoring: {custom.invalid.slice(0, 5).join(", ")}{custom.invalid.length > 5 ? ` +${custom.invalid.length - 5} more` : ""}</span>
+                )}
+              </p>
+            </div>
+          )}
         </div>
 
         <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject line"
@@ -317,9 +362,9 @@ function ComposeView({ source, tournamentId, setTournamentId, audience, setAudie
             className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white/10 text-white hover:bg-white/15 disabled:opacity-40" data-testid="mailer-test-send">
             {testSend.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />} Send test
           </button>
-          <button onClick={() => setConfirmOpen(true)} disabled={!canSend || !(preview?.count)}
+          <button onClick={() => setConfirmOpen(true)} disabled={!canSend || !recipientCount}
             className="flex items-center gap-2 text-sm font-semibold px-5 py-2 rounded-lg bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-40" data-testid="mailer-send">
-            <Send className="w-4 h-4" /> Send to {preview?.count ?? 0}
+            <Send className="w-4 h-4" /> Send to {recipientCount ?? 0}
           </button>
         </div>
       </div>
@@ -352,7 +397,7 @@ function ComposeView({ source, tournamentId, setTournamentId, audience, setAudie
               <button onClick={() => setConfirmOpen(false)} className="text-white/30 hover:text-white/60"><X className="w-5 h-5" /></button>
             </div>
             <p className="text-sm text-white/60 leading-relaxed">
-              This sends "<span className="text-white">{subject}</span>" to <span className="text-amber-400 font-semibold">{preview?.count ?? 0} recipients</span> ({audienceLabel}). This can't be undone.
+              This sends "<span className="text-white">{subject}</span>" to <span className="text-amber-400 font-semibold">{recipientCount ?? 0} recipients</span> ({audienceLabel}). This can't be undone.
             </p>
             <div className="flex items-start gap-2 mt-3 text-[11px] text-white/40 bg-white/[0.03] rounded-lg p-3">
               <AlertTriangle className="w-4 h-4 text-amber-400/70 flex-shrink-0 mt-0.5" /> Send a test to yourself first if you haven't — there's no recall once it's out.
