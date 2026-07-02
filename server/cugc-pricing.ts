@@ -13,34 +13,49 @@ export const CUGC_TERM = {
   weeks: 10,
 };
 
-export type CugcOption = { label: string; price: number }; // full-term price in NZD
-export type CugcProgram = { slug: string; title: string; ages: string; options: CugcOption[] };
+export type CugcOption = { label: string; price: number; times: string[] }; // full-term price in NZD
+export type CugcProgram = {
+  slug: string; title: string; ages: string; image: string; // image = path on cugc.co.nz
+  annual?: boolean; inviteOnly?: boolean;
+  options: CugcOption[];
+};
 
-// Mirrors apps/cugc-website/src/site.ts `programs` (slug, title, ages, options[].label/price).
+// Mirrors apps/cugc-website/src/site.ts `programs` (slug, title, ages, options[].label/price/times).
 export const CUGC_PROGRAMS: CugcProgram[] = [
   {
     slug: "gymplay",
     title: "GymPlay",
     ages: "3–6 years",
-    options: [{ label: "1–2 sessions per week", price: 165 }],
+    image: "/img/program-1.jpg",
+    options: [
+      {
+        label: "1–2 sessions per week",
+        price: 165,
+        times: ["Wednesday 4:00–4:45pm", "Saturday 9:30–10:15am", "Saturday 10:30–11:15am"],
+      },
+    ],
   },
   {
     slug: "gymbasics",
     title: "GymBasics",
     ages: "5–7 & 8+ years",
+    image: "/img/program-2.jpg",
     options: [
-      { label: "Ages 5–7 · once a week", price: 250 },
-      { label: "Ages 5–7 · twice a week", price: 350 },
-      { label: "Ages 8+ · once a week", price: 195 },
+      { label: "Ages 5–7 · once a week", price: 250, times: ["Tuesday 4:00–5:30pm", "Saturday 9:00–10:30am"] },
+      { label: "Ages 5–7 · twice a week", price: 350, times: ["Tuesday + Saturday"] },
+      { label: "Ages 8+ · once a week", price: 195, times: ["Friday 4:00–5:00pm"] },
     ],
   },
   {
     slug: "competitive",
     title: "Competitive Stream — Level 1",
     ages: "By invitation",
+    image: "/img/program-3.jpg",
+    annual: true,
+    inviteOnly: true,
     options: [
-      { label: "1× per week (2 hours)", price: 295 },
-      { label: "2× per week (4.5 hours)", price: 565 },
+      { label: "1× per week (2 hours)", price: 295, times: ["Thursday"] },
+      { label: "2× per week (4.5 hours)", price: 565, times: ["Tuesday or Thursday, + Saturday"] },
     ],
   },
 ];

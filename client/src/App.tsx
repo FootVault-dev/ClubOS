@@ -85,7 +85,7 @@ import CugcAnalytics from "@/pages/cugc-analytics";
 import LeagueBuilderPage from "@/pages/league-builder-page";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
-import GymnasticsPrograms from "@/pages/gymnastics-programs";
+import CugcPrograms from "@/pages/cugc-programs";
 import GymnasticsTerms from "@/pages/gymnastics-terms";
 import TournamentDashboard from "@/pages/tournament-dashboard";
 import TournamentList from "@/pages/tournament-list";
@@ -202,7 +202,9 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={GymnasticsDashboard} />
-        <Route path="/admin/programs" component={GymnasticsPrograms} />
+        {/* The gymnastics Programs tab shows the live cugc.co.nz lineup (not the
+            generic camp-style pipeline) — website enrolments land in Registrations. */}
+        <Route path="/admin/programs" component={CugcPrograms} />
         <Route path="/admin/cugc-registrations" component={CugcRegistrations} />
         <Route path="/admin/cugc-free-sessions" component={CugcFreeSessions} />
         <Route path="/admin/cugc-analytics" component={CugcAnalytics} />

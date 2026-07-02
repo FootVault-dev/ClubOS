@@ -3,6 +3,7 @@
 // the cugc.co.nz enrol form. A row is 'pending_payment' until the CUGC Stripe
 // webhook confirms it 'paid'. Internal-only — session + tab permission.
 import { useState } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { ClipboardCheck, Mail, Phone, Inbox, X } from "lucide-react";
@@ -66,8 +67,9 @@ function fmtDate(iso: string): string {
 export default function CugcRegistrations() {
   const { data: regos = [], isLoading } = useQuery<Registration[]>({ queryKey: ["/api/admin/cugc/registrations"] });
   const { data: cfg } = useQuery<ProgramConfig>({ queryKey: ["/api/admin/cugc/programs"] });
+  const search = useSearch(); // supports deep links from the Programs tab (?program=gymplay)
   const [filter, setFilter] = useState<"all" | "paid" | "pending_payment" | "cancelled">("all");
-  const [progFilter, setProgFilter] = useState<string>("all");
+  const [progFilter, setProgFilter] = useState<string>(() => new URLSearchParams(search).get("program") || "all");
   const [selected, setSelected] = useState<Registration | null>(null);
 
   const inProgram = progFilter === "all" ? regos : regos.filter((r) => r.programSlug === progFilter);
