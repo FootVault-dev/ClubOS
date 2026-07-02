@@ -2356,6 +2356,42 @@ export const insertSkillsChallengeEntrySchema = createInsertSchema(skillsChallen
 export type InsertSkillsChallengeEntry = z.infer<typeof insertSkillsChallengeEntrySchema>;
 export type SkillsChallengeEntry = typeof skillsChallengeEntries.$inferSelect;
 
+// ---- Mobile push notifications (CIC Youth app) ----
+// Devices register their Expo push token via the public API on app launch;
+// broadcasts are composed in the ClubOS "Notifications" tab and fan out through
+// Expo's push service in batches of 100. `disabled` flips when Expo reports the
+// device as no longer registered (app uninstalled / token rotated).
+export const devicePushTokens = pgTable("device_push_tokens", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  token: text("token").notNull().unique(),
+  app: text("app").notNull().default("cic-youth"),
+  platform: text("platform").notNull().default("unknown"), // "ios" | "android" | "unknown"
+  deviceName: text("device_name"),
+  disabled: boolean("disabled").notNull().default(false),
+  failureCount: integer("failure_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const pushCampaigns = pgTable("push_campaigns", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  app: text("app").notNull().default("cic-youth"),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  dataJson: text("data_json"),
+  audience: text("audience").notNull().default("all"),
+  recipientCount: integer("recipient_count").default(0),
+  sentCount: integer("sent_count").default(0),
+  failedCount: integer("failed_count").default(0),
+  status: text("status").notNull().default("draft"), // "draft" | "sending" | "sent"
+  sentByUserId: integer("sent_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type DevicePushToken = typeof devicePushTokens.$inferSelect;
+export type PushCampaign = typeof pushCampaigns.$inferSelect;
+
 // ---- CIC 7's register-interest submissions (from the cic7s.com marketing site) ----
 // Lives under the same CIC organization as the youth tournament; surfaced in the
 // "CIC 7's" view of the Tournament workspace.

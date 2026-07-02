@@ -77,6 +77,7 @@ import LeagueInbox from "@/pages/league-inbox";
 import CicInbox from "@/pages/cic-inbox";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import CicMailer from "@/pages/cic-mailer";
+import CicPush from "@/pages/cic-push";
 import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
 import CugcAnalytics from "@/pages/cugc-analytics";
@@ -233,6 +234,7 @@ function AdminRouter() {
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
         <Route path="/admin/cic-registrations" component={CicInbox} />
         <Route path="/admin/cic-mailer" component={CicMailer} />
+        <Route path="/admin/cic-push" component={CicPush} />
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/esign" component={ESign} />
         <Route path="/admin/domains" component={AdminDomainSettings} />

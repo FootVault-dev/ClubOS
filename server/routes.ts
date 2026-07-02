@@ -1,7 +1,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents, tournamentStaff } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns } from "@shared/schema";
+import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab } from "@shared/tabs";
 import { budgetStorage } from "./budget-storage";
@@ -12572,6 +12573,137 @@ export async function registerRoutes(
       res.json({ queued: true, recipientCount: recipients.length });
     } catch (e: any) {
       console.error("[CIC mailer send] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // ── CIC Youth app push notifications ────────────────────────────────────────
+  // The mobile app registers its Expo push token on launch (public, no auth —
+  // tokens are opaque and unguessable, and registering one only ever means
+  // "this device may receive CIC notifications"). Broadcasts are composed in
+  // the tournament workspace's "Notifications" tab and fan out through Expo's
+  // push service via runPushBroadcastQueue (server/push.ts).
+
+  app.options("/api/public/push/register", (req, res) => { setSkillsCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/push/register", async (req, res) => {
+    setSkillsCors(req, res);
+    try {
+      const { token, platform, deviceName } = req.body || {};
+      if (!isExpoPushToken(token)) return res.status(400).json({ message: "A valid Expo push token is required" });
+      const plat = platform === "ios" || platform === "android" ? platform : "unknown";
+      const name = String(deviceName || "").slice(0, 120) || null;
+      await db.insert(devicePushTokens)
+        .values({ token, platform: plat, deviceName: name, app: "cic-youth" })
+        .onConflictDoUpdate({
+          target: devicePushTokens.token,
+          set: { platform: plat, deviceName: name, disabled: false, failureCount: 0, updatedAt: new Date() },
+        });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Opt-out (e.g. account deletion in the app) — disables rather than deletes
+  // so re-registering the same token later just flips it back on.
+  app.options("/api/public/push/unregister", (req, res) => { setSkillsCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/push/unregister", async (req, res) => {
+    setSkillsCors(req, res);
+    try {
+      const { token } = req.body || {};
+      if (!isExpoPushToken(token)) return res.status(400).json({ message: "A valid Expo push token is required" });
+      await db.update(devicePushTokens).set({ disabled: true, updatedAt: new Date() })
+        .where(eq(devicePushTokens.token, token));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Device counts for the tab header (active devices only).
+  app.get("/api/admin/cic/push/overview", requireAuth, requireTab("cic-push"), async (_req, res) => {
+    try {
+      const rows = await db.select({
+        platform: devicePushTokens.platform,
+        disabled: devicePushTokens.disabled,
+        createdAt: devicePushTokens.createdAt,
+      }).from(devicePushTokens).where(eq(devicePushTokens.app, "cic-youth"));
+      const active = rows.filter((r) => !r.disabled);
+      const last = rows.reduce<Date | null>((acc, r) => (!acc || r.createdAt > acc ? r.createdAt : acc), null);
+      res.json({
+        total: active.length,
+        ios: active.filter((r) => r.platform === "ios").length,
+        android: active.filter((r) => r.platform === "android").length,
+        disabled: rows.length - active.length,
+        lastRegisteredAt: last,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Recently-registered devices — powers the "send a test to my phone" picker.
+  app.get("/api/admin/cic/push/devices", requireAuth, requireTab("cic-push"), async (_req, res) => {
+    try {
+      const rows = await db.select({
+        id: devicePushTokens.id,
+        platform: devicePushTokens.platform,
+        deviceName: devicePushTokens.deviceName,
+        createdAt: devicePushTokens.createdAt,
+      }).from(devicePushTokens)
+        .where(and(eq(devicePushTokens.app, "cic-youth"), eq(devicePushTokens.disabled, false)))
+        .orderBy(desc(devicePushTokens.createdAt))
+        .limit(30);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Broadcast history — CIC Youth campaigns only.
+  app.get("/api/admin/cic/push/campaigns", requireAuth, requireTab("cic-push"), async (_req, res) => {
+    try {
+      const rows = await db.select().from(pushCampaigns)
+        .where(eq(pushCampaigns.app, "cic-youth"))
+        .orderBy(desc(pushCampaigns.createdAt))
+        .limit(50);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Send a single test notification to one chosen device — safe preview.
+  app.post("/api/admin/cic/push/test-send", requireAuth, requireTab("cic-push"), async (req, res) => {
+    try {
+      const { deviceId, title, body } = req.body || {};
+      const t = String(title || "").trim();
+      const b = String(body || "").trim();
+      if (!deviceId || !t || !b) return res.status(400).json({ message: "deviceId, title and body are required" });
+      const [device] = await db.select().from(devicePushTokens)
+        .where(and(eq(devicePushTokens.id, parseInt(String(deviceId))), eq(devicePushTokens.disabled, false)));
+      if (!device) return res.status(404).json({ message: "Device not found" });
+      const result = await sendSinglePush(device.token, { title: `[TEST] ${t}`, body: b });
+      res.json(result);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Broadcast to every active device (batched, logged — queue runs after the
+  // response, progress lands on the campaign row for the UI to poll).
+  app.post("/api/admin/cic/push/send", requireAuth, requireTab("cic-push"), async (req, res) => {
+    try {
+      const title = String(req.body?.title || "").trim();
+      const body = String(req.body?.body || "").trim();
+      if (!title || title.length > 120) return res.status(400).json({ message: "A title (under 120 chars) is required" });
+      if (!body || body.length > 1000) return res.status(400).json({ message: "A message (under 1000 chars) is required" });
+
+      const devices = await db.select({ id: devicePushTokens.id, token: devicePushTokens.token })
+        .from(devicePushTokens)
+        .where(and(eq(devicePushTokens.app, "cic-youth"), eq(devicePushTokens.disabled, false)));
+      if (devices.length === 0) return res.status(400).json({ message: "No registered devices yet — devices appear as people install the updated app" });
+
+      const [campaign] = await db.insert(pushCampaigns).values({
+        app: "cic-youth", title, body, audience: "all",
+        recipientCount: devices.length, status: "sending",
+        sentByUserId: req.session.userId ?? null,
+      }).returning();
+
+      void runPushBroadcastQueue(campaign.id, devices, { title, body })
+        .catch((e) => console.error("[CIC push queue] error:", e));
+
+      res.json({ queued: true, recipientCount: devices.length });
+    } catch (e: any) {
+      console.error("[CIC push send] error:", e);
       res.status(400).json({ message: e.message });
     }
   });
