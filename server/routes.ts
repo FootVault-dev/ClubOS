@@ -16,7 +16,7 @@ import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, crea
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
 import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendClubLogoConsentNotification, sendCicBroadcastEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
-import { computeCugcEnrolPrice, CUGC_TERM } from "./cugc-pricing";
+import { computeCugcEnrolPrice, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -12886,7 +12886,14 @@ export async function registerRoutes(
       }
 
       const { program, option, pricing } = priced;
-      const priceCents = pricing.price * 100;
+
+      // Optional discount code (server-side list — see cugc-pricing.ts). An
+      // unknown code is rejected loudly rather than silently charging full price.
+      const discountCode = String(req.body.discountCode || "").trim().toUpperCase();
+      const discount = discountCode ? CUGC_DISCOUNT_CODES[discountCode] : undefined;
+      if (discountCode && !discount) return res.status(400).json({ message: "That discount code isn't valid." });
+
+      const priceCents = discount ? discount.priceCentsOverride : pricing.price * 100;
       const fullPriceCents = pricing.fullPrice * 100;
       const termName = String(req.body.term || "").trim() || CUGC_TERM.name;
       const orgId = await cugcOrgId();
@@ -12920,12 +12927,12 @@ export async function registerRoutes(
         currency: "nzd",
         automatic_payment_methods: { enabled: true },
         receipt_email: email,
-        description: `${program.title} — ${option.label} (${termName})`,
-        metadata: { registrationId: String(row.id) },
+        description: `${program.title} — ${option.label} (${termName})${discount ? ` · code ${discountCode}` : ""}`,
+        metadata: { registrationId: String(row.id), ...(discount ? { discountCode } : {}) },
       });
 
       await db.update(cugcRegistrations).set({ stripePaymentIntent: intent.id }).where(eq(cugcRegistrations.id, row.id));
-      res.json({ clientSecret: intent.client_secret, registrationId: row.id, amount: pricing.price });
+      res.json({ clientSecret: intent.client_secret, registrationId: row.id, amount: priceCents / 100 });
     } catch (e: any) {
       console.error("[CUGC enrol] error:", e);
       res.status(400).json({ message: e.message });

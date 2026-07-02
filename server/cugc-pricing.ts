@@ -42,6 +42,14 @@ export const CUGC_PROGRAMS: CugcProgram[] = [
   },
 ];
 
+// ── Discount / test codes for the enrol flow ─────────────────────────────────
+// Server-side only (never in the client bundle). Codes are normalised to
+// uppercase before lookup. priceCentsOverride REPLACES the computed term price
+// for the whole enrolment. Remove test codes once they've served their purpose.
+export const CUGC_DISCOUNT_CODES: Record<string, { label: string; priceCentsOverride: number }> = {
+  "CUGC-TEST-2741": { label: "Internal $1 end-to-end payment test", priceCentsOverride: 100 },
+};
+
 const MS_WEEK = 7 * 24 * 60 * 60 * 1000;
 
 /** Parse a YYYY-MM-DD as a local date (avoids TZ off-by-one). */
