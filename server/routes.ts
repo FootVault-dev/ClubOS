@@ -14746,7 +14746,8 @@ async function resolveCicAudience(orgId: number, opts: { source: "youth" | "7s";
       if (team.active === false) continue;
       teamMeta.set(team.id, { team: team.name, term: t.name });
       if (team.clubId) clubIds.add(team.clubId);
-      if (opts.audience !== "staff" && team.contactEmail) add({ name: team.contactName || "", email: team.contactEmail, phone: team.contactPhone || "", role: "Team contact", team: team.name, term: t.name });
+      // Contact fields sometimes hold two addresses ("a@x / b@y") — split them.
+      if (opts.audience !== "staff") for (const email of parseCustomEmails(team.contactEmail)) add({ name: team.contactName || "", email, phone: team.contactPhone || "", role: "Team contact", team: team.name, term: t.name });
     }
   }
 
@@ -14757,16 +14758,15 @@ async function resolveCicAudience(orgId: number, opts: { source: "youth" | "7s";
     for (const club of allClubs) {
       if (!club.active || !club.contactEmail) continue;
       if (opts.tournamentId && !clubIds.has(club.id)) continue;
-      add({ name: club.contactName || "", email: club.contactEmail, phone: club.contactPhone || "", role: "Club contact", team: club.name, term: "" });
+      for (const email of parseCustomEmails(club.contactEmail)) add({ name: club.contactName || "", email, phone: club.contactPhone || "", role: "Club contact", team: club.name, term: "" });
     }
   }
 
   if (opts.audience !== "contacts" && teamMeta.size > 0) {
     const staff = await db.select().from(tournamentStaff).where(inArray(tournamentStaff.teamId, Array.from(teamMeta.keys())));
     for (const s of staff) {
-      if (!s.email) continue;
       const meta = teamMeta.get(s.teamId);
-      add({ name: `${s.firstName || ""} ${s.lastName || ""}`.trim(), email: s.email, phone: s.phone || "", role: s.role || "Staff", team: meta?.team || "", term: meta?.term || "" });
+      for (const email of parseCustomEmails(s.email)) add({ name: `${s.firstName || ""} ${s.lastName || ""}`.trim(), email, phone: s.phone || "", role: s.role || "Staff", team: meta?.team || "", term: meta?.term || "" });
     }
   }
 
