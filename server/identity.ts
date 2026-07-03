@@ -176,9 +176,15 @@ export async function bindVisitorToPerson(
  *   UPDATE analytics_events SET person_id = <person> WHERE visitor_id = <visitor>
  *   AND person_id IS NULL.
  *
- * Also bridges the legacy visitor id: analytics.js (T5) ships the pre-migration
- * `_cufc_vid` once as `metadata->>'legacyVid'`, so we stitch those older rows too
- * (T6 note (a)). Returns the number of rows stitched. Never throws.
+ * Also bridges other visitor ids that are the same human:
+ *   - the legacy id: analytics.js (T5) ships the pre-migration `_cufc_vid` once as
+ *     `metadata->>'legacyVid'` (T6 note (a));
+ *   - cross-root aliases (T13): when the visitor crossed between two brand roots, the
+ *     cookie middleware recorded an `alias` event linking the two spines — we follow
+ *     it in BOTH directions (this visitor may be the kept id OR the aliased one).
+ *
+ * Each bridged id's still-anonymous rows are stitched too. Returns the total number of
+ * rows stitched. Never throws.
  */
 export async function stitchVisitorHistory(visitorId: unknown, personId: number): Promise<number> {
   const normVisitor = validExternalId(visitorId);
@@ -193,22 +199,36 @@ export async function stitchVisitorHistory(visitorId: unknown, personId: number)
       .returning({ id: analyticsEvents.id });
     stitched += updated.length;
 
-    // Bridge any legacy ids this visitor reported, then stitch their history too.
-    const legacyRes = await db.execute(sql`
-      SELECT DISTINCT metadata->>'legacyVid' AS legacy
-      FROM analytics_events
-      WHERE visitor_id = ${normVisitor}
-        AND metadata->>'legacyVid' IS NOT NULL
+    // Collect every OTHER visitor id that is the same human: legacy ids this visitor
+    // reported, plus cross-root aliases (either side of the link). One grouped query;
+    // then stitch each bridged id's remaining anonymous rows.
+    const bridgeRes = await db.execute(sql`
+      SELECT DISTINCT other FROM (
+        SELECT metadata->>'legacyVid' AS other
+          FROM analytics_events
+          WHERE visitor_id = ${normVisitor}
+            AND metadata->>'legacyVid' IS NOT NULL
+        UNION
+        SELECT metadata->>'aliasVisitorId' AS other
+          FROM analytics_events
+          WHERE event_type = 'alias' AND visitor_id = ${normVisitor}
+            AND metadata->>'aliasVisitorId' IS NOT NULL
+        UNION
+        SELECT visitor_id AS other
+          FROM analytics_events
+          WHERE event_type = 'alias' AND metadata->>'aliasVisitorId' = ${normVisitor}
+      ) t
+      WHERE other IS NOT NULL
     `);
-    for (const r of legacyRes.rows as Array<{ legacy: string | null }>) {
-      const legacy = validExternalId(r.legacy);
-      if (!legacy || legacy === normVisitor) continue;
-      const legacyUpdated = await db
+    for (const r of bridgeRes.rows as Array<{ other: string | null }>) {
+      const other = validExternalId(r.other);
+      if (!other || other === normVisitor) continue;
+      const otherUpdated = await db
         .update(analyticsEvents)
         .set({ personId })
-        .where(and(eq(analyticsEvents.visitorId, legacy), isNull(analyticsEvents.personId)))
+        .where(and(eq(analyticsEvents.visitorId, other), isNull(analyticsEvents.personId)))
         .returning({ id: analyticsEvents.id });
-      stitched += legacyUpdated.length;
+      stitched += otherUpdated.length;
     }
   } catch {
     // attribution stitching must never block or bubble — swallow and report what we got

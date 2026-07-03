@@ -11,6 +11,11 @@
 //     reads them back, so they must be JS-visible.
 //   - An incoming `?ci=<clickId>` on the landing URL seeds/overrides usg_cid so a
 //     redirect (/l/:key → destination?ci=…, T9) plants the click on first paint.
+//   - An incoming `?vi=<visitorId>` (T12 tracker decorates cross-root links with it)
+//     is ACCEPTED on the landing (T13): if this root has no first-party id yet we
+//     adopt it so the spine is unbroken; if it differs from an id we already have we
+//     keep ours and record an `alias` event linking the two so identity stitching
+//     (T7) can bridge them.
 //   - The middleware MUST NEVER throw: attribution can never block a page load.
 //
 // All the decision logic is pure and unit-tested in
@@ -88,29 +93,67 @@ export interface CookieDecisionInput {
   cookies: Record<string, string>;
   /** the `?ci=` query param off the landing URL, if any */
   ciParam?: string | null;
+  /** the `?vi=` query param (T12 tracker decorates cross-root links with it), if any */
+  viParam?: string | null;
   /** visitor-id generator, injected so tests are deterministic */
   mintVisitorId: () => string;
 }
 
+/**
+ * A cross-root visitor crossing (T13): the visitor arrived carrying a decorated
+ * `?vi=` id that DIFFERS from the first-party cookie we already hold on this root, so
+ * one human now has two visitor spines. We keep our own id and record the pair as an
+ * `alias` event so identity stitching (T7) can later treat both spines as one person.
+ */
+export interface VisitorAlias {
+  /** the first-party visitor id we keep on this root (never overwritten) */
+  keep: string;
+  /** the decorated `?vi=` id from the origin root, to be stitched to `keep` */
+  alias: string;
+}
+
 export interface CookieDecision {
-  /** the visitor id for this request (reused if valid, freshly minted otherwise) */
+  /** the visitor id for this request (reused if valid, adopted from `?vi=`, else minted) */
   visitorId: string;
   /** the click id for this request, or null when there is none */
   clickId: string | null;
   /** cookies to Set-Cookie on the response */
   setCookies: SetCookieSpec[];
+  /** non-null when an `alias` analytics event should be recorded (see VisitorAlias) */
+  alias: VisitorAlias | null;
 }
 
 /**
- * Pure decision: given the request cookies and a possible `?ci=`, work out the
- * visitor id + click id and which cookies to (re)set. Sliding windows: an active
- * visitor's cookies are re-issued on every page load so they never expire mid-use.
+ * Pure decision: given the request cookies, a possible `?ci=` and a possible `?vi=`,
+ * work out the visitor id + click id, which cookies to (re)set, and whether a
+ * cross-root alias should be recorded. Sliding windows: an active visitor's cookies
+ * are re-issued on every page load so they never expire mid-use.
  */
 export function decideAttributionCookies(input: CookieDecisionInput): CookieDecision {
   const setCookies: SetCookieSpec[] = [];
 
   const existingVid = input.cookies[VID_COOKIE];
-  const visitorId = isValidVisitorId(existingVid) ? existingVid : input.mintVisitorId();
+  const decoratedVid = isValidVisitorId(input.viParam) ? String(input.viParam) : null;
+
+  // Visitor id resolution with cross-root acceptance (T13):
+  //   - a valid existing cookie wins (it's our first-party id for this root);
+  //   - otherwise adopt a valid decorated `?vi=` (the visitor came from another brand
+  //     root and has no id here yet — take theirs so the spine is unbroken);
+  //   - otherwise mint a fresh one.
+  let visitorId: string;
+  let alias: VisitorAlias | null = null;
+  if (isValidVisitorId(existingVid)) {
+    visitorId = existingVid;
+    // A decorated id that DIFFERS from our own means two spines for one human — record
+    // the link (we never overwrite our first-party cookie with a decorated id).
+    if (decoratedVid && decoratedVid !== existingVid) {
+      alias = { keep: existingVid, alias: decoratedVid };
+    }
+  } else if (decoratedVid) {
+    visitorId = decoratedVid;
+  } else {
+    visitorId = input.mintVisitorId();
+  }
   // Always (re)issue to slide the 2-year window forward for returning visitors.
   setCookies.push({ name: VID_COOKIE, value: visitorId, maxAgeSeconds: VID_MAX_AGE_SECONDS });
 
@@ -126,7 +169,7 @@ export function decideAttributionCookies(input: CookieDecisionInput): CookieDeci
     setCookies.push({ name: CID_COOKIE, value: clickId, maxAgeSeconds: CID_MAX_AGE_SECONDS });
   }
 
-  return { visitorId, clickId, setCookies };
+  return { visitorId, clickId, setCookies, alias };
 }
 
 /**
@@ -172,10 +215,12 @@ export function attributionCookieMiddleware(req: Request, res: Response, next: N
 
     const cookies = parseCookieHeader(req.headers.cookie);
     const ciParam = firstQueryValue(req.query?.ci);
+    const viParam = firstQueryValue(req.query?.vi);
 
     const decision = decideAttributionCookies({
       cookies,
       ciParam,
+      viParam,
       mintVisitorId: () => randomUUID(),
     });
 
@@ -183,6 +228,22 @@ export function attributionCookieMiddleware(req: Request, res: Response, next: N
     for (const spec of decision.setCookies) {
       // append (not set) so we never clobber a session Set-Cookie on the same response
       res.append("Set-Cookie", serializeSetCookie(spec, { secure }));
+    }
+
+    // Cross-root crossing (T13): the visitor carried a decorated id that differs from
+    // ours. Link the two spines so identity stitching can bridge them later. This is a
+    // fire-and-forget DB write, loaded lazily so this module stays DB-free (and its
+    // pure logic unit-testable). Never block the page load; swallow any failure.
+    if (decision.alias) {
+      const aliasSpec = decision.alias;
+      const ctx = {
+        page: req.path || null,
+        landingUrl: typeof req.originalUrl === "string" ? req.originalUrl : null,
+        userAgent: (req.headers["user-agent"] as string | undefined) || null,
+      };
+      void import("./attribution-alias")
+        .then((m) => m.recordVisitorAlias(aliasSpec, ctx))
+        .catch(() => {});
     }
 
     // expose for any downstream handler in this request lifecycle

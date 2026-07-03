@@ -7,6 +7,8 @@
 //   - decideAttributionCookies: mint-when-absent, reuse-when-present (sliding window),
 //     ?ci= seeds/overrides usg_cid, invalid ?ci= falls back to the existing cookie,
 //     no click id → no usg_cid cookie, header-injection ids rejected
+//   - cross-root ?vi= adopt/alias matrix (T13): adopt when no existing id, keep + alias
+//     when it differs, no alias when equal/absent/invalid, adopted id still re-issued
 //   - serializeSetCookie: attributes present, HttpOnly ABSENT, Secure toggle, encoding
 
 import {
@@ -144,6 +146,80 @@ check(!isValidClickId("{{click}}"), "cid: macro invalid");
   const d = decideAttributionCookies({ cookies: {}, ciParam: "evil;Domain=evil.com", mintVisitorId: mint });
   eq(d.clickId, null, "decide: header-injection ?ci= rejected, no cid set");
   check(!d.setCookies.some((c) => c.name === CID_COOKIE), "decide: no cid cookie for injection attempt");
+}
+
+// ── decideAttributionCookies: no alias in the plain cases ────────────────────
+{
+  const mintCase = decideAttributionCookies({ cookies: {}, mintVisitorId: mint });
+  eq(mintCase.alias, null, "decide: minting a fresh vid records no alias");
+  const reuseCase = decideAttributionCookies({ cookies: { [VID_COOKIE]: "existingVid123" }, mintVisitorId: mint });
+  eq(reuseCase.alias, null, "decide: reusing an existing vid (no ?vi=) records no alias");
+}
+
+// ── decideAttributionCookies: ?vi= ADOPTED when no existing vid (T13) ────────
+{
+  const d = decideAttributionCookies({ cookies: {}, viParam: "decoratedVid123", mintVisitorId: mint });
+  eq(d.visitorId, "decoratedVid123", "decide: adopts a decorated ?vi= when no existing vid");
+  eq(d.alias, null, "decide: adopting ?vi= records no alias (it becomes our own id)");
+  const vid = d.setCookies.find((c) => c.name === VID_COOKIE)!;
+  eq(vid.value, "decoratedVid123", "decide: adopted ?vi= is re-issued as the usg_vid cookie");
+  eq(vid.maxAgeSeconds, VID_MAX_AGE_SECONDS, "decide: adopted vid cookie keeps the 2y max-age");
+}
+
+// ── decideAttributionCookies: existing vid + differing ?vi= → keep + ALIAS ───
+{
+  const d = decideAttributionCookies({
+    cookies: { [VID_COOKIE]: "existingVid123" },
+    viParam: "decoratedVid999",
+    mintVisitorId: mint,
+  });
+  eq(d.visitorId, "existingVid123", "decide: existing vid wins over a decorated ?vi=");
+  check(d.alias !== null, "decide: a differing ?vi= records an alias");
+  eq(d.alias?.keep, "existingVid123", "decide: alias.keep is our first-party id");
+  eq(d.alias?.alias, "decoratedVid999", "decide: alias.alias is the decorated cross-root id");
+  const vid = d.setCookies.find((c) => c.name === VID_COOKIE)!;
+  eq(vid.value, "existingVid123", "decide: cookie stays our id (decorated id never overwrites it)");
+}
+
+// ── decideAttributionCookies: existing vid + EQUAL ?vi= → no alias ───────────
+{
+  const d = decideAttributionCookies({
+    cookies: { [VID_COOKIE]: "sameVid123456" },
+    viParam: "sameVid123456",
+    mintVisitorId: mint,
+  });
+  eq(d.visitorId, "sameVid123456", "decide: equal ?vi= keeps the existing vid");
+  eq(d.alias, null, "decide: a ?vi= equal to our id records no alias");
+}
+
+// ── decideAttributionCookies: invalid ?vi= is ignored (adopt + alias) ────────
+{
+  // no existing id + macro ?vi= → mint, do NOT adopt, no alias
+  const macro = decideAttributionCookies({ cookies: {}, viParam: "{{visitor}}", mintVisitorId: mint });
+  eq(macro.visitorId, MINT, "decide: macro ?vi= not adopted — mints a fresh id");
+  eq(macro.alias, null, "decide: macro ?vi= records no alias");
+
+  // existing id + header-injection ?vi= → keep existing, no alias
+  const inject = decideAttributionCookies({
+    cookies: { [VID_COOKIE]: "existingVid123" },
+    viParam: "evil;Domain=evil.com",
+    mintVisitorId: mint,
+  });
+  eq(inject.visitorId, "existingVid123", "decide: injection ?vi= ignored, existing vid kept");
+  eq(inject.alias, null, "decide: injection ?vi= records no alias");
+}
+
+// ── decideAttributionCookies: adopt ?vi= alongside ?ci= (independent) ────────
+{
+  const d = decideAttributionCookies({
+    cookies: {},
+    viParam: "decoratedVid123",
+    ciParam: "Click_ABC-123",
+    mintVisitorId: mint,
+  });
+  eq(d.visitorId, "decoratedVid123", "decide: adopts ?vi= and still seeds ?ci= together");
+  eq(d.clickId, "Click_ABC-123", "decide: ?ci= still resolves when ?vi= is also present");
+  eq(d.alias, null, "decide: adopt-with-ci records no alias");
 }
 
 // ── serializeSetCookie ───────────────────────────────────────────────────────
