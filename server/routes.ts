@@ -10,6 +10,7 @@ import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
+import { buildConversionAttribution } from "./attribution-stamp";
 import { eq, ne, and, or, sql, asc, desc, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
@@ -1163,6 +1164,7 @@ export async function registerRoutes(
         : 0;
 
       // Create the registration row in 'pending' state
+      const attribution = await buildConversionAttribution(req, { email, firstName, lastName });
       const reg = await storage.createRegistration({
         programId: program.id,
         programOptionId: option?.id ?? null,
@@ -1183,6 +1185,7 @@ export async function registerRoutes(
         fbclid: utm?.fbclid || null,
         gclid: utm?.gclid || null,
         registrationLocation: "online",
+        ...attribution,
       } as any);
 
       const sharedMetadata = {
@@ -4126,6 +4129,9 @@ export async function registerRoutes(
       }
 
       const normalizedHalfFull = (facility.halfFull || facility.quarterField) ? (parsed.halfFull || "full") : null;
+      const bookingAttribution = await buildConversionAttribution(req, {
+        email: parsed.email, firstName: parsed.fullName, phone: parsed.phone,
+      });
       const [request] = await db.insert(bookingRequests).values({
         organizationId: orgId,
         facilityId: parsed.facilityId,
@@ -4133,6 +4139,7 @@ export async function registerRoutes(
         dateOfBirth: parsed.dateOfBirth,
         email: parsed.email,
         phone: parsed.phone,
+        ...bookingAttribution,
         bookingDate: parsed.date,
         startTime: parsed.startTime,
         endTime: parsed.endTime,
@@ -8821,7 +8828,7 @@ export async function registerRoutes(
     };
   }
 
-  async function fiCreateApplication(body: any, source: string) {
+  async function fiCreateApplication(body: any, source: string, req?: Request) {
     const applicantName = s(body?.applicantName || `${s(body?.studentFirstName, 60)} ${s(body?.studentLastName, 60)}`, 120);
     const email = s(body?.email, 160).toLowerCase();
     if (!applicantName) return { error: "Student name is required" };
@@ -8846,6 +8853,7 @@ export async function registerRoutes(
       intakeYear: Number.isFinite(intakeYearNum) && intakeYearNum > 2024 && intakeYearNum < 2100 ? intakeYearNum : null,
       source,
     };
+    if (req) Object.assign(values, await buildConversionAttribution(req, { email, firstName: body?.parentName || applicantName, phone: body?.phone }));
     const [row] = await db.insert(footballInstituteApplications).values(values).returning();
     return { application: row };
   }
@@ -8895,7 +8903,7 @@ export async function registerRoutes(
   app.post("/api/public/football-institute/apply", async (req, res) => {
     fiApplyCors(req, res);
     try {
-      const result = await fiCreateApplication(req.body, "website");
+      const result = await fiCreateApplication(req.body, "website", req);
       if ("error" in result) return res.status(400).json({ message: result.error });
       // Email is best-effort — never fail the application if Resend hiccups.
       try {
@@ -9960,6 +9968,9 @@ export async function registerRoutes(
 
       const totalCents = subtotalCents - discountCents;
 
+      const campAttribution = await buildConversionAttribution(req, {
+        email: parent?.email, firstName: parent?.firstName, lastName: parent?.lastName, phone: parent?.phone,
+      });
       const registration = await storage.createRegistration({
         programId: camp.id,
         contactId: parentContact.id,
@@ -9977,6 +9988,7 @@ export async function registerRoutes(
         utmMedium: utmMedium || null,
         utmCampaign: utmCampaign || null,
         fbclid: fbclid || null,
+        ...campAttribution,
       });
 
       await storage.createRegistrationItems(registrationItems.map(item => ({
@@ -12180,12 +12192,16 @@ export async function registerRoutes(
         if (day !== 0 && day !== 6) added++;
       }
 
+      const printAttribution = await buildConversionAttribution(req, {
+        email: customer.email, firstName: customer.firstName, lastName: customer.lastName, phone: customer.phone,
+      });
       const order = await storage.createPrintOrder({
         organizationId: orgId,
         orderNumber,
         customerName: `${customer.firstName} ${customer.lastName}`.trim(),
         customerEmail: customer.email,
         customerPhone: customer.phone,
+        ...printAttribution,
         customerCompany: customer.company || null,
         title: material.name,
         description: null,
@@ -13052,6 +13068,7 @@ export async function registerRoutes(
           && Date.now() - new Date(w.createdAt).getTime() < 24 * 3600_000,
       );
 
+      const waitlistAttribution = await buildConversionAttribution(req, { email, firstName: contactName, phone });
       let entry;
       if (existing) {
         const merged = [...new Set([...(existing.divisionIds || []), ...valid.map((d) => d.id)])];
@@ -13067,6 +13084,7 @@ export async function registerRoutes(
           phone: phone || null,
           divisionIds: valid.map((d) => d.id),
           status: "waiting",
+          ...waitlistAttribution,
           utmSource: req.body.utmSource || null,
           utmMedium: req.body.utmMedium || null,
           utmCampaign: req.body.utmCampaign || null,
@@ -13172,6 +13190,9 @@ export async function registerRoutes(
       const wantsFull = String(req.body.paymentChoice || "").toLowerCase() === "full";
 
       // Create one registration per team.
+      const leagueAttribution = await buildConversionAttribution(req, {
+        email: captain?.email, firstName: captain?.firstName, lastName: captain?.lastName, phone: captain?.phone,
+      });
       const created: { registration: any; pay: any; teamTotalCents: number }[] = [];
       for (let i = 0; i < teamsResolved.length; i++) {
         const { team, division, subtotalCents, lineItems } = teamsResolved[i];
@@ -13210,6 +13231,7 @@ export async function registerRoutes(
           utmMedium: utmMedium || null,
           utmCampaign: utmCampaign || null,
           fbclid: fbclid || null,
+          ...leagueAttribution,
         } as any);
 
         await storage.createRegistrationItems(lineItems.map((li) => ({
@@ -13434,10 +13456,12 @@ export async function registerRoutes(
       if (!firstName || !/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Please add your name and a valid email." });
 
       const orgId = await skillsOrgId(); // CIC org — CIC 7's lives under it
+      const cic7sAttribution = await buildConversionAttribution(req, { email, firstName, lastName, phone });
       await db.insert(cic7sRegistrations).values({
         organizationId: orgId, firstName, lastName: lastName || null, email,
         location: location || null, phone: phone || null, category: category || null,
         sourceUrl: String(req.body.sourceUrl || "cic7s.com"), status: "new",
+        ...cic7sAttribution,
       });
       try {
         await sendCic7sRegistrationNotification({
@@ -13965,6 +13989,9 @@ export async function registerRoutes(
       const termName = String(req.body.term || "").trim() || CUGC_TERM.name;
       const orgId = await cugcOrgId();
 
+      const cugcAttribution = await buildConversionAttribution(req, {
+        email, firstName: parentName, phone: String(req.body.phone || "").trim() || null,
+      });
       const [row] = await db.insert(cugcRegistrations).values({
         organizationId: orgId,
         programSlug: program.slug,
@@ -13988,6 +14015,7 @@ export async function registerRoutes(
         // First/last-touch ad attribution captured client-side on cugc.co.nz
         // (utm_*, fbclid, referrer, landing, visits) — feeds CAC/LTV reporting.
         attribution: req.body.attribution && typeof req.body.attribution === "object" ? req.body.attribution : null,
+        ...cugcAttribution,
       }).returning();
 
       // Custom EMBEDDED checkout — return a PaymentIntent clientSecret for our own
@@ -14134,6 +14162,9 @@ export async function registerRoutes(
       const live = existing.find((r) => r.status !== "cancelled");
       if (live) return res.json({ ok: true, id: live.id, alreadyBooked: true });
 
+      const freeSessionAttribution = await buildConversionAttribution(req, {
+        email, firstName: parentName, phone: phone || null,
+      });
       const [row] = await db.insert(cugcFreeSessions).values({
         organizationId: orgId,
         programSlug: program.slug,
@@ -14149,6 +14180,7 @@ export async function registerRoutes(
         status: "booked",
         sourceUrl: String(req.body.sourceUrl || "").slice(0, 500) || null,
         attribution: req.body.attribution && typeof req.body.attribution === "object" ? req.body.attribution : null,
+        ...freeSessionAttribution,
       }).returning();
 
       // Emails: confirmation to the parent + heads-up to the club. Never block
