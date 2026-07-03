@@ -352,6 +352,7 @@ export async function sendCicBroadcastEmail(params: {
     replyTo: params.replyTo || "info@cicyouth.com",
     subject: params.subject,
     html,
+    ...(params.campaignId ? { utm: { source: "email", medium: "broadcast", campaign: String(params.campaignId), ci } } : {}),
   });
 }
 
@@ -410,6 +411,7 @@ export async function sendLeagueConfirmationEmail(params: {
     html: mflShell({ heading: isFull ? "You're in! 🎉" : "Spot locked in", bodyHtml }),
     campId: params.programId,
     registrationId: params.registrationId,
+    utm: { medium: "transactional", campaign: "league-confirmation" },
   });
 }
 
@@ -478,6 +480,7 @@ export async function sendSplitTeamConfirmedEmail(params: {
     html: mflShell({ heading: "Your team's in! 🎉", bodyHtml }),
     campId: params.programId,
     registrationId: params.registrationId,
+    utm: { medium: "transactional", campaign: "league-team-confirmed" },
   });
 }
 
@@ -503,6 +506,7 @@ export async function sendSeasonRewardEmail(params: {
     to: params.to, from: MFL_FROM, replyTo: MFL_REPLY_TO,
     subject: `You've unlocked ${params.tierName} — Season Ticket Rewards`,
     html: mflShell({ heading: `${params.tierName} unlocked 🎉`, bodyHtml }),
+    utm: { medium: "transactional", campaign: "league-season-reward" },
   });
 }
 
@@ -555,6 +559,7 @@ export async function sendMflWaitlistConfirmation(params: {
     replyTo: MFL_REPLY_TO,
     subject: `You're on the waitlist — ${params.teamName}`,
     html: mflShell({ heading: "You're on the waitlist ⚽", bodyHtml }),
+    utm: { medium: "transactional", campaign: "mfl-waitlist" },
   });
 }
 

@@ -25,6 +25,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { randomUUID } from "crypto";
 import { validExternalId } from "../shared/attribution";
+import { EMAIL_CI_PREFIX } from "../shared/email-attribution";
 
 export const VID_COOKIE = "usg_vid";
 export const CID_COOKIE = "usg_cid";
@@ -243,6 +244,20 @@ export function attributionCookieMiddleware(req: Request, res: Response, next: N
       };
       void import("./attribution-alias")
         .then((m) => m.recordVisitorAlias(aliasSpec, ctx))
+        .catch(() => {});
+    }
+
+    // Email click (T14): a fresh `?ci=emc…` on this landing is a per-recipient
+    // broadcast click token. Resolve it back to the recipient email and bind THIS
+    // visitor to that person (retroactively stitching their anonymous history). Only
+    // the URL param counts as a fresh click — the usg_cid cookie carries the token
+    // forward on later page views, but we bind once, on the email-click landing. The
+    // dynamic import keeps this module DB-free (spine test loads it); fully swallowed.
+    if (typeof ciParam === "string" && ciParam.startsWith(EMAIL_CI_PREFIX) && isValidClickId(ciParam)) {
+      const emailCi = ciParam;
+      const boundVisitor = decision.visitorId;
+      void import("./email-token")
+        .then((m) => m.resolveAndBindEmailClick(emailCi, boundVisitor))
         .catch(() => {});
     }
 

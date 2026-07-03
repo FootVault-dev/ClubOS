@@ -5028,6 +5028,7 @@ export async function registerRoutes(
         sendLeagueBroadcastEmail({
           to: email, subject: subj, bodyHtml: String(body), replyTo: replyTo || undefined,
           unsubscribeUrl: mflUnsubUrl(MFL_ORG_ID, email), campId: undefined,
+          orgId: MFL_ORG_ID, campaignId: campaign.id,
         }),
       ).catch((e) => console.error("[League mailer queue] error:", e));
 
@@ -14014,6 +14015,7 @@ export async function registerRoutes(
         sendCicBroadcastEmail({
           to: email, subject: subj, bodyHtml: String(body), brand: source,
           replyTo: replyTo || undefined, unsubscribeUrl: cicUnsubUrl(orgId, email),
+          orgId, campaignId: campaign.id,
         }),
       ).catch((e) => console.error("[CIC mailer queue] error:", e));
 
