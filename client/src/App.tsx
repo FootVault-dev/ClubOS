@@ -51,6 +51,7 @@ import GroupDashboard from "@/pages/group-dashboard";
 import GroupCalendar from "@/pages/group-calendar";
 import GroupSponsorship from "@/pages/group-sponsorship";
 import GroupGrants from "@/pages/group-grants";
+import AdminLicensing from "@/pages/admin-licensing";
 import GroupProjects from "@/pages/group-projects";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
@@ -320,6 +321,7 @@ function AdminRouter() {
       <Route path="/admin/domains" component={AdminDomainSettings} />
       <Route path="/admin/settings" component={AdminSettings} />
       <Route path="/admin/team" component={AdminTeam} />
+      <Route path="/admin/licensing" component={AdminLicensing} />
       <Route component={NotFound} />
     </Switch>
   );
