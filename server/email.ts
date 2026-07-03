@@ -511,6 +511,60 @@ export async function sendMflContactNotification(params: {
   });
 }
 
+/** Waitlist confirmation → the captain who joined the league waitlist. */
+export async function sendMflWaitlistConfirmation(params: {
+  to: string; contactName: string; teamName: string; nights: string[];
+}): Promise<boolean> {
+  const firstName = (params.contactName || "").trim().split(/\s+/)[0] || "there";
+  const nightsLabel = params.nights.join(", ") || "your chosen night";
+  const bodyHtml = `
+    <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:0;">Hey ${firstName},</p>
+    <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:14px 0 0;">
+      <strong style="color:#ffffff;">${params.teamName}</strong> is on the waitlist for <strong style="color:#d1b96e;">${nightsLabel}</strong>.
+      Spots open when a team drops out or we add capacity — and the waitlist gets first call, in order.
+    </p>
+    <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:14px 0 0;">
+      We'll email or call you the moment a spot opens. No payment needed until then.
+    </p>
+    <a href="https://join.minifootball.co.nz/league" style="display:inline-block; margin:22px 0 0; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">See nights with spots left →</a>`;
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: MFL_REPLY_TO,
+    subject: `You're on the waitlist — ${params.teamName}`,
+    html: mflShell({ heading: "You're on the waitlist ⚽", bodyHtml }),
+  });
+}
+
+/** Waitlist signup heads-up → the MFL coordinator (info@minifootball.co.nz).
+ *  Reply-To is the captain so staff can reply straight from their inbox. */
+export async function sendMflWaitlistNotification(params: {
+  to: string; teamName: string; contactName: string; email: string; phone?: string; nights: string[];
+}): Promise<boolean> {
+  const rows = [
+    mflRow("Team", params.teamName || "—"),
+    mflRow("Captain", params.contactName || "—"),
+    mflRow("Email", params.email || "—"),
+    ...(params.phone ? [mflRow("Phone", params.phone)] : []),
+    mflRow("Wants", params.nights.join(", ") || "—", true),
+  ].join("");
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:16px; font-weight:600; margin:0 0 14px;">New waitlist signup</p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    <p style="color:#8a8a8a; font-size:13px; line-height:1.6; margin:16px 0 0;">
+      They're waiting on a sold-out night. When a spot opens, contact them first — manage the list in ClubOS → Leagues → Teams.
+    </p>`;
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: params.email || MFL_REPLY_TO,
+    subject: `Waitlist: ${params.teamName} wants ${params.nights.join(", ") || "a spot"}`,
+    html: mflShell({ heading: "New waitlist signup", bodyHtml }),
+  });
+}
+
 /** CIC 7's "Register Your Interest" submission → the tournament team (info@cic7s.com).
  *  Reply-To is the registrant so staff can reply straight from their inbox. */
 export async function sendCic7sRegistrationNotification(params: {

@@ -848,6 +848,29 @@ export const leagueTeams = pgTable("league_teams", {
   uniqueRegistration: uniqueIndex("league_teams_registration_id_unique").on(t.registrationId),
 }));
 
+// ── League waitlist ──────────────────────────────────────────────────────────
+// Captured from the public join site when a night is sold out (or someone wants
+// first call on multiple nights). One row per request; divisionIds holds every
+// night they registered interest in. status: waiting → contacted → converted.
+export const leagueWaitlist = pgTable("league_waitlist", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  competitionId: integer("competition_id").references(() => leagueCompetitions.id, { onDelete: "cascade" }),
+  programSlug: text("program_slug"),
+  teamName: text("team_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  divisionIds: jsonb("division_ids").$type<number[]>().notNull().default(sql`'[]'::jsonb`),
+  notes: text("notes"),
+  status: text("status").notNull().default("waiting"), // 'waiting'|'contacted'|'converted'
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  fbclid: text("fbclid"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // ── Split Pay (split a team fee across the squad) ────────────────────────────
 // A split session divides a FIXED team fee equally across N payers, each paying
 // their own share on their own card. Lock-then-charge: members join + save a
@@ -1219,6 +1242,7 @@ export const insertLeagueDivisionSchema = createInsertSchema(leagueDivisions).om
 export const insertLeagueTeamSchema = createInsertSchema(leagueTeams).omit({ id: true, createdAt: true });
 export const insertLeagueGameSchema = createInsertSchema(leagueGames).omit({ id: true, createdAt: true });
 export const insertLeagueCouponSchema = createInsertSchema(leagueCoupons).omit({ id: true, createdAt: true });
+export const insertLeagueWaitlistSchema = createInsertSchema(leagueWaitlist).omit({ id: true, createdAt: true });
 export const insertSplitSessionSchema = createInsertSchema(splitSessions).omit({ id: true, createdAt: true });
 export const insertSplitMemberSchema = createInsertSchema(splitMembers).omit({ id: true, joinedAt: true });
 
@@ -1316,6 +1340,8 @@ export type InsertLeagueGame = z.infer<typeof insertLeagueGameSchema>;
 export type LeagueGame = typeof leagueGames.$inferSelect;
 export type InsertLeagueCoupon = z.infer<typeof insertLeagueCouponSchema>;
 export type LeagueCoupon = typeof leagueCoupons.$inferSelect;
+export type InsertLeagueWaitlist = z.infer<typeof insertLeagueWaitlistSchema>;
+export type LeagueWaitlistEntry = typeof leagueWaitlist.$inferSelect;
 export type InsertSplitSession = z.infer<typeof insertSplitSessionSchema>;
 export type SplitSession = typeof splitSessions.$inferSelect;
 export type InsertSplitMember = z.infer<typeof insertSplitMemberSchema>;

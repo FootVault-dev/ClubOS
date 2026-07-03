@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -16,7 +16,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -4467,6 +4467,48 @@ export async function registerRoutes(
   app.delete("/api/admin/league/teams/:id", requireAuth, async (req, res) => {
     try {
       await storage.deleteLeagueTeam(parseInt(req.params.id));
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Waitlist entries for the org, with each entry's division names resolved
+  // for display (divisionIds is a jsonb array of league_divisions ids).
+  app.get("/api/admin/league/waitlist", requireAuth, async (req, res) => {
+    try {
+      const orgId = parseInt(req.query.orgId as string);
+      if (!orgId) return res.status(400).json({ message: "orgId required" });
+      const entries = await storage.getLeagueWaitlist(orgId);
+      const divIds = [...new Set(entries.flatMap((e) => e.divisionIds || []))];
+      const divs = divIds.length ? await db.select().from(leagueDivisions).where(inArray(leagueDivisions.id, divIds)) : [];
+      const divMap = Object.fromEntries(divs.map((d) => [d.id, d]));
+      res.json(entries.map((e) => ({
+        ...e,
+        divisions: (e.divisionIds || []).map((id) => divMap[id]).filter(Boolean)
+          .map((d: any) => ({ id: d.id, name: d.name, dayOfWeek: d.dayOfWeek })),
+      })));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/admin/league/waitlist/:id", requireAuth, async (req, res) => {
+    try {
+      const allowed: any = {};
+      if (typeof req.body.status === "string" && ["waiting", "contacted", "converted"].includes(req.body.status)) allowed.status = req.body.status;
+      if (typeof req.body.notes === "string") allowed.notes = req.body.notes;
+      const entry = await storage.updateLeagueWaitlistEntry(parseInt(req.params.id), allowed);
+      if (!entry) return res.status(404).json({ message: "Not found" });
+      res.json(entry);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/league/waitlist/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteLeagueWaitlistEntry(parseInt(req.params.id));
       res.json({ ok: true });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -12965,6 +13007,79 @@ export async function registerRoutes(
         splitEnabled: !!(program as any).splitEnabled,
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Join the waitlist for one or more sold-out (or nearly-full) nights. No
+  // payment — captures the team + captain contact + every night they'd take,
+  // emails the captain a confirmation and the MFL coordinator a heads-up.
+  app.post("/api/public/league/waitlist", async (req, res) => {
+    try {
+      const teamName = String(req.body.teamName || "").trim();
+      const contactName = String(req.body.contactName || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const slug = String(req.body.slug || "").trim();
+      const rawIds: any[] = Array.isArray(req.body.divisionIds) ? req.body.divisionIds : [];
+      const divisionIds = [...new Set(rawIds.map((x) => parseInt(String(x))).filter((n) => Number.isFinite(n)))];
+
+      if (!teamName || !contactName || !/.+@.+\..+/.test(email)) {
+        return res.status(400).json({ message: "Please add your team name, your name and a valid email." });
+      }
+      if (divisionIds.length === 0) {
+        return res.status(400).json({ message: "Pick at least one night to join the waitlist for." });
+      }
+
+      const program = await getMflRegistrationProgram(slug);
+      if (!program) return res.status(404).json({ message: "League not found" });
+      const competitionId = (program as any).leagueCompetitionId as number | null;
+
+      // Only accept divisions that belong to this competition.
+      const divs = competitionId ? await storage.getLeagueDivisions(competitionId) : [];
+      const valid = divs.filter((d) => divisionIds.includes(d.id));
+      if (valid.length === 0) return res.status(400).json({ message: "Pick at least one valid night." });
+      const nights = valid.map((d) => d.dayOfWeek ? `${d.name} (${d.dayOfWeek})` : d.name);
+
+      // Soft dedupe: same email + team within 24h updates the existing request
+      // (double-taps and "let me add another night" edits don't duplicate rows).
+      const existing = (await storage.getLeagueWaitlist(MFL_ORG_ID, competitionId || undefined)).find(
+        (w) => w.email.toLowerCase() === email.toLowerCase()
+          && w.teamName.toLowerCase() === teamName.toLowerCase()
+          && w.status === "waiting"
+          && Date.now() - new Date(w.createdAt).getTime() < 24 * 3600_000,
+      );
+
+      let entry;
+      if (existing) {
+        const merged = [...new Set([...(existing.divisionIds || []), ...valid.map((d) => d.id)])];
+        entry = await storage.updateLeagueWaitlistEntry(existing.id, {
+          contactName, phone: phone || existing.phone, divisionIds: merged,
+        });
+      } else {
+        entry = await storage.createLeagueWaitlistEntry({
+          organizationId: MFL_ORG_ID,
+          competitionId,
+          programSlug: slug,
+          teamName, contactName, email,
+          phone: phone || null,
+          divisionIds: valid.map((d) => d.id),
+          status: "waiting",
+          utmSource: req.body.utmSource || null,
+          utmMedium: req.body.utmMedium || null,
+          utmCampaign: req.body.utmCampaign || null,
+          fbclid: req.body.fbclid || null,
+        });
+      }
+
+      // Emails are best-effort — the waitlist row is already saved.
+      try {
+        await sendMflWaitlistConfirmation({ to: email, contactName, teamName, nights });
+      } catch (e) { console.error("[MFL waitlist] confirmation email failed:", e); }
+      try {
+        await sendMflWaitlistNotification({ to: "info@minifootball.co.nz", teamName, contactName, email, phone: phone || undefined, nights });
+      } catch (e) { console.error("[MFL waitlist] notification email failed:", e); }
+
+      res.json({ ok: true, id: entry?.id });
+    } catch (e: any) { console.error("[MFL waitlist] error:", e); res.status(400).json({ message: e.message }); }
   });
 
   // Create a pending team registration + deposit PaymentIntent (card saved

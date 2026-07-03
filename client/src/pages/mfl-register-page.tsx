@@ -10,6 +10,7 @@ const BRAND = {
   black: "#000000", bg: "#0a0a0a", card: "#141414", cardSoft: "#1c1c1c", border: "#2a2a2a",
   gold: "#d1b96e", goldDeep: "#a8915a", white: "#ffffff",
   muted: "rgba(255,255,255,0.62)", dim: "rgba(255,255,255,0.38)",
+  red: "#f0564f",
 };
 const FONT = "'Inter Tight', Inter, system-ui, -apple-system, sans-serif";
 const PIXEL_CONTENT = "MFL Term 3 Team Registration";
@@ -84,7 +85,8 @@ export default function MflRegisterPage() {
       .then((d) => {
         setData(d);
         const wantedId = parseInt(new URLSearchParams(window.location.search).get("division") || "");
-        const preselect = (d.divisions || []).find((x: any) => x.id === wantedId);
+        // Never preselect a sold-out night — those arrive via the waitlist page.
+        const preselect = (d.divisions || []).find((x: any) => x.id === wantedId && (x.spotsLeft == null || x.spotsLeft > 0));
         const firstOpen = (d.divisions || []).find((x: any) => x.spotsLeft == null || x.spotsLeft > 0);
         const pick = preselect || firstOpen;
         if (pick) setTeams([{ teamName: "", divisionId: pick.id }]);
@@ -251,24 +253,40 @@ export default function MflRegisterPage() {
     );
   }
 
+  const anyFull = divisions.some((d: any) => d.spotsLeft != null && d.spotsLeft <= 0);
   const NightPicker = ({ value, onPick }: { value: number | null; onPick: (id: number) => void }) => (
-    <div className="grid sm:grid-cols-2 gap-3">
-      {divisions.map((d: any) => {
-        const full = d.spotsLeft != null && d.spotsLeft <= 0;
-        const active = value === d.id;
-        return (
-          <button type="button" key={d.id} disabled={full} onClick={() => onPick(d.id)}
-            className="rounded-xl px-4 py-3 text-left transition-all"
-            style={{ background: active ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${active ? BRAND.gold : BRAND.border}`, opacity: full ? 0.45 : 1 }}
-            data-testid={`division-${d.id}`}>
-            <div className="flex items-center justify-between">
-              <span className="font-semibold">{d.name}</span>
-              <span className="text-sm font-bold" style={{ color: BRAND.gold }}>{formatCurrency(d.teamCostCents, { fromCents: true })}</span>
-            </div>
-            <span className="text-[12px]" style={{ color: BRAND.muted }}>{d.dayOfWeek || "Weeknights"}{full ? " · full" : d.spotsLeft != null ? ` · ${d.spotsLeft} left` : ""}</span>
-          </button>
-        );
-      })}
+    <div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        {divisions.map((d: any) => {
+          const full = d.spotsLeft != null && d.spotsLeft <= 0;
+          const active = value === d.id;
+          return (
+            <button type="button" key={d.id} disabled={full} onClick={() => onPick(d.id)}
+              className="rounded-xl px-4 py-3 text-left transition-all"
+              style={{ background: active ? `${BRAND.gold}1f` : BRAND.cardSoft, border: `1px solid ${active ? BRAND.gold : full ? `${BRAND.red}44` : BRAND.border}`, opacity: full ? 0.75 : 1 }}
+              data-testid={`division-${d.id}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{d.name}</span>
+                {full ? (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full flex-shrink-0" style={{ background: `${BRAND.red}22`, color: BRAND.red, border: `1px solid ${BRAND.red}55` }}>Sold out</span>
+                ) : (
+                  <span className="text-sm font-bold flex-shrink-0" style={{ color: BRAND.gold }}>{formatCurrency(d.teamCostCents, { fromCents: true })}</span>
+                )}
+              </div>
+              <span className="text-[12px]" style={{ color: BRAND.muted }}>{d.dayOfWeek || "Weeknights"}{full ? "" : d.spotsLeft != null ? ` · ${d.spotsLeft} left` : ""}</span>
+            </button>
+          );
+        })}
+      </div>
+      {anyFull && (
+        <p className="text-[12px] mt-2.5" style={{ color: BRAND.muted }}>
+          Want a sold-out night?{" "}
+          <Link href={`/league/${slug}/waitlist`}>
+            <a className="font-semibold underline" style={{ color: BRAND.gold }} data-testid="link-waitlist">Join the waitlist</a>
+          </Link>{" "}
+          — first call when a spot opens.
+        </p>
+      )}
     </div>
   );
 

@@ -33,6 +33,7 @@ import BookingCancel from "@/pages/booking-cancel";
 import CheckoutPage from "@/pages/checkout-page";
 import MflLandingPage from "@/pages/mfl-landing-page";
 import MflRegisterPage from "@/pages/mfl-register-page";
+import MflWaitlistPage from "@/pages/mfl-waitlist-page";
 import MflCheckoutPage from "@/pages/mfl-checkout-page";
 import MflSuccessPage from "@/pages/mfl-success-page";
 import MflSplitPage from "@/pages/mfl-split-page";
@@ -428,6 +429,7 @@ function App() {
             {/* MFL team registration funnel (join.minifootball.co.nz) */}
             <Route path="/league/balance/:registrationId">{() => <MflCheckoutPage mode="balance" />}</Route>
             <Route path="/league/:slug/register" component={MflRegisterPage} />
+            <Route path="/league/:slug/waitlist" component={MflWaitlistPage} />
             <Route path="/league/:slug/checkout">{() => <MflCheckoutPage mode="deposit" />}</Route>
             <Route path="/league/:slug/success" component={MflSuccessPage} />
             {/* Split Pay hub — captain splits a fixed team fee across the squad.

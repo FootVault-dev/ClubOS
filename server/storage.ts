@@ -9,7 +9,7 @@ import {
   attendance, emailLogs, metaEventLogs, emailCampaigns,
   organizations, userOrganizations,
   facilities, facilityPricingRules, facilityBookings, facilityAddons, venueSettings,
-  leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueCoupons,
+  leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueCoupons, leagueWaitlist,
   type InsertUser, type User,
   type UserOrganization,
   type InsertContact, type Contact,
@@ -41,6 +41,7 @@ import {
   type InsertLeagueCompetition, type LeagueCompetition,
   type InsertLeagueDivision, type LeagueDivision,
   type InsertLeagueTeam, type LeagueTeam,
+  type InsertLeagueWaitlist, type LeagueWaitlistEntry,
   type InsertLeagueGame, type LeagueGame,
   type InsertLeagueCoupon, type LeagueCoupon,
   discounts, discountUsages,
@@ -173,6 +174,11 @@ export interface IStorage {
   createLeagueTeam(data: InsertLeagueTeam): Promise<LeagueTeam>;
   updateLeagueTeam(id: number, data: Partial<InsertLeagueTeam>): Promise<LeagueTeam | undefined>;
   deleteLeagueTeam(id: number): Promise<void>;
+
+  getLeagueWaitlist(orgId: number, competitionId?: number): Promise<LeagueWaitlistEntry[]>;
+  createLeagueWaitlistEntry(data: InsertLeagueWaitlist): Promise<LeagueWaitlistEntry>;
+  updateLeagueWaitlistEntry(id: number, data: Partial<InsertLeagueWaitlist>): Promise<LeagueWaitlistEntry | undefined>;
+  deleteLeagueWaitlistEntry(id: number): Promise<void>;
 
   getLeagueGames(competitionId: number): Promise<(LeagueGame & { homeTeam?: LeagueTeam; awayTeam?: LeagueTeam; division?: LeagueDivision })[]>;
   getLeagueGame(id: number): Promise<LeagueGame | undefined>;
@@ -1612,6 +1618,26 @@ export class DatabaseStorage implements IStorage {
 
   async deleteLeagueTeam(id: number): Promise<void> {
     await db.delete(leagueTeams).where(eq(leagueTeams.id, id));
+  }
+
+  async getLeagueWaitlist(orgId: number, competitionId?: number): Promise<LeagueWaitlistEntry[]> {
+    const conditions = [eq(leagueWaitlist.organizationId, orgId)];
+    if (competitionId) conditions.push(eq(leagueWaitlist.competitionId, competitionId));
+    return db.select().from(leagueWaitlist).where(and(...conditions)).orderBy(desc(leagueWaitlist.createdAt));
+  }
+
+  async createLeagueWaitlistEntry(data: InsertLeagueWaitlist): Promise<LeagueWaitlistEntry> {
+    const [w] = await db.insert(leagueWaitlist).values(data).returning();
+    return w;
+  }
+
+  async updateLeagueWaitlistEntry(id: number, data: Partial<InsertLeagueWaitlist>): Promise<LeagueWaitlistEntry | undefined> {
+    const [w] = await db.update(leagueWaitlist).set(data).where(eq(leagueWaitlist.id, id)).returning();
+    return w;
+  }
+
+  async deleteLeagueWaitlistEntry(id: number): Promise<void> {
+    await db.delete(leagueWaitlist).where(eq(leagueWaitlist.id, id));
   }
 
   async getLeagueGames(competitionId: number): Promise<(LeagueGame & { homeTeam?: LeagueTeam; awayTeam?: LeagueTeam; division?: LeagueDivision })[]> {

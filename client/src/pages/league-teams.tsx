@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { UsersRound, Plus, Search, Pencil, Trash2, X } from "lucide-react";
+import { UsersRound, Plus, Search, Pencil, Trash2, X, Hourglass } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -215,7 +215,105 @@ export default function LeagueTeams() {
         </div>
       )}
 
+      <WaitlistPanel orgId={orgId!} />
+
       {showModal && <TeamModal team={editing} orgId={orgId!} competitions={competitions} onClose={() => { setShowModal(false); setEditing(undefined); }} />}
+    </div>
+  );
+}
+
+// Waitlist signups from the public join site (sold-out nights). Shown only when
+// entries exist — first call goes to the oldest 'waiting' entry when a spot opens.
+type WaitlistEntry = {
+  id: number; teamName: string; contactName: string; email: string; phone: string | null;
+  status: string; createdAt: string;
+  divisions: { id: number; name: string; dayOfWeek: string | null }[];
+};
+
+const WAITLIST_STATUSES = [
+  { value: "waiting", label: "Waiting" },
+  { value: "contacted", label: "Contacted" },
+  { value: "converted", label: "Converted" },
+];
+
+function WaitlistPanel({ orgId }: { orgId: number }) {
+  const { toast } = useToast();
+  const { data: entries = [] } = useQuery<WaitlistEntry[]>({
+    queryKey: ["/api/admin/league/waitlist", { orgId }],
+    queryFn: () => fetch(`/api/admin/league/waitlist?orgId=${orgId}`).then(r => r.json()),
+    enabled: !!orgId,
+  });
+
+  const statusMut = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) => apiRequest("PATCH", `/api/admin/league/waitlist/${id}`, { status }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/league/waitlist", { orgId }] }),
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/league/waitlist/${id}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/admin/league/waitlist", { orgId }] }); toast({ title: "Waitlist entry removed" }); },
+  });
+
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const waiting = entries.filter(e => e.status === "waiting").length;
+
+  return (
+    <div>
+      <div className="flex items-center gap-2.5 mb-3 mt-2">
+        <Hourglass className="w-4 h-4 text-amber-400" />
+        <h2 className="text-lg font-semibold text-white" data-testid="text-waitlist-title">Waitlist</h2>
+        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20">{waiting} waiting</span>
+      </div>
+      <p className="text-xs text-white/40 mb-3">Captains who wanted a sold-out night. When a spot opens, call the oldest "Waiting" entry first.</p>
+      <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] overflow-hidden overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-white/5">
+              <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Team</th>
+              <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Wants</th>
+              <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden md:table-cell">Contact</th>
+              <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden sm:table-cell">Since</th>
+              <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Status</th>
+              <th className="w-14" />
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(e => (
+              <tr key={e.id} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors" data-testid={`waitlist-row-${e.id}`}>
+                <td className="px-5 py-3.5">
+                  <p className="text-sm font-medium text-white/80">{e.teamName}</p>
+                  <p className="text-xs text-white/35">{e.contactName}</p>
+                </td>
+                <td className="px-5 py-3.5">
+                  <div className="flex flex-wrap gap-1.5">
+                    {e.divisions.map(d => (
+                      <span key={d.id} className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/60 border border-white/10 whitespace-nowrap">{d.name}</span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-5 py-3.5 text-sm hidden md:table-cell">
+                  <a href={`mailto:${e.email}`} className="block text-blue-400/80 hover:text-blue-300">{e.email}</a>
+                  {e.phone && <a href={`tel:${e.phone}`} className="block text-white/40 hover:text-white/70 text-xs mt-0.5">{e.phone}</a>}
+                </td>
+                <td className="px-5 py-3.5 text-sm text-white/40 hidden sm:table-cell whitespace-nowrap">
+                  {new Date(e.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}
+                </td>
+                <td className="px-5 py-3.5">
+                  <Select value={e.status} onValueChange={(v) => statusMut.mutate({ id: e.id, status: v })}>
+                    <SelectTrigger className="premium-input text-white h-8 w-[130px] text-xs" data-testid={`waitlist-status-${e.id}`}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {WAITLIST_STATUSES.map(s => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </td>
+                <td className="px-3 py-3.5">
+                  <button onClick={() => deleteMut.mutate(e.id)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400" data-testid={`waitlist-delete-${e.id}`}><Trash2 className="w-3.5 h-3.5" /></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

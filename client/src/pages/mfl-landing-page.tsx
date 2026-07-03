@@ -20,6 +20,7 @@ const BRAND = {
   white: "#ffffff",
   muted: "rgba(255,255,255,0.62)",
   dim: "rgba(255,255,255,0.38)",
+  red: "#f0564f",
 };
 const FONT = "'Inter Tight', Inter, system-ui, -apple-system, sans-serif";
 const MFL_LOGO = "/logos/mini-football-leagues.png";
@@ -212,40 +213,64 @@ export default function MflLandingPage() {
 
       {/* Divisions / nights with spots-left */}
       <section className="max-w-5xl mx-auto px-6 py-12">
-        <h2 className="text-2xl font-bold mb-6 text-center" style={{ color: BRAND.gold }}>Pick your night</h2>
+        <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: BRAND.gold }}>Pick your night</h2>
+        {(() => {
+          const soldOut = divisions.filter((d) => d.spotsLeft != null && d.spotsLeft <= 0);
+          return soldOut.length > 0 ? (
+            <p className="text-center text-sm mb-6" style={{ color: BRAND.muted }}>
+              <span className="font-bold" style={{ color: BRAND.red }}>{soldOut.map((d) => d.name).join(" & ")} sold out</span> — other nights are filling fast.
+            </p>
+          ) : <div className="mb-6" />;
+        })()}
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {divisions.map((d) => {
             const full = d.spotsLeft != null && d.spotsLeft <= 0;
+            const lowSpots = !full && d.spotsLeft != null && d.spotsLeft <= 4;
             const weeklyCents = isWeeklyPlan && depositCents ? Math.round((d.teamCostCents - depositCents) / (numWeeklyPayments || 8)) : 0;
+            const href = full ? `/league/${slug}/waitlist?division=${d.id}` : `${registerHref}?division=${d.id}`;
             return (
-              <Link key={d.id} href={`${registerHref}?division=${d.id}`}>
+              <Link key={d.id} href={href}>
                 <a
-                  className="group rounded-2xl p-5 flex flex-col transition-all"
-                  style={{ background: BRAND.card, border: `1px solid ${BRAND.border}`, opacity: full ? 0.7 : 1, cursor: "pointer" }}
-                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = BRAND.gold; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = BRAND.border; }}
+                  className="group rounded-2xl p-5 flex flex-col transition-all relative overflow-hidden"
+                  style={{ background: BRAND.card, border: `1px solid ${full ? `${BRAND.red}66` : BRAND.border}`, cursor: "pointer" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = full ? BRAND.red : BRAND.gold; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = full ? `${BRAND.red}66` : BRAND.border; }}
                   data-testid={`division-card-${d.id}`}
                 >
+                  {full && (
+                    <span className="absolute top-0 right-0 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-bl-xl" style={{ background: BRAND.red, color: "#fff" }} data-testid={`sold-out-badge-${d.id}`}>
+                      Sold out
+                    </span>
+                  )}
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-bold">{d.name}</h3>
-                    <span className="text-[15px] font-bold" style={{ color: BRAND.gold }}>{formatCurrency(d.teamCostCents, { fromCents: true })}</span>
+                    {!full && <span className="text-[15px] font-bold" style={{ color: BRAND.gold }}>{formatCurrency(d.teamCostCents, { fromCents: true })}</span>}
                   </div>
                   <p className="text-sm mt-1 flex items-center gap-1.5" style={{ color: BRAND.muted }}>
                     <Clock className="w-3.5 h-3.5" /> {d.dayOfWeek || "Weeknights"}{d.ageGroup ? ` · ${d.ageGroup}` : ""}
                   </p>
-                  {weeklyCents > 0 && (
+                  {full ? (
+                    <p className="text-[12px] mt-1" style={{ color: BRAND.dim }}>
+                      This night filled up — waitlisted teams get first call.
+                    </p>
+                  ) : weeklyCents > 0 && (
                     <p className="text-[12px] mt-1" style={{ color: BRAND.dim }}>
                       {formatCurrency(depositCents!, { fromCents: true })} deposit · {formatCurrency(weeklyCents, { fromCents: true })}/week
                     </p>
                   )}
                   <div className="flex items-center justify-between mt-3">
-                    {d.spotsLeft != null ? (
-                      <span className="text-[12px] font-semibold" style={{ color: full ? BRAND.dim : BRAND.gold }}>
-                        {full ? "Full — register for the waitlist" : `${d.spotsLeft} spot${d.spotsLeft === 1 ? "" : "s"} left`}
+                    {full ? (
+                      <span className="text-[12px] font-bold inline-flex items-center gap-1" style={{ color: BRAND.red }}>
+                        <Flame className="w-3.5 h-3.5" /> Waitlist open
+                      </span>
+                    ) : d.spotsLeft != null ? (
+                      <span className="text-[12px] font-bold inline-flex items-center gap-1" style={{ color: lowSpots ? BRAND.red : BRAND.gold }}>
+                        {lowSpots && <Flame className="w-3.5 h-3.5" />}
+                        {lowSpots ? `Only ${d.spotsLeft} spot${d.spotsLeft === 1 ? "" : "s"} left` : `${d.spotsLeft} spot${d.spotsLeft === 1 ? "" : "s"} left`}
                       </span>
                     ) : <span />}
                     <span className="text-[13px] font-semibold inline-flex items-center gap-1 opacity-80 group-hover:opacity-100" style={{ color: BRAND.gold }}>
-                      Register <ArrowRight className="w-3.5 h-3.5" />
+                      {full ? "Join waitlist" : "Register"} <ArrowRight className="w-3.5 h-3.5" />
                     </span>
                   </div>
                 </a>
