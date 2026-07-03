@@ -4011,6 +4011,10 @@ export async function registerRoutes(
       const intent = await retrievePaymentIntent(pi);
       if (intent.status === "succeeded") {
         const updated = await confirmAndEmailVenueBookings(pi);
+        // Bind the paying customer to a durable person + stitch their history.
+        // facilityBookings has no attribution columns (T3) so this is identity-only.
+        // buildConversionAttribution is fully defensive — never blocks the confirmation.
+        await buildConversionAttribution(req, { email: emailQ });
         return res.json({ status: "paid", confirmed: updated.length });
       }
       return res.json({ status: bookings[0].status, paymentStatus: intent.status });
@@ -13427,6 +13431,9 @@ export async function registerRoutes(
         name, email, phone: phone || null, subject: subject || null, body: message,
         sourceUrl: String(req.body.sourceUrl || "minifootball.co.nz"), status: "new",
       });
+      // Lead → durable person (cross-origin form: usually no visitor cookie, so
+      // identity-only — links this enquirer to their eventual columned conversion).
+      await buildConversionAttribution(req, { email, firstName: name, phone: phone || undefined });
       try {
         await sendMflContactNotification({ to: "info@minifootball.co.nz", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
       } catch (e) { console.error("[MFL contact] email failed:", e); }
@@ -13513,6 +13520,8 @@ export async function registerRoutes(
         name, email, phone: phone || null, subject: subject || null, body: message,
         sourceUrl: String(req.body.sourceUrl || "cicyouth.com"), status: "new",
       });
+      // Lead → durable person (identity-only; cross-origin form). Never blocks the enquiry.
+      await buildConversionAttribution(req, { email, firstName: name, phone: phone || undefined });
       try {
         await sendCicContactNotification({ to: "info@cicyouth.com", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
       } catch (e) { console.error("[CIC contact] email failed:", e); }
@@ -13911,6 +13920,8 @@ export async function registerRoutes(
         name, email, phone: phone || null, subject: subject || null, body: message,
         sourceUrl: String(req.body.sourceUrl || "cugc.co.nz"), status: "new",
       });
+      // Lead → durable person (identity-only; cross-origin form). Never blocks the enquiry.
+      await buildConversionAttribution(req, { email, firstName: name, phone: phone || undefined });
       try {
         await sendCugcContactNotification({ to: "info@cugc.co.nz", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
       } catch (e) { console.error("[CUGC contact] email failed:", e); }
