@@ -174,6 +174,10 @@ app.use(attributionCookieMiddleware);
   const { startApiSecurityJobs } = await import("./api-security");
   startApiSecurityJobs();
 
+  // AttributionOS: daily Meta ad-spend sync (no-op without META_ACCESS_TOKEN + accounts).
+  const { startAdSpendCron } = await import("./ad-spend-cron");
+  startAdSpendCron();
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

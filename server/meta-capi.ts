@@ -6,8 +6,9 @@ const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN || "";
 // Meta Graph API version — single source of truth for every CAPI call. Bump this
 // one const when Meta releases a new stable major (a version stays valid ~2 years
 // after release; older ones are auto-deprecated). HUMAN: confirm this is current
-// in the Meta developer dashboard at deploy time.
-const META_API_VERSION = "v23.0";
+// in the Meta developer dashboard at deploy time. Exported so the Marketing-API
+// ad-spend cron (server/ad-spend-cron.ts) shares the exact same version.
+export const META_API_VERSION = "v23.0";
 
 interface ServerEvent {
   eventName: string;
