@@ -28,8 +28,9 @@ import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS } from "@shared/attribution";
-import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes } from "@shared/short-links";
-import { CID_COOKIE, CID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId } from "./attribution-cookies";
+import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
+import { renderTrackerScript } from "@shared/tracker-script";
+import { CID_COOKIE, CID_MAX_AGE_SECONDS, VID_COOKIE, VID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId, isValidClickId, parseCookieHeader } from "./attribution-cookies";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
 import multer from "multer";
@@ -154,6 +155,88 @@ export async function registerRoutes(
       } catch {
         /* response already sent — nothing more we can safely do */
       }
+    }
+  });
+
+  // ── AttributionOS: cross-site embeddable tracker (T12) ─────────────────────
+  // `GET /t.js` — served on every ClubOS-hosted brand domain. The marketing sites
+  // load it from THEIR same-root funnel domain (minifootball.co.nz ←
+  // join.minifootball.co.nz/t.js), so it is first-party to the brand root. We inject
+  // the serving origin (so the script knows where to POST from the marketing page's
+  // context) and the brand-root list (so it can decorate cross-root outbound links).
+  // Scripts load without CORS, but we reflect a known origin for good measure. Cached
+  // for an hour. Registered before the SPA catch-all so it wins on all domains.
+  app.get("/t.js", (req, res) => {
+    try {
+      const proto = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+      const collectorBase = `${proto}://${String(req.headers.host || "")}`;
+      const js = renderTrackerScript({ collectorBase, domains: CLUB_ROOT_DOMAINS });
+      res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      const origin = String(req.headers.origin || "");
+      if (origin && isOurOrigin(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+      }
+      res.send(js);
+    } catch {
+      res.status(500).type("application/javascript").send("/* tracker unavailable */");
+    }
+  });
+
+  // CORS for the cross-site tracker fetch endpoints (hello + collector). Reflects the
+  // request origin only when it is one of ours (isOurOrigin), allows credentials so
+  // the first-party Set-Cookie sticks, and always sets Vary: Origin.
+  function setTrackerCors(req: Request, res: Response) {
+    const origin = String(req.headers.origin || "");
+    if (origin && isOurOrigin(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Access-Control-Allow-Credentials", "true");
+    }
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  }
+
+  // `POST /api/public/analytics/hello` — the cross-site boot. Sets a first-party
+  // usg_vid scoped to the brand ROOT (so the marketing site + funnel subdomain share
+  // one visitor id), refreshes usg_cid from an incoming ?ci=/body.ci, and echoes back
+  // { visitorId, clickId } so the tracker can decorate outbound links immediately.
+  // Fully defensive — never throws. (T13 owns the full ?vi= adopt/alias matrix; here
+  // we only adopt a body.vi when there is no existing visitor cookie at all.)
+  app.options("/api/public/analytics/hello", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/analytics/hello", (req, res) => {
+    setTrackerCors(req, res);
+    try {
+      const cookies = parseCookieHeader(req.headers.cookie);
+      const secure = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https";
+      const domain = rootDomainForHost(String(req.headers.host || "")); // null → host-only
+
+      const body = (req.body || {}) as Record<string, unknown>;
+      const existingVid = cookies[VID_COOKIE];
+      let visitorId: string;
+      if (isValidVisitorId(existingVid)) visitorId = existingVid;
+      else if (isValidVisitorId(body.vi)) visitorId = String(body.vi); // adopt a decorated cross-root id
+      else visitorId = crypto.randomUUID();
+      res.append(
+        "Set-Cookie",
+        serializeSetCookie({ name: VID_COOKIE, value: visitorId, maxAgeSeconds: VID_MAX_AGE_SECONDS }, { secure, domain }),
+      );
+
+      let clickId: string | null = null;
+      if (isValidClickId(body.ci)) clickId = String(body.ci);
+      else if (isValidClickId(cookies[CID_COOKIE])) clickId = cookies[CID_COOKIE];
+      if (clickId) {
+        res.append(
+          "Set-Cookie",
+          serializeSetCookie({ name: CID_COOKIE, value: clickId, maxAgeSeconds: CID_MAX_AGE_SECONDS }, { secure, domain }),
+        );
+      }
+
+      res.json({ visitorId, clickId });
+    } catch {
+      try { res.json({ visitorId: null, clickId: null }); } catch { /* response gone */ }
     }
   });
 
@@ -6171,7 +6254,13 @@ export async function registerRoutes(
     return r[0] || {};
   }
 
+  // The collector accepts cross-site touches from the T12 `/t.js` tracker running on
+  // the marketing sites, so it reflects CORS for our origins + handles preflight.
+  app.options("/api/public/analytics/event", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+  app.options("/api/public/analytics/batch", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+
   app.post("/api/public/analytics/event", async (req, res) => {
+    setTrackerCors(req, res);
     try {
       // Shape at ingest: classify touch, clean macros, flag bots (T6). A malformed
       // payload (missing/illegal ids) shapes to null and is silently dropped.
@@ -6185,6 +6274,7 @@ export async function registerRoutes(
   });
 
   app.post("/api/public/analytics/batch", async (req, res) => {
+    setTrackerCors(req, res);
     try {
       const { events } = req.body || {};
       // Shape + drop malformed rows + cap at 50 (T6). Classifies touch on

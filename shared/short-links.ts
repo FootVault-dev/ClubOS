@@ -77,6 +77,35 @@ export function isAllowedDestination(raw: unknown): boolean {
   return hostIsOurs(u.hostname);
 }
 
+/**
+ * The registrable brand root we own for a given host (e.g. `join.minifootball.co.nz`
+ * → `minifootball.co.nz`), or null when the host is our app/preview/dev host (there
+ * is no shareable brand root, so cookies stay host-only). T12's `/hello` uses this
+ * to scope the usg_vid Set-Cookie `Domain` so a funnel subdomain and its marketing
+ * root share one first-party cookie. Never returns a public-suffix domain.
+ */
+export function rootDomainForHost(host: string | null | undefined): string | null {
+  const h = normHost(host);
+  if (!h) return null;
+  for (const root of CLUB_ROOT_DOMAINS) {
+    if (h === root || h.endsWith("." + root)) return root;
+  }
+  return null;
+}
+
+/**
+ * True when an `Origin` header belongs to one of our sites — used to reflect CORS
+ * on the cross-site tracker endpoints (T12). Accepts a well-formed http(s) origin
+ * whose host is ours (brand root/subdomain, app host, *.vercel.app, or dev).
+ */
+export function isOurOrigin(origin: unknown): boolean {
+  if (typeof origin !== "string" || !origin.trim()) return false;
+  const u = parseUrl(origin.trim());
+  if (!u) return false;
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  return hostIsOurs(u.hostname);
+}
+
 // base64url alphabet (RFC 4648 §5): index 62 = '-', 63 = '_'. Matches
 // node's Buffer.toString("base64url") exactly, but implemented by hand so the
 // module needs no Buffer/btoa and stays portable to the client bundle.

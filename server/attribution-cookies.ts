@@ -133,15 +133,20 @@ export function decideAttributionCookies(input: CookieDecisionInput): CookieDeci
  * Serialize a cookie spec into a Set-Cookie header value. Path=/, SameSite=Lax,
  * Secure (when the connection is https), and deliberately NOT HttpOnly so the
  * client analytics script can read the visitor/click ids.
+ *
+ * `domain` scopes the cookie to a registrable root (e.g. `minifootball.co.nz`) so
+ * the funnel subdomain and the marketing root share ONE first-party cookie — the
+ * T12 `/api/public/analytics/hello` boot uses this so join.brand + brand.co.nz see
+ * the same usg_vid. Omit it (the default) for a host-only cookie (T4 middleware).
  */
-export function serializeSetCookie(spec: SetCookieSpec, opts?: { secure?: boolean }): string {
+export function serializeSetCookie(
+  spec: SetCookieSpec,
+  opts?: { secure?: boolean; domain?: string | null; sameSite?: "Lax" | "Strict" | "None" },
+): string {
   const secure = opts?.secure !== false; // default to Secure unless explicitly disabled
-  const parts = [
-    `${spec.name}=${encodeURIComponent(spec.value)}`,
-    "Path=/",
-    `Max-Age=${spec.maxAgeSeconds}`,
-    "SameSite=Lax",
-  ];
+  const parts = [`${spec.name}=${encodeURIComponent(spec.value)}`, "Path=/", `Max-Age=${spec.maxAgeSeconds}`];
+  if (opts?.domain) parts.push(`Domain=${opts.domain}`);
+  parts.push(`SameSite=${opts?.sameSite || "Lax"}`);
   if (secure) parts.push("Secure");
   return parts.join("; ");
 }
