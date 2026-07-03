@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -7522,6 +7522,62 @@ export async function registerRoutes(
       for (const k of LICENSING_SUB_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k];
       const [updated] = await db.update(licensingSubtasks).set(patch).where(eq(licensingSubtasks.id, id)).returning();
       res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // ── Community engagement events (SIU workspace) ──────────────────────────
+  // Fan/community event board: outreach pipeline → plan → run → post-review.
+  const EVENT_FIELDS = [
+    "title", "eventType", "status", "owner", "partner", "eventDate", "location",
+    "description", "outreachNotes", "reviewNotes", "attendance", "reach", "links",
+  ] as const;
+
+  app.get("/api/admin/community-events", requireAuth, requireTab("events"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(communityEvents)
+        .where(eq(communityEvents.organizationId, orgId))
+        .orderBy(desc(communityEvents.updatedAt));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/community-events", requireAuth, requireTab("events"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body?.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      if (!req.body?.title?.trim()) return res.status(400).json({ message: "title required" });
+      const values: any = { organizationId: orgId };
+      for (const k of EVENT_FIELDS) if (k in (req.body || {})) values[k] = req.body[k] === "" ? null : req.body[k];
+      const [row] = await db.insert(communityEvents).values(values).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/community-events/:id", requireAuth, requireTab("events"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(communityEvents).where(eq(communityEvents.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = { updatedAt: new Date() };
+      for (const k of EVENT_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k] === "" ? null : req.body[k];
+      const [updated] = await db.update(communityEvents).set(patch).where(eq(communityEvents.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/community-events/:id", requireAuth, requireTab("events"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(communityEvents).where(eq(communityEvents.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(communityEvents).where(eq(communityEvents.id, id));
+      res.json({ ok: true });
     } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 

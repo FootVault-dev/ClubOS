@@ -1895,6 +1895,33 @@ export type LicensingCriterion = typeof licensingCriteria.$inferSelect;
 export const insertLicensingSubtaskSchema = createInsertSchema(licensingSubtasks).omit({ id: true, createdAt: true, updatedAt: true });
 export type LicensingSubtask = typeof licensingSubtasks.$inferSelect;
 
+// ── Community engagement events (SIU workspace) ─────────────────────────────
+// One board for fan/community events: outreach pipeline → plan → run → review.
+// Ruby/Conor (merch), Brad (fan engagement / watch-alongs), club/school visits.
+export const communityEvents = pgTable("community_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  eventType: text("event_type").notNull().default("other"),
+  status: text("status").notNull().default("idea"),
+  owner: text("owner"),
+  partner: text("partner"),
+  eventDate: date("event_date"),
+  location: text("location"),
+  description: text("description"),
+  outreachNotes: text("outreach_notes"),
+  reviewNotes: text("review_notes"),
+  attendance: integer("attendance"),
+  reach: text("reach"),
+  links: text("links"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertCommunityEventSchema = createInsertSchema(communityEvents).omit({ id: true, createdAt: true, updatedAt: true });
+export type CommunityEvent = typeof communityEvents.$inferSelect;
+
 // ── Billboard sales (Go Media contra resell) ────────────────────────────────
 // USG holds a $250k contra credit with Go Media. We resell slices of that
 // credit to local businesses at 20-30% off rate-card, target $200k revenue.

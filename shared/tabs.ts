@@ -170,6 +170,7 @@ export const TABS_BY_WORKSPACE_TYPE: Record<WorkspaceType, TabDef[]> = {
 // tools that must NOT appear for CUFC. Appended to SIU's tab set by slug.
 const siuExtraTabs: TabDef[] = [
   { slug: "licensing", title: "OFC Licensing", url: "/admin/licensing" },
+  { slug: "events", title: "Community Events", url: "/admin/events" },
 ];
 
 export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
