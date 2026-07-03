@@ -3067,3 +3067,23 @@ export const adEntities = pgTable("ad_entities", {
 export const insertAdEntitySchema = createInsertSchema(adEntities).omit({ id: true, createdAt: true });
 export type InsertAdEntity = z.infer<typeof insertAdEntitySchema>;
 export type AdEntity = typeof adEntities.$inferSelect;
+
+// AttributionOS (T14) — per-recipient email click tokens. A broadcast stamps each
+// recipient's links with `ci=emc…`, a signed HMAC-derived token stored here mapping
+// token → recipient email + campaign. On click, the cookie middleware resolves the
+// token back to the email and binds the visitor to that person (identity stitch).
+// The attribution person is the PARENT/payer — email addresses only, no child PII.
+export const emailClickTokens = pgTable("email_click_tokens", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  token: varchar("token", { length: 64 }).notNull(),
+  organizationId: integer("organization_id"),
+  campaignId: integer("campaign_id"),
+  email: text("email").notNull(),          // normalised lowercase recipient email
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  tokenKey: uniqueIndex("email_click_tokens_token_key").on(t.token),
+}));
+
+export const insertEmailClickTokenSchema = createInsertSchema(emailClickTokens).omit({ id: true, createdAt: true });
+export type InsertEmailClickToken = z.infer<typeof insertEmailClickTokenSchema>;
+export type EmailClickToken = typeof emailClickTokens.$inferSelect;
