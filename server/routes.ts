@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes,inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -11,7 +11,7 @@ import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
 import { buildConversionAttribution } from "./attribution-stamp";
-import { eq, ne, and, or, sql, asc, desc, inArray, isNull } from "drizzle-orm";
+import { eq, ne, and, or, sql, asc, desc, gt, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
@@ -27,7 +27,9 @@ import { buildCICSchedule } from "./tournament-schedule";
 import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
-import { shapeAnalyticsEvent, shapeAnalyticsEvents } from "@shared/attribution";
+import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot } from "@shared/attribution";
+import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost } from "@shared/short-links";
+import { CID_COOKIE, CID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId } from "./attribution-cookies";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
 import multer from "multer";
@@ -39,6 +41,121 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // ── AttributionOS: trackable short-link / QR redirect (T9) ─────────────────
+  // Public GET on every domain. Looks up an active short_links row by key, mints a
+  // first-party click id, records the click (ip_hash = SHA256(ip+ua), 1h dedupe per
+  // link, bot-flagged, QR-flagged from ?qr=1), bumps the cached click counter, plants
+  // usg_cid, then 302s to the link's ALLOW-LISTED destination with ?ci=<clickId> + the
+  // link's stored utm set appended (existing destination params preserved). Unknown /
+  // inactive / foreign-destination keys fall back to the brand's main site — never an
+  // open redirect. Registered inside registerRoutes so it wins over the SPA catch-all.
+  // Fully defensive: attribution must never break a click-through.
+  app.get("/l/:key", async (req, res) => {
+    const fallback = mainSiteForHost(String(req.headers.host || ""));
+    try {
+      const key = String(req.params.key || "").trim();
+      if (!key || !/^[A-Za-z0-9_-]{1,64}$/.test(key)) {
+        return res.redirect(302, fallback);
+      }
+
+      const [link] = await db
+        .select()
+        .from(shortLinks)
+        .where(and(eq(shortLinks.key, key), eq(shortLinks.active, true)))
+        .limit(1);
+      if (!link || !isAllowedDestination(link.destination)) {
+        return res.redirect(302, fallback);
+      }
+
+      const ua = String(req.headers["user-agent"] || "");
+      const ipRaw =
+        String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
+        req.ip ||
+        req.socket?.remoteAddress ||
+        "";
+      const ipHash = crypto.createHash("sha256").update(ipHashSeed(ipRaw, ua)).digest("hex");
+      const isBot = detectBot({ userAgent: ua });
+      const isQr = req.query.qr === "1" || req.query.qr === "true";
+      const usgVid = (req as any).usgVid;
+      const visitorId = isValidVisitorId(usgVid) ? String(usgVid) : null;
+
+      // 1h dedupe per link on the ip+ua hash: reuse the prior click id for double
+      // taps / link prefetch / QR re-scans so the counter isn't inflated. Bots are
+      // never deduped or counted.
+      let clickId: string | null = null;
+      let counted = false;
+      if (!isBot) {
+        const since = new Date(Date.now() - 60 * 60 * 1000);
+        const [recent] = await db
+          .select({ clickId: linkClicks.clickId })
+          .from(linkClicks)
+          .where(
+            and(
+              eq(linkClicks.linkId, link.id),
+              eq(linkClicks.ipHash, ipHash),
+              eq(linkClicks.isBot, false),
+              gt(linkClicks.createdAt, since),
+            ),
+          )
+          .orderBy(desc(linkClicks.createdAt))
+          .limit(1);
+        if (recent?.clickId) clickId = recent.clickId;
+      }
+
+      if (!clickId) {
+        clickId = clickIdFromBytes(crypto.randomBytes(16));
+        try {
+          await db.insert(linkClicks).values({
+            linkId: link.id,
+            clickId,
+            visitorId,
+            ipHash,
+            ua: ua.slice(0, 1024) || null,
+            referrer: String(req.headers.referer || (req.headers as any).referrer || "").slice(0, 2048) || null,
+            isQr: Boolean(isQr),
+            isBot,
+          });
+          counted = !isBot;
+        } catch {
+          // unique clickId collision or transient error — still redirect, don't count
+          counted = false;
+        }
+      }
+
+      if (counted) {
+        try {
+          await db
+            .update(shortLinks)
+            .set({ clicks: sql`${shortLinks.clicks} + 1` })
+            .where(eq(shortLinks.id, link.id));
+        } catch {
+          /* counter bump is best-effort — repairable from link_clicks (T21) */
+        }
+      }
+
+      // Plant the click cookie (90d sliding) so a same-domain conversion inherits it.
+      const secure = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https";
+      res.append(
+        "Set-Cookie",
+        serializeSetCookie({ name: CID_COOKIE, value: clickId, maxAgeSeconds: CID_MAX_AGE_SECONDS }, { secure }),
+      );
+
+      const target = buildRedirectUrl(link.destination, clickId, {
+        channel: link.channel,
+        medium: link.medium,
+        campaign: link.campaign,
+        content: link.content,
+      });
+      return res.redirect(302, target);
+    } catch {
+      try {
+        return res.redirect(302, fallback);
+      } catch {
+        /* response already sent — nothing more we can safely do */
+      }
+    }
+  });
 
   app.post("/api/auth/login", async (req, res) => {
     try {
