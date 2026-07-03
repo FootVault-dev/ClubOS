@@ -6,6 +6,8 @@ import { Tent, MapPin, Calendar, Users, DollarSign, ArrowRight, Clock, ChevronDo
 import { initPixel, trackEvent } from "@/lib/meta-pixel";
 import cuFcLogoPath from "@assets/CUFC_LOGO_1772823768518.png";
 import { PublicBlock } from "@/components/page-blocks/public-block";
+import SiuCampPage from "./siu-camp-page";
+import { SIU_ORG_SLUG } from "@/lib/camp-brand";
 
 const BRAND = {
   blue: "#22399B",
@@ -255,9 +257,11 @@ export default function CampPage() {
   }, [data]);
 
   // Hero media: image wins over video when both are set. Otherwise fall back
-  // to the default Wistia id so legacy camps keep their video.
+  // to the default Wistia id so legacy camps keep their video. SIU camps get
+  // no CUFC default — their page only plays an explicitly-set video.
   const heroImage = data?.camp?.heroImage || "";
-  const heroVideoId = heroImage ? null : (data?.camp?.heroVideoId || "0l469en6m5");
+  const isSiuCamp = data?.organization?.slug === SIU_ORG_SLUG;
+  const heroVideoId = heroImage ? null : (data?.camp?.heroVideoId || (isSiuCamp ? null : "0l469en6m5"));
   useEffect(() => {
     if (!heroVideoId) return;
     const wistiaScript = document.createElement("script");
@@ -307,6 +311,30 @@ export default function CampPage() {
           <Link href="/"><button className="text-[#22399B] text-[14px] font-semibold hover:underline cursor-pointer" data-testid="link-back">Back to camps</button></Link>
         </div>
       </div>
+    );
+  }
+
+  // South Island United camps render their own full-brand page (Unity Black /
+  // Ambition Gold / Rough Cut). This component still owns the data fetch,
+  // split-test assignment, and Meta pixel events for both clubs.
+  if (data.organization?.slug === SIU_ORG_SLUG) {
+    return (
+      <SiuCampPage
+        data={data}
+        slug={slug}
+        activeVariants={activeVariants}
+        onBookClick={() => {
+          const pixelId = (import.meta as any).env?.VITE_META_PIXEL_ID;
+          if (pixelId) {
+            trackEvent("InitiateCheckout", {
+              content_name: data.camp.name,
+              content_category: "Holiday Camp",
+              value: (data.pricing.length > 0 ? Math.min(...data.pricing.map((p: any) => p.priceCents)) : 0) / 100,
+              currency: "NZD",
+            });
+          }
+        }}
+      />
     );
   }
 

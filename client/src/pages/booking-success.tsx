@@ -97,10 +97,12 @@ export default function BookingSuccess() {
       <header className="bg-white border-b border-slate-100">
         <div className="max-w-3xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: BRAND.blue }}>
-              <span className="text-white font-bold text-[9px]">CU</span>
-            </div>
-            <span className="text-[12px] text-slate-400 font-medium">Christchurch United FC</span>
+            <img
+              src={campData?.organization?.logoUrl || clubBrand.logoUrl}
+              alt={campData?.organization?.name || clubBrand.clubName}
+              className="w-7 h-7 object-contain"
+            />
+            <span className="text-[12px] text-slate-400 font-medium">{campData?.organization?.name || clubBrand.clubName}</span>
           </div>
         </div>
       </header>
