@@ -178,6 +178,11 @@ app.use(attributionCookieMiddleware);
   const { startAdSpendCron } = await import("./ad-spend-cron");
   startAdSpendCron();
 
+  // AttributionOS: nightly data-quality guards (prune stale page views, bot-flag
+  // backstop, short-link counter reconciliation).
+  const { startAttributionMaintenanceCron } = await import("./attribution-maintenance-cron");
+  startAttributionMaintenanceCron();
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

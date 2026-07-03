@@ -1221,7 +1221,13 @@ export const analyticsEvents = pgTable("analytics_events", {
   isBot: boolean("is_bot").notNull().default(false),
   metadata: jsonb("metadata"),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
-});
+}, (t) => ({
+  // AttributionOS (T21) — VACUUM-friendly composite indexes for the hot read
+  // paths + nightly prune. Mirrors migrations/2026-07-04_attribution_indexes.sql.
+  visitorTsIdx: index("analytics_events_visitor_ts_idx").on(t.visitorId, t.timestamp),
+  personTsIdx: index("analytics_events_person_ts_idx").on(t.personId, t.timestamp),
+  channelTsIdx: index("analytics_events_channel_ts_idx").on(t.channel, t.timestamp),
+}));
 
 export const insertAnalyticsEventSchema = createInsertSchema(analyticsEvents).omit({ id: true });
 export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
