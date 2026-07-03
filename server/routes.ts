@@ -9373,7 +9373,10 @@ export async function registerRoutes(
       intakeYear: Number.isFinite(intakeYearNum) && intakeYearNum > 2024 && intakeYearNum < 2100 ? intakeYearNum : null,
       source,
     };
-    if (req) Object.assign(values, await buildConversionAttribution(req, { email, firstName: body?.parentName || applicantName, phone: body?.phone }));
+    // Identity person = the PARENT only. Never fall back to applicantName — the
+    // applicant is the student (year 9–13, often a minor); child names must not
+    // reach the persons table (Hard Rule 4; verifier finding MAJOR-1, 2026-07-04).
+    if (req) Object.assign(values, await buildConversionAttribution(req, { email, firstName: s(body?.parentName, 120) || undefined, phone: body?.phone }));
     const [row] = await db.insert(footballInstituteApplications).values(values).returning();
     return { application: row };
   }
@@ -10969,24 +10972,49 @@ export async function registerRoutes(
     try {
       const type = String(req.body?.type || "").trim();
       const id = parseInt(String(req.body?.id ?? ""), 10);
-      const value = normalizeHdyhauAnswer(req.body?.value);
+      const value = normalizeHdyhauAnswer(req.body?.value); // strict whitelist of HDYHAU_OPTIONS ids
       if (!Number.isFinite(id) || id <= 0 || !value) {
         return res.status(400).json({ message: "type, id and value are required" });
       }
+      // Anti-tamper (verifier MAJOR-2): the row must be the caller's own — its
+      // stamped visitor_id must match the caller's usg_vid cookie when both
+      // exist — and the answer is write-once (existing self-reports are never
+      // overwritten by an unauthenticated call).
+      const callerVid = parseCookieHeader(req.headers.cookie)[VID_COOKIE] || "";
+      const guard = (rowVid: string | null | undefined, existing: string | null | undefined): "write" | "keep" | "deny" => {
+        if (existing) return "keep";
+        if (rowVid && rowVid !== callerVid) return "deny";
+        return "write";
+      };
+      let outcome: "write" | "keep" | "deny" = "deny";
       switch (type) {
-        case "registration": // MFL team + camp + class all live in `registrations`
-          await storage.updateRegistration(id, { referralSource: value });
+        case "registration": { // MFL team + camp + class all live in `registrations`
+          const row = await storage.getRegistration(id);
+          if (!row) return res.status(200).json({ ok: false });
+          outcome = guard((row as any).visitorId, row.referralSource);
+          if (outcome === "write") await storage.updateRegistration(id, { referralSource: value });
           break;
-        case "waitlist":
-          await storage.updateLeagueWaitlistEntry(id, { hdyhau: value });
+        }
+        case "waitlist": {
+          const [row] = await db.select().from(leagueWaitlist).where(eq(leagueWaitlist.id, id));
+          if (!row) return res.status(200).json({ ok: false });
+          outcome = guard((row as any).visitorId, (row as any).hdyhau);
+          if (outcome === "write") await storage.updateLeagueWaitlistEntry(id, { hdyhau: value } as any);
           break;
-        case "booking_request":
-          await db.update(bookingRequests).set({ hdyhau: value }).where(eq(bookingRequests.id, id));
+        }
+        case "booking_request": {
+          const [row] = await db.select().from(bookingRequests).where(eq(bookingRequests.id, id));
+          if (!row) return res.status(200).json({ ok: false });
+          outcome = guard((row as any).visitorId, (row as any).hdyhau);
+          if (outcome === "write") await db.update(bookingRequests).set({ hdyhau: value } as any).where(eq(bookingRequests.id, id));
           break;
+        }
         default:
           return res.status(400).json({ message: "Unknown conversion type" });
       }
-      res.json({ ok: true });
+      // Same 200 shape for all outcomes — the success-screen card never shows an
+      // error, and probing responses don't reveal which ids exist or hold data.
+      res.json({ ok: outcome !== "deny" });
     } catch (error: any) {
       console.error("[HDYHAU] capture failed:", error?.message || error);
       res.status(200).json({ ok: false });

@@ -45,6 +45,15 @@ function linkUrlFor(key: string): string {
   return `${publicBase()}/l/${key}`;
 }
 
+// URL to encode INSIDE a QR image: our short links get ?qr=1 so the redirect
+// stores is_qr and the touch classifies as channel `qr` (scans vs shared-link
+// clicks stay separable). Non-short-link URLs (raw wa.me) pass through as-is —
+// appending would corrupt their own query params and nothing tracks them anyway.
+function qrValueFor(url: string): string {
+  if (!url.includes("/l/")) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}qr=1`;
+}
+
 function formatCents(cents: number): string {
   return `$${(cents / 100).toLocaleString("en-NZ", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 }
@@ -586,13 +595,13 @@ export default function LinksPage() {
             </button>
             <p className="text-sm text-white/70 mb-3 truncate pr-8">{qr.name}</p>
             <div className="bg-white rounded-xl p-4 flex items-center justify-center">
-              <QRCodeSVG value={qr.url} size={208} level="M" bgColor="#ffffff" fgColor="#000000" />
+              <QRCodeSVG value={qrValueFor(qr.url)} size={208} level="M" bgColor="#ffffff" fgColor="#000000" />
             </div>
             {/* Hidden hi-res canvas used only for the PNG export. */}
             <div style={{ position: "absolute", left: -9999, top: -9999 }} aria-hidden>
-              <QRCodeCanvas value={qr.url} size={512} level="M" bgColor="#ffffff" fgColor="#000000" />
+              <QRCodeCanvas value={qrValueFor(qr.url)} size={512} level="M" bgColor="#ffffff" fgColor="#000000" />
             </div>
-            <p className="text-[11px] text-white/40 mt-3 break-all">{qr.url}</p>
+            <p className="text-[11px] text-white/40 mt-3 break-all">{qrValueFor(qr.url)}</p>
             <div className="flex gap-2 mt-4">
               <Button
                 onClick={downloadPng}

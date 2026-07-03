@@ -428,11 +428,12 @@ export const HDYHAU_OPTIONS = [
   { id: "other", label: "Other", channel: "other" },
 ] as const;
 
-/** A valid HDYHAU option id, or null. Used server-side to reject junk values. */
+/** A valid HDYHAU option id, or null. Strict whitelist — the public endpoint
+ *  must never persist free text (verifier finding MAJOR-2, 2026-07-04). */
 export function normalizeHdyhauAnswer(raw: unknown): string | null {
-  const s = typeof raw === "string" ? raw.trim() : "";
-  if (!s || s.length > 200) return null;
-  return s;
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (!s) return null;
+  return HDYHAU_OPTIONS.some((o) => o.id === s) ? s : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

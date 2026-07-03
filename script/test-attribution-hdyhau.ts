@@ -44,12 +44,21 @@ check("normalize rejects empty / whitespace", () => {
   assert.strictEqual(normalizeHdyhauAnswer(undefined), null);
   assert.strictEqual(normalizeHdyhauAnswer(123 as unknown), null);
 });
-check("normalize rejects over-long (>200)", () => {
+// Strict whitelist (verifier MAJOR-2 fix): free text NEVER passes — only exact
+// HDYHAU_OPTIONS ids survive (case-insensitively). The public endpoint must not
+// persist arbitrary strings.
+check("normalize rejects all free text", () => {
   assert.strictEqual(normalizeHdyhauAnswer("x".repeat(201)), null);
-  assert.strictEqual(normalizeHdyhauAnswer("x".repeat(200)), "x".repeat(200));
+  assert.strictEqual(normalizeHdyhauAnswer("x".repeat(200)), null);
+  assert.strictEqual(normalizeHdyhauAnswer("my mate told me"), null);
+  assert.strictEqual(normalizeHdyhauAnswer("<script>alert(1)</script>"), null);
 });
-check("normalize trims and keeps a real answer", () => {
+check("normalize accepts every option id, trimmed + case-insensitive", () => {
   assert.strictEqual(normalizeHdyhauAnswer("  friend_teammate  "), "friend_teammate");
+  assert.strictEqual(normalizeHdyhauAnswer("FACEBOOK"), "facebook");
+  for (const opt of HDYHAU_OPTIONS) {
+    assert.strictEqual(normalizeHdyhauAnswer(opt.id), opt.id);
+  }
 });
 
 // Free-text "Other: ..." still classifies as other (parents may type anything).
