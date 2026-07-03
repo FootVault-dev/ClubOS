@@ -55,6 +55,7 @@ import {
   BellRing,
   CalendarCheck,
   Link2,
+  Target,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -78,6 +79,7 @@ type Org = {
 const campsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
+  { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "camps", title: "Camps", url: "/admin/camps", icon: Tent },
   { tab: "academy", title: "Academy", url: "/admin/academy", icon: GraduationCap },
   // Terms intentionally NOT in the sidebar — it's reachable as a sub-tab
@@ -94,6 +96,7 @@ const campsNav = [
 const venueNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
+  { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "calendar", title: "Bookings Calendar", url: "/admin/calendar", icon: Calendar },
   { tab: "bookings", title: "Bookings", url: "/admin/bookings", icon: ListChecks },
   { tab: "booking-requests", title: "Booking Requests", url: "/admin/booking-requests", icon: ClipboardCheck },
@@ -115,6 +118,7 @@ const campsSecondary = [
 const leagueNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
+  { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "competitions", title: "Terms", url: "/admin/competitions", icon: Trophy },
   { tab: "teams", title: "Teams", url: "/admin/teams", icon: UsersRound },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
@@ -142,6 +146,7 @@ const leagueSecondary = [
 const tournamentNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
+  { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "tournaments", title: "Tournaments", url: "/admin/tournaments", icon: Award },
   { tab: "clubs", title: "Clubs", url: "/admin/clubs", icon: Shield },
   { tab: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge", icon: Zap },
@@ -169,6 +174,7 @@ const tournament7sNav = [
 const gymnasticsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
+  { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "programs", title: "Programs", url: "/admin/programs", icon: GraduationCap },
   { tab: "cugc-registrations", title: "Registrations", url: "/admin/cugc-registrations", icon: ClipboardCheck },
   { tab: "cugc-free-sessions", title: "Free Sessions", url: "/admin/cugc-free-sessions", icon: CalendarCheck },
@@ -186,6 +192,7 @@ const gymnasticsSecondary = [
 const groupNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
+  { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "calendar", title: "Calendar", url: "/admin/calendar", icon: Calendar },
   { tab: "projects", title: "Projects", url: "/admin/projects", icon: ClipboardCheck },
   { tab: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship", icon: Handshake },
@@ -203,6 +210,7 @@ const groupSecondary = [
 const printsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
+  { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "jobs", title: "Jobs", url: "/admin/print-jobs", icon: FolderKanban },
   { tab: "orders", title: "Orders", url: "/admin/print-orders", icon: ShoppingCart },
   { tab: "materials", title: "Materials", url: "/admin/print-materials", icon: FileText },
