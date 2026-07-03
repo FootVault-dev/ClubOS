@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth } from "./auth";
+import { attributionCookieMiddleware } from "./attribution-cookies";
 
 const app = express();
 const httpServer = createServer(app);
@@ -65,6 +66,11 @@ app.use((req, res, next) => {
 
   next();
 });
+
+// AttributionOS (T4): ensure first-party usg_vid / usg_cid cookies on real page
+// loads, before any route runs. Defensive — never throws, never touches /api or
+// static assets. See server/attribution-cookies.ts.
+app.use(attributionCookieMiddleware);
 
 (async () => {
   const { seedDatabase, migrateScheduleData } = await import("./seed");
