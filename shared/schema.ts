@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, time, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -350,6 +350,17 @@ export const registrations = pgTable("registrations", {
   refundedBy: integer("refunded_by"),
   stripeRefundId: text("stripe_refund_id"),
   stripeRefundStatus: text("stripe_refund_status"),
+  // ── AttributionOS (additive, T3) — HDYHAU reuses referral_source above ──────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
   registeredAt: timestamp("registered_at").defaultNow().notNull(),
 });
 
@@ -779,6 +790,18 @@ export const bookingRequests = pgTable("booking_requests", {
   // Set on approval — the confirmed facilityBookings row that holds the slot.
   facilityBookingId: integer("facility_booking_id").references(() => facilityBookings.id),
   notes: text("notes"),
+  // ── AttributionOS (additive, T3) ──────────────────────────────────────────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
+  hdyhau: text("hdyhau"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -868,6 +891,18 @@ export const leagueWaitlist = pgTable("league_waitlist", {
   utmMedium: text("utm_medium"),
   utmCampaign: text("utm_campaign"),
   fbclid: text("fbclid"),
+  // ── AttributionOS (additive, T3) ──────────────────────────────────────────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
+  hdyhau: text("hdyhau"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -2052,6 +2087,19 @@ export const printOrders = pgTable("print_orders", {
 
   rushRequested: boolean("rush_requested").notNull().default(false),
 
+  // ── AttributionOS (additive, T3) ──────────────────────────────────────────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
+  hdyhau: text("hdyhau"),
+
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -2543,6 +2591,18 @@ export const cic7sRegistrations = pgTable("cic7s_registrations", {
   category: text("category"), // "Mens" | "Masters" | "Social"
   sourceUrl: text("source_url"),
   status: text("status").notNull().default("new"), // "new" | "contacted" | "confirmed" | "archived"
+  // ── AttributionOS (additive, T3) ──────────────────────────────────────────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
+  hdyhau: text("hdyhau"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -2585,6 +2645,17 @@ export const cugcRegistrations = pgTable("cugc_registrations", {
   // referrer, landing page, visit count) — the "which ad created this customer"
   // record that CAC/LTV reporting is built on.
   attribution: jsonb("attribution"),
+  // ── AttributionOS (additive, T3) — HDYHAU reuses heard_via above ───────────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -2617,6 +2688,18 @@ export const cugcFreeSessions = pgTable("cugc_free_sessions", {
   attendedAt: timestamp("attended_at", { withTimezone: true }),
   sourceUrl: text("source_url"),
   attribution: jsonb("attribution"), // same first/last-touch shape as cugc_registrations
+  // ── AttributionOS (additive, T3) ──────────────────────────────────────────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
+  hdyhau: text("hdyhau"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -2646,6 +2729,18 @@ export const footballInstituteApplications = pgTable("football_institute_applica
   intakeYear: integer("intake_year"),
   status: text("status").notNull().default("new"), // new | contacted | reviewing | accepted | declined
   source: text("source").notNull().default("website"), // website | admin
+  // ── AttributionOS (additive, T3) ──────────────────────────────────────────
+  visitorId: text("visitor_id"),
+  clickId: text("click_id"),
+  personId: integer("person_id"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  metaAdId: text("meta_ad_id"),
+  metaAdsetId: text("meta_adset_id"),
+  metaCampaignId: text("meta_campaign_id"),
+  metaPlatform: text("meta_platform"),
+  attributionChannel: text("attribution_channel"),
+  hdyhau: text("hdyhau"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -2727,6 +2822,9 @@ export const esignDocuments = pgTable("esign_documents", {
   message: text("message"),
   status: text("status").notNull().default("draft"),
   sequential: boolean("sequential").notNull().default(false), // invite signers one at a time, in signing_order
+  docType: text("doc_type").notNull().default("pdf"), // 'pdf' (uploaded, field overlay) | 'native' (template-rendered branded web page)
+  templateId: integer("template_id"),                 // esign_templates.id when doc_type = 'native'
+  templateData: jsonb("template_data").$type<Record<string, any> | null>(), // sender-set variable values (rate, start date, …)
   sourceFileName: text("source_file_name"),
   sourcePdf: text("source_pdf").notNull(), // base64 of the original PDF
   signedPdf: text("signed_pdf"),           // base64 of final (original + certificate)
@@ -2761,6 +2859,7 @@ export const esignSigners = pgTable("esign_signers", {
   ip: text("ip"),
   userAgent: text("user_agent"),
   declineReason: text("decline_reason"),
+  formData: jsonb("form_data").$type<Record<string, any> | null>(), // native docs: signer-filled details (incl. guardian block for under-18s)
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -2861,3 +2960,110 @@ export const personMerges = pgTable("person_merges", {
 export const insertPersonMergeSchema = createInsertSchema(personMerges).omit({ id: true, createdAt: true });
 export type InsertPersonMerge = z.infer<typeof insertPersonMergeSchema>;
 export type PersonMerge = typeof personMerges.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AttributionOS — short links / QR, Meta ad spend + entities (T3, migration 2)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// One trackable short link / QR poster (Dub-style). `key` is the public slug
+// served at /l/:key; `destination` is validated to an allowlisted (our-own) host
+// at create time — no open redirect. Counters are cached and repairable from
+// link_clicks + the conversion tables (T21 repair function).
+export const shortLinks = pgTable("short_links", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),                 // public slug (unique) → /l/:key
+  destination: text("destination").notNull(), // allowlisted target URL (our domains only)
+  channel: text("channel"),                   // canonical channel locked at create time
+  campaign: text("campaign"),
+  medium: text("medium"),
+  content: text("content"),
+  brand: text("brand"),                       // which brand this link is for
+  note: text("note"),                         // free-text staff note
+  qrDefault: boolean("qr_default").notNull().default(false),  // built primarily for a QR poster
+  clicks: integer("clicks").notNull().default(0),             // cached counter (repairable)
+  leads: integer("leads").notNull().default(0),
+  sales: integer("sales").notNull().default(0),
+  saleAmountCents: integer("sale_amount_cents").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  keyUnq: uniqueIndex("short_links_key_unq").on(t.key),
+  orgIdx: index("short_links_org_idx").on(t.organizationId, t.active, t.createdAt),
+}));
+
+export const insertShortLinkSchema = createInsertSchema(shortLinks).omit({ id: true, createdAt: true });
+export type InsertShortLink = z.infer<typeof insertShortLinkSchema>;
+export type ShortLink = typeof shortLinks.$inferSelect;
+
+// One row per counted click on a short link. `clickId` is the minted first-party
+// id echoed to the destination as ?ci= (unique). `ipHash` is SHA256(ip+ua) only —
+// no raw IP is ever stored; it is the 1h per-link dedupe key (T9).
+export const linkClicks = pgTable("link_clicks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  linkId: integer("link_id").notNull().references(() => shortLinks.id, { onDelete: "cascade" }),
+  clickId: text("click_id").notNull(),        // minted first-party click id (unique; ?ci=)
+  visitorId: text("visitor_id"),
+  ipHash: text("ip_hash"),                    // SHA256(ip+ua) — no raw IP; 1h dedupe key
+  ua: text("ua"),
+  referrer: text("referrer"),
+  isQr: boolean("is_qr").notNull().default(false),   // scanned from a QR poster (?qr=1)
+  isBot: boolean("is_bot").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  clickIdUnq: uniqueIndex("link_clicks_click_id_unq").on(t.clickId),
+  linkIdx: index("link_clicks_link_idx").on(t.linkId, t.createdAt),
+}));
+
+export const insertLinkClickSchema = createInsertSchema(linkClicks).omit({ id: true, createdAt: true });
+export type InsertLinkClick = z.infer<typeof insertLinkClickSchema>;
+export type LinkClick = typeof linkClicks.$inferSelect;
+
+// Daily Meta Insights at level=ad, broken down by publisher_platform +
+// platform_position (so FB vs IG spend is separable). Re-upserted for the last 7
+// days each run; the unique key is (date, adId, publisherPlatform,
+// platformPosition). Breakdown columns default to '' so the unique key never has
+// a NULL (NULLs are distinct in a unique index and would defeat the upsert).
+// spendCents is integer cents (Meta returns spend as decimal dollars — convert).
+export const adSpendDaily = pgTable("ad_spend_daily", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  date: date("date").notNull(),
+  adId: text("ad_id").notNull(),
+  adsetId: text("adset_id"),
+  campaignId: text("campaign_id"),
+  publisherPlatform: text("publisher_platform").notNull().default(""),  // 'facebook' | 'instagram' | ...
+  platformPosition: text("platform_position").notNull().default(""),    // 'feed' | 'story' | 'reels' | ...
+  spendCents: integer("spend_cents").notNull().default(0),
+  impressions: integer("impressions").notNull().default(0),
+  clicks: integer("clicks").notNull().default(0),
+  refreshedAt: timestamp("refreshed_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  unq: uniqueIndex("ad_spend_daily_unq").on(t.date, t.adId, t.publisherPlatform, t.platformPosition),
+}));
+
+export const insertAdSpendDailySchema = createInsertSchema(adSpendDaily).omit({ id: true, createdAt: true });
+export type InsertAdSpendDaily = z.infer<typeof insertAdSpendDailySchema>;
+export type AdSpendDaily = typeof adSpendDaily.$inferSelect;
+
+// Name lookup for ad / adset / campaign ids seen in spend or conversions.
+// Refreshed from /{ad-id}?fields=name,adset{name,campaign{name}}.
+export const adEntities = pgTable("ad_entities", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  adId: text("ad_id").notNull(),
+  adsetId: text("adset_id"),
+  campaignId: text("campaign_id"),
+  adName: text("ad_name"),
+  adsetName: text("adset_name"),
+  campaignName: text("campaign_name"),
+  accountId: text("account_id"),
+  refreshedAt: timestamp("refreshed_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  adIdUnq: uniqueIndex("ad_entities_ad_id_unq").on(t.adId),
+}));
+
+export const insertAdEntitySchema = createInsertSchema(adEntities).omit({ id: true, createdAt: true });
+export type InsertAdEntity = z.infer<typeof insertAdEntitySchema>;
+export type AdEntity = typeof adEntities.$inferSelect;
