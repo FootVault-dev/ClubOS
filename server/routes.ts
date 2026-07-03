@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -9294,12 +9294,104 @@ export async function registerRoutes(
   function esignSerializeDoc(d: typeof esignDocuments.$inferSelect, signers: (typeof esignSigners.$inferSelect)[]) {
     return {
       id: d.id, title: d.title, message: d.message, status: d.status, sequential: d.sequential,
+      docType: d.docType || "pdf",
       sourceFileName: d.sourceFileName, createdAt: d.createdAt, sentAt: d.sentAt, completedAt: d.completedAt,
       signers: signers.map((s) => ({
         id: s.id, name: s.name, email: s.email, status: s.status, token: s.token,
         signedAt: s.signedAt, viewedAt: s.viewedAt, declineReason: s.declineReason,
       })),
     };
+  }
+
+  // ── Native templates (e-Sign v2) ─────────────────────────────────────────
+  // Agreements rendered as branded web pages from a stored template instead of
+  // an uploaded PDF. The signer fills their details inline on the page; the
+  // archived PDF is typeset server-side from the SAME content JSON.
+  async function esignLogoBytes(logoUrl: string | null | undefined): Promise<Uint8Array | null> {
+    if (!logoUrl || !logoUrl.startsWith("/")) return null;
+    const fs = await import("fs");
+    const path = await import("path");
+    const rel = logoUrl.replace(/^\//, "");
+    const candidates: string[] = [];
+    try { candidates.push(path.resolve(__dirname, "public", rel)); } catch { /* ESM dev */ }
+    candidates.push(path.resolve(process.cwd(), "dist", "public", rel), path.resolve(process.cwd(), "client", "public", rel));
+    for (const p of candidates) {
+      try { if (fs.existsSync(p)) return new Uint8Array(fs.readFileSync(p)); } catch { /* try next */ }
+    }
+    return null;
+  }
+  function esignFmtDateNZ(iso: string): string {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso).trim());
+    if (!m) return String(iso);
+    const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    return dt.toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+  }
+  function esignAgeAt(dobIso: string, at: Date): number | null {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dobIso).trim());
+    if (!m) return null;
+    const [y, mo, d] = [+m[1], +m[2], +m[3]];
+    if (!y || !mo || !d || y < 1900) return null;
+    let age = at.getFullYear() - y;
+    if (at.getMonth() + 1 < mo || (at.getMonth() + 1 === mo && at.getDate() < d)) age -= 1;
+    return age >= 0 && age < 120 ? age : null;
+  }
+  const esignDisplayValue = (f: any, v: any): string =>
+    (f?.type === "date" || f?.type === "dob") ? esignFmtDateNZ(String(v)) : String(v);
+
+  // Typeset a native document to PDF. final=false → blank details/signatures
+  // (the hashed "what was sent" record); final=true → filled + signed.
+  async function esignRenderNativeDoc(
+    doc: typeof esignDocuments.$inferSelect,
+    tpl: typeof esignTemplates.$inferSelect,
+    final: boolean,
+  ): Promise<Uint8Array> {
+    const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id)).orderBy(esignSigners.signingOrder, esignSigners.id);
+    const primary = signers.find((s) => s.signingOrder === 0) ?? signers[0];
+    const counter = signers.find((s) => s.signingOrder > 0) ?? null;
+    const form = (tpl.form ?? []) as any[];
+    const fd = (final ? primary?.formData : null) as Record<string, any> | null;
+    const values: Record<string, string> = {};
+    for (const [k, v] of Object.entries((doc.templateData ?? {}) as Record<string, any>)) values[k] = String(v);
+    const fdDisplay: Record<string, any> | null = fd ? {} : null;
+    if (fd && fdDisplay) {
+      for (const f of form) {
+        const v = fd[f.key];
+        const has = v != null && String(v).trim() !== "";
+        fdDisplay[f.key] = has ? esignDisplayValue(f, v) : null;
+        if (has) values[f.key] = esignDisplayValue(f, v);
+      }
+    }
+    const settings = (tpl.settings ?? {}) as Record<string, any>;
+    const parties = [
+      {
+        role: String(settings.counterSignerRole || "The League"),
+        name: final ? (counter?.signatureName ?? null) : null,
+        signatureImage: final ? counter?.signatureImage ?? null : null,
+        signedAt: final ? counter?.signedAt ?? null : null,
+      },
+      {
+        role: String(settings.primarySignerRole || "The Referee"),
+        name: final ? (primary?.signatureName ?? null) : null,
+        signatureImage: final ? primary?.signatureImage ?? null : null,
+        signedAt: final ? primary?.signedAt ?? null : null,
+      },
+    ];
+    const guardian = final && fd?.guardian_name
+      ? { name: String(fd.guardian_name), relationship: fd.guardian_relationship ? String(fd.guardian_relationship) : null, signatureImage: fd.guardian_signature ?? null, signedAt: primary?.signedAt ?? null }
+      : null;
+    const { renderNativePdf } = await import("./esign-native-pdf");
+    return renderNativePdf({
+      brand: tpl.brand as Record<string, any>,
+      content: tpl.content as any,
+      values,
+      formSpec: form.map((f) => ({ key: f.key, label: f.label, type: f.type, required: f.required })),
+      formData: fdDisplay,
+      refereeEmail: primary?.email ?? null,
+      parties,
+      guardian,
+      logoBytes: await esignLogoBytes((tpl.brand as any)?.logoUrl),
+      envelopeId: doc.id,
+    });
   }
   const ESIGN_FIELD_TYPES = ["signature", "initials", "text", "date", "checkbox"] as const;
   function esignSerializeField(f: typeof esignFields.$inferSelect) {
@@ -9396,14 +9488,23 @@ export async function registerRoutes(
     const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, docId)).orderBy(esignSigners.signingOrder, esignSigners.id);
     if (!signers.length || !signers.every((s) => s.status === "signed")) return;
     const fields = await db.select().from(esignFields).where(eq(esignFields.documentId, docId));
+    // Native docs: re-typeset the agreement with the filled details + drawn
+    // signatures, then append the certificate to THAT. PDF docs: stamp fields
+    // onto the uploaded source as before.
+    let certSource: Buffer | Uint8Array = Buffer.from(doc.sourcePdf, "base64");
+    let certFields = fields.map((f) => ({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, type: f.type, value: f.value, valueImage: f.valueImage }));
+    if ((doc.docType || "pdf") === "native" && doc.templateId) {
+      const [tpl] = await db.select().from(esignTemplates).where(eq(esignTemplates.id, doc.templateId));
+      if (tpl) { certSource = await esignRenderNativeDoc(doc, tpl, true); certFields = []; }
+    }
     const { buildSignedPdf } = await import("./esign-pdf");
     const signedBytes = await buildSignedPdf({
-      sourcePdf: Buffer.from(doc.sourcePdf, "base64"),
+      sourcePdf: certSource,
       title: doc.title,
       docHash: doc.docHash || "",
       envelopeId: doc.id,
-      signers: signers.map((s) => ({ name: s.name, email: s.email, signatureName: s.signatureName, signatureImage: s.signatureImage, signedAt: s.signedAt, ip: s.ip })),
-      fields: fields.map((f) => ({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, type: f.type, value: f.value, valueImage: f.valueImage })),
+      signers: signers.map((s) => ({ name: s.name, email: s.email, signatureName: s.signatureName, signatureImage: s.signatureImage, signedAt: s.signedAt, viewedAt: s.viewedAt, ip: s.ip })),
+      fields: certFields,
     });
     const signedB64 = Buffer.from(signedBytes).toString("base64");
     await db.update(esignDocuments).set({ status: "completed", completedAt: new Date(), signedPdf: signedB64 }).where(eq(esignDocuments.id, docId));
@@ -9432,6 +9533,73 @@ export async function registerRoutes(
       const ids = docs.map((d) => d.id);
       const signers = ids.length ? await db.select().from(esignSigners).where(inArray(esignSigners.documentId, ids)) : [];
       res.json(docs.map((d) => esignSerializeDoc(d, signers.filter((s) => s.documentId === d.id))));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Native templates available in this workspace (registered before /:id).
+  app.get("/api/admin/esign/templates", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const rows = await db.select().from(esignTemplates).where(and(eq(esignTemplates.organizationId, orgId), eq(esignTemplates.active, true))).orderBy(esignTemplates.name);
+      res.json(rows.map((t) => ({ id: t.id, slug: t.slug, name: t.name, description: t.description, variables: t.variables, settings: t.settings, brand: t.brand })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Create (and optionally send) a document from a native template.
+  // Body: { templateId, variables: {key: value}, signerName, signerEmail, message?, send? }
+  // Signing order: recipient first, then the sender counter-signs.
+  app.post("/api/admin/esign/from-template", requireAuth, requireTab("esign"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const b = req.body ?? {};
+      const [tpl] = await db.select().from(esignTemplates).where(and(eq(esignTemplates.id, parseInt(String(b.templateId))), eq(esignTemplates.organizationId, orgId), eq(esignTemplates.active, true)));
+      if (!tpl) return res.status(404).json({ message: "Template not found" });
+      const signerEmail = String(b.signerEmail ?? "").trim().toLowerCase();
+      if (!/.+@.+\..+/.test(signerEmail)) return res.status(400).json({ message: "A valid recipient email is required" });
+      const signerName = esignClean(b.signerName, 120) || signerEmail.split("@")[0];
+      const sender = req.session.userId ? (await db.select().from(usersTable).where(eq(usersTable.id, req.session.userId)))[0] : null;
+      if (!sender?.email) return res.status(400).json({ message: "Your account needs an email address to counter-sign" });
+
+      // Validate + format sender-set variables against the template spec.
+      const varsIn = (b.variables ?? {}) as Record<string, any>;
+      const templateData: Record<string, string> = {};
+      for (const v of (tpl.variables ?? []) as any[]) {
+        let raw = varsIn[v.key] != null ? String(varsIn[v.key]).trim() : "";
+        if (!raw && v.default) raw = String(v.default);
+        if (v.required !== false && !raw) return res.status(400).json({ message: `${v.label || v.key} is required` });
+        if (v.type === "date" && raw) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return res.status(400).json({ message: `${v.label || v.key} must be a valid date` });
+          raw = esignFmtDateNZ(raw);
+        }
+        if (v.type === "select" && raw && Array.isArray(v.options) && !v.options.includes(raw) && v.allowCustom !== true)
+          return res.status(400).json({ message: `${v.label || v.key} must be one of the listed options` });
+        templateData[v.key] = raw.slice(0, 200);
+      }
+
+      const title = `${tpl.name} — ${signerName}`;
+      const [doc] = await db.insert(esignDocuments).values({
+        organizationId: orgId, title: title.slice(0, 160), message: esignClean(b.message, 500), status: "draft",
+        sequential: true, docType: "native", templateId: tpl.id, templateData,
+        sourceFileName: null, sourcePdf: "", docHash: "",
+        createdBy: req.session.userId ?? null,
+      }).returning();
+      const senderName = [sender.firstName, sender.lastName].filter(Boolean).join(" ").trim() || "The League";
+      await db.insert(esignSigners).values({ documentId: doc.id, organizationId: orgId, name: signerName, email: signerEmail, signingOrder: 0, token: esignToken() });
+      await db.insert(esignSigners).values({ documentId: doc.id, organizationId: orgId, name: senderName, email: sender.email, signingOrder: 1, token: esignToken() });
+
+      // Typeset the unsigned agreement — this exact render is what gets hashed.
+      const sourceBytes = await esignRenderNativeDoc(doc, tpl, false);
+      await db.update(esignDocuments).set({ sourcePdf: Buffer.from(sourceBytes).toString("base64"), docHash: esignSha(Buffer.from(sourceBytes)) }).where(eq(esignDocuments.id, doc.id));
+
+      await esignLog(doc.id, null, "created", { actorEmail: sender?.email, ip: esignIp(req), userAgent: req.headers["user-agent"], meta: { template: tpl.slug, signers: 2 } });
+      if (b.send) {
+        await db.update(esignDocuments).set({ status: "sent", sentAt: new Date() }).where(eq(esignDocuments.id, doc.id));
+        await esignEmailSigners(doc.id, orgId, false);
+        await esignLog(doc.id, null, "sent", { actorEmail: sender?.email, ip: esignIp(req) });
+      }
+      const [fresh] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, doc.id));
+      const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
+      res.json(esignSerializeDoc(fresh, signers));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -9638,12 +9806,42 @@ export async function registerRoutes(
       // signature is already visible when the vendor opens the document.
       const otherFields = await db.select().from(esignFields)
         .where(and(eq(esignFields.documentId, doc.id), ne(esignFields.signerId, signer.id)));
+      // Native docs: ship the template content so the page renders the
+      // agreement as a branded web page (same JSON the archived PDF is
+      // typeset from — page and record can never diverge).
+      let native: any = null;
+      if ((doc.docType || "pdf") === "native" && doc.templateId) {
+        const [tpl] = await db.select().from(esignTemplates).where(eq(esignTemplates.id, doc.templateId));
+        if (tpl) {
+          const primary = allSigners.find((s) => s.signingOrder === 0) ?? allSigners[0];
+          const isPrimary = signer.id === primary.id;
+          const form = (tpl.form ?? []) as any[];
+          native = {
+            brand: tpl.brand,
+            content: tpl.content,
+            form,
+            settings: tpl.settings ?? {},
+            variables: doc.templateData ?? {},
+            role: isPrimary ? "primary" : "counter",
+            myFormData: signer.formData ?? null,
+            primaryDetails: isPrimary ? null : {
+              name: primary.signatureName || primary.name,
+              email: primary.email,
+              formData: primary.formData ?? null,
+              signatureImage: primary.signatureImage,
+              signedAt: primary.signedAt,
+            },
+          };
+        }
+      }
       res.json({
         documentStatus: doc.status,
         title: doc.title,
         message: doc.message,
         orgName: org?.name || "Christchurch United",
         sequential: doc.sequential,
+        docType: doc.docType || "pdf",
+        native,
         signer: { name: signer.name, email: signer.email, status: signer.status },
         parties: allSigners.map((s) => ({ name: s.name, status: s.status })),
         fields: myFields.map(esignSerializeField),
@@ -9680,6 +9878,42 @@ export async function registerRoutes(
       if (b.consent !== true) return res.status(400).json({ message: "You must agree to sign electronically." });
       const now = new Date();
 
+      // Native docs: validate + store the signer-filled details (and the
+      // parent/guardian co-signature when the signer is under 18).
+      let nativeFormData: Record<string, any> | null = null;
+      if ((doc.docType || "pdf") === "native" && signer.signingOrder === 0) {
+        if (!doc.templateId) return res.status(500).json({ message: "This document is missing its template." });
+        const [tpl] = await db.select().from(esignTemplates).where(eq(esignTemplates.id, doc.templateId));
+        if (!tpl) return res.status(500).json({ message: "This document is missing its template." });
+        const raw = (b.formData ?? {}) as Record<string, any>;
+        const cleaned: Record<string, any> = {};
+        for (const f of (tpl.form ?? []) as any[]) {
+          const v = raw[f.key] == null ? "" : String(raw[f.key]).trim();
+          if (f.required !== false && !v) return res.status(400).json({ message: `Please fill in "${f.label}" before signing.` });
+          if ((f.type === "date" || f.type === "dob") && v && !/^\d{4}-\d{2}-\d{2}$/.test(v))
+            return res.status(400).json({ message: `Please enter a valid date for "${f.label}".` });
+          cleaned[f.key] = v.slice(0, 300);
+        }
+        const settings = (tpl.settings ?? {}) as Record<string, any>;
+        if (settings.guardianUnder18) {
+          const dobField = ((tpl.form ?? []) as any[]).find((f) => f.type === "dob");
+          const dob = dobField ? cleaned[dobField.key] : null;
+          const age = dob ? esignAgeAt(String(dob), now) : null;
+          if (dobField && dob && age == null) return res.status(400).json({ message: "Please enter a valid date of birth." });
+          if (age != null && age < 18) {
+            const gName = String(raw.guardian_name ?? "").trim();
+            const gRel = String(raw.guardian_relationship ?? "").trim();
+            const gSig = typeof raw.guardian_signature === "string" && raw.guardian_signature.startsWith("data:image") ? raw.guardian_signature.slice(0, 400000) : null;
+            if (!gName || !gSig) return res.status(400).json({ message: "As you're under 18, a parent or legal guardian needs to add their name and signature to co-sign this agreement." });
+            cleaned.guardian_name = gName.slice(0, 120);
+            cleaned.guardian_relationship = gRel.slice(0, 80) || null;
+            cleaned.guardian_signature = gSig;
+            cleaned.guardian_consent = true;
+          }
+        }
+        nativeFormData = cleaned;
+      }
+
       // Save any placed field values for this signer, validating required ones.
       const myFields = await db.select().from(esignFields).where(and(eq(esignFields.documentId, doc.id), eq(esignFields.signerId, signer.id)));
       const incoming: Record<string, { value?: string; valueImage?: string }> = {};
@@ -9698,8 +9932,9 @@ export async function registerRoutes(
       await db.update(esignSigners).set({
         status: "signed", signatureName: signatureName.slice(0, 120), signatureImage,
         signedAt: now, consentedAt: now, ip: esignIp(req), userAgent: String(req.headers["user-agent"] || "").slice(0, 300),
+        ...(nativeFormData ? { formData: nativeFormData, name: String(nativeFormData.referee_name || signatureName).slice(0, 120) } : {}),
       }).where(eq(esignSigners.id, signer.id));
-      await esignLog(doc.id, signer.id, "signed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"], meta: { fields: myFields.length } });
+      await esignLog(doc.id, signer.id, "signed", { actorEmail: signer.email, ip: esignIp(req), userAgent: req.headers["user-agent"], meta: { fields: myFields.length, ...(nativeFormData ? { form: Object.keys(nativeFormData).length, guardian: !!nativeFormData.guardian_name } : {}) } });
       const all = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id));
       const allComplete = all.every((s) => s.status === "signed");
       if (allComplete) {

@@ -2716,6 +2716,9 @@ export const esignDocuments = pgTable("esign_documents", {
   message: text("message"),
   status: text("status").notNull().default("draft"),
   sequential: boolean("sequential").notNull().default(false), // invite signers one at a time, in signing_order
+  docType: text("doc_type").notNull().default("pdf"), // 'pdf' (uploaded, field overlay) | 'native' (template-rendered branded web page)
+  templateId: integer("template_id"),                 // esign_templates.id when doc_type = 'native'
+  templateData: jsonb("template_data").$type<Record<string, any> | null>(), // sender-set variable values (rate, start date, …)
   sourceFileName: text("source_file_name"),
   sourcePdf: text("source_pdf").notNull(), // base64 of the original PDF
   signedPdf: text("signed_pdf"),           // base64 of final (original + certificate)
@@ -2750,6 +2753,7 @@ export const esignSigners = pgTable("esign_signers", {
   ip: text("ip"),
   userAgent: text("user_agent"),
   declineReason: text("decline_reason"),
+  formData: jsonb("form_data").$type<Record<string, any> | null>(), // native docs: signer-filled details (incl. guardian block for under-18s)
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -2799,3 +2803,28 @@ export const esignFields = pgTable("esign_fields", {
 export const insertEsignFieldSchema = createInsertSchema(esignFields).omit({ id: true, createdAt: true });
 export type InsertEsignField = z.infer<typeof insertEsignFieldSchema>;
 export type EsignField = typeof esignFields.$inferSelect;
+
+
+// Native document templates — agreements rendered as branded web pages instead
+// of uploaded PDFs (e-Sign v2). The template holds the full agreement content
+// (structured sections), the brand identity to render it in, sender-set
+// variables (e.g. pay rate), and the form fields the signer fills inline.
+// Adding a new agreement type = inserting a row here; no code changes.
+export const esignTemplates = pgTable("esign_templates", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  slug: text("slug").notNull(),          // e.g. 'mfl-referee-agreement'
+  name: text("name").notNull(),          // e.g. 'MFL Referee Contractor Agreement'
+  description: text("description"),
+  brand: jsonb("brand").$type<Record<string, any>>().notNull(),     // { orgLabel, logoUrl, bg, panel, accent, accentDeep, paper, ink }
+  content: jsonb("content").$type<Record<string, any>>().notNull(), // { title, intro, sections:[{heading, items:[{kind:'p'|'bullet'|'numbered', text}]}], appendix:{...}, adviceNotice, signAck }
+  variables: jsonb("variables").$type<any[]>().notNull(),           // sender-set: [{key,label,type:'select'|'text'|'date'|'money',options?,default?,required}]
+  form: jsonb("form").$type<any[]>().notNull(),                     // signer-filled: [{key,label,type:'text'|'date'|'dob'|'phone'|'email'|'bank'|'address',required,help?,section?}]
+  settings: jsonb("settings").$type<Record<string, any> | null>(),  // { guardianUnder18: true, counterSignerRole: 'The League', … }
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertEsignTemplateSchema = createInsertSchema(esignTemplates).omit({ id: true, createdAt: true });
+export type InsertEsignTemplate = z.infer<typeof insertEsignTemplateSchema>;
+export type EsignTemplate = typeof esignTemplates.$inferSelect;
