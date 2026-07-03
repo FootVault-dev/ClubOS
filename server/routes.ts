@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, departments, goals, goalMeasures } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -6804,6 +6804,7 @@ export async function registerRoutes(
         }
         if (parent.parentId) return res.status(400).json({ message: "Subtasks can't have subtasks" });
       }
+      const RAG = ["none", "on_track", "at_risk", "off_track"];
       const [task] = await db.insert(projectTasks).values({
         organizationId: orgId,
         boardId,
@@ -6815,6 +6816,14 @@ export async function registerRoutes(
         ownerId: req.body?.ownerId ? parseInt(req.body.ownerId) : null,
         dueDate: req.body?.dueDate || null,
         brandTags: Array.isArray(req.body?.brandTags) ? req.body.brandTags : [],
+        // Work-management fields — the second axis + meeting data.
+        departmentId: req.body?.departmentId ? parseInt(req.body.departmentId) : null,
+        ragStatus: RAG.includes(req.body?.ragStatus) ? req.body.ragStatus : "none",
+        startDate: req.body?.startDate || null,
+        nextStep: req.body?.nextStep || null,
+        isIssue: req.body?.isIssue === true,
+        helperIds: Array.isArray(req.body?.helperIds) ? req.body.helperIds.map((n: any) => parseInt(n)).filter(Number.isFinite) : [],
+        goalId: req.body?.goalId ? parseInt(req.body.goalId) : null,
         createdBy: req.session.userId!,
       }).returning();
       res.json(task);
@@ -6836,6 +6845,18 @@ export async function registerRoutes(
       if (req.body.dueDate === null) patch.dueDate = null;
       else if (typeof req.body.dueDate === "string") patch.dueDate = req.body.dueDate;
       if (Array.isArray(req.body.brandTags)) patch.brandTags = req.body.brandTags;
+      // Work-management fields
+      if (req.body.departmentId === null) patch.departmentId = null;
+      else if (typeof req.body.departmentId === "number") patch.departmentId = req.body.departmentId;
+      if (typeof req.body.ragStatus === "string" && ["none", "on_track", "at_risk", "off_track"].includes(req.body.ragStatus)) patch.ragStatus = req.body.ragStatus;
+      if (req.body.startDate === null) patch.startDate = null;
+      else if (typeof req.body.startDate === "string") patch.startDate = req.body.startDate;
+      if (req.body.nextStep === null) patch.nextStep = null;
+      else if (typeof req.body.nextStep === "string") patch.nextStep = req.body.nextStep;
+      if (typeof req.body.isIssue === "boolean") patch.isIssue = req.body.isIssue;
+      if (Array.isArray(req.body.helperIds)) patch.helperIds = req.body.helperIds.map((n: any) => parseInt(n)).filter(Number.isFinite);
+      if (req.body.goalId === null) patch.goalId = null;
+      else if (typeof req.body.goalId === "number") patch.goalId = req.body.goalId;
       if (typeof req.body.groupId === "number") {
         patch.groupId = req.body.groupId;
         // Auto-stamp completedAt when moved into a 'done' group
@@ -6875,6 +6896,227 @@ export async function registerRoutes(
       `);
       res.json(rows.rows);
     } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // ── Departments ────────────────────────────────────────────────────────────
+  // The second axis of the work matrix — the team that OWNS a task/goal (brand =
+  // who it serves). Org-scoped, seeded with 7 defaults, editable here.
+  const RAG_VALUES = ["none", "on_track", "at_risk", "off_track"];
+
+  app.get("/api/admin/departments", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const orgId = parseInt(req.query.organizationId as string);
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(departments)
+        .where(and(eq(departments.organizationId, orgId), eq(departments.archived, false)))
+        .orderBy(asc(departments.sortOrder), asc(departments.id));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/departments", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const orgId = parseInt(req.body?.organizationId);
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const name = String(req.body?.name || "").trim();
+      if (!name) return res.status(400).json({ message: "name required" });
+      const color = String(req.body?.color || "#3b82f6").trim();
+      if (!/^#[0-9a-fA-F]{6}$/.test(color)) return res.status(400).json({ message: "color must be a #rrggbb hex" });
+      const existing = await db.select().from(departments).where(eq(departments.organizationId, orgId));
+      let slug = slugifyLabel(name) || "team";
+      let candidate = slug, n = 2;
+      while (existing.some(d => d.slug === candidate)) candidate = `${slug}-${n++}`;
+      const sortOrder = existing.length > 0 ? Math.max(...existing.map(d => d.sortOrder)) + 1 : 0;
+      const [created] = await db.insert(departments).values({
+        organizationId: orgId, name, slug: candidate, color,
+        leadUserId: req.body?.leadUserId ? parseInt(req.body.leadUserId) : null,
+        sortOrder,
+      }).returning();
+      res.json(created);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/departments/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(departments).where(eq(departments.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = {};
+      if (typeof req.body.name === "string" && req.body.name.trim()) patch.name = req.body.name.trim();
+      if (typeof req.body.color === "string") {
+        if (!/^#[0-9a-fA-F]{6}$/.test(req.body.color)) return res.status(400).json({ message: "color must be a #rrggbb hex" });
+        patch.color = req.body.color;
+      }
+      if (req.body.leadUserId === null) patch.leadUserId = null;
+      else if (typeof req.body.leadUserId === "number") patch.leadUserId = req.body.leadUserId;
+      if (typeof req.body.sortOrder === "number") patch.sortOrder = req.body.sortOrder;
+      if (typeof req.body.archived === "boolean") patch.archived = req.body.archived;
+      const [updated] = await db.update(departments).set(patch).where(eq(departments.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Soft-delete (archive) — tasks keep working (their departmentId FK is SET NULL
+  // by the DB), and history is preserved. GET filters archived out.
+  app.delete("/api/admin/departments/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(departments).where(eq(departments.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.update(departments).set({ archived: true }).where(eq(departments.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // ── Goals (Vision → Season → Priority) + measures ──────────────────────────
+  // One self-referential ladder. GET returns every goal for the org with its
+  // measures nested; the client builds the tree from parentId.
+  app.get("/api/admin/goals", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const orgId = parseInt(req.query.organizationId as string);
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(goals)
+        .where(and(eq(goals.organizationId, orgId), eq(goals.archived, false)))
+        .orderBy(asc(goals.sortOrder), asc(goals.id));
+      const goalIds = rows.map(g => g.id);
+      const measures = goalIds.length > 0
+        ? await db.select().from(goalMeasures).where(inArray(goalMeasures.goalId, goalIds)).orderBy(asc(goalMeasures.sortOrder), asc(goalMeasures.id))
+        : [];
+      const byGoal = new Map<number, typeof measures>();
+      for (const m of measures) { const a = byGoal.get(m.goalId) || []; a.push(m); byGoal.set(m.goalId, a); }
+      res.json(rows.map(g => ({ ...g, measures: byGoal.get(g.id) || [] })));
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/goals", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const orgId = parseInt(req.body?.organizationId);
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const title = String(req.body?.title || "").trim();
+      if (!title) return res.status(400).json({ message: "title required" });
+      const level = ["vision", "season", "priority"].includes(req.body?.level) ? req.body.level : "priority";
+      // Validate parent belongs to same org (line-of-sight can't cross orgs).
+      let parentId: number | null = null;
+      if (req.body?.parentId) {
+        parentId = parseInt(req.body.parentId);
+        const [parent] = await db.select().from(goals).where(eq(goals.id, parentId));
+        if (!parent || parent.organizationId !== orgId) return res.status(400).json({ message: "Invalid parentId" });
+      }
+      const existing = await db.select().from(goals).where(and(eq(goals.organizationId, orgId), eq(goals.level, level)));
+      const sortOrder = existing.length > 0 ? Math.max(...existing.map(g => g.sortOrder)) + 1 : 0;
+      const [created] = await db.insert(goals).values({
+        organizationId: orgId, level, parentId, title,
+        description: req.body?.description || null,
+        ownerId: req.body?.ownerId ? parseInt(req.body.ownerId) : null,
+        departmentId: req.body?.departmentId ? parseInt(req.body.departmentId) : null,
+        brandTags: Array.isArray(req.body?.brandTags) ? req.body.brandTags : [],
+        ragStatus: RAG_VALUES.includes(req.body?.ragStatus) ? req.body.ragStatus : "on_track",
+        period: req.body?.period || null,
+        targetDate: req.body?.targetDate || null,
+        sortOrder,
+        createdBy: req.session.userId!,
+      }).returning();
+      res.json(created);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/goals/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(goals).where(eq(goals.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = { updatedAt: new Date() };
+      if (typeof req.body.title === "string" && req.body.title.trim()) patch.title = req.body.title.trim();
+      if (typeof req.body.description === "string") patch.description = req.body.description;
+      if (req.body.ownerId === null) patch.ownerId = null;
+      else if (typeof req.body.ownerId === "number") patch.ownerId = req.body.ownerId;
+      if (req.body.departmentId === null) patch.departmentId = null;
+      else if (typeof req.body.departmentId === "number") patch.departmentId = req.body.departmentId;
+      if (Array.isArray(req.body.brandTags)) patch.brandTags = req.body.brandTags;
+      if (typeof req.body.ragStatus === "string" && RAG_VALUES.includes(req.body.ragStatus)) patch.ragStatus = req.body.ragStatus;
+      if (req.body.period === null) patch.period = null;
+      else if (typeof req.body.period === "string") patch.period = req.body.period;
+      if (req.body.targetDate === null) patch.targetDate = null;
+      else if (typeof req.body.targetDate === "string") patch.targetDate = req.body.targetDate;
+      if (req.body.parentId === null) patch.parentId = null;
+      else if (typeof req.body.parentId === "number") patch.parentId = req.body.parentId;
+      if (typeof req.body.sortOrder === "number") patch.sortOrder = req.body.sortOrder;
+      if (typeof req.body.archived === "boolean") patch.archived = req.body.archived;
+      const [updated] = await db.update(goals).set(patch).where(eq(goals.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/goals/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(goals).where(eq(goals.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      // Archive (keeps any linked tasks/children valid; FKs are SET NULL).
+      await db.update(goals).set({ archived: true }).where(eq(goals.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/goals/:id/measures", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const goalId = parseInt(req.params.id);
+      const [goal] = await db.select().from(goals).where(eq(goals.id, goalId));
+      if (!goal) return res.status(404).json({ message: "Goal not found" });
+      if (!(await checkUserOrg(req.session.userId!, goal.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const name = String(req.body?.name || "").trim();
+      if (!name) return res.status(400).json({ message: "name required" });
+      const measureType = req.body?.measureType === "lag" ? "lag" : "lead";
+      const existing = await db.select().from(goalMeasures).where(eq(goalMeasures.goalId, goalId));
+      const sortOrder = existing.length > 0 ? Math.max(...existing.map(m => m.sortOrder)) + 1 : 0;
+      const [created] = await db.insert(goalMeasures).values({
+        goalId, name, measureType,
+        targetValue: req.body?.targetValue != null ? String(req.body.targetValue) : null,
+        currentValue: req.body?.currentValue != null ? String(req.body.currentValue) : "0",
+        unit: req.body?.unit || null,
+        sortOrder,
+      }).returning();
+      res.json(created);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/goal-measures/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(goalMeasures).where(eq(goalMeasures.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const [goal] = await db.select().from(goals).where(eq(goals.id, existing.goalId));
+      if (!goal || !(await checkUserOrg(req.session.userId!, goal.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = {};
+      if (typeof req.body.name === "string" && req.body.name.trim()) patch.name = req.body.name.trim();
+      if (req.body.measureType === "lead" || req.body.measureType === "lag") patch.measureType = req.body.measureType;
+      if (req.body.targetValue !== undefined) patch.targetValue = req.body.targetValue != null ? String(req.body.targetValue) : null;
+      if (req.body.currentValue !== undefined) patch.currentValue = req.body.currentValue != null ? String(req.body.currentValue) : null;
+      if (req.body.unit !== undefined) patch.unit = req.body.unit || null;
+      if (typeof req.body.sortOrder === "number") patch.sortOrder = req.body.sortOrder;
+      const [updated] = await db.update(goalMeasures).set(patch).where(eq(goalMeasures.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/goal-measures/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(goalMeasures).where(eq(goalMeasures.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const [goal] = await db.select().from(goals).where(eq(goals.id, existing.goalId));
+      if (!goal || !(await checkUserOrg(req.session.userId!, goal.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(goalMeasures).where(eq(goalMeasures.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 
   // ── Sponsorship CRM ───────────────────────────────────────────────────────
