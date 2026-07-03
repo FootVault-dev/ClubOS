@@ -468,6 +468,45 @@ export async function reconciliation(params: ReportParams) {
   return { model: ds.range.model, rows };
 }
 
+/**
+ * Recent conversions across the 8 tables (most-recent first), for the journeys
+ * drilldown list. Anonymous rows are included so the list is complete; `personId`
+ * is null when the buyer was never identified (only person-backed rows can open a
+ * full timeline via `personJourney`). Capped so the list stays cheap.
+ */
+export async function recentConversions(params: ReportParams & { limit?: number }) {
+  const range = resolveParams(params);
+  const raw = await fetchConversions({
+    orgIds: params.orgIds,
+    startMs: range.startMs,
+    endMs: range.endMs,
+  });
+  const tagged = tagNewVsReturning(raw) as (ConvRow & { isNew: boolean })[];
+  const limit = params.limit && params.limit > 0 ? Math.min(Math.floor(params.limit), 500) : 100;
+  const conversions = tagged
+    .slice()
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit)
+    .map((c) => ({
+      source: c.source,
+      id: c.id,
+      personId: c.personId,
+      visitorId: c.visitorId,
+      timestamp: c.timestamp,
+      revenueCents: c.revenueCents,
+      isLead: c.isLead,
+      isNew: c.isNew,
+      channel: c.stampedChannel ?? null,
+    }));
+  return {
+    model: range.model,
+    windowDays: range.windowDays,
+    range: { startMs: range.startMs, endMs: range.endMs },
+    total: tagged.length,
+    conversions,
+  };
+}
+
 // ── Journey ──────────────────────────────────────────────────────────────────
 
 export interface JourneyItem {

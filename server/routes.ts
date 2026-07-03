@@ -11,6 +11,7 @@ import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
 import { buildConversionAttribution } from "./attribution-stamp";
+import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
 import { eq, ne, and, or, sql, asc, desc, gt, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
@@ -1301,6 +1302,157 @@ export async function registerRoutes(
       const days = req.query.days ? parseInt(req.query.days as string) : 30;
       const stats = await storage.getShortLinkStats(id, days);
       res.json({ link: existing, ...stats });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ── AttributionOS: admin reporting API (T19) ───────────────────────────────
+  // Read-only attribution dashboards backed by the T18 query layer
+  // (server/attribution-reports.ts). requireAuth + workspace membership; scoped
+  // to the current workspace's org, OR — in group=1 mode from the master (group)
+  // workspace — every org the admin belongs to, rolled up. Consistent JSON
+  // shapes (each carries `group`) for the T20 dashboard tab.
+  async function attributionScope(
+    req: Request,
+  ): Promise<
+    | { ok: true; org: { id: number; slug: string }; orgIds: number[]; group: boolean }
+    | { ok: false; status: number; message: string }
+  > {
+    const org = await workspaceOrg(req);
+    if (!org) return { ok: false, status: 400, message: "X-Workspace-Slug header required" };
+    if (!(await checkUserOrg(req.session.userId!, org.id)))
+      return { ok: false, status: 403, message: "Forbidden" };
+    const wantGroup = req.query.group === "1" || req.query.group === "true";
+    // Group rollup is only honoured from the master (group) workspace — a normal
+    // brand workspace can never widen its scope past its own org.
+    if (wantGroup && workspaceTypeFor(org.slug) === "group") {
+      const userOrgs = await storage.getUserOrganizations(req.session.userId!);
+      const orgIds = Array.from(new Set(userOrgs.map((o) => o.id)));
+      return { ok: true, org, orgIds: orgIds.length ? orgIds : [org.id], group: true };
+    }
+    return { ok: true, org, orgIds: [org.id], group: false };
+  }
+
+  // Parse the shared reporting query params: attribution model, lookback window,
+  // conversion date range (explicit start/end, or a trailing `days` count) and
+  // the new-vs-returning filter. All optional — the report layer supplies defaults.
+  function parseAttributionParams(req: Request, orgIds: number[]): ReportParams {
+    const q = req.query as Record<string, any>;
+    const num = (v: any): number | undefined => {
+      if (v == null || v === "") return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const parseDate = (v: any): number | undefined => {
+      if (v == null || v === "") return undefined;
+      const t = Date.parse(String(v));
+      return Number.isFinite(t) ? t : undefined;
+    };
+    let startMs = parseDate(q.start);
+    let endMs = parseDate(q.end);
+    // A trailing `days` window is the common dashboard control; an explicit start wins.
+    const days = num(q.days);
+    if (startMs == null && days && days > 0) {
+      endMs = endMs ?? Date.now();
+      startMs = endMs - days * 86_400_000;
+    }
+    const filterRaw = String(q.filter || "");
+    const filter = filterRaw === "new" || filterRaw === "returning" ? filterRaw : "all";
+    return {
+      orgIds,
+      model: q.model ? String(q.model) : undefined,
+      windowDays: num(q.windowDays),
+      startMs,
+      endMs,
+      filter,
+    };
+  }
+
+  app.get("/api/admin/attribution/overview", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await attributionOverview(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/campaigns", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await revenueByCampaign(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/ads", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await revenueByAd(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/leads", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await leadsByChannel(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/reconciliation", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await reconciliation(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Journeys drilldown list — most-recent conversions in scope. Anonymous rows
+  // included (personId null); only person-backed rows open a timeline below.
+  app.get("/api/admin/attribution/journeys", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const params = parseAttributionParams(req, scope.orgIds);
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const data = await recentConversions({ ...params, limit });
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Single person timeline. Org-scoped: a person with NO conversion in the scoped
+  // orgs is treated as not-found (person PII never leaks across workspaces, even
+  // though the touch log itself has no org column).
+  app.get("/api/admin/attribution/journey/:personId", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const personId = parseInt(String(req.params.personId), 10);
+      if (!Number.isInteger(personId) || personId <= 0)
+        return res.status(400).json({ message: "Invalid personId" });
+      const data = await personJourney(personId, scope.orgIds);
+      if (!data || data.conversionCount === 0)
+        return res.status(404).json({ message: "No journey for that person in this workspace" });
+      res.json({ group: scope.group, ...data });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
