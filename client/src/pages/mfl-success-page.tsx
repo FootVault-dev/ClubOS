@@ -5,6 +5,7 @@ import { useRoute, Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Mail, Calendar, Trophy, Loader2, CreditCard } from "lucide-react";
 import { trackEvent } from "@/lib/meta-pixel";
+import { purchaseEventId } from "@shared/meta-events";
 import { formatCurrency } from "@/lib/format";
 
 const BRAND = {
@@ -53,7 +54,7 @@ export default function MflSuccessPage() {
           value: (reg.depositCents ?? reg.totalCents ?? 0) / 100,
           currency: reg.currency || "NZD",
           content_ids: [reg.slug || slug],
-        }, `mfl_purchase_${reg.id}`);
+        }, purchaseEventId(reg.id));
       }
       setTracked(true);
     }

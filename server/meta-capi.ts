@@ -1,8 +1,13 @@
 import { storage } from "./storage";
+import { venuePurchaseEventId } from "@shared/meta-events";
 
 const META_PIXEL_ID = process.env.META_PIXEL_ID || "";
 const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN || "";
-const META_API_VERSION = "v19.0";
+// Meta Graph API version — single source of truth for every CAPI call. Bump this
+// one const when Meta releases a new stable major (a version stays valid ~2 years
+// after release; older ones are auto-deprecated). HUMAN: confirm this is current
+// in the Meta developer dashboard at deploy time.
+const META_API_VERSION = "v23.0";
 
 interface ServerEvent {
   eventName: string;
@@ -132,6 +137,53 @@ export async function sendPurchaseEvent(params: {
       content_type: "product",
       content_ids: params.contentIds ?? [String(params.campId)],
       ...(params.contentName ? { content_name: params.contentName } : {}),
+    },
+  });
+}
+
+/**
+ * Server-side Purchase for a VENUE hire (facilityBookings). Venue has no browser
+ * pixel of its own, so this is the authoritative Purchase for venue revenue. The
+ * event id is the deterministic, namespaced `venuePurchaseEventId(bookingGroupId)`
+ * so that if a browser pixel is ever added it deduplicates cleanly, and repeat
+ * confirms (webhook + self-heal) never double-count (the caller is idempotent).
+ * facilityBookings carries no fbp/fbc (no T3 attribution columns) — match quality
+ * comes from the hashed email + phone.
+ */
+export async function sendVenuePurchaseEvent(params: {
+  /** first facilityBookings row id — for the meta_event_log audit only. */
+  bookingId: number;
+  /** booking-group id (one payment, many rows) — drives the dedup event id. */
+  bookingGroupId: string;
+  totalCents: number;
+  currency: string;
+  email: string;
+  phone?: string;
+  firstName?: string;
+  lastName?: string;
+  userAgent?: string;
+  ipAddress?: string;
+  sourceUrl?: string;
+  facilityName?: string;
+}): Promise<boolean> {
+  return sendServerEvent({
+    eventName: "Purchase",
+    eventId: venuePurchaseEventId(params.bookingGroupId),
+    eventTime: Math.floor(Date.now() / 1000),
+    email: params.email,
+    phone: params.phone,
+    firstName: params.firstName,
+    lastName: params.lastName,
+    userAgent: params.userAgent,
+    ipAddress: params.ipAddress,
+    sourceUrl: params.sourceUrl,
+    registrationId: params.bookingId,
+    customData: {
+      value: params.totalCents / 100,
+      currency: params.currency,
+      content_type: "product",
+      content_ids: [params.bookingGroupId],
+      content_name: params.facilityName || "Venue Booking",
     },
   });
 }

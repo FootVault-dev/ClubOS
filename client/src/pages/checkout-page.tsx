@@ -5,7 +5,8 @@ import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Lock, ShieldCheck, CreditCard, CheckCircle, Calendar, User } from "lucide-react";
-import { trackEvent, generateEventId } from "@/lib/meta-pixel";
+import { trackEvent } from "@/lib/meta-pixel";
+import { purchaseEventId } from "@shared/meta-events";
 import { formatCurrency } from "@/lib/format";
 import { brandForOrg, type CampBrand } from "@/lib/camp-brand";
 
@@ -79,14 +80,14 @@ function PaymentForm({ checkoutData, slug, brand }: { checkoutData: CheckoutData
           });
         } catch (e) {}
 
-        const eventId = generateEventId();
+        // Deterministic id → dedups with the server CAPI Purchase (handlePaymentSuccess).
         trackEvent("Purchase", {
           value: checkoutData.totalCents / 100,
           currency: checkoutData.currency,
           content_name: checkoutData.campName,
           content_ids: [String(checkoutData.registrationId)],
           num_items: checkoutData.items.length,
-        }, eventId);
+        }, purchaseEventId(checkoutData.registrationId));
 
         setLocation(`/${slug}/feedback?registrationId=${checkoutData.registrationId}`);
       } else if (paymentIntent.status === "requires_action") {

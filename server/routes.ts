@@ -16,7 +16,8 @@ import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
-import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
+import { sendPurchaseEvent, sendLeadEvent, sendVenuePurchaseEvent } from "./meta-capi";
+import { purchaseEventId } from "@shared/meta-events";
 import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
@@ -15749,6 +15750,26 @@ async function confirmAndEmailVenueBookings(paymentIntentId: string) {
   } catch (e) {
     console.error("[Venue email] failed", e);
   }
+  // Server-side Purchase for venue revenue (no browser pixel on the venue flow).
+  // Idempotent: confirmFacilityBookingsByPaymentIntent only returns newly-flipped
+  // rows, so a webhook+self-heal double-confirm returns early above and never
+  // re-fires this. Fully defensive — a CAPI failure must not break confirmation.
+  try {
+    const nameParts = (first.customerName || "").trim().split(/\s+/).filter(Boolean);
+    await sendVenuePurchaseEvent({
+      bookingId: first.id,
+      bookingGroupId: first.bookingGroupId || paymentIntentId,
+      totalCents,
+      currency: "NZD",
+      email: first.customerEmail || "",
+      phone: first.customerPhone || undefined,
+      firstName: nameParts[0] || undefined,
+      lastName: nameParts.length > 1 ? nameParts.slice(1).join(" ") : undefined,
+      facilityName: sessions[0]?.facilityName,
+    });
+  } catch (e) {
+    console.error("[Venue CAPI] Purchase failed", e);
+  }
   return updated;
 }
 
@@ -15791,6 +15812,24 @@ async function confirmAndEmailVenueBookingGroup(groupId: string) {
     });
   } catch (e) {
     console.error("[Venue email] group confirm failed", e);
+  }
+  // Server Purchase for the Player-Pay venue path (idempotent: only the first
+  // flip returns rows, so this fires once per group). Defensive.
+  try {
+    const nameParts = (first.customerName || "").trim().split(/\s+/).filter(Boolean);
+    await sendVenuePurchaseEvent({
+      bookingId: first.id,
+      bookingGroupId: groupId,
+      totalCents,
+      currency: "NZD",
+      email: first.customerEmail || "",
+      phone: first.customerPhone || undefined,
+      firstName: nameParts[0] || undefined,
+      lastName: nameParts.length > 1 ? nameParts.slice(1).join(" ") : undefined,
+      facilityName: sessions[0]?.facilityName,
+    });
+  } catch (e) {
+    console.error("[Venue CAPI] group Purchase failed", e);
   }
   return updated;
 }
@@ -16008,7 +16047,9 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
     totalPaid: `$${((reg.totalCents || 0) / 100).toFixed(2)} NZD`,
   }).catch(e => console.error("[Post-payment] Email error:", e));
 
-  const eventId = `purchase_${registrationId}_${Date.now()}`;
+  // Deterministic id shared with the browser Purchase pixel (checkout-page /
+  // booking-page / booking-success) so Meta dedups the two — NO timestamp.
+  const eventId = purchaseEventId(registrationId);
   sendPurchaseEvent({
     registrationId,
     campId: program.id,
@@ -16314,7 +16355,8 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
       fbp: metadata?.fbp || undefined,
       fbc: metadata?.fbc || undefined,
       userAgent: metadata?.userAgent || undefined,
-      eventId: `mfl_purchase_${primaryId}`,
+      // Canonical deterministic id — matches mfl-checkout-page + mfl-success-page.
+      eventId: purchaseEventId(primaryId),
       contentName: "MFL Term 3 Team Registration",
       contentIds: [program.slug || String(program.id)],
     }).catch((e) => console.error("[MFL] Purchase CAPI failed:", e));
