@@ -156,6 +156,8 @@
     evt.fbp = fbp;
     evt.fbc = fbc;
     evt.landingUrl = landingUrl;
+    // navigator.webdriver hint — the server ORs this into its bot flag (T6).
+    evt.webdriver = (navigator.webdriver === true);
     if (legacyVidToSend) evt.legacyVid = legacyVidToSend;
   }
 

@@ -19,6 +19,10 @@ import {
   validExternalId,
   resolveConversionAttribution,
   mapHdyhauToChannel,
+  isBotUserAgent,
+  detectBot,
+  shapeAnalyticsEvent,
+  shapeAnalyticsEvents,
   CANONICAL_CHANNELS,
   META_UNATTRIBUTED,
   type ClassifiedTouch,
@@ -243,7 +247,163 @@ check(CANONICAL_CHANNELS.includes("facebook"), "canonical includes facebook");
 check(CANONICAL_CHANNELS.includes("direct"), "canonical includes direct");
 check(CANONICAL_CHANNELS.length === 11, "11 canonical channels");
 
-console.log(`attribution (T1): ${pass} checks passed, ${fail} failed`);
+// ─────────────────────────────────────────────────────────────────────────────
+// T6 — collector ingest: bot detection + row shaping
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Real browser UAs must NOT be flagged as bots.
+const CHROME_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const SAFARI_IOS_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1";
+const CUBOT_UA =
+  "Mozilla/5.0 (Linux; Android 12; CUBOT NOTE 40) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36";
+
+check(!isBotUserAgent(CHROME_UA), "real Chrome UA → not a bot");
+check(!isBotUserAgent(SAFARI_IOS_UA), "real iOS Safari UA → not a bot");
+check(!isBotUserAgent(CUBOT_UA), "CUBOT device UA → not a bot (no bare-'bot' false positive)");
+check(isBotUserAgent("Googlebot/2.1 (+http://www.google.com/bot.html)"), "Googlebot → bot");
+check(isBotUserAgent("facebookexternalhit/1.1"), "facebookexternalhit → bot");
+check(isBotUserAgent("WhatsApp/2.23.20.0"), "WhatsApp link preview → bot");
+check(isBotUserAgent("curl/7.79.1"), "curl → bot");
+check(isBotUserAgent("python-requests/2.31.0"), "python-requests → bot");
+check(isBotUserAgent("Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120.0.0.0 Safari/537.36"), "HeadlessChrome → bot");
+check(isBotUserAgent(""), "empty UA → bot");
+check(isBotUserAgent(undefined), "missing UA → bot");
+
+// detectBot: webdriver hint ORs with the UA blocklist.
+check(detectBot({ userAgent: CHROME_UA, webdriver: true }), "webdriver=true → bot even with real UA");
+check(detectBot({ userAgent: CHROME_UA, webdriver: "true" }), "webdriver='true' string → bot");
+check(!detectBot({ userAgent: CHROME_UA, webdriver: false }), "webdriver=false + real UA → not a bot");
+check(!detectBot({ userAgent: CHROME_UA }), "no webdriver + real UA → not a bot");
+check(detectBot({ userAgent: "Googlebot/2.1", webdriver: false }), "bot UA still flagged when webdriver false");
+
+// shapeAnalyticsEvent — malformed rows dropped.
+eq(shapeAnalyticsEvent(null), null, "null payload → dropped");
+eq(shapeAnalyticsEvent("nope"), null, "non-object payload → dropped");
+eq(shapeAnalyticsEvent({ sessionId: "s1", eventType: "page_view" }), null, "missing visitorId → dropped");
+eq(shapeAnalyticsEvent({ visitorId: "v1", eventType: "page_view" }), null, "missing sessionId → dropped");
+eq(shapeAnalyticsEvent({ visitorId: "v1", sessionId: "s1" }), null, "missing eventType → dropped");
+eq(shapeAnalyticsEvent({ visitorId: "undefined", sessionId: "s1", eventType: "page_view" }), null, "illegal visitorId → dropped");
+
+// session_start classifies the touch (facebook paid) and is not a bot with a real UA.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "session_start", utmSource: "fb", utmMedium: "paid_social" },
+    { userAgent: CHROME_UA },
+  );
+  check(s !== null, "valid session_start shapes");
+  eq(s!.channel, "facebook", "session_start classified → facebook");
+  eq(s!.channelRaw, "fb", "channelRaw preserved");
+  eq(s!.isBot, false, "real UA → not flagged bot");
+}
+
+// page_view with fbclid only → meta_unattributed.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "page_view", fbclid: "IwAR123" },
+    { userAgent: CHROME_UA },
+  );
+  eq(s!.channel, META_UNATTRIBUTED, "fbclid-only page_view → meta_unattributed");
+}
+
+// non-touch event (click) is NOT classified — channel stays null.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "click", utmSource: "fb", utmMedium: "paid" },
+    { userAgent: CHROME_UA },
+  );
+  eq(s!.channel, null, "non-touch event → channel null");
+  eq(s!.channelRaw, null, "non-touch event → channelRaw null");
+}
+
+// literal {{ad.id}} macro on clickId is nulled, not persisted.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "page_view", clickId: "{{ad.id}}" },
+    { userAgent: CHROME_UA },
+  );
+  eq(s!.clickId, null, "macro clickId nulled");
+}
+
+// macro utm_campaign is nulled.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "page_view", utmCampaign: "{{campaign.name}}" },
+    { userAgent: CHROME_UA },
+  );
+  eq(s!.utmCampaign, null, "macro utm_campaign nulled");
+}
+
+// metadata preserved verbatim + legacyVid / utmContent / utmTerm stashed into it.
+{
+  const s = shapeAnalyticsEvent(
+    {
+      visitorId: "v1",
+      sessionId: "s1",
+      eventType: "session_start",
+      utmContent: "ad-abc",
+      utmTerm: "term-xyz",
+      legacyVid: "old-vid-123",
+      metadata: { trafficSource: "Meta Ads", isNewVisitor: true },
+    },
+    { userAgent: CHROME_UA },
+  );
+  eq(s!.metadata!.trafficSource, "Meta Ads", "existing metadata preserved");
+  eq(s!.metadata!.isNewVisitor, true, "isNewVisitor preserved");
+  eq(s!.metadata!.legacyVid, "old-vid-123", "legacyVid stashed into metadata");
+  eq(s!.metadata!.utmContent, "ad-abc", "utmContent stashed into metadata");
+  eq(s!.metadata!.utmTerm, "term-xyz", "utmTerm stashed into metadata");
+}
+
+// illegal legacyVid is not stashed.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "page_view", legacyVid: "null" },
+    { userAgent: CHROME_UA },
+  );
+  eq(s!.metadata, null, "illegal legacyVid not stashed, metadata stays null");
+}
+
+// screenWidth string coerced to int; webdriver hint drives is_bot.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "page_view", screenWidth: "375", webdriver: true },
+    { userAgent: CHROME_UA },
+  );
+  eq(s!.screenWidth, 375, "screenWidth string → int");
+  eq(s!.isBot, true, "webdriver hint flags bot");
+}
+
+// bot UA flags the row.
+{
+  const s = shapeAnalyticsEvent(
+    { visitorId: "v1", sessionId: "s1", eventType: "page_view" },
+    { userAgent: "Googlebot/2.1" },
+  );
+  eq(s!.isBot, true, "bot UA flags the row");
+}
+
+// shapeAnalyticsEvents — drops malformed, respects limit, non-array → [].
+{
+  const batch = shapeAnalyticsEvents(
+    [
+      { visitorId: "v1", sessionId: "s1", eventType: "page_view" },
+      { sessionId: "s1", eventType: "page_view" }, // malformed (no visitorId)
+      { visitorId: "v2", sessionId: "s2", eventType: "session_start" },
+    ],
+    { userAgent: CHROME_UA },
+  );
+  eq(batch.length, 2, "batch drops the malformed row");
+}
+{
+  const many = [1, 2, 3, 4].map((n) => ({ visitorId: "v" + n, sessionId: "s" + n, eventType: "page_view" }));
+  eq(shapeAnalyticsEvents(many, { userAgent: CHROME_UA }, 2).length, 2, "batch respects the limit");
+}
+eq(shapeAnalyticsEvents(null).length, 0, "non-array batch → empty");
+eq(shapeAnalyticsEvents(undefined).length, 0, "undefined batch → empty");
+
+console.log(`attribution (T1+T6): ${pass} checks passed, ${fail} failed`);
 if (fail > 0) {
   console.error("FAILURES:\n" + fails.join("\n"));
   process.exit(1);

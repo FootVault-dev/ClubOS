@@ -465,3 +465,209 @@ export function resolveConversionAttribution(signals: ConversionSignals): Resolv
   // 4. Unattributed.
   return { method: "unattributed", channel: "direct", detail: null };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Collector ingest (T6) — bot detection + row shaping
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The public collector (`/api/public/analytics/event` + `/batch`) accepts loosely
+// typed payloads straight off the wire from analytics.js. Everything below is pure
+// so it can be unit-tested without a DB: shape a raw event into a row ready for
+// `db.insert(analyticsEvents)`, running classifyTouch() at ingest and flagging
+// obvious bots. Malformed rows (missing/illegal ids) return null → silently dropped.
+
+/**
+ * isbot-style user-agent patterns. Basic but covers the common search crawlers,
+ * link unfurlers / social preview fetchers, headless browsers, automation drivers,
+ * and CLI HTTP clients. Case-insensitive. The goal is to FLAG (not perfectly block)
+ * obvious non-human traffic so reporting can exclude it — analytics rows are still
+ * stored, just marked is_bot. Deliberately avoids a bare `bot` substring so device
+ * brands like "CUBOT" are not false-flagged; uses `\bbot\b` for the generic case.
+ */
+const BOT_UA_RE =
+  /(googlebot|bingbot|bingpreview|slurp|duckduckbot|baiduspider|yandex|sogou|exabot|facebookexternalhit|facebot|meta-externalagent|ia_archiver|applebot|petalbot|semrushbot|ahrefsbot|mj12bot|dotbot|dataforseo|blexbot|gptbot|ccbot|claudebot|anthropic-ai|perplexitybot|amazonbot|bytespider|twitterbot|linkedinbot|pinterest|slackbot|discordbot|telegrambot|redditbot|whatsapp\/|skypeuripreview|embedly|quora link preview|vkshare|google-inspectiontool|chrome-lighthouse|headless|phantomjs|electron\/|puppeteer|playwright|selenium|webdriver|python-requests|python-urllib|aiohttp|httpx|go-http-client|okhttp|java\/|apache-httpclient|curl\/|wget\/|libwww-perl|scrapy|node-fetch|axios\/|guzzlehttp|postmanruntime|insomnia|uptimerobot|pingdom|statuscake|site24x7|monitoring|\bbot\b|\bcrawler\b|\bspider\b|\bscraper\b)/i;
+
+/**
+ * True when a user-agent looks like a bot/crawler/automation. A missing or empty UA
+ * is treated as a bot (real browsers always send one; beacon/fetch from analytics.js
+ * always include it), as is an absurdly long UA.
+ */
+export function isBotUserAgent(ua: unknown): boolean {
+  if (typeof ua !== "string") return true;
+  const s = ua.trim();
+  if (!s || s.length > 2048) return true;
+  return BOT_UA_RE.test(s);
+}
+
+export interface BotSignals {
+  /** The request User-Agent header. */
+  userAgent?: string | null;
+  /** Client-supplied navigator.webdriver hint (true when automation drives the page). */
+  webdriver?: unknown;
+}
+
+/** Combine the UA blocklist with the client's navigator.webdriver hint. */
+export function detectBot(signals: BotSignals): boolean {
+  if (signals.webdriver === true || signals.webdriver === "true") return true;
+  return isBotUserAgent(signals.userAgent);
+}
+
+/** Event types that carry the full attribution bundle → classifyTouch() runs on them. */
+export const TOUCH_EVENT_TYPES = new Set<string>(["session_start", "page_view"]);
+
+/** A raw analytics_events row shaped for insertion (drizzle camelCase column keys). */
+export interface ShapedAnalyticsEvent {
+  visitorId: string;
+  sessionId: string;
+  eventType: string;
+  page: string | null;
+  referrer: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  device: string | null;
+  browser: string | null;
+  screenWidth: number | null;
+  campSlug: string | null;
+  fbclid: string | null;
+  gclid: string | null;
+  clickId: string | null;
+  fbp: string | null;
+  fbc: string | null;
+  channel: string | null;
+  channelRaw: string | null;
+  landingUrl: string | null;
+  isBot: boolean;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface ShapeContext {
+  /** The request User-Agent header (shared across a batch of events). */
+  userAgent?: string | null;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** cleanMacroValue + a length clamp: nulls macros/empties, truncates over `max`. */
+function clampText(value: unknown, max: number): string | null {
+  const c = cleanMacroValue(value);
+  if (c === null) return null;
+  return c.length > max ? c.slice(0, max) : c;
+}
+
+/** Coerce a value to a finite integer, or null. */
+function safeInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return Math.trunc(n);
+  }
+  return null;
+}
+
+/**
+ * Shape one raw collector payload into an analytics_events row, or null when it is
+ * malformed (missing/illegal visitorId, sessionId, or eventType → silently dropped).
+ * Runs classifyTouch() on touch-bearing events (session_start / page_view), cleans
+ * macro values off every stored field, flags bots, and stashes fields that have no
+ * dedicated column (legacyVid for stitching, utmContent/utmTerm) into metadata.
+ */
+export function shapeAnalyticsEvent(raw: unknown, ctx?: ShapeContext): ShapedAnalyticsEvent | null {
+  if (!isPlainObject(raw)) return null;
+
+  // Required identifiers — malformed rows are silently dropped.
+  const visitorId = validExternalId(raw.visitorId);
+  const sessionId = validExternalId(raw.sessionId);
+  if (!visitorId || !sessionId) return null;
+  const eventType = clampText(raw.eventType, 64);
+  if (!eventType) return null;
+
+  const utmSource = clampText(raw.utmSource, 256);
+  const utmMedium = clampText(raw.utmMedium, 256);
+  const utmCampaign = clampText(raw.utmCampaign, 256);
+  const utmContent = clampText(raw.utmContent, 256);
+  const utmTerm = clampText(raw.utmTerm, 256);
+  const referrer = clampText(raw.referrer, 2048);
+  const landingUrl = clampText(raw.landingUrl, 2048);
+
+  // External ids get the full hygiene pass (illegal-id blocklist + macro + length).
+  const fbclid = validExternalId(raw.fbclid);
+  const gclid = validExternalId(raw.gclid);
+  const clickId = validExternalId(raw.clickId);
+  const fbp = clampText(raw.fbp, 512);
+  const fbc = clampText(raw.fbc, 512);
+
+  // Classify the touch at ingest — only the touch-bearing events carry the full
+  // attribution bundle (fbclid/gclid/clickId), so only they get a channel.
+  let channel: string | null = null;
+  let channelRaw: string | null = null;
+  if (TOUCH_EVENT_TYPES.has(eventType)) {
+    const touch = classifyTouch({
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      utmContent,
+      utmTerm,
+      clickId,
+      fbclid,
+      gclid,
+      referrer,
+      landingUrl,
+    });
+    channel = touch.channel;
+    channelRaw = touch.channelRaw;
+  }
+
+  // Preserve any client metadata verbatim (the overview endpoint reads
+  // trafficSource / isNewVisitor / seconds / maxPercent off it), then add fields
+  // that have no dedicated column so downstream stitching/reporting can reach them.
+  let metadata: Record<string, unknown> | null = isPlainObject(raw.metadata) ? { ...raw.metadata } : null;
+  const extras: Record<string, unknown> = {};
+  const legacyVid = validExternalId(raw.legacyVid);
+  if (legacyVid) extras.legacyVid = legacyVid;
+  if (utmContent) extras.utmContent = utmContent;
+  if (utmTerm) extras.utmTerm = utmTerm;
+  if (Object.keys(extras).length > 0) metadata = { ...(metadata ?? {}), ...extras };
+
+  return {
+    visitorId,
+    sessionId,
+    eventType,
+    page: clampText(raw.page, 1024),
+    referrer,
+    utmSource,
+    utmMedium,
+    utmCampaign,
+    device: clampText(raw.device, 32),
+    browser: clampText(raw.browser, 64),
+    screenWidth: safeInt(raw.screenWidth),
+    campSlug: clampText(raw.campSlug, 256),
+    fbclid,
+    gclid,
+    clickId,
+    fbp,
+    fbc,
+    channel,
+    channelRaw,
+    landingUrl,
+    isBot: detectBot({ userAgent: ctx?.userAgent, webdriver: raw.webdriver }),
+    metadata,
+  };
+}
+
+/**
+ * Shape a batch of raw payloads, dropping malformed rows and capping at `limit`
+ * (default 50). Non-array input → empty array.
+ */
+export function shapeAnalyticsEvents(rawEvents: unknown, ctx?: ShapeContext, limit = 50): ShapedAnalyticsEvent[] {
+  if (!Array.isArray(rawEvents)) return [];
+  const out: ShapedAnalyticsEvent[] = [];
+  for (const raw of rawEvents) {
+    if (out.length >= limit) break;
+    const shaped = shapeAnalyticsEvent(raw, ctx);
+    if (shaped) out.push(shaped);
+  }
+  return out;
+}

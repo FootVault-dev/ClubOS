@@ -26,6 +26,7 @@ import { buildCICSchedule } from "./tournament-schedule";
 import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
+import { shapeAnalyticsEvent, shapeAnalyticsEvents } from "@shared/attribution";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
 import multer from "multer";
@@ -5889,7 +5890,11 @@ export async function registerRoutes(
 
   app.post("/api/public/analytics/event", async (req, res) => {
     try {
-      await db.insert(analyticsEvents).values(req.body);
+      // Shape at ingest: classify touch, clean macros, flag bots (T6). A malformed
+      // payload (missing/illegal ids) shapes to null and is silently dropped.
+      const shaped = shapeAnalyticsEvent(req.body, { userAgent: req.headers["user-agent"] });
+      if (!shaped) return res.json({ ok: false, dropped: true });
+      await db.insert(analyticsEvents).values(shaped);
       res.json({ ok: true });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -5899,14 +5904,13 @@ export async function registerRoutes(
   app.post("/api/public/analytics/batch", async (req, res) => {
     try {
       const { events } = req.body || {};
-      if (!events || !Array.isArray(events) || events.length === 0) {
-        return res.json({ ok: true });
+      // Shape + drop malformed rows + cap at 50 (T6). Classifies touch on
+      // session_start / page_view, cleans macro values, flags bots.
+      const shaped = shapeAnalyticsEvents(events, { userAgent: req.headers["user-agent"] }, 50);
+      if (shaped.length > 0) {
+        await db.insert(analyticsEvents).values(shaped);
       }
-      const validEvents = events.filter((e: any) => e.visitorId && e.sessionId && e.eventType).slice(0, 50);
-      if (validEvents.length > 0) {
-        await db.insert(analyticsEvents).values(validEvents);
-      }
-      res.json({ ok: true, count: validEvents.length });
+      res.json({ ok: true, count: shaped.length });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
