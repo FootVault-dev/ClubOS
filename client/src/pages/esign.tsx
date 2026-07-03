@@ -221,22 +221,25 @@ function NewDocDialog({ onClose, onDone, onDoneNative, onErr }: { onClose: () =>
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader><DialogTitle>New document for signature</DialogTitle></DialogHeader>
-        <div className="space-y-4 py-1">
+        <div className="space-y-4 py-1 min-w-0 overflow-hidden">
           {templates.length > 0 && (
             <button
               onClick={() => setMode("template")}
-              className="w-full text-left rounded-xl border border-amber-400/30 bg-amber-400/5 hover:bg-amber-400/10 transition-colors p-3.5 flex items-center gap-3"
+              className="w-full min-w-0 text-left rounded-xl border border-amber-400/30 bg-amber-400/5 hover:bg-amber-400/10 transition-colors p-3.5 flex items-center gap-3 overflow-hidden"
             >
               <div className="w-9 h-9 rounded-lg bg-amber-400/15 text-amber-400 flex items-center justify-center shrink-0">
                 <FileSignature className="w-4.5 h-4.5" />
               </div>
-              <div className="min-w-0">
+              {/* No nowrap/truncate here: inside the grid-based DialogContent an
+                  unwrappable line inflates the column's min-content width and
+                  pushes EVERY field past the dialog edge. Let it wrap. */}
+              <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold">Use an agreement template</div>
-                <div className="text-xs text-muted-foreground truncate">
+                <div className="text-xs text-muted-foreground">
                   {templates.map((t) => t.name).join(" · ")} — branded web page, no PDF needed
                 </div>
               </div>
-              <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto shrink-0" />
+              <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
             </button>
           )}
           <div>
@@ -352,7 +355,7 @@ function FromTemplateDialog({ templates, onBack, onClose, onDone, onErr }: {
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><FileSignature className="w-5 h-5 text-amber-400" /> New from template</DialogTitle></DialogHeader>
-        <div className="space-y-4 py-1">
+        <div className="space-y-4 py-1 min-w-0 overflow-hidden">
           {templates.length > 1 && (
             <div>
               <label className="text-xs text-muted-foreground">Template</label>

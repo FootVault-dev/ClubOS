@@ -5,7 +5,7 @@
 // parent/guardian co-signature block. The archived PDF is typeset server-side
 // from the same content JSON this page renders.
 // Legal basis: Contract and Commercial Law Act 2017 (Part 4).
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { SignaturePad } from "@/components/signature-pad";
 import { Loader2, CheckCircle2, ShieldCheck, AlertTriangle, X, Lock, Users } from "lucide-react";
 
@@ -36,6 +36,84 @@ export interface NativeSignData {
   native: NativePayload;
 }
 
+interface BrandTokens {
+  bg: string; panel: string; border: string; gold: string; goldDeep: string;
+  paper: string; ink: string; orgLabel: string; logoUrl: string | null;
+}
+const FONT = "'Inter Tight', Inter, system-ui, -apple-system, sans-serif";
+
+// Page chrome — MODULE level so component identity is stable across renders.
+// Defining these inside NativeSign remounted the whole tree on every state
+// change: inputs lost focus (mobile keyboard closed after each character) and
+// the signature canvas was wiped. Same bug sign.tsx fixed on 2026-07-03 —
+// never define components inside a component.
+function Shell({ B, children }: { B: BrandTokens; children: ReactNode }) {
+  return (
+    <div className="min-h-screen" style={{ background: B.bg, color: "#fff", fontFamily: FONT }}>
+      <div className="h-1.5" style={{ background: `linear-gradient(90deg, ${B.goldDeep}, ${B.gold}, ${B.goldDeep})` }} />
+      {children}
+      <footer className="max-w-3xl mx-auto px-5 pb-10 pt-6 text-center text-[11px]" style={{ color: "rgba(255,255,255,0.32)" }}>
+        <Lock className="w-3 h-3 inline-block mr-1 -mt-0.5" />
+        Secure electronic signing · Legally valid under the Contract and Commercial Law Act 2017 (NZ) · {B.orgLabel} × ClubOS e-Sign
+      </footer>
+    </div>
+  );
+}
+
+function StateCard({ B, icon, title, sub }: { B: BrandTokens; icon: ReactNode; title: string; sub?: string }) {
+  return (
+    <Shell B={B}>
+      <div className="max-w-md mx-auto px-5 py-28 text-center">
+        {B.logoUrl && <img src={B.logoUrl} alt={B.orgLabel} className="w-16 h-16 mx-auto mb-6 rounded-full" />}
+        <div className="mx-auto mb-4">{icon}</div>
+        <h1 className="text-xl font-bold">{title}</h1>
+        {sub && <p className="mt-2 text-sm" style={{ color: "rgba(255,255,255,0.55)" }}>{sub}</p>}
+      </div>
+    </Shell>
+  );
+}
+
+// Signature capture with an explicit confirm step: draw (multiple strokes
+// fine) → "Confirm signature" → locked preview + Redo. The committed value
+// only reaches the parent on confirm, so the signer always SEES what was
+// captured — no more "I signed but the box looks blank".
+function SignatureBox({ B, value, onChange, height = 170 }: {
+  B: BrandTokens; value: string | null; onChange: (v: string | null) => void; height?: number;
+}) {
+  const [pending, setPending] = useState<string | null>(null);
+  if (value) {
+    return (
+      <div>
+        <div className="rounded-xl border bg-white flex items-center justify-center overflow-hidden" style={{ borderColor: "#cfc7b2", height }}>
+          <img src={value} alt="Your signature" className="max-h-full max-w-full object-contain p-2" />
+        </div>
+        <div className="flex items-center justify-between mt-2">
+          <span className="text-[12.5px] font-semibold inline-flex items-center gap-1.5" style={{ color: "#2e7d4f" }}>
+            <CheckCircle2 className="w-4 h-4" /> Signature captured
+          </span>
+          <button type="button" onClick={() => { onChange(null); setPending(null); }} className="text-[12.5px] underline" style={{ color: "#8d8774" }}>
+            Redo signature
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <SignaturePad onChange={setPending} height={height} />
+      <button
+        type="button"
+        disabled={!pending}
+        onClick={() => pending && onChange(pending)}
+        className="mt-2 w-full h-11 rounded-xl font-bold text-[14px] transition-opacity disabled:opacity-40"
+        style={{ background: pending ? B.gold : "#e8e1cf", color: "#17150e" }}
+      >
+        {pending ? "Confirm signature" : "Draw your signature above, then confirm"}
+      </button>
+    </div>
+  );
+}
+
 const ageFromDob = (iso: string): number | null => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
   if (!m) return null;
@@ -52,7 +130,7 @@ const fmtDobNz = (iso: string): string => {
 
 export function NativeSign({ token, data }: { token: string; data: NativeSignData }) {
   const n = data.native;
-  const B = {
+  const B: BrandTokens = {
     bg: n.brand?.bg || "#0a0a0a",
     panel: n.brand?.panel || "#141414",
     border: n.brand?.border || "#2a2a2a",
@@ -63,7 +141,6 @@ export function NativeSign({ token, data }: { token: string; data: NativeSignDat
     orgLabel: n.brand?.orgLabel || data.orgName,
     logoUrl: n.brand?.logoUrl || null,
   };
-  const FONT = "'Inter Tight', Inter, system-ui, -apple-system, sans-serif";
   const isPrimary = n.role === "primary";
 
   // form state (primary signer only)
@@ -168,38 +245,16 @@ export function NativeSign({ token, data }: { token: string; data: NativeSignDat
     }
   };
 
-  // ── chrome ────────────────────────────────────────────────────────────────
-  const Shell = ({ children }: { children: React.ReactNode }) => (
-    <div className="min-h-screen" style={{ background: B.bg, color: "#fff", fontFamily: FONT }}>
-      <div className="h-1.5" style={{ background: `linear-gradient(90deg, ${B.goldDeep}, ${B.gold}, ${B.goldDeep})` }} />
-      {children}
-      <footer className="max-w-3xl mx-auto px-5 pb-10 pt-6 text-center text-[11px]" style={{ color: "rgba(255,255,255,0.32)" }}>
-        <Lock className="w-3 h-3 inline-block mr-1 -mt-0.5" />
-        Secure electronic signing · Legally valid under the Contract and Commercial Law Act 2017 (NZ) · {B.orgLabel} × ClubOS e-Sign
-      </footer>
-    </div>
-  );
-  const StateCard = ({ icon, title, sub }: { icon: React.ReactNode; title: string; sub?: string }) => (
-    <Shell>
-      <div className="max-w-md mx-auto px-5 py-28 text-center">
-        {B.logoUrl && <img src={B.logoUrl} alt={B.orgLabel} className="w-16 h-16 mx-auto mb-6 rounded-full" />}
-        <div className="mx-auto mb-4">{icon}</div>
-        <h1 className="text-xl font-bold">{title}</h1>
-        {sub && <p className="mt-2 text-sm" style={{ color: "rgba(255,255,255,0.55)" }}>{sub}</p>}
-      </div>
-    </Shell>
-  );
-
-  if (declined) return <StateCard icon={<X className="w-9 h-9 mx-auto" style={{ color: "rgba(255,255,255,0.4)" }} />} title="Signing declined" sub={`We've let ${B.orgLabel} know you declined to sign.`} />;
-  if (done) return <StateCard icon={<CheckCircle2 className="w-11 h-11 mx-auto text-emerald-400" />} title={`Signed — thank you, ${signatureName.split(" ")[0] || data.signer.name}`} sub={done.allComplete ? "All parties have now signed. Your copy of the completed agreement is on its way to your inbox." : "Your signature has been recorded. You'll receive the completed agreement by email once it's counter-signed."} />;
-  if (data.documentStatus === "voided") return <StateCard icon={<AlertTriangle className="w-9 h-9 mx-auto text-amber-400" />} title="No longer available" sub="This document has been voided by the sender." />;
-  if (data.signer.status === "signed") return <StateCard icon={<CheckCircle2 className="w-10 h-10 mx-auto text-emerald-400" />} title="You've already signed" sub="Thanks — nothing more to do. Your copy will arrive by email once everyone has signed." />;
+  if (declined) return <StateCard B={B} icon={<X className="w-9 h-9 mx-auto" style={{ color: "rgba(255,255,255,0.4)" }} />} title="Signing declined" sub={`We've let ${B.orgLabel} know you declined to sign.`} />;
+  if (done) return <StateCard B={B} icon={<CheckCircle2 className="w-11 h-11 mx-auto text-emerald-400" />} title={`Signed — thank you, ${signatureName.split(" ")[0] || data.signer.name}`} sub={done.allComplete ? "All parties have now signed. Your copy of the completed agreement is on its way to your inbox." : "Your signature has been recorded. You'll receive the completed agreement by email once it's counter-signed."} />;
+  if (data.documentStatus === "voided") return <StateCard B={B} icon={<AlertTriangle className="w-9 h-9 mx-auto text-amber-400" />} title="No longer available" sub="This document has been voided by the sender." />;
+  if (data.signer.status === "signed") return <StateCard B={B} icon={<CheckCircle2 className="w-10 h-10 mx-auto text-emerald-400" />} title="You've already signed" sub="Thanks — nothing more to do. Your copy will arrive by email once everyone has signed." />;
 
   const input = "w-full h-12 rounded-xl border bg-white px-3.5 text-[16px] outline-none transition-shadow focus:ring-2";
   const inputStyle = { borderColor: "#ddd6c6", color: B.ink, ["--tw-ring-color" as any]: `${B.gold}55` };
 
   return (
-    <Shell>
+    <Shell B={B}>
       {/* Hero */}
       <header className="max-w-3xl mx-auto px-5 pt-10 pb-8 text-center">
         {B.logoUrl && <img src={B.logoUrl} alt={B.orgLabel} className="w-[76px] h-[76px] mx-auto mb-5 rounded-full" />}
@@ -318,7 +373,7 @@ export function NativeSign({ token, data }: { token: string; data: NativeSignDat
                 </div>
                 <div className="mt-4">
                   <label className="block text-[12px] font-semibold mb-1.5" style={{ color: "#5c5748" }}>Guardian signature <span style={{ color: B.goldDeep }}>*</span></label>
-                  <SignaturePad onChange={setGuardianSig} height={140} />
+                  <SignatureBox B={B} value={guardianSig} onChange={setGuardianSig} height={140} />
                 </div>
               </section>
             )}
@@ -381,7 +436,7 @@ export function NativeSign({ token, data }: { token: string; data: NativeSignDat
                   <label className="block text-[12px] font-semibold mb-1.5" style={{ color: "#5c5748" }}>
                     Draw your signature — finger on your phone, mouse or trackpad on a computer <span style={{ color: B.goldDeep }}>*</span>
                   </label>
-                  <SignaturePad onChange={setSigImage} height={170} />
+                  <SignatureBox B={B} value={sigImage} onChange={setSigImage} height={170} />
                 </div>
               </div>
             </section>
