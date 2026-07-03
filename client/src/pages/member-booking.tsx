@@ -17,6 +17,7 @@ import {
   ChevronLeft, ChevronRight, Shield, ScrollText, Send, Clock,
 } from "lucide-react";
 import { FacilityCarousel } from "@/components/FacilityCarousel";
+import HdyhauCard from "@/components/hdyhau-card";
 import { cellsOverlap, QUARTER_POSITIONS, type FieldSize } from "@shared/field-cells";
 import { USC_WAIVER_SECTIONS, USC_WAIVER_VERSION } from "@shared/usc-waiver";
 
@@ -343,6 +344,9 @@ function MemberRequestFlow({ resolved }: { resolved: ResolveResp }) {
             <SummaryRow label="Facility" value={`${facility.name}${supportsSizes && effectiveSize !== "full" ? ` (${fieldSizeLabel(effectiveSize, wantPos)})` : ""}`} brand={brand} />
             <SummaryRow label="Date" value={fmtDateLong(date)} brand={brand} />
             <SummaryRow label="Time" value={`${fmtTime(startTime)} – ${fmtTime(endTime)}`} brand={brand} />
+          </div>
+          <div className="mb-8 text-left">
+            <HdyhauCard type="booking_request" id={submittedId} variant="dark" accent={brand} />
           </div>
           <Button
             onClick={() => window.location.reload()}

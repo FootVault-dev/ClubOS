@@ -410,6 +410,31 @@ export function mapHdyhauToChannel(answer: unknown): string {
   return "other";
 }
 
+/**
+ * The self-report options shown on success screens (T17 HDYHAU capture). Order
+ * is display order. Each `id` is stored verbatim as the conversion row's
+ * self-report value and MUST resolve through `mapHdyhauToChannel` to `channel`
+ * (guarded by `script/test-attribution-hdyhau.ts`) so the reporting waterfall
+ * classifies it consistently.
+ */
+export const HDYHAU_OPTIONS = [
+  { id: "friend_teammate", label: "Friend or Teammate", channel: "referral" },
+  { id: "facebook", label: "Facebook", channel: "facebook" },
+  { id: "instagram", label: "Instagram", channel: "instagram" },
+  { id: "google", label: "Google", channel: "google" },
+  { id: "email", label: "Email", channel: "email" },
+  { id: "whatsapp", label: "WhatsApp", channel: "whatsapp" },
+  { id: "poster_qr", label: "Poster or QR code", channel: "qr" },
+  { id: "other", label: "Other", channel: "other" },
+] as const;
+
+/** A valid HDYHAU option id, or null. Used server-side to reject junk values. */
+export function normalizeHdyhauAnswer(raw: unknown): string | null {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (!s || s.length > 200) return null;
+  return s;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Conversion attribution waterfall
 // ─────────────────────────────────────────────────────────────────────────────

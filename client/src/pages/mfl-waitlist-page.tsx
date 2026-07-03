@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/format";
 import { initPixel, trackEvent } from "@/lib/meta-pixel";
 import { ArrowLeft, ArrowRight, Loader2, CheckCircle2, Clock, BellRing } from "lucide-react";
+import HdyhauCard from "@/components/hdyhau-card";
 
 // MFL premium black + gold brand (matches the landing + register pages).
 const BRAND = {
@@ -26,6 +27,7 @@ export default function MflWaitlistPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [waitlistId, setWaitlistId] = useState<number | null>(null);
 
   const [teamName, setTeamName] = useState("");
   const [contactName, setContactName] = useState("");
@@ -80,6 +82,7 @@ export default function MflWaitlistPage() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.message || "Something went wrong — please try again.");
       trackEvent("Lead", { content_name: PIXEL_CONTENT, content_category: "League Waitlist", currency: "NZD" });
+      if (typeof body.id === "number") setWaitlistId(body.id);
       setDone(true);
       window.scrollTo({ top: 0 });
     } catch (err: any) {
@@ -123,6 +126,11 @@ export default function MflWaitlistPage() {
             <p className="mt-3 max-w-md mx-auto" style={{ color: BRAND.muted }}>
               <strong style={{ color: BRAND.white }}>{teamName}</strong> is on the waitlist. Spots open when a team drops out or we add capacity — and the waitlist gets <strong style={{ color: BRAND.gold }}>first call, in order</strong>. We've emailed you a confirmation.
             </p>
+            {waitlistId && (
+              <div className="max-w-md mx-auto mt-8">
+                <HdyhauCard type="waitlist" id={waitlistId} variant="dark" accent={BRAND.gold} />
+              </div>
+            )}
             <Link href={`/league/${slug}`}>
               <a className="inline-flex items-center gap-2 mt-8 px-8 py-3.5 rounded-full font-bold" style={{ background: BRAND.gold, color: BRAND.black }}>
                 See nights with spots left <ArrowRight className="w-4 h-4" />

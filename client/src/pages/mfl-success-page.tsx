@@ -7,6 +7,7 @@ import { CheckCircle2, Mail, Calendar, Trophy, Loader2, CreditCard } from "lucid
 import { trackEvent } from "@/lib/meta-pixel";
 import { purchaseEventId } from "@shared/meta-events";
 import { formatCurrency } from "@/lib/format";
+import HdyhauCard from "@/components/hdyhau-card";
 
 const BRAND = {
   black: "#000000", bg: "#0a0a0a", card: "#141414", cardSoft: "#1c1c1c", border: "#2a2a2a",
@@ -120,6 +121,8 @@ export default function MflSuccessPage() {
                 <p className="text-sm mt-0.5" style={{ color: BRAND.muted }}>Check {reg?.captainEmail || "your inbox"} for the details. We'll be in touch with your fixtures before kick-off.</p>
               </div>
             </div>
+
+            {reg?.id && <HdyhauCard type="registration" id={reg.id} variant="dark" accent={BRAND.gold} answered={!!reg?.referralSource} />}
 
             <Link href={`/league/${slug}`}>
               <a className="inline-block w-full py-3.5 rounded-full font-bold" style={{ background: BRAND.gold, color: BRAND.black }}>Back to the league</a>

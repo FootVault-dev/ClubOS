@@ -28,7 +28,7 @@ import { buildCICSchedule } from "./tournament-schedule";
 import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
-import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS } from "@shared/attribution";
+import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
 import { renderTrackerScript } from "@shared/tracker-script";
 import { CID_COOKIE, CID_MAX_AGE_SECONDS, VID_COOKIE, VID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId, isValidClickId, parseCookieHeader } from "./attribution-cookies";
@@ -10804,6 +10804,40 @@ export async function registerRoutes(
       res.json({ ok: true });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // T17 — generalized self-reported "how did you hear about us?" (HDYHAU) capture.
+  // One entry point for the reusable success-screen card: writes the answer onto
+  // the correct conversion row. Registration/camp reuse the existing
+  // `referral_source` column; the newer lead tables use `hdyhau` (T3). Optional
+  // and best-effort — a failed self-report must NEVER surface an error that
+  // discourages the tap, so anything unexpected returns 200 { ok: false }.
+  app.post("/api/public/hdyhau", async (req, res) => {
+    try {
+      const type = String(req.body?.type || "").trim();
+      const id = parseInt(String(req.body?.id ?? ""), 10);
+      const value = normalizeHdyhauAnswer(req.body?.value);
+      if (!Number.isFinite(id) || id <= 0 || !value) {
+        return res.status(400).json({ message: "type, id and value are required" });
+      }
+      switch (type) {
+        case "registration": // MFL team + camp + class all live in `registrations`
+          await storage.updateRegistration(id, { referralSource: value });
+          break;
+        case "waitlist":
+          await storage.updateLeagueWaitlistEntry(id, { hdyhau: value });
+          break;
+        case "booking_request":
+          await db.update(bookingRequests).set({ hdyhau: value }).where(eq(bookingRequests.id, id));
+          break;
+        default:
+          return res.status(400).json({ message: "Unknown conversion type" });
+      }
+      res.json({ ok: true });
+    } catch (error: any) {
+      console.error("[HDYHAU] capture failed:", error?.message || error);
+      res.status(200).json({ ok: false });
     }
   });
 
