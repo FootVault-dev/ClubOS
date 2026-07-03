@@ -1173,6 +1173,17 @@ export const analyticsEvents = pgTable("analytics_events", {
   browser: text("browser"),
   screenWidth: integer("screen_width"),
   campSlug: text("camp_slug"),
+  // ── AttributionOS (additive, T2) ──────────────────────────────────────────
+  fbclid: text("fbclid"),               // Facebook click id (present on organic clicks too)
+  gclid: text("gclid"),                 // Google Ads click id
+  clickId: text("click_id"),            // our first-party short-link click id (?ci=)
+  fbp: text("fbp"),                     // Meta browser pixel cookie (_fbp)
+  fbc: text("fbc"),                     // Meta click cookie (_fbc)
+  personId: integer("person_id"),       // stitched identity (persons.id), NULL until known
+  channel: text("channel"),             // classifyTouch() canonical channel
+  channelRaw: text("channel_raw"),      // raw utm_source / referrer before normalisation
+  landingUrl: text("landing_url"),      // full URL of the landing page for this touch
+  isBot: boolean("is_bot").notNull().default(false),
   metadata: jsonb("metadata"),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
 });
@@ -2799,3 +2810,54 @@ export const esignFields = pgTable("esign_fields", {
 export const insertEsignFieldSchema = createInsertSchema(esignFields).omit({ id: true, createdAt: true });
 export type InsertEsignField = z.infer<typeof insertEsignFieldSchema>;
 export type EsignField = typeof esignFields.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AttributionOS — persons / identities / merges (T2, migration file 1)
+// The attribution "person" is always the PARENT/payer — never a child (Hard Rule 4).
+// A person is the identity spine that visitor ids, emails and phones resolve to.
+// Merge rules (PostHog verbatim): anonymous→identified merges freely; two already-
+// identified persons are NEVER auto-merged (logged to person_merges instead).
+// ═══════════════════════════════════════════════════════════════════════════
+export const persons = pgTable("persons", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  primaryEmail: text("primary_email"),   // normalised lowercase; nullable until identified
+  primaryPhone: text("primary_phone"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPersonSchema = createInsertSchema(persons).omit({ id: true, createdAt: true });
+export type InsertPerson = z.infer<typeof insertPersonSchema>;
+export type Person = typeof persons.$inferSelect;
+
+// Every known handle for a person: an email, a phone, or a visitor id (cookie).
+// unique(kind, value) — the same handle can only ever point at one person.
+export const personIdentities = pgTable("person_identities", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),  // 'email' | 'phone' | 'visitor'
+  value: text("value").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  kindValueUnq: uniqueIndex("person_identities_kind_value_unq").on(t.kind, t.value),
+  personIdx: uniqueIndex("person_identities_person_kind_value_unq").on(t.personId, t.kind, t.value),
+}));
+
+export const insertPersonIdentitySchema = createInsertSchema(personIdentities).omit({ id: true, createdAt: true });
+export type InsertPersonIdentity = z.infer<typeof insertPersonIdentitySchema>;
+export type PersonIdentity = typeof personIdentities.$inferSelect;
+
+// Audit trail for every merge decision — including the ones we REFUSE to make
+// (reason 'blocked_auto_merge' when two already-identified persons collide).
+export const personMerges = pgTable("person_merges", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  winnerId: integer("winner_id").notNull(),  // person kept (not FK — losers may be deleted)
+  loserId: integer("loser_id").notNull(),    // person merged away (or would-be)
+  reason: text("reason").notNull(),          // e.g. 'anon_to_identified' | 'blocked_auto_merge'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPersonMergeSchema = createInsertSchema(personMerges).omit({ id: true, createdAt: true });
+export type InsertPersonMerge = z.infer<typeof insertPersonMergeSchema>;
+export type PersonMerge = typeof personMerges.$inferSelect;
