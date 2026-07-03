@@ -68,11 +68,21 @@ export function securityAlert(topicKey: string, subject: string, detailHtml: str
 }
 
 // ── Brute-force protection (invalid/expired keys, per IP) ────────────────────
+// The failure LOG is the authoritative cross-machine counter (the app runs on
+// multiple Fly machines — per-machine memory alone would let an attacker split
+// attempts across machines and never trip the threshold). Memory holds the
+// local fast-path counts and the confirmed-block cache.
 const ipFailures = new Map<string, number[]>();
 const ipFailureLogCount = new Map<string, { hourStart: number; count: number }>();
+const blockedIps = new Map<string, number>(); // ip → blocked-until (epoch ms)
 
 export function isIpBlocked(ip: string): boolean {
   const now = Date.now();
+  const until = blockedIps.get(ip);
+  if (until) {
+    if (now < until) return true;
+    blockedIps.delete(ip);
+  }
   const hits = (ipFailures.get(ip) || []).filter((t) => now - t < BRUTE_FORCE_WINDOW_MS);
   ipFailures.set(ip, hits);
   return hits.length >= BRUTE_FORCE_MAX_FAILURES;
@@ -89,23 +99,36 @@ export function recordAuthFailure(req: Request, presentedKey: string) {
   const cap = ipFailureLogCount.get(ip);
   const hourStart = Math.floor(now / 3_600_000);
   const count = cap && cap.hourStart === hourStart ? cap.count : 0;
-  if (count < FAILURE_LOG_CAP_PER_IP_PER_HOUR) {
-    ipFailureLogCount.set(ip, { hourStart, count: count + 1 });
-    db.insert(apiAuthFailures).values({
-      ip,
-      path: (req.originalUrl || req.path || "").slice(0, 500),
-      presentedPrefix: presentedKey.slice(0, 12),
-    }).catch(() => {});
-  }
+  if (count >= FAILURE_LOG_CAP_PER_IP_PER_HOUR) return;
+  ipFailureLogCount.set(ip, { hourStart, count: count + 1 });
 
-  if (hits.length === BRUTE_FORCE_MAX_FAILURES) {
-    securityAlert(
-      `bruteforce:${ip}`,
-      `Possible API key brute-force from ${ip}`,
-      `<p><b>${BRUTE_FORCE_MAX_FAILURES} invalid API keys</b> were presented from IP <b>${ip}</b>
-       within 10 minutes. That IP is now blocked from key auth for the rest of the window.</p>`
-    );
-  }
+  // Insert, then check the CROSS-MACHINE failure count for this IP. If it has
+  // crossed the threshold, cache the block locally and alert. Each machine
+  // learns of the block on the next failure it handles, so a distributed
+  // attacker gets at most a couple of extra 401s before every machine denies.
+  db.insert(apiAuthFailures).values({
+    ip,
+    path: (req.originalUrl || req.path || "").slice(0, 500),
+    presentedPrefix: presentedKey.slice(0, 12),
+  })
+    .then(() => db.execute(sql`
+      SELECT COUNT(*)::int AS n FROM api_auth_failures
+      WHERE ip = ${ip} AND created_at > now() - interval '10 minutes'
+    `))
+    .then(({ rows }) => {
+      const n = Number((rows[0] as any)?.n || 0);
+      if (n >= BRUTE_FORCE_MAX_FAILURES) {
+        blockedIps.set(ip, Date.now() + BRUTE_FORCE_WINDOW_MS);
+        securityAlert(
+          `bruteforce:${ip}`,
+          `Possible API key brute-force from ${ip}`,
+          `<p><b>${n} invalid API keys</b> were presented from IP <b>${ip}</b>
+           within 10 minutes. That IP is now blocked from the external API for the
+           rest of the window.</p>`
+        );
+      }
+    })
+    .catch(() => {});
 }
 
 // ── Per-key rate limiting (DB-authoritative, memory fast-path) ───────────────

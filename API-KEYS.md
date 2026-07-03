@@ -31,10 +31,17 @@ extend it safely.
 5. **Rate limit 240 req/min/key**, counted from the audit log — exact across
    machines and deploys (in-memory fast-path only short-circuits repeat offenders).
 6. **Brute-force protection**: 20 invalid keys from one IP in 10 min → that IP
-   is blocked for the window and an alert email goes out.
+   is blocked for the window and an alert email goes out. The count comes from
+   `api_auth_failures` (cross-machine), so splitting attempts across Fly
+   machines doesn't evade it — per-machine memory only caches the block.
+   Testing it will block YOUR IP for 10 minutes, which is why it's not in
+   `api-fence-test.sh`; test manually with ~25 invalid keys, expect 401s
+   turning into 429s.
 7. **Security alerts** (throttled to one per topic per 6h) email
    `API_SECURITY_ALERT_TO` (default daniel@cufc.co.nz) on: brute force,
    rate-limit hits, and scope probing (15× 403 on one key in an hour).
+   Known quirk: the throttle is per machine, so one incident can produce up to
+   [machine count] duplicate emails — accepted, not worth a DB round-trip.
 8. **Retention**: request logs 90 days, auth failures 30 days — pruned nightly
    (`startApiSecurityJobs`, wired in `server/index.ts`).
 9. **Rotation without downtime**: `POST /api/admin/api-keys/:id/rotate` mints a
