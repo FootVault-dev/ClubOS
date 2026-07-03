@@ -168,3 +168,50 @@ export function mainSiteForHost(host: string | null | undefined): string {
 export function ipHashSeed(ip: string | null | undefined, ua: string | null | undefined): string {
   return `${ip ?? ""}||${ua ?? ""}`;
 }
+
+// ── Link key (public /l/:key slug) generation + validation (T10) ─────────────
+
+// Auto-generated keys use an unambiguous base-N alphabet: no 0/O/1/l/I so a key
+// read off a printed QR poster is never mistyped. Custom keys the staff choose
+// may use the full url-safe set (isValidLinkKey), but our generator avoids the
+// look-alikes on purpose.
+export const LINK_KEY_ALPHABET =
+  "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+// Slugs that must never be taken as a custom key — they'd collide with real
+// routes/paths or read confusingly. Compared case-insensitively.
+export const RESERVED_LINK_KEYS = new Set<string>([
+  "l", "api", "admin", "app", "www", "assets", "static", "objects",
+  "health", "login", "logout", "auth", "new", "edit", "qr",
+]);
+
+/**
+ * Map raw random bytes to a link key over the unambiguous alphabet. The server
+ * passes crypto.randomBytes(len); kept pure (no Buffer/crypto) so it stays
+ * client-safe and unit-testable with fixed byte arrays. Modulo bias over 55
+ * symbols is negligible for collision-checked 7-char keys.
+ */
+export function linkKeyFromBytes(bytes: ArrayLike<number>, len = 7): string {
+  const A = LINK_KEY_ALPHABET;
+  let out = "";
+  const n = Math.max(1, len);
+  for (let i = 0; i < n; i++) {
+    const b = (bytes[i % bytes.length] ?? 0) & 0xff;
+    out += A[b % A.length];
+  }
+  return out;
+}
+
+/**
+ * True when a staff-chosen custom key is acceptable: 2–64 url-safe chars
+ * ([A-Za-z0-9_-]) and not a reserved slug. Empty/oversized/reserved → false.
+ * Mirrors the redirect route's `/^[A-Za-z0-9_-]{1,64}$/` guard with a 2-char
+ * floor (1-char custom keys are too easy to fat-finger; generated keys are 7).
+ */
+export function isValidLinkKey(raw: unknown): boolean {
+  if (typeof raw !== "string") return false;
+  const key = raw.trim();
+  if (!/^[A-Za-z0-9_-]{2,64}$/.test(key)) return false;
+  if (RESERVED_LINK_KEYS.has(key.toLowerCase())) return false;
+  return true;
+}

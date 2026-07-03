@@ -27,8 +27,8 @@ import { buildCICSchedule } from "./tournament-schedule";
 import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
-import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot } from "@shared/attribution";
-import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost } from "@shared/short-links";
+import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS } from "@shared/attribution";
+import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes } from "@shared/short-links";
 import { CID_COOKIE, CID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId } from "./attribution-cookies";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
@@ -1062,6 +1062,161 @@ export async function registerRoutes(
       const all = await storage.getPrograms();
       const camps = all.filter(p => p.type === "holiday_camp" && (!org || p.organizationId === org.id));
       res.json(camps);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ── AttributionOS: short-link admin API (T10) ──────────────────────────────
+  // Org-scoped (workspace) trackable-link builder feeding the /l/:key redirect
+  // (T9). requireAuth + workspace membership; every mutating/stats path re-checks
+  // the workspace org actually OWNS the link (no cross-org edits). Destinations
+  // are validated to our own domains at create/edit time so the DB only ever
+  // holds allow-listed targets (defence in depth alongside the redirect guard).
+  const linkStrOrNull = (v: any): string | null => {
+    const s = v == null ? "" : String(v).trim();
+    return s ? s : null;
+  };
+  // utm_campaign should be a stable slug — lowercase, spaces/punct → single '-'.
+  const slugifyCampaign = (v: any): string | null => {
+    const s = v == null ? "" : String(v).trim().toLowerCase();
+    if (!s) return null;
+    const slug = s.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+    return slug || null;
+  };
+  const validateLinkChannel = (v: any): { ok: true; value: string | null } | { ok: false } => {
+    if (v == null || String(v).trim() === "") return { ok: true, value: null };
+    const c = String(v).trim().toLowerCase();
+    if (!(CANONICAL_CHANNELS as readonly string[]).includes(c)) return { ok: false };
+    return { ok: true, value: c };
+  };
+
+  app.get("/api/admin/links", requireAuth, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
+      if (!(await checkUserOrg(req.session.userId!, org.id))) return res.status(403).json({ message: "Forbidden" });
+      const includeArchived = req.query.archived === "1" || req.query.archived === "true";
+      const links = await storage.listShortLinks(org.id, { includeArchived });
+      res.json(links);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/admin/links", requireAuth, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
+      if (!(await checkUserOrg(req.session.userId!, org.id))) return res.status(403).json({ message: "Forbidden" });
+
+      const body = req.body || {};
+      const destination = String(body.destination || "").trim();
+      if (!isAllowedDestination(destination)) {
+        return res.status(400).json({ message: "Destination must be a full URL on one of our own domains (no open redirects)." });
+      }
+      const channel = validateLinkChannel(body.channel);
+      if (!channel.ok) {
+        return res.status(400).json({ message: `channel must be one of: ${CANONICAL_CHANNELS.join(", ")}` });
+      }
+
+      // Key: a validated custom slug, else an auto nanoid-style key with
+      // collision retry (widening length after a few misses).
+      let key = "";
+      const custom = body.key != null ? String(body.key).trim() : "";
+      if (custom) {
+        if (!isValidLinkKey(custom)) {
+          return res.status(400).json({ message: "Invalid custom key — use 2–64 letters/numbers/-/_ and not a reserved word." });
+        }
+        if (await storage.getShortLinkByKey(custom)) {
+          return res.status(409).json({ message: "That key is already taken — pick another." });
+        }
+        key = custom;
+      } else {
+        for (let attempt = 0; attempt < 6 && !key; attempt++) {
+          const candidate = linkKeyFromBytes(crypto.randomBytes(16), 7 + Math.floor(attempt / 3));
+          if (!(await storage.getShortLinkByKey(candidate))) key = candidate;
+        }
+        if (!key) return res.status(500).json({ message: "Could not allocate a unique key — please retry." });
+      }
+
+      const link = await storage.createShortLink({
+        organizationId: org.id,
+        key,
+        destination,
+        channel: channel.value,
+        medium: linkStrOrNull(body.medium),
+        campaign: slugifyCampaign(body.campaign),
+        content: linkStrOrNull(body.content),
+        brand: linkStrOrNull(body.brand),
+        note: linkStrOrNull(body.note),
+        qrDefault: Boolean(body.qrDefault),
+        active: true,
+        createdBy: req.session.userId!,
+      });
+      res.status(201).json(link);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/admin/links/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid id" });
+      const existing = await storage.getShortLink(id);
+      if (!existing) return res.status(404).json({ message: "Link not found" });
+      const org = await workspaceOrg(req);
+      if (!org || existing.organizationId !== org.id) return res.status(403).json({ message: "Forbidden" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+
+      const body = req.body || {};
+      // Drizzle-native insert type for the mutable patch (reliable for property
+      // writes; storage.updateShortLink accepts the equivalent Partial).
+      const patch: Partial<typeof shortLinks.$inferInsert> = {};
+      // Archive / restore.
+      if (typeof body.active === "boolean") patch.active = body.active;
+      // Safe editable metadata (key + org + counters are immutable here).
+      if ("note" in body) patch.note = linkStrOrNull(body.note);
+      if ("brand" in body) patch.brand = linkStrOrNull(body.brand);
+      if ("campaign" in body) patch.campaign = slugifyCampaign(body.campaign);
+      if ("medium" in body) patch.medium = linkStrOrNull(body.medium);
+      if ("content" in body) patch.content = linkStrOrNull(body.content);
+      if (typeof body.qrDefault === "boolean") patch.qrDefault = body.qrDefault;
+      if ("channel" in body) {
+        const channel = validateLinkChannel(body.channel);
+        if (!channel.ok) return res.status(400).json({ message: `channel must be one of: ${CANONICAL_CHANNELS.join(", ")}` });
+        patch.channel = channel.value;
+      }
+      if ("destination" in body) {
+        const destination = String(body.destination || "").trim();
+        if (!isAllowedDestination(destination)) {
+          return res.status(400).json({ message: "Destination must be a full URL on one of our own domains (no open redirects)." });
+        }
+        patch.destination = destination;
+      }
+      if (Object.keys(patch).length === 0) return res.status(400).json({ message: "No editable fields provided" });
+
+      const updated = await storage.updateShortLink(id, patch);
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/links/:id/stats", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid id" });
+      const existing = await storage.getShortLink(id);
+      if (!existing) return res.status(404).json({ message: "Link not found" });
+      const org = await workspaceOrg(req);
+      if (!org || existing.organizationId !== org.id) return res.status(403).json({ message: "Forbidden" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+
+      const days = req.query.days ? parseInt(req.query.days as string) : 30;
+      const stats = await storage.getShortLinkStats(id, days);
+      res.json({ link: existing, ...stats });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

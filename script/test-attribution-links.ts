@@ -10,6 +10,10 @@ import {
   clickIdFromBytes,
   mainSiteForHost,
   ipHashSeed,
+  linkKeyFromBytes,
+  isValidLinkKey,
+  LINK_KEY_ALPHABET,
+  RESERVED_LINK_KEYS,
   DEFAULT_MAIN_SITE,
 } from "../shared/short-links";
 
@@ -155,5 +159,39 @@ ok(sha("1.2.3.4", "UA/1") !== sha("1.2.3.4", "UA/2"), "different ua → differen
 ok(ipHashSeed("ab", "c") !== ipHashSeed("a", "bc"), "boundary is unambiguous");
 eq(sha("", "").length, 64, "sha256 hex is 64 chars");
 ok(!sha("1.2.3.4", "UA/1").includes("1.2.3.4"), "digest never contains the raw ip");
+
+// ── link key generation (T10) ────────────────────────────────────────────────
+{
+  // 7-char default, every char inside the unambiguous alphabet
+  const k = linkKeyFromBytes(randomBytes(16));
+  eq(k.length, 7, "generated key is 7 chars by default");
+  for (const ch of k) ok(LINK_KEY_ALPHABET.includes(ch), "key char is in the alphabet");
+  // deterministic for a fixed byte array (pure) + honours custom length
+  eq(linkKeyFromBytes([0, 0, 0, 0, 0, 0, 0]), "aaaaaaa", "all-zero bytes → first symbol repeated");
+  eq(linkKeyFromBytes([0], 5).length, 5, "length arg respected");
+  eq(linkKeyFromBytes([255, 254, 253]).length, 7, "short byte source still yields 7 chars (wraps)");
+  // generated keys never contain the look-alike chars we excluded
+  const many = linkKeyFromBytes(randomBytes(64), 40);
+  for (const bad of ["0", "O", "1", "l", "I"]) ok(!many.includes(bad), `generated key omits '${bad}'`);
+  // generated keys are always valid custom keys too
+  ok(isValidLinkKey(linkKeyFromBytes(randomBytes(16))), "generated key passes isValidLinkKey");
+}
+
+// ── custom key validation (T10) ──────────────────────────────────────────────
+ok(isValidLinkKey("mfl-t3"), "kebab custom key valid");
+ok(isValidLinkKey("Summer_2026"), "underscore + caps valid");
+ok(isValidLinkKey("ab"), "2 chars is the floor");
+ok(!isValidLinkKey("a"), "1 char too short");
+ok(!isValidLinkKey(""), "empty invalid");
+ok(!isValidLinkKey("has space"), "space invalid");
+ok(!isValidLinkKey("emoji😀"), "non-url-safe invalid");
+ok(!isValidLinkKey("a".repeat(65)), "over 64 chars invalid");
+ok(isValidLinkKey("a".repeat(64)), "exactly 64 chars valid");
+ok(!isValidLinkKey("l"), "reserved 'l' rejected (also too short)");
+ok(!isValidLinkKey("API"), "reserved matched case-insensitively");
+ok(!isValidLinkKey("admin"), "reserved 'admin' rejected");
+ok(!isValidLinkKey(null as any), "null invalid");
+ok(!isValidLinkKey(123 as any), "number invalid");
+ok(RESERVED_LINK_KEYS.has("l"), "reserved set exported and populated");
 
 console.log(`\n✅ test-attribution-links: ${n} assertions passed`);
