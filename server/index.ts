@@ -164,6 +164,10 @@ app.use((req, res, next) => {
   const { startLeagueBalanceCron } = await import("./league-balance-cron");
   startLeagueBalanceCron();
 
+  // External API security: nightly retention pruning of the key audit tables.
+  const { startApiSecurityJobs } = await import("./api-security");
+  startApiSecurityJobs();
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

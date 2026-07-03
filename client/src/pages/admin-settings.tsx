@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Save, Users, Settings, Plus, Trash2, X, Shield, ShieldCheck, UserCog, User, Pencil, Key, Copy, Check, Eye, EyeOff, ExternalLink } from "lucide-react";
+import { Save, Users, Settings, Plus, Trash2, X, Shield, ShieldCheck, UserCog, User, Pencil, Key, Copy, Check, Eye, EyeOff, ExternalLink, RefreshCw, Activity } from "lucide-react";
 import { API_SCOPES } from "@shared/api-scopes";
 
 type UserAccount = {
@@ -504,6 +504,19 @@ type ApiKeyData = {
   expiresAt: string | null;
   active: boolean;
   createdAt: string;
+  rotatedFromId: number | null;
+  usage24h: number;
+  usage7d: number;
+  denied7d: number;
+};
+
+type ApiKeyLogRow = {
+  id: number;
+  method: string;
+  path: string;
+  status: number | null;
+  ip: string | null;
+  createdAt: string;
 };
 
 type OrgOption = { id: number; name: string; slug: string };
@@ -516,12 +529,29 @@ function ApiKeysTab() {
   const [revokeConfirm, setRevokeConfirm] = useState<number | null>(null);
   const [showDocs, setShowDocs] = useState(false);
 
+  const [rotateConfirm, setRotateConfirm] = useState<number | null>(null);
+  const [activityKeyId, setActivityKeyId] = useState<number | null>(null);
+
   const revokeMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/api-keys/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/api-keys"] });
       setRevokeConfirm(null);
       toast({ title: "API key revoked" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const rotateMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/admin/api-keys/${id}/rotate`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/api-keys"] });
+      setRotateConfirm(null);
+      setNewKeyValue(data.key);
+      toast({ title: "Key rotated", description: "The old key keeps working for 72 hours — swap it in the connected system any time before then." });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -580,54 +610,96 @@ function ApiKeysTab() {
         ) : (
           <div className="divide-y divide-blue-500/[0.04]">
             {activeKeys.map(key => (
-              <div key={key.id} className="flex items-center gap-4 px-5 py-3.5" data-testid={`row-api-key-${key.id}`}>
-                <div className="w-9 h-9 rounded-xl bg-amber-500/8 border border-amber-500/15 flex items-center justify-center flex-shrink-0">
-                  <Key className="w-4 h-4 text-amber-400/70" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-medium text-white/75 truncate" data-testid={`text-key-name-${key.id}`}>{key.name}</p>
-                  <p className="text-[11px] text-white/25 font-mono">{key.keyPrefix}</p>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-[10px] text-white/20">
-                    {key.lastUsedAt ? `Last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : "Never used"}
-                  </p>
-                  {key.expiresAt && (
-                    <p className="text-[10px] text-white/15">Expires {new Date(key.expiresAt).toLocaleDateString()}</p>
+              <div key={key.id}>
+                <div className="flex items-center gap-4 px-5 py-3.5" data-testid={`row-api-key-${key.id}`}>
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/8 border border-amber-500/15 flex items-center justify-center flex-shrink-0">
+                    <Key className="w-4 h-4 text-amber-400/70" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-white/75 truncate" data-testid={`text-key-name-${key.id}`}>{key.name}</p>
+                    <p className="text-[11px] text-white/25 font-mono">{key.keyPrefix}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-[10px] text-white/30">
+                      {key.usage7d > 0 ? `${key.usage7d.toLocaleString()} reqs (7d)` : "No requests (7d)"}
+                      {key.denied7d > 0 && <span className="text-red-400/60"> · {key.denied7d} denied</span>}
+                    </p>
+                    <p className="text-[10px] text-white/20">
+                      {key.lastUsedAt ? `Last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : "Never used"}
+                    </p>
+                    {key.expiresAt && (
+                      <p className="text-[10px] text-amber-400/40">Expires {new Date(key.expiresAt).toLocaleDateString()}</p>
+                    )}
+                  </div>
+                  <div className="hidden md:flex items-center gap-1 max-w-[260px] flex-wrap justify-end">
+                    {key.scopes.map(s => (
+                      <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0.5 border-amber-500/20 text-amber-400/60 bg-amber-500/5">
+                        {s}
+                      </Badge>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setActivityKeyId(activityKeyId === key.id ? null : key.id)}
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${activityKeyId === key.id ? "bg-amber-500/15" : "hover:bg-white/5"}`}
+                    title="View recent activity"
+                    data-testid={`button-activity-${key.id}`}
+                  >
+                    <Activity className={`w-3.5 h-3.5 ${activityKeyId === key.id ? "text-amber-400/80" : "text-white/20 hover:text-amber-400/60"}`} />
+                  </button>
+                  {rotateConfirm === key.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => rotateMutation.mutate(key.id)}
+                        disabled={rotateMutation.isPending}
+                        className="text-[10px] text-amber-400 hover:text-amber-300 px-2 py-1 rounded-lg hover:bg-amber-500/10 transition-colors cursor-pointer"
+                        data-testid={`button-confirm-rotate-${key.id}`}
+                      >
+                        {rotateMutation.isPending ? "Rotating..." : "Rotate now"}
+                      </button>
+                      <button
+                        onClick={() => setRotateConfirm(null)}
+                        className="text-[10px] text-white/30 hover:text-white/50 px-2 py-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setRotateConfirm(key.id)}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-amber-500/10 transition-colors cursor-pointer"
+                      title="Rotate key (old key keeps working for 72h)"
+                      data-testid={`button-rotate-${key.id}`}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-white/20 hover:text-amber-400" />
+                    </button>
+                  )}
+                  {revokeConfirm === key.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => revokeMutation.mutate(key.id)}
+                        className="text-[10px] text-red-400 hover:text-red-300 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors cursor-pointer"
+                        data-testid={`button-confirm-revoke-${key.id}`}
+                      >
+                        Revoke
+                      </button>
+                      <button
+                        onClick={() => setRevokeConfirm(null)}
+                        className="text-[10px] text-white/30 hover:text-white/50 px-2 py-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setRevokeConfirm(key.id)}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-red-500/10 transition-colors cursor-pointer"
+                      data-testid={`button-revoke-${key.id}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-white/20 hover:text-red-400" />
+                    </button>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
-                  {key.scopes.map(s => (
-                    <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0.5 border-amber-500/20 text-amber-400/60 bg-amber-500/5">
-                      {s}
-                    </Badge>
-                  ))}
-                </div>
-                {revokeConfirm === key.id ? (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => revokeMutation.mutate(key.id)}
-                      className="text-[10px] text-red-400 hover:text-red-300 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors cursor-pointer"
-                      data-testid={`button-confirm-revoke-${key.id}`}
-                    >
-                      Revoke
-                    </button>
-                    <button
-                      onClick={() => setRevokeConfirm(null)}
-                      className="text-[10px] text-white/30 hover:text-white/50 px-2 py-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setRevokeConfirm(key.id)}
-                    className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-red-500/10 transition-colors cursor-pointer"
-                    data-testid={`button-revoke-${key.id}`}
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-white/20 hover:text-red-400" />
-                  </button>
-                )}
+                {activityKeyId === key.id && <KeyActivityPanel keyId={key.id} />}
               </div>
             ))}
           </div>
@@ -664,6 +736,34 @@ function ApiKeysTab() {
       )}
       {newKeyValue && (
         <NewKeyRevealModal keyValue={newKeyValue} onClose={() => setNewKeyValue(null)} />
+      )}
+    </div>
+  );
+}
+
+function KeyActivityPanel({ keyId }: { keyId: number }) {
+  const { data: logs, isLoading } = useQuery<ApiKeyLogRow[]>({
+    queryKey: [`/api/admin/api-keys/${keyId}/logs?limit=15`],
+  });
+
+  return (
+    <div className="px-5 pb-4 bg-black/20">
+      <p className="text-[10px] text-amber-300/30 uppercase tracking-wider font-semibold pt-3 pb-2">Recent requests (audit log)</p>
+      {isLoading ? (
+        <Skeleton className="h-16 w-full rounded-xl bg-blue-500/[0.04]" />
+      ) : !logs || logs.length === 0 ? (
+        <p className="text-[11px] text-white/25">No requests recorded yet.</p>
+      ) : (
+        <div className="space-y-1">
+          {logs.map(l => (
+            <div key={l.id} className="flex items-center gap-3 text-[11px] font-mono">
+              <span className={`w-9 flex-shrink-0 ${l.status && l.status >= 400 ? "text-red-400/70" : "text-emerald-400/60"}`}>{l.status ?? "—"}</span>
+              <span className="text-white/25 w-10 flex-shrink-0">{l.method}</span>
+              <span className="text-white/45 truncate flex-1">{l.path}</span>
+              <span className="text-white/20 flex-shrink-0">{new Date(l.createdAt).toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

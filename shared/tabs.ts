@@ -30,6 +30,8 @@ export interface TabDef {
 
 /** Map an org slug to its workspace type. Default fallback is "camps". */
 export const WORKSPACE_TYPE_BY_SLUG: Record<string, WorkspaceType> = {
+  "christchurch-united": "camps",
+  "south-island-united": "camps",
   "united-sports-centre": "venue",
   "mini-football-leagues": "league",
   "christchurch-international-cup": "tournament",
@@ -129,6 +131,7 @@ const groupTabs: TabDef[] = [
   { slug: "calendar", title: "Calendar", url: "/admin/calendar" },
   { slug: "projects", title: "Projects", url: "/admin/projects" },
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
+  { slug: "grants", title: "Grants", url: "/admin/grants" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },

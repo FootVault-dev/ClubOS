@@ -7,13 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle, Calendar, Mail, ArrowRight, Home, Clock, ShieldCheck, Sparkles } from "lucide-react";
 import { trackEvent, generateEventId } from "@/lib/meta-pixel";
 import { formatCurrency } from "@/lib/format";
-
-const BRAND = {
-  blue: '#22399B',
-  darkBlue: '#221F7A',
-  white: '#FBFBFC',
-  gold: '#D9B10F',
-};
+import { brandForOrg } from "@/lib/camp-brand";
 
 export default function BookingSuccess() {
   const [, params] = useRoute("/:slug/success");
@@ -21,6 +15,19 @@ export default function BookingSuccess() {
   const urlParams = new URLSearchParams(window.location.search);
   const registrationId = urlParams.get("registrationId");
   const [confirmed, setConfirmed] = useState(false);
+
+  // Brand off the camp's owning club (shares the landing/booking page query cache).
+  const { data: campData } = useQuery<{ organization?: { slug: string; name: string; logoUrl: string | null } }>({
+    queryKey: ["/api/public/camps", slug],
+    queryFn: async () => {
+      const res = await fetch(`/api/public/camps/${slug}`);
+      if (!res.ok) throw new Error("Camp not found");
+      return res.json();
+    },
+    enabled: !!slug,
+  });
+  const clubBrand = brandForOrg(campData?.organization?.slug);
+  const BRAND = { blue: clubBrand.primary, darkBlue: clubBrand.dark, white: clubBrand.pageBg, gold: clubBrand.gold };
 
   const { data: registration, isLoading } = useQuery<any>({
     queryKey: ["/api/public/registrations", registrationId],

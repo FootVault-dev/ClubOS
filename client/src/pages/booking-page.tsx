@@ -12,15 +12,9 @@ import { ArrowLeft, Plus, X, User, Calendar, CreditCard, ShieldCheck, Clock, Arr
 import { trackEvent, getFbp, getFbc, generateEventId } from "@/lib/meta-pixel";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
+import { brandForOrg, type CampBrand } from "@/lib/camp-brand";
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "");
-
-const BRAND = {
-  blue: '#22399B',
-  darkBlue: '#221F7A',
-  white: '#FBFBFC',
-  gold: '#D9B10F',
-};
 
 interface ChildData {
   firstName: string;
@@ -50,7 +44,7 @@ const hardcodedPrices: Record<string, number> = {
   FULL_DAY: 5000,
 };
 
-function StripePay({ clientSecret, slug, registrationId, totalCents, parentEmail, parentName, campName, itemCount, currency }: {
+function StripePay({ clientSecret, slug, registrationId, totalCents, parentEmail, parentName, campName, itemCount, currency, brand }: {
   clientSecret: string;
   slug: string;
   registrationId: number;
@@ -60,6 +54,7 @@ function StripePay({ clientSecret, slug, registrationId, totalCents, parentEmail
   campName: string;
   itemCount: number;
   currency: string;
+  brand: CampBrand;
 }) {
   return (
     <Elements
@@ -69,7 +64,7 @@ function StripePay({ clientSecret, slug, registrationId, totalCents, parentEmail
         appearance: {
           theme: "stripe",
           variables: {
-            colorPrimary: BRAND.blue,
+            colorPrimary: brand.primary,
             colorBackground: "#ffffff",
             colorText: "#1e293b",
             colorDanger: "#ef4444",
@@ -80,10 +75,10 @@ function StripePay({ clientSecret, slug, registrationId, totalCents, parentEmail
           },
           rules: {
             ".Input": { border: "1px solid #e2e8f0", boxShadow: "none", padding: "12px 14px" },
-            ".Input:focus": { border: `1px solid ${BRAND.blue}80`, boxShadow: `0 0 0 3px ${BRAND.blue}15` },
+            ".Input:focus": { border: `1px solid ${brand.primary}80`, boxShadow: `0 0 0 3px ${brand.primary}15` },
             ".Label": { fontSize: "13px", fontWeight: "500", color: "#64748b", marginBottom: "6px" },
             ".Tab": { border: "1px solid #e2e8f0", borderRadius: "12px" },
-            ".Tab--selected": { border: `2px solid ${BRAND.blue}`, backgroundColor: `${BRAND.blue}08` },
+            ".Tab--selected": { border: `2px solid ${brand.primary}`, backgroundColor: `${brand.primary}08` },
           },
         },
       }}
@@ -97,12 +92,13 @@ function StripePay({ clientSecret, slug, registrationId, totalCents, parentEmail
         campName={campName}
         itemCount={itemCount}
         currency={currency}
+        brand={brand}
       />
     </Elements>
   );
 }
 
-function PaymentFormInner({ slug, registrationId, totalCents, parentEmail, parentName, campName, itemCount, currency }: {
+function PaymentFormInner({ slug, registrationId, totalCents, parentEmail, parentName, campName, itemCount, currency, brand }: {
   slug: string;
   registrationId: number;
   totalCents: number;
@@ -111,6 +107,7 @@ function PaymentFormInner({ slug, registrationId, totalCents, parentEmail, paren
   campName: string;
   itemCount: number;
   currency: string;
+  brand: CampBrand;
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -204,7 +201,7 @@ function PaymentFormInner({ slug, registrationId, totalCents, parentEmail, paren
         type="submit"
         disabled={!stripe || processing}
         className="w-full border-0 rounded-xl h-14 text-[16px] font-bold shadow-lg transition-all text-white cursor-pointer"
-        style={{ background: BRAND.blue, boxShadow: `0 8px 24px ${BRAND.blue}30` }}
+        style={{ background: brand.primary, boxShadow: `0 8px 24px ${brand.primary}30` }}
         data-testid="button-pay"
       >
         <Lock className="w-4 h-4 mr-2" />
@@ -245,7 +242,7 @@ export default function BookingPage() {
   const [promoError, setPromoError] = useState("");
   const [promoLoading, setPromoLoading] = useState(false);
 
-  const { data, isLoading } = useQuery<{ camp: any; pricing: any[]; dates: any[]; discounts: any[] }>({
+  const { data, isLoading } = useQuery<{ camp: any; organization?: { slug: string; name: string; logoUrl: string | null }; pricing: any[]; dates: any[]; discounts: any[] }>({
     queryKey: ["/api/public/camps", slug],
     queryFn: async () => {
       const res = await fetch(`/api/public/camps/${slug}`);
@@ -253,6 +250,16 @@ export default function BookingPage() {
       return res.json();
     },
   });
+
+  // Brand the whole form off the camp's owning club (CUFC default, SIU black/gold).
+  const clubBrand = brandForOrg(data?.organization?.slug);
+  const BRAND = { blue: clubBrand.primary, darkBlue: clubBrand.dark, white: clubBrand.pageBg, gold: clubBrand.gold };
+
+  // Real per-camp prices from camp_pricing; legacy hardcoded values as fallback.
+  const priceFor = (pt: string) => {
+    const m = (data?.pricing || []).find((p: any) => p.productType === pt);
+    return m ? m.priceCents : (hardcodedPrices[pt] || 0);
+  };
 
   const bookMutation = useMutation({
     mutationFn: async () => {
@@ -381,7 +388,7 @@ export default function BookingPage() {
   const calcTotal = () => {
     let perChildSubtotal = 0;
     items.forEach(item => {
-      perChildSubtotal += hardcodedPrices[item.productType] || 0;
+      perChildSubtotal += priceFor(item.productType);
     });
     const subtotal = perChildSubtotal * validChildCount;
     const totalItems = items.length * validChildCount;
@@ -456,9 +463,11 @@ export default function BookingPage() {
             </button>
           </Link>
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: BRAND.blue }}>
-              <span className="text-white font-bold text-[8px]">CU</span>
-            </div>
+            <img
+              src={data.organization?.logoUrl || clubBrand.logoUrl}
+              alt={data.organization?.name || clubBrand.clubName}
+              className="w-6 h-6 object-contain"
+            />
             <span className="text-[12px] text-slate-400 font-medium hidden sm:block">{data.camp.name}</span>
           </div>
         </div>
@@ -525,7 +534,7 @@ export default function BookingPage() {
                     <div className="flex gap-2">
                       {(["MORNING", "AFTERNOON", "FULL_DAY"] as const).map(pt => {
                         const isSelected = items.some(i => i.childIndex === 0 && i.campDateId === d.id && i.productType === pt);
-                        const price = hardcodedPrices[pt];
+                        const price = priceFor(pt);
                         const info = sessionTypes[pt];
                         return (
                           <button
@@ -560,7 +569,7 @@ export default function BookingPage() {
                   {items.map((item, i) => (
                     <div key={i} className="flex justify-between text-[13px]">
                       <span className="text-slate-600">{sessionTypes[item.productType]?.label} — {item.dateName}</span>
-                      <span className="text-slate-700 font-semibold">${(hardcodedPrices[item.productType] / 100).toFixed(0)}</span>
+                      <span className="text-slate-700 font-semibold">${(priceFor(item.productType) / 100).toFixed(0)}</span>
                     </div>
                   ))}
                 </div>
@@ -797,7 +806,7 @@ export default function BookingPage() {
                         <Calendar className="w-3 h-3" /> {item.dateName}
                       </p>
                     </div>
-                    <span className="text-[13px] font-semibold text-slate-700">${(hardcodedPrices[item.productType] / 100).toFixed(0)}</span>
+                    <span className="text-[13px] font-semibold text-slate-700">${(priceFor(item.productType) / 100).toFixed(0)}</span>
                   </div>
                 ))}
               </div>
@@ -829,6 +838,7 @@ export default function BookingPage() {
               campName={checkoutData.campName}
               itemCount={items.length}
               currency={checkoutData.currency}
+              brand={clubBrand}
             />
           </div>
         )}

@@ -19,13 +19,18 @@ export const OPENAPI_V1_SPEC = {
   openapi: "3.0.3",
   info: {
     title: "ClubOS External API",
-    version: "1.1.0",
+    version: "1.2.0",
     description:
       "Read-only external API for Christchurch United FC's club platform (ClubOS). " +
       "Every endpoint requires a scoped API key (Authorization: Bearer clubos_...). " +
       "Keys are bound to named scopes and specific workspaces; requests outside a key's " +
-      "grant return 403. All requests are audit-logged and rate-limited (240/min/key). " +
-      "No endpoint exposes medical information, payment identifiers, or player ID documents.",
+      "grant return 403. All requests are audit-logged and rate-limited (240/min/key); " +
+      "repeated invalid keys from one IP are blocked (brute-force protection). " +
+      "No endpoint exposes medical information, payment identifiers, or player ID documents. " +
+      "Versioning policy: /api/v1 is stable — fields are only ever ADDED, never renamed or " +
+      "removed. Breaking changes ship as /api/v2 with both versions running in parallel for " +
+      "at least 6 months and direct notice to every key holder. Keys support zero-downtime " +
+      "rotation (the replaced key keeps working for a grace window).",
     contact: { name: "Daniel Meyn — Christchurch United FC", email: "daniel@cufc.co.nz" },
   },
   servers: [{ url: "https://app.usg.co.nz", description: "Production" }],
@@ -180,8 +185,13 @@ export const OPENAPI_V1_SPEC = {
     "/api/v1/league/teams": {
       get: {
         summary: "League teams with captain contact + payment status",
-        description: "Scope: league:read.",
-        parameters: [{ name: "competition_id", in: "query", schema: { type: "integer" } }],
+        description: "Scope: league:read. Archived competitions excluded unless include_archived=1.",
+        parameters: [
+          { name: "competition_id", in: "query", schema: { type: "integer" } },
+          { name: "include_archived", in: "query", schema: { type: "string", enum: ["1"] } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 1000, maximum: 2000 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+        ],
         responses: { "200": { description: "Teams" }, ...errorResponses },
       },
     },
@@ -206,16 +216,26 @@ export const OPENAPI_V1_SPEC = {
     "/api/v1/tournament/teams": {
       get: {
         summary: "Tournament teams with manager contact, roster + payment status",
-        description: "Scope: tournament:read. Never exposes player squads, DOBs or ID documents.",
-        parameters: [{ name: "tournament_id", in: "query", schema: { type: "integer" } }],
+        description: "Scope: tournament:read. Never exposes player squads, DOBs or ID documents. Archived tournaments excluded unless include_archived=1.",
+        parameters: [
+          { name: "tournament_id", in: "query", schema: { type: "integer" } },
+          { name: "include_archived", in: "query", schema: { type: "string", enum: ["1"] } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 1000, maximum: 2000 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+        ],
         responses: { "200": { description: "Teams" }, ...errorResponses },
       },
     },
     "/api/v1/tournament/fixtures": {
       get: {
         summary: "Tournament fixtures + results",
-        description: "Scope: tournament:read.",
-        parameters: [{ name: "tournament_id", in: "query", schema: { type: "integer" } }],
+        description: "Scope: tournament:read. Archived tournaments excluded unless include_archived=1.",
+        parameters: [
+          { name: "tournament_id", in: "query", schema: { type: "integer" } },
+          { name: "include_archived", in: "query", schema: { type: "string", enum: ["1"] } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 1000, maximum: 2000 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+        ],
         responses: { "200": { description: "Fixtures" }, ...errorResponses },
       },
     },
@@ -226,6 +246,8 @@ export const OPENAPI_V1_SPEC = {
         parameters: [
           { name: "age_group", in: "query", schema: { type: "string", example: "U10" } },
           { name: "challenge", in: "query", schema: { type: "string", enum: ["juggling", "dribble_pass_finish"] } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 1000, maximum: 2000 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
         ],
         responses: { "200": { description: "Entries" }, ...errorResponses },
       },
@@ -234,7 +256,11 @@ export const OPENAPI_V1_SPEC = {
       get: {
         summary: "CIC Summer 7s register-interest submissions",
         description: "Scope: cic7s:read.",
-        parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["new", "contacted", "confirmed", "archived"] } }],
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string", enum: ["new", "contacted", "confirmed", "archived"] } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 1000, maximum: 2000 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+        ],
         responses: { "200": { description: "Registrations" }, ...errorResponses },
       },
     },

@@ -36,6 +36,7 @@ import {
   Tag,
   Globe,
   Handshake,
+  Landmark,
   GraduationCap,
   Printer,
   ShoppingCart,
@@ -181,6 +182,7 @@ const groupNav = [
   { tab: "calendar", title: "Calendar", url: "/admin/calendar", icon: Calendar },
   { tab: "projects", title: "Projects", url: "/admin/projects", icon: ClipboardCheck },
   { tab: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship", icon: Handshake },
+  { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
 ];
 

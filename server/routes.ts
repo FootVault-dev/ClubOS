@@ -1,8 +1,9 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
+import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
@@ -913,19 +914,34 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/stats", requireAuth, async (_req, res) => {
+  // Resolve the admin's current workspace (the client sends x-workspace-slug
+  // on every request) to an organisation. Null when the header is missing or
+  // unknown — callers treat null as "no filter" so legacy/headerless calls
+  // keep the old all-orgs behaviour. Needed since SIU shares the camps
+  // workspace type with CUFC: without it each club would see the other's
+  // camps and registrations.
+  async function workspaceOrg(req: Request): Promise<{ id: number; slug: string } | null> {
+    const slug = String(req.headers["x-workspace-slug"] || "").trim();
+    if (!slug) return null;
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug));
+    return org ? { id: org.id, slug: org.slug } : null;
+  }
+
+  app.get("/api/admin/stats", requireAuth, async (req, res) => {
     try {
-      const stats = await storage.getCampStats();
+      const org = await workspaceOrg(req);
+      const stats = await storage.getCampStats(org?.id);
       res.json(stats);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
   });
 
-  app.get("/api/admin/camps", requireAuth, async (_req, res) => {
+  app.get("/api/admin/camps", requireAuth, async (req, res) => {
     try {
+      const org = await workspaceOrg(req);
       const all = await storage.getPrograms();
-      const camps = all.filter(p => p.type === "holiday_camp");
+      const camps = all.filter(p => p.type === "holiday_camp" && (!org || p.organizationId === org.id));
       res.json(camps);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1409,6 +1425,14 @@ export async function registerRoutes(
       // type) for term-mode programs.
       if (!data.type) data.type = "holiday_camp";
 
+      // Scope new programs to the admin's current workspace. Holiday-camp
+      // creates never sent organizationId (only term-mode did), which left
+      // camps org-less and visible in every camps workspace.
+      if (!data.organizationId) {
+        const org = await workspaceOrg(req);
+        if (org) data.organizationId = org.id;
+      }
+
       // Term auto-fill — mirrors the gymnastics /programs route. When the
       // camp is bound to a term, copy startDate/endDate/sessionCount from
       // the term so the admin doesn't have to re-type.
@@ -1441,10 +1465,11 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/academy", requireAuth, async (_req, res) => {
+  app.get("/api/admin/academy", requireAuth, async (req, res) => {
     try {
+      const org = await workspaceOrg(req);
       const all = await storage.getPrograms();
-      const academy = all.filter(p => p.type === "academy");
+      const academy = all.filter(p => p.type === "academy" && (!org || p.organizationId === org.id));
       const sectionRows = await db.execute(sql`SELECT id, academy_section FROM programs WHERE type = 'academy'`);
       const sectionMap: Record<number, string> = {};
       for (const row of sectionRows.rows) {
@@ -1764,11 +1789,19 @@ export async function registerRoutes(
   app.get("/api/admin/registrations", requireAuth, async (req, res) => {
     try {
       const campId = req.query.campId ? parseInt(req.query.campId as string) : undefined;
+      const org = await workspaceOrg(req);
       let regs;
       if (campId) {
         regs = await storage.getRegistrationsByProgram(campId);
+        // A camp filter from another workspace returns nothing rather than
+        // leaking cross-club registrations.
+        if (org) {
+          const prog = await storage.getProgram(campId);
+          if (prog?.organizationId && prog.organizationId !== org.id) regs = [];
+        }
       } else {
         regs = await storage.getRegistrations();
+        if (org) regs = regs.filter((r: any) => r.program?.organizationId === org.id);
       }
       const enriched = await Promise.all(regs.map(async (r: any) => {
         const items = await storage.getRegistrationItems(r.id);
@@ -7262,6 +7295,124 @@ export async function registerRoutes(
     } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 
+  // ── Grant funding (USG workspace) ─────────────────────────────────────────
+  // Funder directory + application tracker: what's out there, what we applied
+  // for, what got approved/declined and for how much.
+
+  app.get("/api/admin/grants/funders", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(grantFunders)
+        .where(eq(grantFunders.organizationId, orgId))
+        .orderBy(desc(grantFunders.priorityScore), asc(grantFunders.name));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  const GRANT_FUNDER_FIELDS = [
+    "name", "funderType", "geography", "whatTheyFund", "priorityScore", "typicalGrant", "maxGrant",
+    "applicationWindows", "eligibility", "relationshipRequirements", "proSportExcluded",
+    "contactName", "contactEmail", "contactPhone", "website", "segment", "notes", "archived",
+  ] as const;
+
+  app.post("/api/admin/grants/funders", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body?.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      if (!req.body?.name?.trim()) return res.status(400).json({ message: "name required" });
+      const values: any = { organizationId: orgId };
+      for (const k of GRANT_FUNDER_FIELDS) if (k in (req.body || {})) values[k] = req.body[k];
+      const [row] = await db.insert(grantFunders).values(values).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/grants/funders/:id", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(grantFunders).where(eq(grantFunders.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = { updatedAt: new Date() };
+      for (const k of GRANT_FUNDER_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k];
+      const [updated] = await db.update(grantFunders).set(patch).where(eq(grantFunders.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/grants/funders/:id", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(grantFunders).where(eq(grantFunders.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(grantFunders).where(eq(grantFunders.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.get("/api/admin/grants/applications", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(grantApplications)
+        .where(eq(grantApplications.organizationId, orgId))
+        .orderBy(desc(grantApplications.updatedAt));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  const GRANT_APP_FIELDS = [
+    "funderId", "funderName", "projectTitle", "purpose", "brandTags",
+    "amountRequestedCents", "amountApprovedCents", "status", "round", "owner", "referenceNumber",
+    "docsUrl", "notes",
+  ] as const;
+  const GRANT_APP_DATE_FIELDS = ["submittedAt", "decisionAt", "paidAt", "acquittalDueAt", "acquittedAt"] as const;
+
+  app.post("/api/admin/grants/applications", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body?.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      if (!req.body?.funderName?.trim()) return res.status(400).json({ message: "funderName required" });
+      if (!req.body?.projectTitle?.trim()) return res.status(400).json({ message: "projectTitle required" });
+      const values: any = { organizationId: orgId };
+      for (const k of GRANT_APP_FIELDS) if (k in (req.body || {})) values[k] = req.body[k];
+      for (const k of GRANT_APP_DATE_FIELDS) if (req.body?.[k]) values[k] = new Date(req.body[k]);
+      const [row] = await db.insert(grantApplications).values(values).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/grants/applications/:id", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(grantApplications).where(eq(grantApplications.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = { updatedAt: new Date() };
+      for (const k of GRANT_APP_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k];
+      for (const k of GRANT_APP_DATE_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k] ? new Date(req.body[k]) : null;
+      const [updated] = await db.update(grantApplications).set(patch).where(eq(grantApplications.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/grants/applications/:id", requireAuth, requireTab("grants"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(grantApplications).where(eq(grantApplications.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(grantApplications).where(eq(grantApplications.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
   // ── Billboard sales (Go Media contra resell) ─────────────────────────────
   // USG holds a $250k credit with Go Media; we resell at 20-30% off rate-card
   // up to a $200k revenue target. This pipeline tracks credit-consumed vs
@@ -10160,6 +10311,14 @@ export async function registerRoutes(
         };
       });
 
+      // Owning club's slug so the checkout can render the right brand
+      // (SIU black/gold vs CUFC navy) — same idea as /api/public/camps/:slug.
+      let organizationSlug: string | null = null;
+      if (program?.organizationId) {
+        const [org] = await db.select().from(organizations).where(eq(organizations.id, program.organizationId));
+        organizationSlug = org?.slug || null;
+      }
+
       res.json({
         clientSecret: pi.client_secret,
         registrationId: reg.id,
@@ -10169,6 +10328,7 @@ export async function registerRoutes(
         currency: reg.currency || "NZD",
         campName: program?.name || "",
         campSlug: program?.slug || "",
+        organizationSlug,
         parentName: contact ? `${contact.firstName} ${contact.lastName}` : "",
         parentEmail: contact?.email || "",
         items: itemDetails,
@@ -10294,59 +10454,67 @@ export async function registerRoutes(
     return { raw, prefix, hash };
   }
 
-  // Per-key sliding-window rate limit (in-memory — single Fly machine).
-  const API_KEY_RATE_LIMIT_PER_MIN = 240;
-  const apiKeyHits = new Map<number, number[]>();
-
   async function requireApiKey(req: Request, res: Response, next: NextFunction) {
     try {
+      const ip = clientIp(req);
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
         return res.status(401).json({ error: "Missing or invalid Authorization header. Use: Bearer <api_key>" });
       }
       const key = authHeader.slice(7);
+
+      // Brute-force gate: an IP that keeps presenting invalid keys is cut off
+      // before we even hash. Only failed attempts count, so real integrations
+      // are never affected.
+      if (isIpBlocked(ip)) {
+        res.setHeader("Retry-After", "600");
+        return res.status(429).json({ error: "Too many failed authentication attempts. Try again later." });
+      }
+
       const hash = hashApiKey(key);
       const [apiKey] = await db.select().from(apiKeys).where(and(eq(apiKeys.keyHash, hash), eq(apiKeys.active, true)));
       if (!apiKey) {
+        recordAuthFailure(req, key);
         return res.status(401).json({ error: "Invalid API key" });
       }
-      if (apiKey.expiresAt && new Date(apiKey.expiresAt) < new Date()) {
-        return res.status(401).json({ error: "API key has expired" });
-      }
 
-      const now = Date.now();
-      const hits = (apiKeyHits.get(apiKey.id) || []).filter((t) => now - t < 60_000);
-      if (hits.length >= API_KEY_RATE_LIMIT_PER_MIN) {
-        res.setHeader("Retry-After", "60");
-        return res.status(429).json({ error: `Rate limit exceeded (${API_KEY_RATE_LIMIT_PER_MIN} requests/minute per key)` });
-      }
-      hits.push(now);
-      apiKeyHits.set(apiKey.id, hits);
-
-      // Stamp last-used at most once a minute — every request already writes
-      // an audit row below, so this stays a cheap coarse signal for the UI.
-      if (!apiKey.lastUsedAt || now - new Date(apiKey.lastUsedAt).getTime() > 60_000) {
-        db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, apiKey.id)).catch(() => {});
-      }
-
-      (req as any).apiKeyId = apiKey.id;
-      (req as any).apiKeyOrg = apiKey.organizationId;
-      (req as any).apiKeyScopes = apiKey.scopes || [];
-      (req as any).apiKeyOrgIds =
-        apiKey.allowedOrgIds && apiKey.allowedOrgIds.length > 0
-          ? apiKey.allowedOrgIds
-          : [apiKey.organizationId];
-
-      // Audit trail — one row per request, written after the response settles.
+      // From here on, EVERY outcome for a real key is audit-logged — including
+      // expired-key 401s and rate-limit 429s, not just successful reads.
       res.on("finish", () => {
         db.insert(apiKeyRequestLogs).values({
           apiKeyId: apiKey.id,
           method: req.method,
           path: (req.originalUrl || req.path || "").slice(0, 500),
           status: res.statusCode,
-          ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket?.remoteAddress || null,
+          ip,
         }).catch(() => {});
       });
+
+      if (apiKey.expiresAt && new Date(apiKey.expiresAt) < new Date()) {
+        recordAuthFailure(req, key);
+        return res.status(401).json({ error: "API key has expired" });
+      }
+
+      // DB-authoritative rate limit — exact across machines and deploys.
+      if (await keyRateLimitExceeded(apiKey.id, apiKey.name)) {
+        res.setHeader("Retry-After", "60");
+        return res.status(429).json({ error: `Rate limit exceeded (${API_KEY_RATE_LIMIT_PER_MIN} requests/minute per key)` });
+      }
+
+      // Stamp last-used at most once a minute — the audit log holds the detail.
+      const now = Date.now();
+      if (!apiKey.lastUsedAt || now - new Date(apiKey.lastUsedAt).getTime() > 60_000) {
+        db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, apiKey.id)).catch(() => {});
+      }
+
+      (req as any).apiKeyId = apiKey.id;
+      (req as any).apiKeyName = apiKey.name;
+      (req as any).apiKeyOrg = apiKey.organizationId;
+      (req as any).apiKeyScopes = apiKey.scopes || [];
+      (req as any).apiKeyOrgIds =
+        apiKey.allowedOrgIds && apiKey.allowedOrgIds.length > 0
+          ? apiKey.allowedOrgIds
+          : [apiKey.organizationId];
 
       next();
     } catch (error: any) {
@@ -10355,10 +10523,13 @@ export async function registerRoutes(
   }
 
   // Scope gate — every /api/v1/* endpoint names the scope it requires.
+  // Repeated denials on one key trip a scope-probe security alert.
   function requireScope(scope: string) {
     return (req: Request, res: Response, next: NextFunction) => {
       const scopes: string[] = (req as any).apiKeyScopes || [];
       if (!scopes.includes(scope)) {
+        const keyId = (req as any).apiKeyId;
+        if (keyId) noteScopeDenial(keyId, (req as any).apiKeyName || `key ${keyId}`, scope);
         return res.status(403).json({
           error: `This API key does not have the '${scope}' scope`,
           grantedScopes: scopes,
@@ -10415,6 +10586,7 @@ export async function registerRoutes(
         expiresAt: apiKeys.expiresAt,
         active: apiKeys.active,
         createdAt: apiKeys.createdAt,
+        rotatedFromId: apiKeys.rotatedFromId,
       }).from(apiKeys).orderBy(desc(apiKeys.createdAt));
       if (orgFilter) {
         keys = keys.filter((k) =>
@@ -10423,7 +10595,21 @@ export async function registerRoutes(
             : k.organizationId === orgFilter
         );
       }
-      res.json(keys);
+      // Usage rollup from the audit log — one aggregate query for all keys.
+      const { rows: usage } = await db.execute(sql`
+        SELECT api_key_id,
+               COUNT(*) FILTER (WHERE created_at > now() - interval '24 hours')::int AS u24,
+               COUNT(*)::int AS u7,
+               COUNT(*) FILTER (WHERE status >= 400)::int AS denied7
+        FROM api_key_request_logs
+        WHERE created_at > now() - interval '7 days'
+        GROUP BY api_key_id
+      `);
+      const usageByKey = new Map((usage as any[]).map((u) => [Number(u.api_key_id), u]));
+      res.json(keys.map((k) => {
+        const u = usageByKey.get(k.id) as any;
+        return { ...k, usage24h: u ? Number(u.u24) : 0, usage7d: u ? Number(u.u7) : 0, denied7d: u ? Number(u.denied7) : 0 };
+      }));
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -10466,7 +10652,70 @@ export async function registerRoutes(
         scopes,
         expiresAt,
       }).returning();
+      await storage.createAuditLog({
+        userId: (req as any).session.userId,
+        action: "create",
+        entity: "api_key",
+        entityId: created.id,
+        details: `Created API key "${created.name}" — scopes: ${scopes.join(", ")}; orgs: [${bindOrgIds.join(",")}]`,
+      });
       res.json({ id: created.id, name: created.name, key: raw, keyPrefix: prefix, expiresAt: created.expiresAt, scopes: created.scopes, allowedOrgIds: created.allowedOrgIds, message: "Save this key now — it won't be shown again." });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Zero-downtime rotation: mints a replacement key with identical grants; the
+  // old key keeps working for a grace window (default 72h) then expires. Swap
+  // the consumer's .env any time inside the window — no hard cutover.
+  app.post("/api/admin/api-keys/:id/rotate", requireSuperAdmin, async (req, res) => {
+    try {
+      const keyId = parseInt(req.params.id as string);
+      if (isNaN(keyId)) return res.status(400).json({ message: "Invalid key ID" });
+      const graceHours = Math.min(Math.max(parseInt(req.body?.graceHours) || 72, 1), 24 * 30);
+
+      const [oldKey] = await db.select().from(apiKeys).where(and(eq(apiKeys.id, keyId), eq(apiKeys.active, true)));
+      if (!oldKey) return res.status(404).json({ message: "Key not found or already revoked" });
+
+      const { raw, prefix, hash } = generateApiKey();
+      const [created] = await db.insert(apiKeys).values({
+        name: oldKey.name,
+        keyHash: hash,
+        keyPrefix: prefix,
+        organizationId: oldKey.organizationId,
+        allowedOrgIds: oldKey.allowedOrgIds,
+        rotatedFromId: oldKey.id,
+        createdById: (req as any).session.userId,
+        scopes: oldKey.scopes,
+        expiresAt: oldKey.expiresAt, // a rotation never EXTENDS an expiry policy
+      }).returning();
+
+      const graceExpiry = new Date(Date.now() + graceHours * 3_600_000);
+      await db.update(apiKeys)
+        .set({
+          name: `${oldKey.name} (retiring)`.slice(0, 100),
+          expiresAt: oldKey.expiresAt && new Date(oldKey.expiresAt) < graceExpiry ? oldKey.expiresAt : graceExpiry,
+        })
+        .where(eq(apiKeys.id, oldKey.id));
+
+      await storage.createAuditLog({
+        userId: (req as any).session.userId,
+        action: "rotate",
+        entity: "api_key",
+        entityId: created.id,
+        details: `Rotated API key "${oldKey.name}" (#${oldKey.id} → #${created.id}); old key expires in ${graceHours}h`,
+      });
+
+      res.json({
+        id: created.id,
+        name: created.name,
+        key: raw,
+        keyPrefix: prefix,
+        scopes: created.scopes,
+        allowedOrgIds: created.allowedOrgIds,
+        oldKeyExpiresAt: graceExpiry,
+        message: `Save this key now — it won't be shown again. The old key keeps working until ${graceExpiry.toISOString()}.`,
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -10490,9 +10739,18 @@ export async function registerRoutes(
 
   app.delete("/api/admin/api-keys/:id", requireSuperAdmin, async (req, res) => {
     try {
-      const keyId = parseInt(req.params.id);
+      const keyId = parseInt(req.params.id as string);
       if (isNaN(keyId)) return res.status(400).json({ message: "Invalid key ID" });
-      await db.update(apiKeys).set({ active: false }).where(eq(apiKeys.id, keyId));
+      const [revoked] = await db.update(apiKeys).set({ active: false }).where(eq(apiKeys.id, keyId)).returning();
+      if (revoked) {
+        await storage.createAuditLog({
+          userId: (req as any).session.userId,
+          action: "revoke",
+          entity: "api_key",
+          entityId: keyId,
+          details: `Revoked API key "${revoked.name}" (${revoked.keyPrefix})`,
+        });
+      }
       res.json({ ok: true });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -10500,6 +10758,9 @@ export async function registerRoutes(
   });
 
   // ── External API v1 (authenticated by API key) ──
+  // HSTS / nosniff / no-store on every v1 response.
+  app.use("/api/v1", apiSecurityHeaders);
+
   app.get("/api/v1/overview", requireApiKey, requireScope("overview:read"), async (req: Request, res: Response) => {
     try {
       const orgId = (req as any).apiKeyOrg;
@@ -10974,6 +11235,9 @@ export async function registerRoutes(
       if (orgs.length === 0) return res.status(403).json({ error: "This API key has no league workspace access" });
       const orgIdList = orgs.map((o) => o.id).join(",");
       const competitionId = parseInt(req.query.competition_id as string) || null;
+      const includeArchived = req.query.include_archived === "1";
+      const limit = Math.min(parseInt(req.query.limit as string) || 1000, 2000);
+      const offset = parseInt(req.query.offset as string) || 0;
 
       const { rows } = await db.execute(sql.raw(`
         SELECT lt.id, lt.name, lt.contact_name, lt.contact_email, lt.contact_phone,
@@ -10983,8 +11247,10 @@ export async function registerRoutes(
         JOIN league_competitions lc ON lt.competition_id = lc.id
         LEFT JOIN league_divisions ld ON lt.division_id = ld.id
         WHERE lt.organization_id IN (${orgIdList})
+          ${includeArchived ? "" : "AND lc.archived = false"}
           ${competitionId ? `AND lt.competition_id = ${competitionId}` : ""}
         ORDER BY lc.created_at DESC, ld.sort_order NULLS LAST, lt.name
+        LIMIT ${limit} OFFSET ${offset}
       `));
 
       res.json({
@@ -11027,6 +11293,7 @@ export async function registerRoutes(
         LEFT JOIN league_teams ht ON lg.home_team_id = ht.id
         LEFT JOIN league_teams aw ON lg.away_team_id = aw.id
         WHERE lc.organization_id IN (${orgIdList})
+          AND lc.archived = false
           AND lg.game_date BETWEEN current_date - ${days} AND current_date + ${days}
           ${competitionId ? `AND lg.competition_id = ${competitionId}` : ""}
         ORDER BY lg.game_date, lg.start_time
@@ -11105,6 +11372,9 @@ export async function registerRoutes(
       if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
       const orgIdList = orgs.map((o) => o.id).join(",");
       const tournamentId = parseInt(req.query.tournament_id as string) || null;
+      const includeArchived = req.query.include_archived === "1";
+      const limit = Math.min(parseInt(req.query.limit as string) || 1000, 2000);
+      const offset = parseInt(req.query.offset as string) || 0;
 
       const { rows } = await db.execute(sql.raw(`
         SELECT tt.id, tt.name, tt.club_name, tt.contact_name, tt.contact_email, tt.contact_phone,
@@ -11116,8 +11386,10 @@ export async function registerRoutes(
         LEFT JOIN tournament_groups grp ON tt.group_id = grp.id
         LEFT JOIN clubs cl ON tt.club_id = cl.id
         WHERE t.organization_id IN (${orgIdList})
+          ${includeArchived ? "" : "AND t.archived = false"}
           ${tournamentId ? `AND tt.tournament_id = ${tournamentId}` : ""}
         ORDER BY t.start_date DESC NULLS LAST, t.id DESC, grp.name NULLS LAST, tt.name
+        LIMIT ${limit} OFFSET ${offset}
       `));
 
       res.json({
@@ -11150,6 +11422,9 @@ export async function registerRoutes(
       if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
       const orgIdList = orgs.map((o) => o.id).join(",");
       const tournamentId = parseInt(req.query.tournament_id as string) || null;
+      const includeArchived = req.query.include_archived === "1";
+      const limit = Math.min(parseInt(req.query.limit as string) || 1000, 2000);
+      const offset = parseInt(req.query.offset as string) || 0;
 
       const { rows } = await db.execute(sql.raw(`
         SELECT tg.id, tg.game_number, tg.round_number, tg.stage, tg.stage_detail,
@@ -11165,8 +11440,10 @@ export async function registerRoutes(
         LEFT JOIN tournament_teams ht ON tg.home_team_id = ht.id
         LEFT JOIN tournament_teams aw ON tg.away_team_id = aw.id
         WHERE t.organization_id IN (${orgIdList})
+          ${includeArchived ? "" : "AND t.archived = false"}
           ${tournamentId ? `AND tg.tournament_id = ${tournamentId}` : ""}
         ORDER BY tg.game_date NULLS LAST, tg.start_time NULLS LAST, tg.game_number
+        LIMIT ${limit} OFFSET ${offset}
       `));
 
       res.json({
@@ -11206,6 +11483,9 @@ export async function registerRoutes(
       const ageGroup = typeof req.query.age_group === "string" && /^U\d{1,2}$/i.test(req.query.age_group) ? req.query.age_group.toUpperCase() : null;
       const challenge = typeof req.query.challenge === "string" && ["juggling", "dribble_pass_finish"].includes(req.query.challenge) ? req.query.challenge : null;
 
+      const limit = Math.min(parseInt(req.query.limit as string) || 1000, 2000);
+      const offset = parseInt(req.query.offset as string) || 0;
+
       const { rows } = await db.execute(sql.raw(`
         SELECT id, player_name, club_name, age_group, challenge, score, scored_at, source, created_at
         FROM skills_challenge_entries
@@ -11213,6 +11493,7 @@ export async function registerRoutes(
           ${ageGroup ? `AND age_group = '${ageGroup}'` : ""}
           ${challenge ? `AND challenge = '${challenge}'` : ""}
         ORDER BY created_at DESC
+        LIMIT ${limit} OFFSET ${offset}
       `));
 
       res.json({
@@ -11241,12 +11522,16 @@ export async function registerRoutes(
       const orgIdList = orgs.map((o) => o.id).join(",");
       const status = typeof req.query.status === "string" && ["new", "contacted", "confirmed", "archived"].includes(req.query.status) ? req.query.status : null;
 
+      const limit = Math.min(parseInt(req.query.limit as string) || 1000, 2000);
+      const offset = parseInt(req.query.offset as string) || 0;
+
       const { rows } = await db.execute(sql.raw(`
         SELECT id, first_name, last_name, email, phone, location, category, status, created_at
         FROM cic7s_registrations
         WHERE organization_id IN (${orgIdList})
           ${status ? `AND status = '${status}'` : ""}
         ORDER BY created_at DESC
+        LIMIT ${limit} OFFSET ${offset}
       `));
 
       res.json({

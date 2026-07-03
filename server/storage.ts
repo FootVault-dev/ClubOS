@@ -312,7 +312,7 @@ export interface IStorage {
     pendingRegistrations: number;
   }>;
 
-  getCampStats(): Promise<{
+  getCampStats(orgId?: number): Promise<{
     totalParents: number;
     activeCamps: number;
     totalRegistrations: number;
@@ -1183,17 +1183,21 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getCampStats(): Promise<{
+  async getCampStats(orgId?: number): Promise<{
     totalParents: number;
     activeCamps: number;
     totalRegistrations: number;
     paidRegistrations: number;
     totalRevenueCents: number;
   }> {
-    const [tp] = await db.select({ count: sql<number>`count(*)` }).from(contacts).where(eq(contacts.type, "guardian"));
+    // With an orgId the stats are workspace-scoped (SIU vs CUFC); without it
+    // the legacy all-orgs behaviour is preserved.
+    const campWhere = orgId
+      ? and(eq(programs.type, "holiday_camp"), eq(programs.organizationId, orgId))
+      : eq(programs.type, "holiday_camp");
     const [ac] = await db.select({ count: sql<number>`count(*)` }).from(programs)
-      .where(and(eq(programs.isActive, true), eq(programs.type, "holiday_camp")));
-    const campIds = await db.select({ id: programs.id }).from(programs).where(eq(programs.type, "holiday_camp"));
+      .where(and(eq(programs.isActive, true), campWhere));
+    const campIds = await db.select({ id: programs.id }).from(programs).where(campWhere);
     const ids = campIds.map(c => c.id);
     let totalRegs = 0, paidRegs = 0, totalRev = 0;
     if (ids.length > 0) {
@@ -1206,8 +1210,23 @@ export class DatabaseStorage implements IStorage {
       paidRegs = Number(pr.count);
       totalRev = Number(rev.total);
     }
+    // Contacts aren't org-scoped, so per-workspace we count guardians who
+    // actually registered for this club's camps.
+    let totalParents: number;
+    if (orgId) {
+      if (ids.length > 0) {
+        const [tp] = await db.select({ count: sql<number>`count(distinct ${registrations.contactId})` })
+          .from(registrations).where(inArray(registrations.programId, ids));
+        totalParents = Number(tp.count);
+      } else {
+        totalParents = 0;
+      }
+    } else {
+      const [tp] = await db.select({ count: sql<number>`count(*)` }).from(contacts).where(eq(contacts.type, "guardian"));
+      totalParents = Number(tp.count);
+    }
     return {
-      totalParents: Number(tp.count),
+      totalParents,
       activeCamps: Number(ac.count),
       totalRegistrations: totalRegs,
       paidRegistrations: paidRegs,

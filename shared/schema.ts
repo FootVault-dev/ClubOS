@@ -1386,6 +1386,9 @@ export const apiKeys = pgTable("api_keys", {
   // Orgs this key may read. NULL/empty = just organizationId (legacy single-org
   // keys). Enforced in requireApiKey; scopes gate WHAT, this gates WHOSE.
   allowedOrgIds: integer("allowed_org_ids").array(),
+  // Set on keys created by POST /api/admin/api-keys/:id/rotate — points at the
+  // key this one replaced (which keeps working until its grace expiry).
+  rotatedFromId: integer("rotated_from_id"),
   lastUsedAt: timestamp("last_used_at"),
   expiresAt: timestamp("expires_at"),
   active: boolean("active").notNull().default(true),
@@ -1406,6 +1409,20 @@ export const apiKeyRequestLogs = pgTable("api_key_request_logs", {
 });
 
 export type ApiKeyRequestLog = typeof apiKeyRequestLogs.$inferSelect;
+
+// Failed key-auth attempts (invalid/expired key presented). Feeds the per-IP
+// brute-force limiter and the security-alert emails. presentedPrefix stores
+// only the first 12 chars of whatever was presented — enough to tell a typo'd
+// real key from random guessing, never a usable secret.
+export const apiAuthFailures = pgTable("api_auth_failures", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  ip: text("ip"),
+  path: text("path"),
+  presentedPrefix: text("presented_prefix"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ApiAuthFailure = typeof apiAuthFailures.$inferSelect;
 
 export const insertDiscountSchema2 = createInsertSchema(discounts).omit({ id: true, createdAt: true, updatedAt: true, timesUsed: true, totalDiscountedCents: true });
 export type InsertDiscount2 = z.infer<typeof insertDiscountSchema2>;
@@ -1730,6 +1747,71 @@ export const sponsorshipProspects = pgTable("sponsorship_prospects", {
 export const insertSponsorshipProspectSchema = createInsertSchema(sponsorshipProspects).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertSponsorshipProspect = z.infer<typeof insertSponsorshipProspectSchema>;
 export type SponsorshipProspect = typeof sponsorshipProspects.$inferSelect;
+
+// ── Grant funding (USG workspace) ───────────────────────────────────────────
+// Funder directory + application tracker. Brings the grants process in-house:
+// what's out there, what we applied for, what got approved/declined and for
+// how much. Applications keep a denormalised funderName so history survives
+// funder-row deletion.
+
+export const grantApplicationStatusEnum = pgEnum("grant_application_status", [
+  "planning", "drafting", "submitted", "approved", "declined", "paid", "acquitted", "withdrawn",
+]);
+
+export const grantFunders = pgTable("grant_funders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  funderType: text("funder_type"),           // Class 4 gaming trust | community trust | council | philanthropic
+  geography: text("geography"),
+  whatTheyFund: text("what_they_fund"),
+  priorityScore: integer("priority_score"),  // 1-5
+  typicalGrant: text("typical_grant"),
+  maxGrant: text("max_grant"),
+  applicationWindows: text("application_windows"),
+  eligibility: text("eligibility"),
+  relationshipRequirements: text("relationship_requirements"),
+  proSportExcluded: boolean("pro_sport_excluded"), // Class-4 trusts barring professional sport → SIU ineligible
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  contactPhone: text("contact_phone"),
+  website: text("website"),
+  segment: text("segment"),
+  notes: text("notes"),
+  archived: boolean("archived").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const grantApplications = pgTable("grant_applications", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  funderId: integer("funder_id").references(() => grantFunders.id, { onDelete: "set null" }),
+  funderName: text("funder_name").notNull(),
+  projectTitle: text("project_title").notNull(),
+  purpose: text("purpose"),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  amountRequestedCents: integer("amount_requested_cents").notNull().default(0),
+  amountApprovedCents: integer("amount_approved_cents"),
+  status: grantApplicationStatusEnum("status").notNull().default("planning"),
+  round: text("round"),                      // e.g. "Aug 2026 committee"
+  owner: text("owner"),                      // Tim Shanahan / Daniel / Ryan
+  referenceNumber: text("reference_number"),
+  submittedAt: timestamp("submitted_at"),
+  decisionAt: timestamp("decision_at"),
+  paidAt: timestamp("paid_at"),
+  acquittalDueAt: timestamp("acquittal_due_at"),
+  acquittedAt: timestamp("acquitted_at"),
+  docsUrl: text("docs_url"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertGrantFunderSchema = createInsertSchema(grantFunders).omit({ id: true, createdAt: true, updatedAt: true });
+export type GrantFunder = typeof grantFunders.$inferSelect;
+export const insertGrantApplicationSchema = createInsertSchema(grantApplications).omit({ id: true, createdAt: true, updatedAt: true });
+export type GrantApplication = typeof grantApplications.$inferSelect;
 
 // ── Billboard sales (Go Media contra resell) ────────────────────────────────
 // USG holds a $250k contra credit with Go Media. We resell slices of that

@@ -125,9 +125,46 @@ export async function sendConfirmationEmail(params: {
 
   const settings = await storage.getCampSettings(params.campId);
 
-  const defaultFrom = "CUFC Camps <noreply@cufc.co.nz>";
+  // Brand the defaults by the club that owns the camp. Per-camp overrides in
+  // camp_settings always win. SIU sends from the verified cufc.co.nz domain
+  // (southislandunited.com isn't verified in Resend yet) with an SIU name.
+  let isSiu = false;
+  try {
+    const program = await storage.getProgram(params.campId);
+    isSiu = program?.organizationId === 2; // South Island United
+  } catch {}
+
+  const defaultFrom = isSiu
+    ? "South Island United Camps <noreply@cufc.co.nz>"
+    : "CUFC Camps <noreply@cufc.co.nz>";
   const defaultSubject = "Booking Confirmed — {{campName}}";
-  const defaultBody = `
+  const siuDefaultBody = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background: linear-gradient(135deg, #000000, #1B3D24); padding: 32px; border-radius: 16px 16px 0 0; text-align: center;">
+        <h1 style="color: #C59949; margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 1px;">Booking Confirmed</h1>
+        <p style="color: rgba(255,255,255,0.85); margin: 8px 0 0;">{{campName}}</p>
+      </div>
+      <div style="background: #f8fafc; padding: 32px; border: 1px solid #e2e8f0; border-top: 0; border-radius: 0 0 16px 16px;">
+        <p style="color: #334155; font-size: 16px; margin: 0 0 16px;">Hi {{parentName}},</p>
+        <p style="color: #475569; font-size: 14px; line-height: 1.6; margin: 0 0 24px;">
+          Thank you for booking! Here are your details:
+        </p>
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 0 0 24px;">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr><td style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 0;">Children</td><td style="color: #1e293b; font-size: 14px; padding: 6px 0; text-align: right;">{{childrenList}}</td></tr>
+            <tr><td style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 0;">Dates</td><td style="color: #1e293b; font-size: 14px; padding: 6px 0; text-align: right;">{{campDates}}</td></tr>
+            <tr><td style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 0;">Location</td><td style="color: #1e293b; font-size: 14px; padding: 6px 0; text-align: right;">{{location}}</td></tr>
+            <tr style="border-top: 1px solid #e2e8f0;"><td style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 0 6px;">Total Paid</td><td style="color: #1e293b; font-size: 16px; font-weight: 600; padding: 10px 0 6px; text-align: right;">{{totalPaid}}</td></tr>
+          </table>
+        </div>
+        <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin: 0;">
+          If you have any questions, reply to this email or contact us at info@cufc.co.nz
+        </p>
+      </div>
+      <p style="text-align: center; color: #94a3b8; font-size: 11px; margin: 16px 0 0;">South Island United — Uniting the South</p>
+    </div>
+  `;
+  const defaultBody = isSiu ? siuDefaultBody : `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
       <div style="background: linear-gradient(135deg, #1e3a5f, #2563eb); padding: 32px; border-radius: 16px 16px 0 0; text-align: center;">
         <h1 style="color: white; margin: 0; font-size: 24px;">Booking Confirmed!</h1>

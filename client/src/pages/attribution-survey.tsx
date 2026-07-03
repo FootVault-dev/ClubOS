@@ -1,19 +1,14 @@
 import { useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CheckCircle, Sparkles } from "lucide-react";
 import { SiInstagram, SiFacebook, SiYoutube, SiTiktok, SiGoogle } from "react-icons/si";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { brandForOrg } from "@/lib/camp-brand";
 
-const BRAND = {
-  blue: '#22399B',
-  darkBlue: '#221F7A',
-  white: '#FBFBFC',
-  gold: '#D9B10F',
-};
-
+// clubTint entries take the owning club's colour at render time.
 const SOURCES = [
   { id: "instagram", label: "Instagram", icon: SiInstagram, color: "#E4405F", bg: "#E4405F12" },
   { id: "facebook", label: "Facebook", icon: SiFacebook, color: "#1877F2", bg: "#1877F212" },
@@ -21,8 +16,8 @@ const SOURCES = [
   { id: "tiktok", label: "TikTok", icon: SiTiktok, color: "#000000", bg: "#00000008" },
   { id: "google", label: "Google Search", icon: SiGoogle, color: "#4285F4", bg: "#4285F412" },
   { id: "facebook_ad", label: "Facebook / Instagram Ad", icon: SiFacebook, color: "#1877F2", bg: "#1877F212" },
-  { id: "word_of_mouth", label: "Word of Mouth", icon: null, emoji: "🗣️", color: BRAND.blue, bg: `${BRAND.blue}08` },
-  { id: "friend_family", label: "Friend or Family", icon: null, emoji: "👋", color: BRAND.blue, bg: `${BRAND.blue}08` },
+  { id: "word_of_mouth", label: "Word of Mouth", icon: null, emoji: "🗣️", clubTint: true, color: "#22399B", bg: "#22399B08" },
+  { id: "friend_family", label: "Friend or Family", icon: null, emoji: "👋", clubTint: true, color: "#22399B", bg: "#22399B08" },
   { id: "school_club", label: "School or Club", icon: null, emoji: "🏫", color: "#059669", bg: "#05966912" },
   { id: "billboard_sign", label: "Billboard or Sign", icon: null, emoji: "📋", color: "#D97706", bg: "#D9770612" },
   { id: "email_newsletter", label: "Email / Newsletter", icon: null, emoji: "📧", color: "#7C3AED", bg: "#7C3AED12" },
@@ -33,6 +28,20 @@ export default function AttributionSurvey() {
   const [, params] = useRoute("/:slug/feedback");
   const [, setLocation] = useLocation();
   const slug = params?.slug || "";
+
+  // Brand off the camp's owning club (shares the landing/booking page query cache).
+  const { data: campData } = useQuery<{ organization?: { slug: string; name: string; logoUrl: string | null } }>({
+    queryKey: ["/api/public/camps", slug],
+    queryFn: async () => {
+      const res = await fetch(`/api/public/camps/${slug}`);
+      if (!res.ok) throw new Error("Camp not found");
+      return res.json();
+    },
+    enabled: !!slug,
+  });
+  const clubBrand = brandForOrg(campData?.organization?.slug);
+  const BRAND = { blue: clubBrand.primary, darkBlue: clubBrand.dark, white: clubBrand.pageBg, gold: clubBrand.gold };
+  const sources = SOURCES.map(s => (s as any).clubTint ? { ...s, color: clubBrand.primary, bg: `${clubBrand.primary}08` } : s);
   const urlParams = new URLSearchParams(window.location.search);
   const registrationId = urlParams.get("registrationId");
   const [selected, setSelected] = useState<string | null>(null);
@@ -102,10 +111,12 @@ export default function AttributionSurvey() {
       <header className="bg-white border-b border-slate-100">
         <div className="max-w-3xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: BRAND.blue }}>
-              <span className="text-white font-bold text-[9px]">CU</span>
-            </div>
-            <span className="text-[12px] text-slate-400 font-medium">Christchurch United FC</span>
+            <img
+              src={campData?.organization?.logoUrl || clubBrand.logoUrl}
+              alt={campData?.organization?.name || clubBrand.clubName}
+              className="w-7 h-7 object-contain"
+            />
+            <span className="text-[12px] text-slate-400 font-medium">{campData?.organization?.name || clubBrand.clubName}</span>
           </div>
           <button
             onClick={handleSkip}
@@ -133,7 +144,7 @@ export default function AttributionSurvey() {
         </div>
 
         <div className="grid grid-cols-2 gap-3" data-testid="attribution-options">
-          {SOURCES.map(src => {
+          {sources.map(src => {
             const isSelected = selected === src.id;
             return (
               <button

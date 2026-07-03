@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Lock, ShieldCheck, CreditCard, CheckCircle, Calendar, User } from "lucide-react";
 import { trackEvent, generateEventId } from "@/lib/meta-pixel";
 import { formatCurrency } from "@/lib/format";
+import { brandForOrg, type CampBrand } from "@/lib/camp-brand";
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "");
 
@@ -19,6 +20,7 @@ interface CheckoutData {
   currency: string;
   campName: string;
   campSlug: string;
+  organizationSlug?: string | null;
   parentName: string;
   parentEmail: string;
   items: { dateName: string; productType: string; childIndex: number }[];
@@ -31,7 +33,7 @@ const sessionTypeLabels: Record<string, string> = {
   FULL_DAY: "Full Day",
 };
 
-function PaymentForm({ checkoutData, slug }: { checkoutData: CheckoutData; slug: string }) {
+function PaymentForm({ checkoutData, slug, brand }: { checkoutData: CheckoutData; slug: string; brand: CampBrand }) {
   const stripe = useStripe();
   const elements = useElements();
   const [, setLocation] = useLocation();
@@ -115,7 +117,7 @@ function PaymentForm({ checkoutData, slug }: { checkoutData: CheckoutData; slug:
         <div className="lg:col-span-3 space-y-6">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm" data-testid="card-payment-details">
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2.5 mb-6">
-              <CreditCard className="w-5 h-5 text-blue-600" /> Payment Details
+              <CreditCard className="w-5 h-5" style={{ color: brand.primary }} /> Payment Details
             </h2>
             <PaymentElement
               options={{
@@ -139,7 +141,8 @@ function PaymentForm({ checkoutData, slug }: { checkoutData: CheckoutData; slug:
           <Button
             type="submit"
             disabled={!stripe || processing}
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white border-0 rounded-xl h-14 text-[16px] font-semibold shadow-lg shadow-blue-600/20 transition-all"
+            className="w-full text-white border-0 rounded-xl h-14 text-[16px] font-semibold shadow-lg transition-all hover:opacity-90"
+            style={{ background: brand.primary, boxShadow: `0 8px 24px ${brand.primary}30` }}
             data-testid="button-pay"
           >
             <Lock className="w-4 h-4 mr-2" />
@@ -155,12 +158,12 @@ function PaymentForm({ checkoutData, slug }: { checkoutData: CheckoutData; slug:
         <div className="lg:col-span-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:sticky lg:top-24" data-testid="card-order-summary">
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2.5 mb-5">
-              <CheckCircle className="w-5 h-5 text-blue-600" /> Order Summary
+              <CheckCircle className="w-5 h-5" style={{ color: brand.primary }} /> Order Summary
             </h2>
             <div className="space-y-3 mb-5">
               {Object.entries(groupedItems).map(([childName, items]) => (
                 <div key={childName} className="space-y-2">
-                  <span className="text-[12px] font-semibold text-blue-600 uppercase tracking-wider">{childName}</span>
+                  <span className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: brand.primary }}>{childName}</span>
                   {items.map((item, i) => (
                     <div key={i} className="flex items-start justify-between rounded-xl border border-slate-100 bg-slate-50/50 px-4 py-3">
                       <div className="min-w-0">
@@ -201,7 +204,7 @@ function PaymentForm({ checkoutData, slug }: { checkoutData: CheckoutData; slug:
                 <span>Your payment is securely processed by Stripe. We never store your card details.</span>
               </div>
               <div className="flex items-start gap-2.5 text-[12px] text-slate-400">
-                <User className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                <User className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: brand.primary }} />
                 <span>Booking for <strong className="text-slate-600">{checkoutData.parentName}</strong> ({checkoutData.parentEmail})</span>
               </div>
             </div>
@@ -218,6 +221,7 @@ export default function CheckoutPage() {
   const [checkoutData, setCheckoutData] = useState<CheckoutData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const brand = brandForOrg(checkoutData?.organizationSlug);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -311,7 +315,7 @@ export default function CheckoutPage() {
             appearance: {
               theme: "stripe",
               variables: {
-                colorPrimary: "#2563eb",
+                colorPrimary: brand.primary,
                 colorBackground: "#ffffff",
                 colorText: "#1e293b",
                 colorDanger: "#ef4444",
@@ -327,8 +331,8 @@ export default function CheckoutPage() {
                   padding: "12px 14px",
                 },
                 ".Input:focus": {
-                  border: "1px solid #93c5fd",
-                  boxShadow: "0 0 0 3px rgba(37,99,235,0.1)",
+                  border: `1px solid ${brand.primary}80`,
+                  boxShadow: `0 0 0 3px ${brand.primary}15`,
                 },
                 ".Label": {
                   fontSize: "13px",
@@ -341,14 +345,14 @@ export default function CheckoutPage() {
                   borderRadius: "12px",
                 },
                 ".Tab--selected": {
-                  border: "2px solid #2563eb",
-                  backgroundColor: "#eff6ff",
+                  border: `2px solid ${brand.primary}`,
+                  backgroundColor: `${brand.primary}08`,
                 },
               },
             },
           }}
         >
-          <PaymentForm checkoutData={checkoutData} slug={slug} />
+          <PaymentForm checkoutData={checkoutData} slug={slug} brand={brand} />
         </Elements>
       </main>
     </div>
