@@ -47,6 +47,7 @@ export function workspaceTypeFor(orgSlug: string | undefined | null): WorkspaceT
 
 const campsTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "camps", title: "Camps", url: "/admin/camps" },
   { slug: "academy", title: "Academy", url: "/admin/academy" },
   { slug: "registrations", title: "Registrations", url: "/admin/registrations" },
@@ -63,6 +64,7 @@ const campsTabs: TabDef[] = [
 
 const venueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "calendar", title: "Bookings Calendar", url: "/admin/calendar" },
   { slug: "bookings", title: "Bookings", url: "/admin/bookings" },
   { slug: "booking-requests", title: "Booking Requests", url: "/admin/booking-requests" },
@@ -80,6 +82,7 @@ const venueTabs: TabDef[] = [
 
 const leagueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "competitions", title: "Terms", url: "/admin/competitions" },
   { slug: "teams", title: "Teams", url: "/admin/teams" },
   { slug: "payments", title: "Payments", url: "/admin/payments" },
@@ -96,6 +99,7 @@ const leagueTabs: TabDef[] = [
 
 const tournamentTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "tournaments", title: "Tournaments", url: "/admin/tournaments" },
   { slug: "clubs", title: "Clubs", url: "/admin/clubs" },
   { slug: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge" },
@@ -115,6 +119,7 @@ const tournamentTabs: TabDef[] = [
 
 const gymnasticsTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "programs", title: "Programs", url: "/admin/programs" },
   { slug: "cugc-registrations", title: "Registrations", url: "/admin/cugc-registrations" },
   { slug: "cugc-free-sessions", title: "Free Sessions", url: "/admin/cugc-free-sessions" },
@@ -128,6 +133,7 @@ const gymnasticsTabs: TabDef[] = [
 
 const groupTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "calendar", title: "Calendar", url: "/admin/calendar" },
   { slug: "projects", title: "Projects", url: "/admin/projects" },
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
@@ -141,6 +147,7 @@ const groupTabs: TabDef[] = [
 
 const printsTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "jobs", title: "Jobs", url: "/admin/print-jobs" },
   { slug: "orders", title: "Orders", url: "/admin/print-orders" },
   { slug: "materials", title: "Materials", url: "/admin/print-materials" },
