@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -7452,6 +7452,76 @@ export async function registerRoutes(
       if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
       await db.delete(grantApplications).where(eq(grantApplications.id, id));
       res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // ── OFC Pro League licensing tracker (SIU workspace) ─────────────────────
+  // Live workbook of every licensing criterion + evidence sub-items. Ryan/Zach
+  // work it toward the resubmission deadline. Org-scoped (SIU=2) like grants.
+  const LICENSING_CRIT_FIELDS = [
+    "status", "owner", "priority", "maturityTarget", "actionRequired", "keyRisk",
+    "sourceUrls", "ofcFeedback", "resubmitNeeded", "notes", "assessment", "deadline",
+    "grade", "name", "category",
+  ] as const;
+  const LICENSING_SUB_FIELDS = [
+    "status", "description", "required", "actionRequired", "evidence2025", "sourceUrls", "dueDate",
+  ] as const;
+
+  app.get("/api/admin/licensing/criteria", requireAuth, requireTab("licensing"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const criteria = await db.select().from(licensingCriteria)
+        .where(eq(licensingCriteria.organizationId, orgId))
+        .orderBy(asc(licensingCriteria.sortOrder));
+      const subs = await db.select().from(licensingSubtasks)
+        .where(eq(licensingSubtasks.organizationId, orgId));
+      const byCrit: Record<number, { total: number; done: number }> = {};
+      for (const s of subs) {
+        const b = (byCrit[s.criterionId] ||= { total: 0, done: 0 });
+        b.total++; if (s.status === "done" || s.status === "na") b.done++;
+      }
+      res.json(criteria.map((c) => ({ ...c, subtaskTotal: byCrit[c.id]?.total || 0, subtaskDone: byCrit[c.id]?.done || 0 })));
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.get("/api/admin/licensing/criteria/:id", requireAuth, requireTab("licensing"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [crit] = await db.select().from(licensingCriteria).where(eq(licensingCriteria.id, id));
+      if (!crit) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, crit.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const subtasks = await db.select().from(licensingSubtasks)
+        .where(eq(licensingSubtasks.criterionId, id))
+        .orderBy(asc(licensingSubtasks.sortOrder));
+      res.json({ ...crit, subtasks });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/licensing/criteria/:id", requireAuth, requireTab("licensing"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(licensingCriteria).where(eq(licensingCriteria.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = { updatedAt: new Date() };
+      for (const k of LICENSING_CRIT_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k];
+      const [updated] = await db.update(licensingCriteria).set(patch).where(eq(licensingCriteria.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/licensing/subtasks/:id", requireAuth, requireTab("licensing"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const [existing] = await db.select().from(licensingSubtasks).where(eq(licensingSubtasks.id, id));
+      if (!existing) return res.status(404).json({ message: "not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = { updatedAt: new Date() };
+      for (const k of LICENSING_SUB_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k];
+      const [updated] = await db.update(licensingSubtasks).set(patch).where(eq(licensingSubtasks.id, id)).returning();
+      res.json(updated);
     } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 

@@ -1839,6 +1839,62 @@ export type GrantFunder = typeof grantFunders.$inferSelect;
 export const insertGrantApplicationSchema = createInsertSchema(grantApplications).omit({ id: true, createdAt: true, updatedAt: true });
 export type GrantApplication = typeof grantApplications.$inferSelect;
 
+// ── OFC Pro League licensing tracker (SIU workspace) ────────────────────────
+// Live workbook of every licensing criterion + its evidence sub-items. Seeded
+// from the "Analysis Tracker.xlsx" matrix. Ryan/Zach work it together toward the
+// resubmission deadline; per-criterion OFC feedback + working status + subtask
+// checklist. Rows keyed by organizationId (SIU = 2) like every org-scoped table.
+
+export const licensingCriteria = pgTable("licensing_criteria", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),                    // 'S.01', 'P.12', 'Article 21.2(d)'
+  category: text("category").notNull(),            // Sporting | Legal | Financial | ...
+  name: text("name").notNull(),
+  grade: text("grade").notNull().default("A"),     // A | B | C
+  requirementType: text("requirement_type"),
+  owner: text("owner"),                            // Ryan | Dan | Zach | null
+  deadline: date("deadline"),
+  status: text("status").notNull().default("not_started"),
+  assessment: text("assessment"),                  // OFC-material assessment
+  priority: text("priority"),                      // High | Medium | Low
+  maturityTarget: integer("maturity_target"),      // 1 or 3 (score-3 bar)
+  actionRequired: text("action_required"),
+  evidence2025: text("evidence_2025"),
+  keyRisk: text("key_risk"),
+  sourceUrls: text("source_urls"),
+  ofcFeedback: text("ofc_feedback"),               // OFC review feedback → resubmit
+  resubmitNeeded: boolean("resubmit_needed").notNull().default(false),
+  notes: text("notes"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const licensingSubtasks = pgTable("licensing_subtasks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  criterionId: integer("criterion_id").notNull().references(() => licensingCriteria.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),                    // parent criterion code (denormalised)
+  itemNum: text("item_num"),
+  description: text("description").notNull(),
+  grade: text("grade"),
+  required: boolean("required").notNull().default(true),
+  dueDate: date("due_date"),
+  status: text("status").notNull().default("not_started"), // not_started | in_progress | done | na
+  evidence2025: text("evidence_2025"),
+  actionRequired: text("action_required"),
+  sourceUrls: text("source_urls"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertLicensingCriterionSchema = createInsertSchema(licensingCriteria).omit({ id: true, createdAt: true, updatedAt: true });
+export type LicensingCriterion = typeof licensingCriteria.$inferSelect;
+export const insertLicensingSubtaskSchema = createInsertSchema(licensingSubtasks).omit({ id: true, createdAt: true, updatedAt: true });
+export type LicensingSubtask = typeof licensingSubtasks.$inferSelect;
+
 // ── Billboard sales (Go Media contra resell) ────────────────────────────────
 // USG holds a $250k contra credit with Go Media. We resell slices of that
 // credit to local businesses at 20-30% off rate-card, target $200k revenue.
