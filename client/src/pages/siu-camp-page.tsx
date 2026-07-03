@@ -403,7 +403,13 @@ export default function SiuCampPage({ data, slug, activeVariants, onBookClick }:
               },
               {
                 icon: MapPin, label: "Drop Off + Pick Up",
-                lines: [pc.infoLocation || camp.location || "United Sports Centre", pc.infoLocationAddress || "466 Yaldhurst Road"],
+                // camp.location holds "Venue, Street" — split so the venue and
+                // address render as separate lines without duplicating either.
+                lines: pc.infoLocation
+                  ? [pc.infoLocation, pc.infoLocationAddress].filter(Boolean)
+                  : camp.location
+                    ? String(camp.location).split(",").map((s: string) => s.trim())
+                    : ["United Sports Centre", "466 Yaldhurst Road"],
                 testid: "info-card-location",
               },
               {
