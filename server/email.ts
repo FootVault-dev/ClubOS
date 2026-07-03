@@ -1,4 +1,5 @@
 import { storage } from "./storage";
+import { campFromForOrg } from "@shared/org-domains";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 
@@ -126,17 +127,17 @@ export async function sendConfirmationEmail(params: {
   const settings = await storage.getCampSettings(params.campId);
 
   // Brand the defaults by the club that owns the camp. Per-camp overrides in
-  // camp_settings always win. SIU sends from the verified cufc.co.nz domain
-  // (southislandunited.com isn't verified in Resend yet) with an SIU name.
+  // camp_settings always win. Each workspace sends from its OWN verified domain
+  // (see @shared/org-domains) — SIU → southislandunited.com, CUFC → cufc.co.nz.
+  let orgId: number | undefined;
   let isSiu = false;
   try {
     const program = await storage.getProgram(params.campId);
-    isSiu = program?.organizationId === 2; // South Island United
+    orgId = program?.organizationId ?? undefined;
+    isSiu = orgId === 2; // South Island United — drives the black/gold body below
   } catch {}
 
-  const defaultFrom = isSiu
-    ? "South Island United Camps <noreply@cufc.co.nz>"
-    : "CUFC Camps <noreply@cufc.co.nz>";
+  const defaultFrom = campFromForOrg(orgId);
   const defaultSubject = "Booking Confirmed — {{campName}}";
   const siuDefaultBody = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -220,7 +221,7 @@ export async function sendConfirmationEmail(params: {
 // Mini Football Leagues — team registration emails (black + gold brand)
 // ---------------------------------------------------------------------------
 
-const MFL_FROM = "Mini Football Leagues <noreply@cufc.co.nz>";
+const MFL_FROM = "Mini Football Leagues <noreply@minifootball.co.nz>";
 const MFL_REPLY_TO = "minifootball@cufc.co.nz";
 const MFL_LOGO_URL = "https://join.minifootball.co.nz/logos/mini-football-leagues.png";
 
@@ -301,7 +302,7 @@ export async function sendCicBroadcastEmail(params: {
   const card = is7s ? "#10131c" : "#141511";
   const border = is7s ? "#252a38" : "#2c2d23";
   const eyebrow = is7s ? "CIC Summer 7's" : "Christchurch International Cup";
-  const from = is7s ? "CIC 7's <noreply@cufc.co.nz>" : "Christchurch International Cup <noreply@cufc.co.nz>";
+  const from = is7s ? "CIC 7's <noreply@cic7s.com>" : "Christchurch International Cup <noreply@cicyouth.com>";
   const audienceLine = is7s
     ? "You're receiving this because you registered your interest in CIC Summer 7's."
     : "You're receiving this because your club or team is part of the Christchurch International Cup.";
@@ -598,7 +599,7 @@ export async function sendCic7sRegistrationNotification(params: {
   </div>`;
   return sendEmail({
     to: params.to,
-    from: "CIC 7's <noreply@cufc.co.nz>",
+    from: "CIC 7's <noreply@cic7s.com>",
     replyTo: params.email || undefined,
     subject: `New CIC 7's registration${fullName ? ` — ${fullName}` : ""}${params.category ? ` (${params.category})` : ""}`,
     html,
@@ -638,7 +639,7 @@ export async function sendCicContactNotification(params: {
   </div>`;
   return sendEmail({
     to: params.to,
-    from: "Christchurch International Cup <noreply@cufc.co.nz>",
+    from: "Christchurch International Cup <noreply@cicyouth.com>",
     replyTo: params.email || "info@cicyouth.com",
     subject: `New interest registration${params.name ? ` from ${params.name}` : ""} — cicyouth.com`,
     html,
@@ -680,7 +681,7 @@ export async function sendClubLogoConsentNotification(params: {
   </div>`;
   return sendEmail({
     to: params.to,
-    from: "Christchurch International Cup <noreply@cufc.co.nz>",
+    from: "Christchurch International Cup <noreply@cicyouth.com>",
     replyTo: params.repEmail,
     subject: `Club logo licence signed — ${params.clubName}`,
     html,
@@ -717,7 +718,7 @@ export async function sendCugcContactNotification(params: {
   </div>`;
   return sendEmail({
     to: params.to,
-    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    from: "Christchurch United Gymnastics Club <noreply@cugc.co.nz>",
     replyTo: params.email || "info@cugc.co.nz",
     subject: `New website enquiry${params.name ? ` from ${params.name}` : ""} — cugc.co.nz`,
     html,
@@ -790,7 +791,7 @@ export async function sendCugcEnrolmentConfirmation(params: {
     <p style="text-align:center;color:#013590;font-size:15px;font-style:italic;font-weight:600;margin:22px 0 0;">Be Bright, Be Beautiful, Be You.</p>`;
   return sendEmail({
     to: params.to,
-    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    from: "Christchurch United Gymnastics Club <noreply@cugc.co.nz>",
     replyTo: "info@cugc.co.nz",
     subject: `Enrolment confirmed — ${params.gymnastName} · ${params.programName}`,
     html: cugcEmailShell({ headline: "Enrolment Confirmed ✓", body }),
@@ -847,7 +848,7 @@ export async function sendCugcEnrolmentNotification(params: {
     <p style="color:#64748b;font-size:13px;line-height:1.65;margin:0;">Hit reply to email ${cugcEsc(params.parentName) || "the family"} directly, or manage this registration in <a href="https://app.usg.co.nz" style="color:#013590;font-weight:600;text-decoration:none;">ClubOS → Gymnastics → Registrations</a>.</p>`;
   return sendEmail({
     to: params.to,
-    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    from: "Christchurch United Gymnastics Club <noreply@cugc.co.nz>",
     replyTo: params.parentEmail || "info@cugc.co.nz",
     subject: `New enrolment — ${params.gymnastName} · ${params.programName} · ${cugcMoney(params.amount)}`,
     html: cugcEmailShell({ headline: "New Enrolment 🎉", body, footerNote: "Internal notification for CUGC admins." }),
@@ -903,7 +904,7 @@ export async function sendCugcFreeSessionConfirmation(params: {
   </div>`;
   return sendEmail({
     to: params.to,
-    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    from: "Christchurch United Gymnastics Club <noreply@cugc.co.nz>",
     replyTo: "info@cugc.co.nz",
     subject: `Free session booked — ${params.childName} · ${niceDate}`,
     html,
@@ -943,7 +944,7 @@ export async function sendCugcFreeSessionNotification(params: {
   </div>`;
   return sendEmail({
     to: params.to,
-    from: "Christchurch United Gymnastics Club <noreply@cufc.co.nz>",
+    from: "Christchurch United Gymnastics Club <noreply@cugc.co.nz>",
     replyTo: params.email,
     subject: `Free session: ${params.childName} · ${params.sessionLabel} ${params.sessionDate}`,
     html,
