@@ -180,8 +180,21 @@ export const TABS_BY_WORKSPACE_TYPE: Record<WorkspaceType, TabDef[]> = {
   prints: printsTabs,
 };
 
+// SIU shares the "camps" workspace type with CUFC, but has its own club-building
+// tools that must NOT appear for CUFC. Appended to SIU's tab set by slug.
+const siuExtraTabs: TabDef[] = [
+  { slug: "licensing", title: "OFC Licensing", url: "/admin/licensing" },
+  { slug: "events", title: "Community Events", url: "/admin/events" },
+];
+
 export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
-  return TABS_BY_WORKSPACE_TYPE[workspaceTypeFor(orgSlug)];
+  const base = TABS_BY_WORKSPACE_TYPE[workspaceTypeFor(orgSlug)];
+  if (orgSlug === "south-island-united") {
+    const main = base.filter((t) => !t.secondary);
+    const secondary = base.filter((t) => t.secondary);
+    return [...main, ...siuExtraTabs, ...secondary];
+  }
+  return base;
 }
 
 /**

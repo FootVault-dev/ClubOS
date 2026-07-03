@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState, type ReactNode, type CSSProperties } from
 import { useRoute } from "wouter";
 import { SignaturePad } from "@/components/signature-pad";
 import { PdfDoc } from "@/components/pdf-doc";
+import { NativeSign, type NativeSignData } from "@/pages/sign-native";
 import { Loader2, CheckCircle2, FileText, ShieldCheck, AlertTriangle, PenLine, X } from "lucide-react";
 
 interface Field {
@@ -20,6 +21,8 @@ interface OtherField {
 interface SignData {
   documentStatus: string; title: string; message: string | null; orgName: string;
   sequential?: boolean;
+  docType?: string;
+  native?: NativeSignData["native"] | null;
   signer: { name: string; email: string; status: string };
   parties: { name: string; status: string }[];
   fields: Field[];
@@ -138,6 +141,8 @@ export default function SignPage() {
 
   if (loading) return <Shell><div className="py-32 text-center text-slate-400"><Loader2 className="w-6 h-6 animate-spin mx-auto mb-3" />Loading document…</div></Shell>;
   if (error && !data) return <Shell><Card icon={<AlertTriangle className="w-8 h-8 text-amber-500 mx-auto" />} title="Link unavailable" sub={error} /></Shell>;
+  // e-Sign v2 native documents get the fully branded web-page experience.
+  if (data?.docType === "native" && data.native) return <NativeSign token={token} data={data as NativeSignData} />;
   if (declined) return <Shell><Card icon={<X className="w-8 h-8 text-slate-400 mx-auto" />} title="Signing declined" sub={`We've let ${data?.orgName} know you declined to sign.`} /></Shell>;
   if (done) return <Shell><Card icon={<CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />} title={`Signed — thank you, ${data?.signer.name}`} sub={done.allComplete ? "All parties have now signed. A copy is on its way to your inbox." : "Your signature has been recorded. You'll get a copy once everyone has signed."} /></Shell>;
   if (!data) return null;

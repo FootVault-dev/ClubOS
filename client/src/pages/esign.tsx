@@ -40,12 +40,22 @@ interface Doc {
   title: string;
   message: string | null;
   status: string; // draft | sent | viewed | completed | voided | declined
+  docType?: string; // 'pdf' | 'native' (template-rendered web page)
   sourceFileName: string | null;
   createdAt: string;
   sentAt: string | null;
   completedAt: string | null;
   signers: Signer[];
   events?: EventRow[];
+}
+interface Template {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  variables: { key: string; label: string; type: string; options?: string[]; allowCustom?: boolean; default?: string; required?: boolean }[];
+  settings: Record<string, any> | null;
+  brand: Record<string, any>;
 }
 
 const STATUS: Record<string, { label: string; cls: string }> = {
@@ -127,7 +137,7 @@ export default function ESign() {
             return (
               <button
                 key={d.id}
-                onClick={() => (d.status === "draft" ? setPrepareId(d.id) : setDetailId(d.id))}
+                onClick={() => (d.status === "draft" && d.docType !== "native" ? setPrepareId(d.id) : setDetailId(d.id))}
                 className="w-full text-left bg-white/[0.03] border border-white/5 rounded-2xl p-4 hover:bg-white/[0.05] transition-colors flex items-center gap-4"
               >
                 <div className="w-10 h-10 rounded-xl bg-amber-400/10 text-amber-400 flex items-center justify-center shrink-0">
@@ -147,7 +157,7 @@ export default function ESign() {
         </div>
       )}
 
-      {newOpen && <NewDocDialog onClose={() => setNewOpen(false)} onDone={(id) => { setNewOpen(false); invalidate(); setPrepareId(id); }} onErr={onErr} />}
+      {newOpen && <NewDocDialog onClose={() => setNewOpen(false)} onDone={(id) => { setNewOpen(false); invalidate(); setPrepareId(id); }} onDoneNative={(id) => { setNewOpen(false); invalidate(); setDetailId(id); }} onErr={onErr} />}
       {detailId != null && <DetailDialog id={detailId} onClose={() => setDetailId(null)} onChanged={invalidate} onErr={onErr} />}
       {prepareId != null && <EsignPrepare docId={prepareId} onClose={() => { setPrepareId(null); invalidate(); }} onSent={() => { setPrepareId(null); invalidate(); }} />}
     </div>
@@ -155,8 +165,10 @@ export default function ESign() {
 }
 
 // ── New document ─────────────────────────────────────────────────────────────
-function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone: (id: number) => void; onErr: (e: any) => void }) {
+function NewDocDialog({ onClose, onDone, onDoneNative, onErr }: { onClose: () => void; onDone: (id: number) => void; onDoneNative: (id: number) => void; onErr: (e: any) => void }) {
   const { toast } = useToast();
+  const { data: templates = [] } = useQuery<Template[]>({ queryKey: ["/api/admin/esign/templates"] });
+  const [mode, setMode] = useState<"pdf" | "template">("pdf");
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
   const [fileName, setFileName] = useState("");
@@ -201,11 +213,35 @@ function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone:
     onError: onErr,
   });
 
+  if (mode === "template") {
+    return <FromTemplateDialog templates={templates} onBack={() => setMode("pdf")} onClose={onClose} onDone={onDoneNative} onErr={onErr} />;
+  }
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader><DialogTitle>New document for signature</DialogTitle></DialogHeader>
-        <div className="space-y-4 py-1">
+        <div className="space-y-4 py-1 min-w-0 overflow-hidden">
+          {templates.length > 0 && (
+            <button
+              onClick={() => setMode("template")}
+              className="w-full min-w-0 text-left rounded-xl border border-amber-400/30 bg-amber-400/5 hover:bg-amber-400/10 transition-colors p-3.5 flex items-center gap-3 overflow-hidden"
+            >
+              <div className="w-9 h-9 rounded-lg bg-amber-400/15 text-amber-400 flex items-center justify-center shrink-0">
+                <FileSignature className="w-4.5 h-4.5" />
+              </div>
+              {/* No nowrap/truncate here: inside the grid-based DialogContent an
+                  unwrappable line inflates the column's min-content width and
+                  pushes EVERY field past the dialog edge. Let it wrap. */}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold">Use an agreement template</div>
+                <div className="text-xs text-muted-foreground">
+                  {templates.map((t) => t.name).join(" · ")} — branded web page, no PDF needed
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+            </button>
+          )}
           <div>
             <label className="text-xs text-muted-foreground">Document (PDF)</label>
             <label className="mt-1 flex items-center gap-2 px-3 py-3 rounded-lg border border-dashed border-input cursor-pointer hover:bg-accent/40 transition-colors">
@@ -258,6 +294,132 @@ function NewDocDialog({ onClose, onDone, onErr }: { onClose: () => void; onDone:
         <DialogFooter>
           <Button disabled={!valid || create.isPending} onClick={() => create.mutate()} className="gap-1.5">
             <Send className="w-4 h-4" /> Create &amp; add fields
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── From template (e-Sign v2 native) ────────────────────────────────────────
+// Pick a stored agreement template, set its variables (rate, start date, …),
+// enter the recipient — they get a fully branded signing web page, fill their
+// details inline and sign; you counter-sign after them.
+function FromTemplateDialog({ templates, onBack, onClose, onDone, onErr }: {
+  templates: Template[]; onBack: () => void; onClose: () => void; onDone: (id: number) => void; onErr: (e: any) => void;
+}) {
+  const { toast } = useToast();
+  const [tplId, setTplId] = useState<number>(templates[0]?.id ?? 0);
+  const tpl = templates.find((t) => t.id === tplId) ?? templates[0];
+  const [vars, setVars] = useState<Record<string, string>>(() => {
+    const seed: Record<string, string> = {};
+    for (const v of templates[0]?.variables ?? []) seed[v.key] = v.default || (v.options?.[0] ?? "");
+    return seed;
+  });
+  const [custom, setCustom] = useState<Record<string, boolean>>({});
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+
+  const pickTpl = (id: number) => {
+    setTplId(id);
+    const t = templates.find((x) => x.id === id);
+    const seed: Record<string, string> = {};
+    for (const v of t?.variables ?? []) seed[v.key] = v.default || (v.options?.[0] ?? "");
+    setVars(seed);
+    setCustom({});
+  };
+
+  const valid = tpl && /.+@.+\..+/.test(email.trim()) && (tpl.variables ?? []).every((v) => v.required === false || (vars[v.key] || "").trim());
+
+  const create = useMutation({
+    mutationFn: async (send: boolean) => {
+      const res = await apiRequest("POST", "/api/admin/esign/from-template", {
+        templateId: tpl.id,
+        variables: vars,
+        signerName: name.trim(),
+        signerEmail: email.trim(),
+        message: message.trim() || null,
+        send,
+      });
+      return res.json();
+    },
+    onSuccess: (doc: any, send) => {
+      toast({ title: send ? "Sent for signature" : "Draft saved", description: send ? `${name.trim() || email.trim()} has been emailed their signing link.` : "Send it from the document view when ready." });
+      onDone(doc.id);
+    },
+    onError: onErr,
+  });
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><FileSignature className="w-5 h-5 text-amber-400" /> New from template</DialogTitle></DialogHeader>
+        <div className="space-y-4 py-1 min-w-0 overflow-hidden">
+          {templates.length > 1 && (
+            <div>
+              <label className="text-xs text-muted-foreground">Template</label>
+              <select value={tplId} onChange={(e) => pickTpl(parseInt(e.target.value))} className="mt-1 w-full h-10 rounded-lg border border-input bg-background px-3 text-sm">
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
+          {templates.length === 1 && (
+            <div className="rounded-xl border border-input p-3">
+              <div className="text-sm font-semibold">{tpl.name}</div>
+              {tpl.description && <div className="text-xs text-muted-foreground mt-0.5">{tpl.description}</div>}
+            </div>
+          )}
+
+          {(tpl?.variables ?? []).map((v) => (
+            <div key={v.key}>
+              <label className="text-xs text-muted-foreground">{v.label}</label>
+              {v.type === "select" && v.options?.length && !custom[v.key] ? (
+                <div className="flex gap-2 mt-1">
+                  <select value={vars[v.key] ?? ""} onChange={(e) => setVars((p) => ({ ...p, [v.key]: e.target.value }))} className="flex-1 h-10 rounded-lg border border-input bg-background px-3 text-sm">
+                    {v.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                  {v.allowCustom && (
+                    <Button type="button" size="sm" variant="outline" className="h-10" onClick={() => { setCustom((p) => ({ ...p, [v.key]: true })); setVars((p) => ({ ...p, [v.key]: "" })); }}>
+                      Custom
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <Input
+                  type={v.type === "date" ? "date" : "text"}
+                  value={vars[v.key] ?? ""}
+                  onChange={(e) => setVars((p) => ({ ...p, [v.key]: e.target.value }))}
+                  placeholder={v.type === "select" ? "e.g. $27.50" : ""}
+                  className="mt-1"
+                />
+              )}
+            </div>
+          ))}
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground">Recipient name</label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" className="mt-1" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Recipient email</label>
+              <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@example.com" className="mt-1" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Message (optional)</label>
+            <Input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Welcome to the team — please review and sign." className="mt-1" />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            They sign first on a branded web page (details filled inline, under-18s get a guardian co-sign step), then you counter-sign. Everyone gets the completed PDF automatically.
+          </p>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onBack}>Back</Button>
+          <Button variant="outline" disabled={!valid || create.isPending} onClick={() => create.mutate(false)}>Save draft</Button>
+          <Button disabled={!valid || create.isPending} onClick={() => create.mutate(true)} className="gap-1.5">
+            <Send className="w-4 h-4" /> Send for signature
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -17,6 +17,7 @@ export interface CertSigner {
   signatureName: string | null;
   signatureImage: string | null; // data URL or raw base64 PNG
   signedAt: Date | string | null;
+  viewedAt?: Date | string | null; // first opened — evidences the review window before signing
   ip: string | null;
 }
 
@@ -145,14 +146,15 @@ export async function buildSignedPdf(opts: {
 
   for (let i = 0; i < opts.signers.length; i++) {
     const s = opts.signers[i];
-    ensureSpace(110);
+    const cardH = s.viewedAt ? 109 : 96;
+    ensureSpace(cardH + 16);
     // card border
     const cardTop = y;
-    const cardH = 96;
     page.drawRectangle({ x: margin, y: y - cardH, width: A4.w - margin * 2, height: cardH, borderColor: LINE, borderWidth: 1, color: rgb(0.99, 0.985, 0.97) });
     let cy = cardTop - 16;
     text(`${i + 1}.  ${s.name}`, margin + 12, cy, 11, bold, INK); cy -= 14;
     text(s.email, margin + 12, cy, 9, font, MUTE); cy -= 16;
+    if (s.viewedAt) { text("First viewed", margin + 12, cy, 8, bold, MUTE); text(fmtStamp(s.viewedAt), margin + 70, cy, 8, font, INK); cy -= 13; }
     text("Signed", margin + 12, cy, 8, bold, MUTE); text(fmtStamp(s.signedAt), margin + 70, cy, 8, font, INK); cy -= 13;
     text("IP address", margin + 12, cy, 8, bold, MUTE); text(s.ip || "—", margin + 70, cy, 8, font, INK); cy -= 13;
     text("Typed name", margin + 12, cy, 8, bold, MUTE); text(s.signatureName || "—", margin + 70, cy, 9, bold, INK);

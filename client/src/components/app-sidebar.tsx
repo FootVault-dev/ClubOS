@@ -93,6 +93,14 @@ const campsNav = [
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
 ];
 
+// South Island United shares the camps workspace type with CUFC but adds its own
+// club-building tools (must NOT show for CUFC).
+const siuNav = [
+  ...campsNav,
+  { tab: "licensing", title: "OFC Licensing", url: "/admin/licensing", icon: Award },
+  { tab: "events", title: "Community Events", url: "/admin/events", icon: Calendar },
+];
+
 const venueNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
@@ -418,8 +426,9 @@ export function AppSidebar() {
   const isGymnastics = isGymnasticsWorkspace(currentOrg?.slug);
   const isGroup = isGroupWorkspace(currentOrg?.slug);
   const isPrints = isPrintsWorkspace(currentOrg?.slug);
+  const isSiu = currentOrg?.slug === "south-island-united";
   const tournamentMainNav = cicView === "7s" ? tournament7sNav : tournamentNav;
-  const allMainNav = isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : campsNav;
+  const allMainNav = isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : isSiu ? siuNav : campsNav;
   const allSecondaryNav = isPrints ? printsSecondary : isGroup ? groupSecondary : isGymnastics ? gymnasticsSecondary : isTournament ? tournamentSecondary : isLeague ? leagueSecondary : isVenue ? venueSecondary : campsSecondary;
 
   // Filter nav by the user's tab whitelist for this workspace.
