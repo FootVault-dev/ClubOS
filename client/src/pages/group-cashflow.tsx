@@ -1,11 +1,11 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend, ReferenceLine,
 } from "recharts";
 import { TrendingDown, Gift, AlertTriangle, Sun, Snowflake, Wallet, Info } from "lucide-react";
+import { FinanceNav } from "@/components/finance-nav";
 
 interface Month {
   period: string;
@@ -86,12 +86,11 @@ export default function GroupCashflowPage() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
+      <FinanceNav />
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-white">Cashflow</h1>
         <p className="text-sm text-white/50 mt-1">
           Club-wide (Christchurch United FC Inc / USG) · {data.monthsCount} months to {fmtPeriod(data.dataThrough)}
-          <span className="mx-2">·</span>
-          <Link href="/admin/budget" className="text-blue-300 hover:text-blue-200">Budget & cost centres</Link>
         </p>
       </div>
 

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FinanceNav } from "@/components/finance-nav";
 import { ArrowRight, DollarSign, TrendingDown, TrendingUp, User } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend, ReferenceLine,
@@ -118,13 +119,12 @@ export default function GroupBudgetPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
+      <FinanceNav />
       <div className="flex items-baseline justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-white">Budget — {data.year}</h1>
           <p className="text-sm text-white/50 mt-1">
             {data.centres.length} cost centres · United Sports Group
-            <span className="mx-2">·</span>
-            <Link href="/admin/budget/xero" className="text-blue-300 hover:text-blue-200">Xero actuals</Link>
           </p>
         </div>
         <div className="flex items-center gap-6 text-right">

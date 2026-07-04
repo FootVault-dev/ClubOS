@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Link } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Plug, RefreshCw, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
+import { Plug, RefreshCw, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
+import { FinanceNav } from "@/components/finance-nav";
 
 interface SyncSummary {
   status: string;
@@ -64,9 +64,7 @@ export default function GroupBudgetXeroPage() {
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
-      <Link href="/admin/budget" className="inline-flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 mb-4">
-        <ArrowLeft className="w-3.5 h-3.5" /> Back to budget overview
-      </Link>
+      <FinanceNav />
 
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-white">Xero — Budget actuals</h1>
