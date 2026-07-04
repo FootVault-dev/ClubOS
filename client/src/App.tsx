@@ -57,6 +57,7 @@ import GroupProjects from "@/pages/group-projects";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
+import GroupCashflow from "@/pages/group-cashflow";
 import AdminAcademy from "@/pages/admin-academy";
 import VenueFacilities from "@/pages/venue-facilities";
 import VenueAddons from "@/pages/venue-addons";
@@ -207,6 +208,7 @@ function AdminRouter() {
         <Route path="/admin/budget/cost-centres/:slug" component={GroupBudgetCostCentre} />
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
+        <Route path="/admin/cashflow" component={GroupCashflow} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />

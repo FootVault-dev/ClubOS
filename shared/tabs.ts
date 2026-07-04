@@ -140,6 +140,7 @@ const groupTabs: TabDef[] = [
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
   { slug: "grants", title: "Grants", url: "/admin/grants" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
+  { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -200,6 +201,7 @@ export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
  */
 export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "budget", // Phase 1 construction — staff salaries visible. Daniel only.
+  "cashflow", // Club-wide cashflow insight (Xero patterns, wage-level data). Daniel only.
   "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
   "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.
   "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.

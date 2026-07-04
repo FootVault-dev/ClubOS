@@ -16242,6 +16242,16 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
+  // Club-wide cashflow insight — the strategic "why" layer (donation dependency,
+  // operating burn, seasonal danger zone). super_admin-only via the "cashflow"
+  // locked tab, because it exposes wage-level financials. Read-only.
+  app.get("/api/admin/cashflow/insight", requireAuth, requireTab("cashflow"), async (_req, res) => {
+    try {
+      const { buildCashflowInsight } = await import("./cashflow-insight");
+      res.json(buildCashflowInsight());
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   return httpServer;
 }
 

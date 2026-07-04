@@ -56,6 +56,7 @@ import {
   School,
   BellRing,
   CalendarCheck,
+  Waves,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -201,6 +202,7 @@ const groupNav = [
   { tab: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship", icon: Handshake },
   { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
+  { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
 ];
 
 const groupSecondary = [
