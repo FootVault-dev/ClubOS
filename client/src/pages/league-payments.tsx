@@ -727,6 +727,7 @@ function CashflowView({ competitionId }: { competitionId: number | null }) {
 }
 
 function CashflowChart({ series }: { series: CashflowWeek[] }) {
+  const [hover, setHover] = useState<number | null>(null);
   const W = 760, H = 260, padL = 46, padR = 46, padT = 16, padB = 34;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const baseline = padT + plotH;
@@ -751,52 +752,127 @@ function CashflowChart({ series }: { series: CashflowWeek[] }) {
   // X labels: aim for ~8 across.
   const step = Math.max(1, Math.ceil(n / 8));
 
+  const hv = hover != null ? series[hover] : null;
+  const hvLongDate = hv ? new Date(hv.weekStart + "T12:00:00").toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short" }) : "";
+  // Tooltip horizontal position as a % of the SVG width (SVG fills the wrapper at
+  // the viewBox aspect ratio, so x/W maps straight to a left %). Anchor flips near
+  // the edges so it never clips out of the card.
+  const hvPct = hover != null ? (xCenter(hover) / W) * 100 : 0;
+  const anchor = hvPct > 78 ? "translateX(-100%)" : hvPct < 22 ? "translateX(0)" : "translateX(-50%)";
+
   return (
     <div className="w-full overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ minWidth: n > 18 ? 640 : undefined }}>
-        {/* gridlines + left axis (per-week) + right axis (cumulative) */}
-        {[0, 0.5, 1].map((f, i) => {
-          const y = baseline - f * plotH;
-          return (
-            <g key={i}>
-              <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-              <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={9} fill="rgba(255,255,255,0.3)">{fmtAxis(maxWeekly * f)}</text>
-              <text x={W - padR + 6} y={y + 3} textAnchor="start" fontSize={9} fill="rgba(125,211,252,0.55)">{fmtAxis(maxCum * f)}</text>
-            </g>
-          );
-        })}
+      <div className="relative" style={{ minWidth: n > 18 ? 640 : undefined }}>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" onMouseLeave={() => setHover(null)}>
+          {/* gridlines + left axis (per-week) + right axis (cumulative) */}
+          {[0, 0.5, 1].map((f, i) => {
+            const y = baseline - f * plotH;
+            return (
+              <g key={i}>
+                <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+                <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={9} fill="rgba(255,255,255,0.3)">{fmtAxis(maxWeekly * f)}</text>
+                <text x={W - padR + 6} y={y + 3} textAnchor="start" fontSize={9} fill="rgba(125,211,252,0.55)">{fmtAxis(maxCum * f)}</text>
+              </g>
+            );
+          })}
 
-        {/* today marker — label sits in the headroom above the plot so it never overlaps a bar */}
-        {todayX != null && (
-          <g>
-            <line x1={todayX} y1={padT} x2={todayX} y2={baseline} stroke="rgba(255,255,255,0.28)" strokeWidth={1} strokeDasharray="3 3" />
-            <text x={todayX} y={11} textAnchor="middle" fontSize={8} fill="rgba(255,255,255,0.45)">today</text>
-          </g>
+          {/* hovered-column highlight band (drawn under the bars) */}
+          {hover != null && (
+            <rect x={xCenter(hover) - slot / 2} y={padT} width={slot} height={plotH} fill="rgba(255,255,255,0.04)" />
+          )}
+
+          {/* today marker — label sits in the headroom above the plot so it never overlaps a bar */}
+          {todayX != null && (
+            <g>
+              <line x1={todayX} y1={padT} x2={todayX} y2={baseline} stroke="rgba(255,255,255,0.28)" strokeWidth={1} strokeDasharray="3 3" />
+              <text x={todayX} y={11} textAnchor="middle" fontSize={8} fill="rgba(255,255,255,0.45)">today</text>
+            </g>
+          )}
+
+          {/* bars: collected (solid) + scheduled (translucent, dashed) stacked. The
+              hovered week brightens for premium tactile feedback. */}
+          {series.map((w, i) => {
+            const cx = xCenter(i);
+            const x = cx - barW / 2;
+            const aH = yBar(w.actualCents);
+            const pH = yBar(w.projectedCents);
+            const on = hover === i;
+            return (
+              <g key={i} style={{ transition: "opacity 120ms" }} opacity={hover == null || on ? 1 : 0.55}>
+                {w.actualCents > 0 && <rect x={x} y={baseline - aH} width={barW} height={aH} rx={2} fill={on ? "#e6cf86" : "#d1b96e"} />}
+                {w.projectedCents > 0 && <rect x={x} y={baseline - aH - pH} width={barW} height={pH} rx={2} fill={on ? "rgba(209,185,110,0.30)" : "rgba(209,185,110,0.18)"} stroke={on ? "rgba(209,185,110,0.9)" : "rgba(209,185,110,0.55)"} strokeWidth={1} strokeDasharray="3 2" />}
+              </g>
+            );
+          })}
+
+          {/* cumulative running-total line */}
+          {pastPts.length > 1 && <polyline points={pastPts.join(" ")} fill="none" stroke="#7dd3fc" strokeWidth={2} />}
+          {futurePts.length > 1 && <polyline points={futurePts.join(" ")} fill="none" stroke="#7dd3fc" strokeWidth={2} strokeDasharray="4 3" opacity={0.8} />}
+
+          {/* x labels */}
+          {series.map((w, i) => (i % step === 0 || i === n - 1) ? (
+            <text key={i} x={xCenter(i)} y={baseline + 14} textAnchor="middle" fontSize={8.5} fill="rgba(255,255,255,0.35)">{fmtWeek(w.weekStart)}</text>
+          ) : null)}
+
+          {/* hover crosshair + running-total marker dot */}
+          {hover != null && (
+            <g pointerEvents="none">
+              <line x1={xCenter(hover)} y1={padT} x2={xCenter(hover)} y2={baseline} stroke="rgba(125,211,252,0.35)" strokeWidth={1} />
+              <circle cx={xCenter(hover)} cy={yCum(series[hover].cumulativeCents)} r={4.5} fill="#7dd3fc" stroke="#0a0e1a" strokeWidth={2} />
+            </g>
+          )}
+
+          {/* invisible per-column hit areas (on top) — full height so the whole
+              column is hoverable, not just the bar. */}
+          {series.map((w, i) => (
+            <rect key={`h${i}`} x={xCenter(i) - slot / 2} y={padT} width={slot} height={plotH}
+              fill="transparent" style={{ cursor: "pointer" }}
+              onMouseEnter={() => setHover(i)} onMouseMove={() => setHover(i)} />
+          ))}
+        </svg>
+
+        {/* floating tooltip — positioned by % of the SVG width, flips near edges */}
+        {hv && (
+          <div
+            className="pointer-events-none absolute z-10 rounded-lg border border-white/10 bg-[#0a0e1a]/95 px-3 py-2 shadow-xl backdrop-blur-sm"
+            style={{ left: `${hvPct}%`, top: 6, transform: anchor, minWidth: 150 }}
+            data-testid="cashflow-tooltip"
+          >
+            <div className="flex items-center justify-between gap-3 mb-1.5">
+              <span className="text-[11px] font-semibold text-white">{hvLongDate}</span>
+              <span className={`text-[9px] uppercase tracking-wider ${hv.isPast ? "text-white/30" : "text-sky-300/70"}`}>{hv.isPast ? "collected" : "upcoming"}</span>
+            </div>
+            <div className="space-y-1">
+              {hv.actualCents > 0 && (
+                <Row dot="#d1b96e" label="Collected" value={formatCurrency(hv.actualCents, { fromCents: true })} vClass="text-[#e6cf86]" />
+              )}
+              {hv.projectedCents > 0 && (
+                <Row dot="rgba(209,185,110,0.55)" dashed label="Scheduled" value={formatCurrency(hv.projectedCents, { fromCents: true })} vClass="text-white/80" />
+              )}
+              {hv.actualCents === 0 && hv.projectedCents === 0 && (
+                <p className="text-[11px] text-white/30">No inflow this week</p>
+              )}
+              <div className="flex items-center justify-between gap-4 pt-1 mt-0.5 border-t border-white/10">
+                <span className="flex items-center gap-1.5 text-[11px] text-white/50"><span className="w-3 h-0.5 rounded-full" style={{ background: "#7dd3fc" }} />Running total</span>
+                <span className="text-[11px] font-semibold text-sky-300">{formatCurrency(hv.cumulativeCents, { fromCents: true })}</span>
+              </div>
+            </div>
+          </div>
         )}
+      </div>
+    </div>
+  );
+}
 
-        {/* bars: collected (solid) + scheduled (translucent, dashed) stacked */}
-        {series.map((w, i) => {
-          const cx = xCenter(i);
-          const x = cx - barW / 2;
-          const aH = yBar(w.actualCents);
-          const pH = yBar(w.projectedCents);
-          return (
-            <g key={i}>
-              {w.actualCents > 0 && <rect x={x} y={baseline - aH} width={barW} height={aH} rx={2} fill="#d1b96e" />}
-              {w.projectedCents > 0 && <rect x={x} y={baseline - aH - pH} width={barW} height={pH} rx={2} fill="rgba(209,185,110,0.18)" stroke="rgba(209,185,110,0.55)" strokeWidth={1} strokeDasharray="3 2" />}
-            </g>
-          );
-        })}
-
-        {/* cumulative running-total line */}
-        {pastPts.length > 1 && <polyline points={pastPts.join(" ")} fill="none" stroke="#7dd3fc" strokeWidth={2} />}
-        {futurePts.length > 1 && <polyline points={futurePts.join(" ")} fill="none" stroke="#7dd3fc" strokeWidth={2} strokeDasharray="4 3" opacity={0.8} />}
-
-        {/* x labels */}
-        {series.map((w, i) => (i % step === 0 || i === n - 1) ? (
-          <text key={i} x={xCenter(i)} y={baseline + 14} textAnchor="middle" fontSize={8.5} fill="rgba(255,255,255,0.35)">{fmtWeek(w.weekStart)}</text>
-        ) : null)}
-      </svg>
+// One line of the cashflow tooltip: a legend swatch, a label, and a right-aligned value.
+function Row({ dot, dashed, label, value, vClass }: { dot: string; dashed?: boolean; label: string; value: string; vClass: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="flex items-center gap-1.5 text-[11px] text-white/50">
+        <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: dot, border: dashed ? "1px dashed rgba(209,185,110,0.7)" : undefined }} />
+        {label}
+      </span>
+      <span className={`text-[11px] font-semibold ${vClass}`}>{value}</span>
     </div>
   );
 }
