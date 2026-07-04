@@ -101,6 +101,7 @@
     "xero-node": "^15.0.1",
     "xlsx": "^0.18.5",
     "zod": "^3.24.2",
+    "zod-to-json-schema": "^3.25.2",
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {

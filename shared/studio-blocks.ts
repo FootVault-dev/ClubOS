@@ -171,12 +171,10 @@ export const pageDocSchema = z.object({
 export type PageDoc = z.infer<typeof pageDocSchema>;
 
 // ── JSON Schema for structured generation ─────────────────────────────────────
-// `zod-to-json-schema` is NOT currently a dependency of this app (see package.json).
-// When the generation service is built (next increment) and that dep is added,
-// wire the helper here so the model can be constrained by the exact same schema:
-//
-//   import { zodToJsonSchema } from "zod-to-json-schema";
-//   export const pageDocJsonSchema = zodToJsonSchema(pageDocSchema, "PageDoc");
-//
-// TODO(studio): add `zod-to-json-schema` and export `pageDocJsonSchema` above.
-// Until then, pass `pageDocSchema` / `blockSchema` directly for validation.
+// DONE(studio): `zod-to-json-schema` is now a dependency and the JSON Schema
+// projection of `pageDocSchema` lives in `server/studio/schema.ts` as
+// `pageDocJsonSchema` (kept server-only so the lib never enters the client
+// bundle). The generation service (`server/studio/generate.ts`) feeds that JSON
+// Schema to the Anthropic `emit_page` tool's `input_schema` and re-validates the
+// result with `pageDocSchema` here. This module stays the single source of truth;
+// use `pageDocSchema` / `blockSchema` directly for any validation.

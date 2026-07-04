@@ -12562,6 +12562,274 @@ export async function registerRoutes(
     }
   });
 
+  // ── USG Studio (brand-aware AI proposal pages + Signal analytics) ─────────
+  // Admin routes are requireAuth + requireTab("studio"); org is resolved from the
+  // X-Workspace-Slug header (reusing esignOrgId, a generic workspace→org lookup).
+  // Public routes are unauthenticated: the proposal page (noindex) + the beacon.
+
+  // Map generation/service errors to the same status codes the AI routes use.
+  const studioErrStatus = (e: any): number =>
+    e?.status === 429 || e?.status === 529 ? 429
+      : /not configured/i.test(e?.message || "") ? 503
+      : /rate limit|overloaded/i.test(e?.message || "") ? 429
+      : /schema validation|invalid|parse/i.test(e?.message || "") ? 422
+      : 500;
+
+  // Parse a single cookie value out of the raw Cookie header (no cookie-parser
+  // is registered in this app). Used to read the AttributionOS usg_vid cookie.
+  const readCookie = (req: any, name: string): string | null => {
+    const raw = String(req.headers?.cookie || "");
+    if (!raw) return null;
+    for (const part of raw.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx === -1) continue;
+      if (part.slice(0, idx).trim() === name) {
+        try { return decodeURIComponent(part.slice(idx + 1).trim()); } catch { return part.slice(idx + 1).trim(); }
+      }
+    }
+    return null;
+  };
+
+  const studioDeviceFromUA = (ua: string | undefined): string | null => {
+    if (!ua) return null;
+    const s = ua.toLowerCase();
+    if (/ipad|tablet|playbook|silk|(android(?!.*mobile))/i.test(s)) return "tablet";
+    if (/mobi|iphone|ipod|android.*mobile|windows phone/i.test(s)) return "mobile";
+    return "desktop";
+  };
+
+  // Coarse country only, derived from an edge/proxy geo header — we NEVER store a
+  // raw IP for Studio analytics.
+  const studioCountry = (req: any): string | null => {
+    const h = req.headers || {};
+    const c = h["cf-ipcountry"] || h["x-vercel-ip-country"] || h["fly-client-country"] || h["x-country"] || null;
+    if (!c) return null;
+    const v = String(c).trim().toUpperCase();
+    return v && v !== "XX" ? v.slice(0, 2) : null;
+  };
+
+  // POST /api/admin/studio/generate — run generation, return the PageDoc (+ warnings).
+  app.post("/api/admin/studio/generate", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const { brief, references, liveData } = req.body || {};
+      if (!brief || typeof brief !== "string") return res.status(400).json({ message: "brief is required" });
+      const { generateStudioPage } = await import("./studio/generate");
+      const result = await generateStudioPage({ orgId, brief, references, liveData });
+      res.json({ content: result.doc, warnings: result.warnings, contentHash: result.contentHash, brandId: result.brandId });
+    } catch (e: any) {
+      console.error("[Studio generate] failed:", e);
+      res.status(studioErrStatus(e)).json({ message: e.message });
+    }
+  });
+
+  // POST /api/admin/studio — create/save a draft document. Returns { id, token }.
+  app.post("/api/admin/studio", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const b = req.body || {};
+      if (!b.brandId || typeof b.brandId !== "string") return res.status(400).json({ message: "brandId is required" });
+      if (!b.title || typeof b.title !== "string") return res.status(400).json({ message: "title is required" });
+      const { pageDocSchema } = await import("@shared/studio-blocks");
+      const parsed = pageDocSchema.safeParse(b.contentJson);
+      if (!parsed.success) return res.status(422).json({ message: "contentJson is not a valid page doc", issues: parsed.error.issues.slice(0, 8) });
+      const { contentHashOf } = await import("./studio/hash");
+      const doc = await storage.createStudioDocument({
+        organizationId: orgId,
+        brandId: b.brandId,
+        title: b.title.slice(0, 200),
+        slug: b.slug ? String(b.slug).slice(0, 120) : null,
+        format: b.format ? String(b.format).slice(0, 40) : "proposal",
+        status: "draft",
+        contentJson: parsed.data,
+        schemaVersion: 1,
+        contentHash: contentHashOf(parsed.data),
+        sourceTag: b.sourceTag ? String(b.sourceTag).slice(0, 120) : null,
+        createdBy: req.session.userId!,
+      });
+      res.json({ id: doc.id, token: doc.token });
+    } catch (e: any) {
+      console.error("[Studio create] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // GET /api/admin/studio — list documents for the workspace.
+  app.get("/api/admin/studio", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const docs = await storage.listStudioDocuments(orgId);
+      res.json(docs);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // GET /api/admin/studio/:id — one document (org-scoped).
+  app.get("/api/admin/studio/:id", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const doc = await storage.getStudioDocumentById(parseInt(String(req.params.id)));
+      if (!doc || doc.organizationId !== orgId) return res.status(404).json({ message: "Not found" });
+      res.json(doc);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // PATCH /api/admin/studio/:id — save edits. New contentJson snapshots a version.
+  app.patch("/api/admin/studio/:id", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const existing = await storage.getStudioDocumentById(id);
+      if (!existing || existing.organizationId !== orgId) return res.status(404).json({ message: "Not found" });
+      const b = req.body || {};
+      const updates: Record<string, any> = {};
+      if (b.title != null) updates.title = String(b.title).slice(0, 200);
+      if (b.slug != null) updates.slug = String(b.slug).slice(0, 120);
+      if (b.sourceTag != null) updates.sourceTag = String(b.sourceTag).slice(0, 120);
+      if (b.status != null && ["draft", "published", "archived"].includes(b.status)) updates.status = b.status;
+
+      if (b.contentJson !== undefined) {
+        const { pageDocSchema } = await import("@shared/studio-blocks");
+        const parsed = pageDocSchema.safeParse(b.contentJson);
+        if (!parsed.success) return res.status(422).json({ message: "contentJson is not a valid page doc", issues: parsed.error.issues.slice(0, 8) });
+        const { contentHashOf } = await import("./studio/hash");
+        // Snapshot the prior content as a version before overwriting.
+        await storage.createStudioDocumentVersion(id, existing.contentJson as Record<string, any>, req.session.userId!, { label: "pre-edit" });
+        updates.contentJson = parsed.data;
+        updates.contentHash = contentHashOf(parsed.data);
+      }
+      const doc = await storage.updateStudioDocument(id, updates);
+      res.json(doc);
+    } catch (e: any) {
+      console.error("[Studio patch] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // POST /api/admin/studio/:id/publish — flip to published + freeze a version/hash.
+  app.post("/api/admin/studio/:id/publish", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const existing = await storage.getStudioDocumentById(id);
+      if (!existing || existing.organizationId !== orgId) return res.status(404).json({ message: "Not found" });
+      const doc = await storage.publishStudioDocument(id, req.session.userId!, req.body?.label);
+      res.json(doc);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POST /api/admin/studio/:id/rollback — restore a prior version (as a new version).
+  app.post("/api/admin/studio/:id/rollback", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const existing = await storage.getStudioDocumentById(id);
+      if (!existing || existing.organizationId !== orgId) return res.status(404).json({ message: "Not found" });
+      const versionInt = parseInt(String(req.body?.versionInt));
+      if (!Number.isFinite(versionInt)) return res.status(400).json({ message: "versionInt is required" });
+      const doc = await storage.rollbackStudioDocument(id, versionInt, req.session.userId!);
+      if (!doc) return res.status(404).json({ message: "Version not found" });
+      res.json(doc);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // GET /api/public/studio/:token — the public proposal page payload (no auth).
+  // noindex header is the ONLY noindex mechanism in this app today.
+  app.get("/api/public/studio/:token", async (req, res) => {
+    try {
+      res.setHeader("X-Robots-Tag", "noindex, nofollow");
+      const doc = await storage.getStudioDocumentByToken(String(req.params.token));
+      if (!doc || doc.status === "archived") return res.status(404).json({ message: "This page isn't available" });
+      res.json({ brandId: doc.brandId, sourceTag: doc.sourceTag ?? doc.slug ?? doc.token, content: doc.contentJson });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // POST /api/public/studio/:token/track — Signal beacon ingest (no auth).
+  // Returns 204 FAST, then ingests in the background. Never throws to the client
+  // (post-unload beacons + unknown tokens are tolerated). Matches the client
+  // contract in client/src/lib/studio-track.ts exactly.
+  app.post("/api/public/studio/:token/track", (req, res) => {
+    // Respond immediately so sendBeacon on unload is never blocked.
+    res.status(204).end();
+
+    // AttributionOS fusion: /p/:token is served from the ClubOS domain, so the
+    // first-party usg_vid visitor cookie (set by the AttributionOS collector) is
+    // present here. Adopt it as the canonical visitorId on the Signal session so
+    // proposal engagement stitches onto the SAME person timeline as every other
+    // touch. Fall back to the client's own usg_studio_vid when usg_vid is absent
+    // (e.g. before AttributionOS is live), and always keep both ids linked in
+    // utmJson so nothing is lost.
+    void (async () => {
+      try {
+        const token = String(req.params.token);
+        const body = req.body || {};
+        const sessionId = body.sessionId ? String(body.sessionId) : "";
+        const events: any[] = Array.isArray(body.events) ? body.events : [];
+        if (!sessionId) return; // malformed beacon — nothing to attach to
+
+        const doc = await storage.getStudioDocumentByToken(token);
+        if (!doc) return; // unknown/expired token — no-op (never error the client)
+
+        const usgVid = readCookie(req, "usg_vid"); // AttributionOS canonical id
+        const studioVid = body.visitorId ? String(body.visitorId) : null;
+        const canonicalVisitorId = usgVid || studioVid || null;
+
+        // TODO(studio/attribution): if pushing a Signal "touch" into the
+        // AttributionOS event/person stream is desired, emit it here keyed on
+        // usgVid (person timeline). Kept out of v1 — adopting the shared identity
+        // is the requirement; a cross-module touch write is more than a few lines.
+
+        // Roll up the batch into session-level engaged time + max scroll.
+        let engagedDelta = 0;
+        let maxScroll = 0;
+        let referrer: string | null = null;
+        const ua = String(req.headers["user-agent"] || "") || null;
+        for (const e of events) {
+          if (e?.t === "heartbeat") engagedDelta += Number(e?.meta?.engagedMs ?? 10000);
+          if (typeof e?.scrollPct === "number") maxScroll = Math.max(maxScroll, Math.round(e.scrollPct * 100));
+          if (e?.t === "reached_end") maxScroll = Math.max(maxScroll, 100);
+          if (e?.t === "pageview" && e?.meta?.referrer) referrer = String(e.meta.referrer).slice(0, 500);
+        }
+
+        await storage.upsertStudioAnalyticsSession({
+          documentId: doc.id,
+          sessionId,
+          visitorId: canonicalVisitorId,
+          engagedMsDelta: engagedDelta,
+          maxScrollPct: maxScroll,
+          device: studioDeviceFromUA(ua || undefined),
+          userAgent: ua ? ua.slice(0, 400) : null,
+          referrer,
+          sourceTag: body.sourceTag ? String(body.sourceTag).slice(0, 120) : (doc.sourceTag ?? null),
+          country: studioCountry(req),
+          isInternal: !!body.internal,
+          utmJson: {
+            studioVid,                 // client localStorage id (usg_studio_vid)
+            usgVid: usgVid || null,    // AttributionOS first-party visitor id
+            adoptedUsgVid: !!usgVid,   // did fusion adopt the shared identity?
+            dnt: !!body.dnt,
+          },
+        });
+
+        const rows = events.slice(0, 200).map((e: any) => ({
+          documentId: doc.id,
+          sessionId,
+          type: String(e?.t || "unknown").slice(0, 40),
+          blockId: e?.blockId ? String(e.blockId).slice(0, 120) : null,
+          scrollPct: typeof e?.scrollPct === "number" ? Math.max(0, Math.min(100, Math.round(e.scrollPct * 100))) : null,
+          scrollVelocity: typeof e?.scrollVelocity === "number" ? Math.round(e.scrollVelocity) : null,
+          dwellMs: typeof e?.dwellMs === "number" ? Math.round(e.dwellMs) : null,
+          metaJson: e?.meta ?? null,
+          clientTs: typeof e?.ts === "number" ? e.ts : null,
+        }));
+        await storage.insertStudioAnalyticsEvents(rows);
+      } catch (err) {
+        console.error("[Studio track] ingest failed (ignored):", err);
+      }
+    })();
+  });
+
   // ── Integrations (Xero, Stripe status) ────────────────────────────────
   app.get("/api/admin/integrations", requireAuth, async (req, res) => {
     try {

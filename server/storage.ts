@@ -1,5 +1,7 @@
 import { db } from "./db";
 import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, ne } from "drizzle-orm";
+import crypto from "crypto";
+import { contentHashOf } from "./studio/hash";
 import {
   users, contacts, contactRelationships, programs,
   programSessions, registrations, auditLogs, settings,
@@ -71,6 +73,11 @@ import {
   type InsertClub, type Club,
   terms,
   type InsertTerm, type Term,
+  orgBrandContext, type OrgBrandContext,
+  studioDocuments, type StudioDocument,
+  studioDocumentVersions, type StudioDocumentVersion,
+  studioAnalyticsSessions, type StudioAnalyticsSession,
+  studioAnalyticsEvents,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -406,6 +413,29 @@ export interface IStorage {
   createPrintOrderEvent(data: InsertPrintOrderEvent): Promise<PrintOrderEvent>;
 
   getPrintOrderByMagicLink(token: string): Promise<PrintOrder | undefined>;
+
+  // ── USG Studio ────────────────────────────────────────────────────────────
+  // Brand pack (org_brand_context) + generated proposal pages + Signal analytics.
+  getOrgBrandContext(orgId: number): Promise<OrgBrandContext | undefined>;
+  getOrgBrandContextByBrandId(brandId: string): Promise<OrgBrandContext | undefined>;
+
+  createStudioDocument(data: Omit<typeof studioDocuments.$inferInsert, "token"> & { token?: string }): Promise<StudioDocument>;
+  getStudioDocumentById(id: number): Promise<StudioDocument | undefined>;
+  getStudioDocumentByToken(token: string): Promise<StudioDocument | undefined>;
+  listStudioDocuments(orgId: number): Promise<StudioDocument[]>;
+  updateStudioDocument(id: number, data: Partial<typeof studioDocuments.$inferInsert>): Promise<StudioDocument | undefined>;
+  publishStudioDocument(id: number, userId: number, label?: string): Promise<StudioDocument | undefined>;
+  createStudioDocumentVersion(documentId: number, contentJson: Record<string, any>, createdBy: number, opts?: { label?: string; editOps?: Record<string, any> | null }): Promise<StudioDocumentVersion>;
+  rollbackStudioDocument(id: number, versionInt: number, userId: number): Promise<StudioDocument | undefined>;
+
+  // Signal ingest (public, no-auth beacon). Aggregation queries land in a later increment.
+  upsertStudioAnalyticsSession(input: {
+    documentId: number; sessionId: string; visitorId?: string | null;
+    engagedMsDelta?: number; maxScrollPct?: number; device?: string | null;
+    userAgent?: string | null; referrer?: string | null; sourceTag?: string | null;
+    utmJson?: Record<string, any> | null; country?: string | null; isInternal?: boolean;
+  }): Promise<StudioAnalyticsSession>;
+  insertStudioAnalyticsEvents(batch: (typeof studioAnalyticsEvents.$inferInsert)[]): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2410,6 +2440,157 @@ export class DatabaseStorage implements IStorage {
   async getPrintOrderByMagicLink(token: string): Promise<PrintOrder | undefined> {
     const [r] = await db.select().from(printOrders).where(eq(printOrders.magicLinkToken, token));
     return r;
+  }
+
+  // ── USG Studio ──────────────────────────────────────────────────────────
+  async getOrgBrandContext(orgId: number): Promise<OrgBrandContext | undefined> {
+    const [r] = await db.select().from(orgBrandContext).where(eq(orgBrandContext.organizationId, orgId));
+    return r;
+  }
+  async getOrgBrandContextByBrandId(brandId: string): Promise<OrgBrandContext | undefined> {
+    const [r] = await db.select().from(orgBrandContext).where(eq(orgBrandContext.brandId, brandId));
+    return r;
+  }
+
+  async createStudioDocument(data: Omit<typeof studioDocuments.$inferInsert, "token"> & { token?: string }): Promise<StudioDocument> {
+    // Unguessable share link — same mechanic as esignSigners.token.
+    const token = data.token || crypto.randomBytes(24).toString("base64url");
+    const [r] = await db.insert(studioDocuments).values({ ...data, token }).returning();
+    return r;
+  }
+  async getStudioDocumentById(id: number): Promise<StudioDocument | undefined> {
+    const [r] = await db.select().from(studioDocuments).where(eq(studioDocuments.id, id));
+    return r;
+  }
+  async getStudioDocumentByToken(token: string): Promise<StudioDocument | undefined> {
+    const [r] = await db.select().from(studioDocuments).where(eq(studioDocuments.token, token));
+    return r;
+  }
+  async listStudioDocuments(orgId: number): Promise<StudioDocument[]> {
+    return db.select().from(studioDocuments)
+      .where(eq(studioDocuments.organizationId, orgId))
+      .orderBy(desc(studioDocuments.updatedAt));
+  }
+  async updateStudioDocument(id: number, data: Partial<typeof studioDocuments.$inferInsert>): Promise<StudioDocument | undefined> {
+    const [r] = await db.update(studioDocuments)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(studioDocuments.id, id)).returning();
+    return r;
+  }
+
+  private async nextStudioVersionInt(documentId: number): Promise<number> {
+    const [row] = await db.select({ max: sql<number>`COALESCE(MAX(${studioDocumentVersions.versionInt}), 0)` })
+      .from(studioDocumentVersions)
+      .where(eq(studioDocumentVersions.documentId, documentId));
+    return Number(row?.max ?? 0) + 1;
+  }
+
+  async createStudioDocumentVersion(
+    documentId: number,
+    contentJson: Record<string, any>,
+    createdBy: number,
+    opts?: { label?: string; editOps?: Record<string, any> | null },
+  ): Promise<StudioDocumentVersion> {
+    const versionInt = await this.nextStudioVersionInt(documentId);
+    const [r] = await db.insert(studioDocumentVersions).values({
+      documentId, versionInt, contentJson,
+      editOps: opts?.editOps ?? null, label: opts?.label ?? null, createdBy,
+    }).returning();
+    return r;
+  }
+
+  async publishStudioDocument(id: number, userId: number, label?: string): Promise<StudioDocument | undefined> {
+    const doc = await this.getStudioDocumentById(id);
+    if (!doc) return undefined;
+    // Snapshot the exact content being published + freeze its hash.
+    const hash = contentHashOf(doc.contentJson);
+    await this.createStudioDocumentVersion(id, doc.contentJson as Record<string, any>, userId, { label: label ?? "publish" });
+    const [r] = await db.update(studioDocuments).set({
+      status: "published",
+      contentHash: hash,
+      publishedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(studioDocuments.id, id)).returning();
+    return r;
+  }
+
+  async rollbackStudioDocument(id: number, versionInt: number, userId: number): Promise<StudioDocument | undefined> {
+    const doc = await this.getStudioDocumentById(id);
+    if (!doc) return undefined;
+    const [ver] = await db.select().from(studioDocumentVersions)
+      .where(and(eq(studioDocumentVersions.documentId, id), eq(studioDocumentVersions.versionInt, versionInt)));
+    if (!ver) return undefined;
+    const content = ver.contentJson as Record<string, any>;
+    // Restoring a snapshot is itself a new version (never lose history).
+    await this.createStudioDocumentVersion(id, content, userId, { label: `rollback to v${versionInt}` });
+    const [r] = await db.update(studioDocuments).set({
+      contentJson: content,
+      contentHash: contentHashOf(content),
+      updatedAt: new Date(),
+    }).where(eq(studioDocuments.id, id)).returning();
+    return r;
+  }
+
+  async upsertStudioAnalyticsSession(input: {
+    documentId: number; sessionId: string; visitorId?: string | null;
+    engagedMsDelta?: number; maxScrollPct?: number; device?: string | null;
+    userAgent?: string | null; referrer?: string | null; sourceTag?: string | null;
+    utmJson?: Record<string, any> | null; country?: string | null; isInternal?: boolean;
+  }): Promise<StudioAnalyticsSession> {
+    // Read-modify-write keyed on (documentId, sessionId). No DB unique constraint
+    // exists on that pair, so we can't use ON CONFLICT; beacons from a single tab
+    // are effectively serialised (batched every ~5s) so contention is negligible.
+    // TODO(studio): add a unique index on (document_id, session_id) in a later
+    // migration to enable a true UPSERT and remove the read-modify-write race.
+    const [existing] = await db.select().from(studioAnalyticsSessions)
+      .where(and(
+        eq(studioAnalyticsSessions.documentId, input.documentId),
+        eq(studioAnalyticsSessions.sessionId, input.sessionId),
+      ));
+
+    const now = new Date();
+    const engagedDelta = Math.max(0, Math.round(input.engagedMsDelta ?? 0));
+    const scroll = Math.max(0, Math.min(100, Math.round(input.maxScrollPct ?? 0)));
+
+    if (existing) {
+      const [r] = await db.update(studioAnalyticsSessions).set({
+        lastSeenAt: now,
+        engagedMs: (existing.engagedMs ?? 0) + engagedDelta,
+        maxScrollPct: Math.max(existing.maxScrollPct ?? 0, scroll),
+        // adopt a stronger identity if it arrives later (e.g. usg_vid appears)
+        visitorId: input.visitorId ?? existing.visitorId,
+        device: existing.device ?? input.device ?? null,
+        referrer: existing.referrer ?? input.referrer ?? null,
+        country: existing.country ?? input.country ?? null,
+        utmJson: input.utmJson ?? existing.utmJson,
+        // once internal, stay internal
+        isInternal: existing.isInternal || !!input.isInternal,
+      }).where(eq(studioAnalyticsSessions.id, existing.id)).returning();
+      return r;
+    }
+
+    const [r] = await db.insert(studioAnalyticsSessions).values({
+      documentId: input.documentId,
+      sessionId: input.sessionId,
+      visitorId: input.visitorId ?? null,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      engagedMs: engagedDelta,
+      maxScrollPct: scroll,
+      device: input.device ?? null,
+      userAgent: input.userAgent ?? null,
+      referrer: input.referrer ?? null,
+      sourceTag: input.sourceTag ?? null,
+      utmJson: input.utmJson ?? null,
+      country: input.country ?? null,
+      isInternal: !!input.isInternal,
+    }).returning();
+    return r;
+  }
+
+  async insertStudioAnalyticsEvents(batch: (typeof studioAnalyticsEvents.$inferInsert)[]): Promise<void> {
+    if (!batch.length) return;
+    await db.insert(studioAnalyticsEvents).values(batch);
   }
 }
 
