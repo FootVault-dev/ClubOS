@@ -1,7 +1,8 @@
 import { useState, useEffect, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, centsToDollarInput, dollarInputToCents } from "@/lib/format";
+import { MoneyInput } from "@/components/ui/money-input";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -34,8 +35,8 @@ function DivisionModal({ competitionId, division, onClose }: { competitionId: nu
     ageGroup: division?.ageGroup || "",
     dayOfWeek: division?.dayOfWeek || "",
     maxTeams: division?.maxTeams?.toString() || "",
-    teamCostCents: division?.teamCostCents?.toString() || "0",
-    playerCostCents: division?.playerCostCents?.toString() || "0",
+    teamCost: centsToDollarInput(division?.teamCostCents),
+    playerCost: centsToDollarInput(division?.playerCostCents),
   });
 
   const createMut = useMutation({
@@ -55,8 +56,8 @@ function DivisionModal({ competitionId, division, onClose }: { competitionId: nu
       ageGroup: form.ageGroup || null,
       dayOfWeek: form.dayOfWeek || null,
       maxTeams: form.maxTeams ? parseInt(form.maxTeams) : null,
-      teamCostCents: parseInt(form.teamCostCents) || 0,
-      playerCostCents: parseInt(form.playerCostCents) || 0,
+      teamCostCents: dollarInputToCents(form.teamCost),
+      playerCostCents: dollarInputToCents(form.playerCost),
     };
     division ? updateMut.mutate(data) : createMut.mutate(data);
   };
@@ -79,8 +80,8 @@ function DivisionModal({ competitionId, division, onClose }: { competitionId: nu
             <div><label className="text-xs text-white/40 mb-1 block">Max Teams</label><Input type="number" value={form.maxTeams} onChange={e => setForm(f => ({ ...f, maxTeams: e.target.value }))} className="premium-input text-white" /></div>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs text-white/40 mb-1 block">Team Cost (cents)</label><Input type="number" value={form.teamCostCents} onChange={e => setForm(f => ({ ...f, teamCostCents: e.target.value }))} className="premium-input text-white" /></div>
-            <div><label className="text-xs text-white/40 mb-1 block">Player Cost (cents)</label><Input type="number" value={form.playerCostCents} onChange={e => setForm(f => ({ ...f, playerCostCents: e.target.value }))} className="premium-input text-white" /></div>
+            <div><label className="text-xs text-white/40 mb-1 block">Team Cost</label><MoneyInput value={form.teamCost} onChange={v => setForm(f => ({ ...f, teamCost: v }))} className="premium-input text-white" placeholder="600.00" /></div>
+            <div><label className="text-xs text-white/40 mb-1 block">Player Cost</label><MoneyInput value={form.playerCost} onChange={v => setForm(f => ({ ...f, playerCost: v }))} className="premium-input text-white" placeholder="0.00" /></div>
           </div>
         </div>
         <div className="p-5 border-t border-white/5 flex gap-2 justify-end">

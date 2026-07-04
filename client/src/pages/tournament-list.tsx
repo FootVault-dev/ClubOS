@@ -7,6 +7,8 @@ import { useLocation } from "wouter";
 import { Award, Plus, Search, MoreVertical, Trash2, Archive, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
+import { centsToDollarInput, dollarInputToCents } from "@/lib/format";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -27,7 +29,7 @@ function TournamentModal({ tournament, orgId, onClose }: { tournament?: Tourname
     pointsForWin: tournament?.pointsForWin?.toString() || "3",
     pointsForDraw: tournament?.pointsForDraw?.toString() || "1",
     pointsForLoss: tournament?.pointsForLoss?.toString() || "0",
-    registrationFeeCents: tournament?.registrationFeeCents?.toString() || "0",
+    registrationFee: centsToDollarInput(tournament?.registrationFeeCents),
   });
 
   const createMut = useMutation({
@@ -65,7 +67,7 @@ function TournamentModal({ tournament, orgId, onClose }: { tournament?: Tourname
       pointsForWin: parseInt(form.pointsForWin),
       pointsForDraw: parseInt(form.pointsForDraw),
       pointsForLoss: parseInt(form.pointsForLoss),
-      registrationFeeCents: parseInt(form.registrationFeeCents) || 0,
+      registrationFeeCents: dollarInputToCents(form.registrationFee),
     };
     tournament ? updateMut.mutate(data) : createMut.mutate(data);
   };
@@ -146,8 +148,8 @@ function TournamentModal({ tournament, orgId, onClose }: { tournament?: Tourname
           </div>
 
           <div className="pt-2">
-            <label className="text-xs text-white/40 mb-1 block">Registration Fee (cents)</label>
-            <Input type="number" value={form.registrationFeeCents} onChange={e => setForm(f => ({ ...f, registrationFeeCents: e.target.value }))} className="premium-input text-white" />
+            <label className="text-xs text-white/40 mb-1 block">Registration Fee</label>
+            <MoneyInput value={form.registrationFee} onChange={v => setForm(f => ({ ...f, registrationFee: v }))} className="premium-input text-white" placeholder="0.00" />
           </div>
         </div>
         <div className="p-5 border-t border-white/5 flex gap-2 justify-end">

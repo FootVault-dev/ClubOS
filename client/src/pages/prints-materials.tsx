@@ -6,6 +6,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Edit, X, Search, Package2, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
+import { centsToDollarInput, dollarInputToCents } from "@/lib/format";
 import type { PrintMaterial } from "@shared/schema";
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -38,9 +40,9 @@ function EditModal({
   const { toast } = useToast();
   const [form, setForm] = useState(() => material ? {
     name: material.name,
-    baseRateCents: material.baseRateCents,
-    substrateCostPerM2Cents: material.substrateCostPerM2Cents,
-    minChargeCents: material.minChargeCents,
+    baseRate: centsToDollarInput(material.baseRateCents),
+    substrateCostPerM2: centsToDollarInput(material.substrateCostPerM2Cents),
+    minCharge: centsToDollarInput(material.minChargeCents),
     turnaroundDays: material.turnaroundDays,
     isActive: material.isActive,
     rushAvailable: material.rushAvailable,
@@ -50,8 +52,15 @@ function EditModal({
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!material) throw new Error("No material");
-      const res = await apiRequest("PATCH", `/api/admin/print-materials/${material.id}`, form);
+      if (!material || !form) throw new Error("No material");
+      const { baseRate, substrateCostPerM2, minCharge, ...rest } = form;
+      const payload = {
+        ...rest,
+        baseRateCents: dollarInputToCents(baseRate),
+        substrateCostPerM2Cents: dollarInputToCents(substrateCostPerM2),
+        minChargeCents: dollarInputToCents(minCharge),
+      };
+      const res = await apiRequest("PATCH", `/api/admin/print-materials/${material.id}`, payload);
       return res.json();
     },
     onSuccess: () => {
@@ -84,19 +93,17 @@ function EditModal({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-white/40">Base rate (cents)</label>
-              <Input type="number" value={form.baseRateCents} onChange={e => setForm({ ...form, baseRateCents: parseInt(e.target.value) || 0 })} className="bg-white/[0.02] border-white/10 text-white" />
-              <div className="text-[10px] text-white/30 mt-0.5">{money(form.baseRateCents)}</div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Base rate</label>
+              <MoneyInput value={form.baseRate} onChange={v => setForm({ ...form, baseRate: v })} className="bg-white/[0.02] border-white/10 text-white" />
             </div>
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-white/40">Substrate cost / m² (cents)</label>
-              <Input type="number" value={form.substrateCostPerM2Cents} onChange={e => setForm({ ...form, substrateCostPerM2Cents: parseInt(e.target.value) || 0 })} className="bg-white/[0.02] border-white/10 text-white" />
-              <div className="text-[10px] text-white/30 mt-0.5">{money(form.substrateCostPerM2Cents)} (for margin tracking)</div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Substrate cost / m²</label>
+              <MoneyInput value={form.substrateCostPerM2} onChange={v => setForm({ ...form, substrateCostPerM2: v })} className="bg-white/[0.02] border-white/10 text-white" />
+              <div className="text-[10px] text-white/30 mt-0.5">for margin tracking</div>
             </div>
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-white/40">Min charge (cents)</label>
-              <Input type="number" value={form.minChargeCents} onChange={e => setForm({ ...form, minChargeCents: parseInt(e.target.value) || 0 })} className="bg-white/[0.02] border-white/10 text-white" />
-              <div className="text-[10px] text-white/30 mt-0.5">{money(form.minChargeCents)}</div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Min charge</label>
+              <MoneyInput value={form.minCharge} onChange={v => setForm({ ...form, minCharge: v })} className="bg-white/[0.02] border-white/10 text-white" />
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-white/40">Turnaround (days)</label>

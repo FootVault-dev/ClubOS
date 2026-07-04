@@ -9,6 +9,20 @@ export function formatCurrency(
   return `$${value.toLocaleString("en-NZ", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
 }
 
+// Money is stored in the DB as integer CENTS, but humans read and enter DOLLARS.
+// These bridge a dollar-string text input <-> cents. Never surface raw cents in the UI.
+// Load an existing value with centsToDollarInput(); save it back with dollarInputToCents().
+export function centsToDollarInput(cents?: number | null): string {
+  if (cents == null) return "";
+  return (Math.round(cents) / 100).toString();
+}
+
+export function dollarInputToCents(value: string | number): number {
+  const n = typeof value === "string" ? parseFloat(value) : value;
+  if (isNaN(n)) return 0;
+  return Math.round(n * 100);
+}
+
 export function formatNumber(value: number | string): string {
   const n = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(n)) return "0";
