@@ -738,6 +738,17 @@ export async function listSplitMembersForOrg(organizationId: number, competition
     .where(and(...conds));
 }
 
+// Actual paid split shares for a competition — real per-charge dates + amounts,
+// for the cashflow forecast (split teams collect player-by-player on the spot).
+export async function listSplitPaymentsForCompetition(competitionId: number): Promise<Array<{ paidAt: Date | null; chargedCents: number }>> {
+  const rows = await db.select({ paidAt: splitMembers.paidAt, chargedCents: splitMembers.chargedCents })
+    .from(splitMembers)
+    .innerJoin(splitSessions, eq(splitMembers.splitSessionId, splitSessions.id))
+    .innerJoin(leagueDivisions, eq(splitSessions.leagueDivisionId, leagueDivisions.id))
+    .where(and(eq(leagueDivisions.competitionId, competitionId), eq(splitMembers.status, "paid")));
+  return rows.map(r => ({ paidAt: r.paidAt, chargedCents: r.chargedCents ?? 0 }));
+}
+
 // ── Admin views ──────────────────────────────────────────────────────────────
 export async function listSplitsForCompetition(competitionId: number) {
   const rows = await db.select().from(splitSessions)

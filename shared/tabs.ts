@@ -89,7 +89,9 @@ const leagueTabs: TabDef[] = [
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },
   { slug: "inbox", title: "Inbox", url: "/admin/inbox" },
   { slug: "rewards", title: "Rewards", url: "/admin/rewards" },
+  { slug: "loyalty", title: "Loyalty", url: "/admin/loyalty" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
+  { slug: "business-plan", title: "Business Plan", url: "/admin/business-plan" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -200,6 +202,7 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "budget", // Phase 1 construction — staff salaries visible. Daniel only.
   "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
   "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.
+  "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.
 ]);
 
 /**

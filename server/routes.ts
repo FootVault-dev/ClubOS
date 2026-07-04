@@ -7,6 +7,7 @@ import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLi
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
+import { fromForOrg } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
@@ -21,6 +22,7 @@ import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
 import * as rewards from "./rewards";
+import * as loyalty from "./loyalty";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
 import { buildCICSchedule } from "./tournament-schedule";
 import { resolveTournamentBrackets } from "./tournament-brackets";
@@ -4359,6 +4361,30 @@ export async function registerRoutes(
     }
   });
 
+  // MFL business plan access log — proxied from the standalone documents service
+  // (usg-docs) so the token stays server-side. Read-only; no local table.
+  app.get(
+    "/api/admin/league/business-plan/access-log",
+    requireAuth,
+    requireTab("business-plan"),
+    async (_req, res) => {
+      try {
+        const token = process.env.DOCS_ADMIN_TOKEN || "";
+        const base = process.env.DOCS_BASE_URL || "https://business.minifootball.co.nz";
+        if (!token) return res.status(500).json({ message: "DOCS_ADMIN_TOKEN not configured" });
+        const apiRes = await fetch(`${base}/api/admin/access-log?slug=mfl-business-plan`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!apiRes.ok) {
+          return res.status(502).json({ message: `documents service returned ${apiRes.status}` });
+        }
+        res.json(await apiRes.json());
+      } catch (error: any) {
+        res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
   app.get("/api/admin/league/competitions/:id", requireAuth, async (req, res) => {
     try {
       const comp = await storage.getLeagueCompetition(parseInt(req.params.id));
@@ -4650,7 +4676,7 @@ export async function registerRoutes(
 
       const [campaign] = await db.insert(emailCampaigns).values({
         subject: subj, body: String(body),
-        fromEmail: "Mini Football Leagues <noreply@cufc.co.nz>",
+        fromEmail: "Mini Football Leagues <noreply@minifootball.co.nz>",
         replyTo: replyTo || "minifootball@cufc.co.nz",
         segmentType: `league_${aud}`,
         segmentConfig: JSON.stringify({ orgId: MFL_ORG_ID, competitionId: compId, audience: aud }),
@@ -4728,6 +4754,50 @@ export async function registerRoutes(
       if (!tokens) return res.status(400).json({ message: "tokens required" });
       await rewards.addRefBonus(MFL_ORG_ID, parseInt(req.params.userId), tokens, req.body.note);
       res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── Loyalty & CLV — customer lifetime value + most-loyal leaderboards ────────
+  // Unifies imported historical purchases (mfl_customer_history) + live ClubOS
+  // registrations. People (captains) and teams. Computed on-query.
+  app.get("/api/admin/league/loyalty/stats", requireAuth, async (_req, res) => {
+    try { res.json(await loyalty.getLoyaltyStats()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/admin/league/loyalty/customers", requireAuth, async (_req, res) => {
+    try { res.json(await loyalty.getCustomerLeaderboard()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/admin/league/loyalty/teams", requireAuth, async (_req, res) => {
+    try { res.json(await loyalty.getTeamLeaderboard()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/admin/league/loyalty/journey/:key", requireAuth, async (req, res) => {
+    try { res.json(await loyalty.getCustomerJourney(req.params.key)); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  // Plan B — manually add a purchase we missed (team sends screenshot proof).
+  app.post("/api/admin/league/loyalty/manual", requireAuth, async (req, res) => {
+    try {
+      const b = req.body || {};
+      if (!b.firstName || !b.productTitle || !b.purchasedAt) {
+        return res.status(400).json({ message: "firstName, productTitle and purchasedAt are required" });
+      }
+      const amountCents = Math.round(Number(b.amountCents ?? Math.round(Number(b.amount || 0) * 100)) || 0);
+      const result = await loyalty.addManualPurchase({
+        firstName: String(b.firstName).trim(),
+        lastName: String(b.lastName || "").trim(),
+        email: b.email ? String(b.email).trim() : undefined,
+        phone: b.phone ? String(b.phone).trim() : undefined,
+        productTitle: String(b.productTitle).trim(),
+        variant: b.variant ? String(b.variant).trim() : undefined,
+        teamName: b.teamName ? String(b.teamName).trim() : undefined,
+        amountCents,
+        purchasedAt: String(b.purchasedAt),
+        addedByUserId: (req.session as any)?.userId,
+        notes: b.notes ? String(b.notes).trim() : undefined,
+      });
+      res.json({ ok: true, ...result });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
@@ -4959,6 +5029,131 @@ export async function registerRoutes(
         weeklyAmountCents: weeklyCents, weeksTotal, weeksPaid, paidCents, remainingCents, deposit, weeks,
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── Cashflow forecast (money IN, by week) ─────────────────────────────────
+  // Decomposes every team's payments into DATED inflows — deposits (at signup),
+  // weekly-plan charges (anchored to competition start + 7-day steps, mirroring
+  // the per-team breakdown), instalment balances (at their due date), and split
+  // shares (real paid dates). Splits each week into money already COLLECTED
+  // (actual) vs still SCHEDULED (projected), with a running cumulative curve —
+  // so the coordinator can see when league cash actually lands. All derived from
+  // Postgres; no Stripe calls. Phase 1 of the club-wide cashflow system.
+  app.get("/api/admin/league/competitions/:id/cashflow", requireAuth, async (req, res) => {
+    try {
+      const compId = parseInt(String(req.params.id));
+      const comp = await storage.getLeagueCompetition(compId);
+      if (!comp) return res.status(404).json({ message: "Competition not found" });
+      const regs = await storage.getLeagueCashflowRegs(compId);
+      const splitPayments = await splitPay.listSplitPaymentsForCompetition(compId);
+      const splits = await splitPay.listSplitsForCompetition(compId);
+
+      // Weekly anchor for "Play Now, Pay Later" plans = competition start date.
+      const startMs = (comp as any).startDate ? new Date((comp as any).startDate + "T00:00:00Z").getTime() : null;
+      const dayMs = 86400000;
+      const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+      const centsOf = (v: any) => Math.round(parseFloat(String(v ?? "0")) * 100) || 0;
+
+      // Flat list of dated inflow events + buckets that couldn't be dated.
+      const events: { date: string; cents: number; actual: boolean }[] = [];
+      let undatedCollectedCents = 0;    // paid, but no reliable date → still counts as collected
+      let unscheduledOwedCents = 0;     // owed, but no due date (split outstanding, failed charges)
+      let atRiskCents = 0;              // failed/overdue charges within unscheduledOwed
+      const add = (dateMs: number | null, cents: number, actual: boolean) => {
+        if (cents <= 0) return;
+        if (dateMs == null) { if (actual) undatedCollectedCents += cents; else unscheduledOwedCents += cents; return; }
+        events.push({ date: iso(dateMs), cents, actual });
+      };
+
+      for (const r of regs) {
+        const mode = r.paymentMode as string | null;
+        const regMs = r.registeredAt ? new Date(r.registeredAt).getTime() : null;
+        // Refunded teams: net what they actually kept, dated at signup (rare).
+        if (r.status === "refunded" || r.status === "partially_refunded") {
+          const net = centsOf(r.amountPaid) - (r.refundedCents || 0);
+          if (net > 0) add(regMs, net, true);
+          continue;
+        }
+        if (mode === "split") continue; // handled via split payments + outstanding below
+
+        if (mode === "deposit_weekly") {
+          add(regMs, r.depositCents || 0, true); // deposit at signup
+          const wc = r.weeklyAmountCents || 0, wt = r.weeksTotal || 0, wp = r.weeksPaid || 0;
+          for (let i = 1; i <= wt; i++) {
+            const dueMs = startMs != null ? startMs + (i - 1) * 7 * dayMs : null;
+            add(dueMs, wc, i <= wp);
+          }
+        } else if (mode === "installment") {
+          add(regMs, r.depositCents || 0, true);
+          const bal = r.balanceCents || 0;
+          if (bal > 0) {
+            const dueMs = r.balanceDueDate ? new Date(r.balanceDueDate + "T00:00:00Z").getTime() : null;
+            if (r.balanceStatus === "paid") add(dueMs ?? regMs, bal, true);
+            else if (r.balanceStatus === "failed") { unscheduledOwedCents += bal; atRiskCents += bal; }
+            else add(dueMs, bal, false); // scheduled / charging → projected
+          }
+        } else {
+          // upfront / card / unknown → whole paid amount at signup
+          add(regMs, centsOf(r.amountPaid), true);
+        }
+      }
+
+      // Split shares already paid — real dates.
+      for (const sp of splitPayments) add(sp.paidAt ? new Date(sp.paidAt).getTime() : null, sp.chargedCents, true);
+      // Split outstanding (target total not yet collected) — owed, but no due date.
+      for (const s of splits as any[]) {
+        if (s.status === "cancelled") continue;
+        const outstanding = Math.max(0, (s.totalCents || 0) - (s.collectedCents || 0));
+        if (outstanding > 0) unscheduledOwedCents += outstanding;
+      }
+
+      // Bucket events into ISO weeks (Monday start).
+      const weekStartMs = (ms: number) => {
+        const d = new Date(ms); const day = (d.getUTCDay() + 6) % 7; // 0 = Monday
+        return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - day * dayMs;
+      };
+      const buckets = new Map<number, { actual: number; projected: number }>();
+      for (const e of events) {
+        const wk = weekStartMs(new Date(e.date + "T00:00:00Z").getTime());
+        const b = buckets.get(wk) || { actual: 0, projected: 0 };
+        if (e.actual) b.actual += e.cents; else b.projected += e.cents;
+        buckets.set(wk, b);
+      }
+
+      // Continuous weekly series from first activity to last scheduled inflow.
+      const todayWk = weekStartMs(Date.now());
+      let series: { weekStart: string; actualCents: number; projectedCents: number; cumulativeCents: number; isPast: boolean }[] = [];
+      if (buckets.size > 0) {
+        const keys = [...buckets.keys()].sort((a, b) => a - b);
+        let cumulative = 0;
+        for (let wk = keys[0]; wk <= keys[keys.length - 1]; wk += 7 * dayMs) {
+          const b = buckets.get(wk) || { actual: 0, projected: 0 };
+          cumulative += b.actual + b.projected;
+          series.push({ weekStart: iso(wk), actualCents: b.actual, projectedCents: b.projected, cumulativeCents: cumulative, isPast: wk < todayWk });
+        }
+      }
+
+      const collectedCents = events.filter(e => e.actual).reduce((s, e) => s + e.cents, 0) + undatedCollectedCents;
+      const scheduledEventCents = events.filter(e => !e.actual).reduce((s, e) => s + e.cents, 0);
+      const scheduledCents = scheduledEventCents + unscheduledOwedCents;
+      // Next 4 weeks of scheduled inflow (from this week forward).
+      const next4 = series.filter(s => !s.isPast).slice(0, 4).reduce((sum, s) => sum + s.projectedCents, 0);
+
+      res.json({
+        competition: { id: comp.id, name: (comp as any).name, startDate: (comp as any).startDate ?? null },
+        summary: {
+          collectedCents,
+          scheduledCents,
+          totalExpectedCents: collectedCents + scheduledCents,
+          next4WeeksCents: next4,
+          scheduledDatedCents: scheduledEventCents,
+          unscheduledOwedCents,
+          atRiskCents,
+          undatedCollectedCents,
+        },
+        series,
+      });
+    } catch (e: any) { console.error("[League cashflow] error:", e); res.status(500).json({ message: e.message }); }
   });
 
   // Get the public registration page config (the league_team program) for a competition.
@@ -9807,7 +10002,7 @@ export async function registerRoutes(
       if (onlyPending && s.status !== "pending" && s.status !== "viewed") continue;
       await sendEmail({
         to: s.email,
-        from: `${fromName} <noreply@cufc.co.nz>`,
+        from: fromForOrg(orgId, fromName),
         subject: `Please sign: ${doc.title}`,
         html: esignInviteHtml({ signerName: s.name, title: doc.title, message: doc.message, link: `${base}/sign/${s.token}`, fromName }),
       });
@@ -9828,7 +10023,7 @@ export async function registerRoutes(
       const { sendEmail } = await import("./email");
       await sendEmail({
         to: sender.email,
-        from: `${fromName} <noreply@cufc.co.nz>`,
+        from: fromForOrg(doc.organizationId, fromName),
         subject,
         html: `
     <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
@@ -9890,7 +10085,7 @@ export async function registerRoutes(
     const attachment = { filename: `${esignSafeName(doc.title)}-signed.pdf`, content: signedB64, contentType: "application/pdf" };
     const { sendEmail } = await import("./email");
     for (const to of recipients) {
-      try { await sendEmail({ to, from: `${fromName} <noreply@cufc.co.nz>`, subject: `Completed: ${doc.title}`, html: esignDoneHtml({ title: doc.title, fromName }), attachments: [attachment] }); } catch { /* keep going */ }
+      try { await sendEmail({ to, from: fromForOrg(doc.organizationId, fromName), subject: `Completed: ${doc.title}`, html: esignDoneHtml({ title: doc.title, fromName }), attachments: [attachment] }); } catch { /* keep going */ }
     }
   }
 
@@ -14539,7 +14734,7 @@ export async function registerRoutes(
 
       const [campaign] = await db.insert(emailCampaigns).values({
         subject: subj, body: String(body),
-        fromEmail: source === "7s" ? "CIC 7's <noreply@cufc.co.nz>" : "Christchurch International Cup <noreply@cufc.co.nz>",
+        fromEmail: source === "7s" ? "CIC 7's <noreply@cic7s.com>" : "Christchurch International Cup <noreply@cicyouth.com>",
         replyTo: replyTo || "info@cicyouth.com",
         segmentType: `cic_${source}_${aud}`,
         segmentConfig: JSON.stringify({ orgId, source, tournamentId: tournId, audience: aud, ...(aud === "custom" ? { customEmails: recipients.map((r) => r.email) } : {}) }),

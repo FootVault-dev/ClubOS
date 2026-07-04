@@ -5,10 +5,10 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency } from "@/lib/format";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Mail, Phone, Users, CreditCard, X, Check, AlertTriangle, ChevronRight, Crown, RotateCw } from "lucide-react";
+import { Mail, Phone, Users, CreditCard, X, Check, AlertTriangle, ChevronRight, Crown, RotateCw, TrendingUp } from "lucide-react";
 import type { LeagueCompetition } from "@shared/schema";
 
-type AdminView = "registrations" | "splits";
+type AdminView = "registrations" | "splits" | "cashflow";
 
 type LeagueReg = {
   id: number; teamName: string | null; status: string; divisionName: string | null;
@@ -84,11 +84,11 @@ export default function LeaguePayments() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white">Payments</h1>
-          <p className="text-sm text-white/40 mt-1">{view === "splits" ? "Player Pay teams — who's paid, who to follow up" : "What's been collected across the league"}</p>
+          <p className="text-sm text-white/40 mt-1">{view === "splits" ? "Player Pay teams — who's paid, who to follow up" : view === "cashflow" ? "When league cash lands — collected so far, and what's still scheduled to come in" : "What's been collected across the league"}</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <div className="inline-flex rounded-lg border border-white/5 bg-white/[0.02] p-0.5" data-testid="payments-view-toggle">
-            {([["registrations", "Registrations"], ["splits", "Player Pay"]] as const).map(([v, label]) => (
+            {([["registrations", "Registrations"], ["splits", "Player Pay"], ["cashflow", "Cashflow"]] as const).map(([v, label]) => (
               <button
                 key={v}
                 onClick={() => setView(v)}
@@ -110,7 +110,9 @@ export default function LeaguePayments() {
         </div>
       </div>
 
-      {view === "splits" ? (
+      {view === "cashflow" ? (
+        <CashflowView competitionId={activeTermId} />
+      ) : view === "splits" ? (
         <SplitsView competitionId={activeTermId} />
       ) : (
         <>
@@ -605,6 +607,196 @@ function SplitDetailModal({ splitId, competitionId, onClose }: { splitId: number
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Cashflow — when league money actually lands
+   Every team's payments decomposed into DATED inflows: deposits at signup,
+   "Play Now, Pay Later" weekly charges, instalment balances, and Player Pay
+   shares. Each week is split into money already COLLECTED vs still SCHEDULED,
+   with a running cumulative curve — so we can see when cash comes in and plan
+   outgoings against it. Phase 1 of the club-wide cashflow system (MFL first).
+   ────────────────────────────────────────────────────────────────────────── */
+
+type CashflowWeek = { weekStart: string; actualCents: number; projectedCents: number; cumulativeCents: number; isPast: boolean };
+type CashflowData = {
+  competition: { id: number; name: string; startDate: string | null };
+  summary: {
+    collectedCents: number; scheduledCents: number; totalExpectedCents: number; next4WeeksCents: number;
+    scheduledDatedCents: number; unscheduledOwedCents: number; atRiskCents: number; undatedCollectedCents: number;
+  };
+  series: CashflowWeek[];
+};
+
+const fmtWeek = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" });
+const fmtAxis = (cents: number) => {
+  const d = cents / 100;
+  if (d >= 1000) return `$${(d / 1000).toFixed(d >= 10000 ? 0 : 1)}k`;
+  return `$${Math.round(d)}`;
+};
+
+function CashflowView({ competitionId }: { competitionId: number | null }) {
+  const { data, isLoading } = useQuery<CashflowData>({
+    queryKey: ["/api/admin/league/competitions", competitionId, "cashflow"],
+    queryFn: () => fetch(`/api/admin/league/competitions/${competitionId}/cashflow`).then(r => r.json()),
+    enabled: !!competitionId,
+  });
+
+  if (isLoading) return <div className="text-center py-12 text-white/20 text-sm">Loading…</div>;
+  if (!data || !data.series) return <div className="text-center py-12 text-white/20 text-sm">No cashflow data yet.</div>;
+
+  const s = data.summary;
+  const collectedPct = s.totalExpectedCents > 0 ? Math.round((s.collectedCents / s.totalExpectedCents) * 100) : 0;
+  const futureWeeks = data.series.filter(w => !w.isPast && w.projectedCents > 0);
+
+  const stats = [
+    { label: "Collected to date", value: formatCurrency(s.collectedCents, { fromCents: true }), klass: "text-green-400", sub: `${collectedPct}% of expected` },
+    { label: "Still scheduled", value: formatCurrency(s.scheduledCents, { fromCents: true }), klass: "text-sky-300", sub: s.unscheduledOwedCents > 0 ? `${formatCurrency(s.unscheduledOwedCents, { fromCents: true })} no set date` : "future inflows" },
+    { label: "Total expected", value: formatCurrency(s.totalExpectedCents, { fromCents: true }), klass: "text-white", sub: "collected + scheduled" },
+    { label: "Next 4 weeks", value: formatCurrency(s.next4WeeksCents, { fromCents: true }), klass: "text-amber-300", sub: "scheduled to come in" },
+    { label: "At risk", value: formatCurrency(s.atRiskCents, { fromCents: true }), klass: s.atRiskCents > 0 ? "text-red-400" : "text-white/40", sub: "failed / overdue" },
+  ];
+
+  return (
+    <>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        {stats.map((st, i) => (
+          <div key={i} className="rounded-xl border border-white/5 bg-white/[0.02] p-4">
+            <p className="text-[10px] uppercase tracking-wider text-white/30">{st.label}</p>
+            <p className={`text-lg font-bold mt-0.5 ${st.klass}`}>{st.value}</p>
+            <p className="text-[10px] text-white/25 mt-0.5">{st.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {data.series.length === 0 ? (
+        <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-5">
+          <div className="flex flex-col items-center justify-center py-16 text-white/20">
+            <TrendingUp className="w-12 h-12 mb-3" />
+            <p className="text-sm">No payment activity yet for this term</p>
+            <p className="text-xs mt-1">Inflows appear here as teams register and pay</p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="rounded-xl border border-white/5 bg-white/[0.02] p-4 sm:p-5">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+              <h3 className="text-sm font-semibold text-white">Weekly cashflow</h3>
+              <div className="flex items-center gap-4 text-[11px] text-white/40">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm inline-block" style={{ background: "#d1b96e" }} />Collected</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm inline-block border border-dashed" style={{ background: "rgba(209,185,110,0.18)", borderColor: "rgba(209,185,110,0.55)" }} />Scheduled</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 inline-block" style={{ background: "#7dd3fc" }} />Running total</span>
+              </div>
+            </div>
+            <CashflowChart series={data.series} />
+          </div>
+
+          {futureWeeks.length > 0 && (
+            <div className="rounded-xl border border-white/5 bg-white/[0.02] overflow-x-auto">
+              <div className="px-4 pt-4 pb-1 text-sm font-semibold text-white">Upcoming inflows</div>
+              <table className="w-full min-w-[480px]">
+                <thead>
+                  <tr className="border-b border-white/5">
+                    {["Week of", "Scheduled in", "Running total"].map(h => (
+                      <th key={h} className="text-left text-[10px] text-white/30 uppercase px-4 py-2 font-semibold">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {futureWeeks.slice(0, 12).map((w, i) => (
+                    <tr key={i} className="border-b border-white/[0.02]">
+                      <td className="px-4 py-2.5 text-sm text-white/70 whitespace-nowrap">{fmtWeek(w.weekStart)}</td>
+                      <td className="px-4 py-2.5 text-sm text-sky-300">{formatCurrency(w.projectedCents, { fromCents: true })}</td>
+                      <td className="px-4 py-2.5 text-sm text-white/50">{formatCurrency(w.cumulativeCents, { fromCents: true })}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="text-[11px] text-white/30 leading-relaxed">
+            Inflows only — this is money coming <span className="text-white/50">in</span> from team registrations (deposits, weekly plans, instalments and Player Pay), dated to when each charge lands. Weekly-plan dates are anchored to the competition start; already-paid weeks are shown on their scheduled date. Outgoings and the club-wide picture come in the next phase.
+          </p>
+        </>
+      )}
+    </>
+  );
+}
+
+function CashflowChart({ series }: { series: CashflowWeek[] }) {
+  const W = 760, H = 260, padL = 46, padR = 46, padT = 16, padB = 34;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const baseline = padT + plotH;
+  const n = series.length;
+  const slot = plotW / Math.max(n, 1);
+  const barW = Math.min(slot * 0.6, 34);
+
+  const maxWeekly = Math.max(1, ...series.map(w => w.actualCents + w.projectedCents));
+  const maxCum = Math.max(1, series[series.length - 1]?.cumulativeCents ?? 1);
+  const yBar = (c: number) => (c / maxWeekly) * plotH;
+  const yCum = (c: number) => baseline - (c / maxCum) * plotH;
+  const xCenter = (i: number) => padL + slot * i + slot / 2;
+
+  const firstFuture = series.findIndex(w => !w.isPast);
+  const todayX = firstFuture >= 0 ? padL + slot * firstFuture : null;
+
+  // Cumulative polyline split at today (solid past, dashed future).
+  const cumPts = series.map((w, i) => `${xCenter(i)},${yCum(w.cumulativeCents)}`);
+  const pastPts = firstFuture < 0 ? cumPts : cumPts.slice(0, Math.max(1, firstFuture));
+  const futurePts = firstFuture < 0 ? [] : cumPts.slice(Math.max(0, firstFuture - 1));
+
+  // X labels: aim for ~8 across.
+  const step = Math.max(1, Math.ceil(n / 8));
+
+  return (
+    <div className="w-full overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ minWidth: n > 18 ? 640 : undefined }}>
+        {/* gridlines + left axis (per-week) + right axis (cumulative) */}
+        {[0, 0.5, 1].map((f, i) => {
+          const y = baseline - f * plotH;
+          return (
+            <g key={i}>
+              <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+              <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={9} fill="rgba(255,255,255,0.3)">{fmtAxis(maxWeekly * f)}</text>
+              <text x={W - padR + 6} y={y + 3} textAnchor="start" fontSize={9} fill="rgba(125,211,252,0.55)">{fmtAxis(maxCum * f)}</text>
+            </g>
+          );
+        })}
+
+        {/* today marker — label sits in the headroom above the plot so it never overlaps a bar */}
+        {todayX != null && (
+          <g>
+            <line x1={todayX} y1={padT} x2={todayX} y2={baseline} stroke="rgba(255,255,255,0.28)" strokeWidth={1} strokeDasharray="3 3" />
+            <text x={todayX} y={11} textAnchor="middle" fontSize={8} fill="rgba(255,255,255,0.45)">today</text>
+          </g>
+        )}
+
+        {/* bars: collected (solid) + scheduled (translucent, dashed) stacked */}
+        {series.map((w, i) => {
+          const cx = xCenter(i);
+          const x = cx - barW / 2;
+          const aH = yBar(w.actualCents);
+          const pH = yBar(w.projectedCents);
+          return (
+            <g key={i}>
+              {w.actualCents > 0 && <rect x={x} y={baseline - aH} width={barW} height={aH} rx={2} fill="#d1b96e" />}
+              {w.projectedCents > 0 && <rect x={x} y={baseline - aH - pH} width={barW} height={pH} rx={2} fill="rgba(209,185,110,0.18)" stroke="rgba(209,185,110,0.55)" strokeWidth={1} strokeDasharray="3 2" />}
+            </g>
+          );
+        })}
+
+        {/* cumulative running-total line */}
+        {pastPts.length > 1 && <polyline points={pastPts.join(" ")} fill="none" stroke="#7dd3fc" strokeWidth={2} />}
+        {futurePts.length > 1 && <polyline points={futurePts.join(" ")} fill="none" stroke="#7dd3fc" strokeWidth={2} strokeDasharray="4 3" opacity={0.8} />}
+
+        {/* x labels */}
+        {series.map((w, i) => (i % step === 0 || i === n - 1) ? (
+          <text key={i} x={xCenter(i)} y={baseline + 14} textAnchor="middle" fontSize={8.5} fill="rgba(255,255,255,0.35)">{fmtWeek(w.weekStart)}</text>
+        ) : null)}
+      </svg>
     </div>
   );
 }

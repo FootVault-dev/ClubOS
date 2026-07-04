@@ -53,3 +53,19 @@ export function campFromForOrg(orgId?: number | null, suffix = "Camps"): string 
   const label = suffix ? `${w.fromName} ${suffix}` : w.fromName;
   return `${label} <noreply@${w.emailDomain}>`;
 }
+
+/**
+ * Build a transactional "from" for ANY workspace-scoped email (e-Sign documents,
+ * league/tournament mailers, sender notifications) so it leaves from the brand it
+ * actually belongs to — a SIU partnership from southislandunited.com, a CIC
+ * agreement from cicyouth.com, an MFL notice from minifootball.co.nz — never a
+ * hardcoded cufc.co.nz. `displayName` overrides the from-name (e.g. the org's own
+ * display name); otherwise the workspace default is used. Unknown / org-agnostic
+ * callers (ClubOS system mail) fall back to CUFC.
+ */
+export function fromForOrg(orgId?: number | null, displayName?: string): string {
+  const w = workspaceDomainByOrgId(orgId);
+  const domain = w?.emailDomain || "cufc.co.nz";
+  const name = (displayName && displayName.trim()) || w?.fromName || "Christchurch United";
+  return `${name} <noreply@${domain}>`;
+}

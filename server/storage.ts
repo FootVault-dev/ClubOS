@@ -1839,6 +1839,23 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  // Raw registration rows for a competition (all columns, incl. the weekly-plan
+  // + instalment fields) — used by the cashflow forecast to decompose each
+  // team's payments into dated inflows. Same status set as getLeagueRegistrations
+  // so totals reconcile with the Payments headline.
+  async getLeagueCashflowRegs(competitionId: number): Promise<any[]> {
+    const progs = await db.select().from(programs)
+      .where(and(eq(programs.leagueCompetitionId, competitionId), eq(programs.type, "league_team")));
+    const progIds = progs.map(p => p.id);
+    if (progIds.length === 0) return [];
+    return db.select().from(registrations)
+      .where(and(
+        inArray(registrations.programId, progIds),
+        inArray(registrations.status, ["confirmed", "refunded", "partially_refunded", "waitlisted"]),
+      ))
+      .orderBy(desc(registrations.registeredAt));
+  }
+
   async getLeagueCoupons(competitionId: number): Promise<LeagueCoupon[]> {
     return db.select().from(leagueCoupons).where(eq(leagueCoupons.competitionId, competitionId)).orderBy(desc(leagueCoupons.createdAt));
   }

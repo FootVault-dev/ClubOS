@@ -32,6 +32,7 @@ import {
   Trophy,
   UsersRound,
   Award,
+  Crown,
   Dumbbell,
   Tag,
   Globe,
@@ -128,7 +129,9 @@ const leagueNav = [
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
   { tab: "inbox", title: "Inbox", url: "/admin/inbox", icon: Inbox },
   { tab: "rewards", title: "Rewards", url: "/admin/rewards", icon: Award },
+  { tab: "loyalty", title: "Loyalty", url: "/admin/loyalty", icon: Crown },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
+  { tab: "business-plan", title: "Business Plan", url: "/admin/business-plan", icon: FileText },
 ];
 
 const venueSecondary = [
