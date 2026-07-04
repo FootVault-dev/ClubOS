@@ -102,6 +102,8 @@ import TournamentFoodTruck from "@/pages/tournament-food-truck";
 import TournamentVendors from "@/pages/tournament-vendors";
 import ESign from "@/pages/esign";
 import SignPage from "@/pages/sign";
+import StudioPublicPage from "@/pages/studio-public";
+import StudioPreviewPage from "@/pages/studio-preview";
 import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
@@ -418,6 +420,10 @@ function App() {
             <Route path="/reset-password" component={ResetPassword} />
             <Route path="/calendar/rsvp/:token" component={RsvpPage} />
             <Route path="/sign/:token" component={SignPage} />
+            {/* USG Studio — public proposal pages (unlisted, no auth). Must
+                precede the 2-segment /:slug/* and 1-segment /:slug routes. */}
+            <Route path="/p/:token" component={StudioPublicPage} />
+            <Route path="/studio-preview" component={StudioPreviewPage} />
             <Route path="/book" component={VenueBookPage} />
             <Route path="/book/success" component={VenueBookSuccess} />
             <Route path="/book/split/:code" component={VenueSplitPage} />
