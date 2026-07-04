@@ -1009,6 +1009,9 @@ export const tournaments = pgTable("tournaments", {
   status: text("status").notNull().default("draft"),
   active: boolean("active").notNull().default(true),
   archived: boolean("archived").notNull().default(false),
+  // Default "Watch" destination for the whole age group (single-camera setups);
+  // a game's own streamUrl overrides this when set.
+  streamUrl: text("stream_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1151,6 +1154,9 @@ export const tournamentGames = pgTable("tournament_games", {
   endTime: text("end_time"),
   field: text("field"),
   status: text("status").notNull().default("scheduled"),
+  // "Go Live" toggle + optional per-game stream URL for the Watch feature.
+  isLive: boolean("is_live").notNull().default(false),
+  streamUrl: text("stream_url"),
   homeScore: integer("home_score"),
   awayScore: integer("away_score"),
   homePenalties: integer("home_penalties"),
@@ -1158,6 +1164,40 @@ export const tournamentGames = pgTable("tournament_games", {
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ── Individual awards (ADMIN-ONLY / private — never exposed publicly) ──
+// Golden Boot is public (derived from tournamentGoals). MVP + Golden Glove
+// involve human voting that could be rigged if standings were visible, so
+// these two tables feed admin-only leaderboards.
+
+// MVP: in each game, each team casts ONE vote for the best player on the
+// OPPOSING team. One vote each — the tournament MVP is whoever has the most.
+export const tournamentMvpVotes = pgTable("tournament_mvp_votes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => tournamentGames.id, { onDelete: "cascade" }),
+  // The team doing the voting.
+  voterTeamId: integer("voter_team_id").notNull().references(() => tournamentTeams.id, { onDelete: "cascade" }),
+  // The player being voted MVP (must be on the OTHER team — enforced in the route).
+  playerId: integer("player_id").notNull().references(() => tournamentPlayers.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  // One vote per team per game (re-voting overwrites via upsert).
+  uniqVoter: unique().on(t.gameId, t.voterTeamId),
+}));
+
+// Golden Glove: referees rate each team's goalkeeper 1–5 per game (5 = best).
+// The tournament's best keeper is decided on average rating across games.
+export const tournamentGkRatings = pgTable("tournament_gk_ratings", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => tournamentGames.id, { onDelete: "cascade" }),
+  teamId: integer("team_id").notNull().references(() => tournamentTeams.id, { onDelete: "cascade" }),
+  playerId: integer("player_id").notNull().references(() => tournamentPlayers.id, { onDelete: "cascade" }),
+  rating: integer("rating").notNull(), // 1–5
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  // One keeper rating per team per game.
+  uniqGk: unique().on(t.gameId, t.teamId),
+}));
 
 export const analyticsEvents = pgTable("analytics_events", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -1236,6 +1276,8 @@ export const insertTournamentPlayerSchema = createInsertSchema(tournamentPlayers
 export const insertTournamentGoalSchema = createInsertSchema(tournamentGoals).omit({ id: true, createdAt: true });
 export const insertTournamentStaffSchema = createInsertSchema(tournamentStaff).omit({ id: true, createdAt: true });
 export const insertTournamentGameSchema = createInsertSchema(tournamentGames).omit({ id: true, createdAt: true });
+export const insertTournamentMvpVoteSchema = createInsertSchema(tournamentMvpVotes).omit({ id: true, createdAt: true });
+export const insertTournamentGkRatingSchema = createInsertSchema(tournamentGkRatings).omit({ id: true, createdAt: true });
 
 export const insertLeagueCompetitionSchema = createInsertSchema(leagueCompetitions).omit({ id: true, createdAt: true });
 export const insertLeagueDivisionSchema = createInsertSchema(leagueDivisions).omit({ id: true, createdAt: true });
@@ -1362,6 +1404,10 @@ export type InsertTournamentStaff = z.infer<typeof insertTournamentStaffSchema>;
 export type TournamentStaff = typeof tournamentStaff.$inferSelect;
 export type InsertTournamentGame = z.infer<typeof insertTournamentGameSchema>;
 export type TournamentGame = typeof tournamentGames.$inferSelect;
+export type InsertTournamentMvpVote = z.infer<typeof insertTournamentMvpVoteSchema>;
+export type TournamentMvpVote = typeof tournamentMvpVotes.$inferSelect;
+export type InsertTournamentGkRating = z.infer<typeof insertTournamentGkRatingSchema>;
+export type TournamentGkRating = typeof tournamentGkRatings.$inferSelect;
 
 export const discounts = pgTable("discounts", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -2834,6 +2880,25 @@ export const pushCampaigns = pgTable("push_campaigns", {
 
 export type DevicePushToken = typeof devicePushTokens.$inferSelect;
 export type PushCampaign = typeof pushCampaigns.$inferSelect;
+
+// ---- Mobile app users (marketing email list) ----
+// When someone signs up / signs in inside the CIC Youth app, their email is
+// captured here so CIC can build a segmented marketing list. Deduped by
+// (organization, app, email).
+export const appUsers = pgTable("app_users", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  app: text("app").notNull().default("cic-youth"),
+  email: text("email").notNull(),
+  name: text("name"),
+  provider: text("provider").notNull().default("email"), // "email" | "apple" | "google"
+  category: text("category"), // age-group interest, when known
+  unsubscribed: boolean("unsubscribed").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type AppUser = typeof appUsers.$inferSelect;
 
 // ---- CIC 7's register-interest submissions (from the cic7s.com marketing site) ----
 // Lives under the same CIC organization as the youth tournament; surfaced in the

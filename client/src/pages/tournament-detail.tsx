@@ -11,7 +11,7 @@ import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Tournament, TournamentGroup, TournamentTeam, TournamentGame, TournamentPlayer, TournamentGoal } from "@shared/schema";
 
-type Tab = "format" | "schedule" | "groups" | "teams";
+type Tab = "format" | "schedule" | "groups" | "teams" | "awards";
 
 const FIELDS = ["S1", "S2", "J1", "J2", "J3", "J4", "Mini 1", "Mini 2"];
 
@@ -73,6 +73,105 @@ type GameWithRelations = TournamentGame & { homeTeam?: TournamentTeam; awayTeam?
 
 // Per-game goal log + entry. Lets the admin record goals as a match
 // progresses; these aggregate up into the public top-scorers feed.
+// One MVP-vote row: a team picks the best player on the OPPOSING team.
+function MvpVoteRow({ voterLabel, targetLabel, players, currentName, onSave, onClear, disabled }: {
+  voterLabel: string; targetLabel: string; players: TournamentPlayer[];
+  currentName: string | null; onSave: (v: { playerId?: number; playerName?: string }) => void;
+  onClear: () => void; disabled: boolean;
+}) {
+  const [typed, setTyped] = useState("");
+  return (
+    <div className="rounded-lg bg-white/[0.015] border border-white/5 px-3 py-2.5 space-y-2">
+      <div className="text-[11px] text-white/50">
+        <span className="text-white/70 font-medium">{voterLabel}</span> votes — best <span className="text-white/70 font-medium">{targetLabel}</span> player
+      </div>
+      {currentName ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm text-purple-300 flex items-center gap-1.5"><Award className="w-3.5 h-3.5" /> {currentName}</span>
+          <button onClick={onClear} className="text-white/25 hover:text-red-400 text-xs">Clear</button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {players.length > 0 && (
+            <select
+              defaultValue=""
+              disabled={disabled}
+              onChange={e => { if (e.target.value) onSave({ playerId: parseInt(e.target.value) }); }}
+              className="w-full bg-white/[0.02] border border-white/10 text-white text-sm rounded-md px-3 py-2"
+            >
+              <option value="">Pick MVP…</option>
+              {players.map(p => <option key={p.id} value={p.id}>#{p.shirtNumber ?? "—"} {p.firstName} {p.lastName}</option>)}
+            </select>
+          )}
+          <div className="flex gap-2">
+            <Input
+              type="text"
+              placeholder={players.length > 0 ? "…or type a name" : "Type the player's name"}
+              value={typed}
+              onChange={e => setTyped(e.target.value)}
+              className="text-sm flex-1"
+            />
+            <Button size="sm" variant="outline" disabled={!typed.trim() || disabled}
+              onClick={() => { onSave({ playerName: typed.trim() }); setTyped(""); }} className="text-xs">Set</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One goalkeeper-rating row: pick the keeper, then rate 1–5 (5 = best).
+function GkRatingRow({ teamLabel, players, currentName, currentRating, onSave, onClear, disabled }: {
+  teamLabel: string; players: TournamentPlayer[]; currentName: string | null; currentRating: number | null;
+  onSave: (v: { playerId?: number; playerName?: string; rating: number }) => void; onClear: () => void; disabled: boolean;
+}) {
+  const [pickedId, setPickedId] = useState("");
+  const [typed, setTyped] = useState("");
+  const keeperChosen = !!pickedId || !!typed.trim() || !!currentName;
+  const rate = (rating: number) => {
+    if (currentName && !pickedId && !typed.trim()) { onSave({ rating }); return; }   // re-rate the existing keeper
+    if (pickedId) onSave({ playerId: parseInt(pickedId), rating });
+    else if (typed.trim()) onSave({ playerName: typed.trim(), rating });
+  };
+  return (
+    <div className="rounded-lg bg-white/[0.015] border border-white/5 px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] text-white/50"><span className="text-white/70 font-medium">{teamLabel}</span> goalkeeper</div>
+        {currentName && (
+          <span className="text-[11px] text-blue-300 flex items-center gap-1">
+            {currentName}{currentRating != null ? <span className="text-white/40">· {currentRating}/5</span> : null}
+            <button onClick={onClear} className="text-white/25 hover:text-red-400 ml-1">Clear</button>
+          </span>
+        )}
+      </div>
+      {!currentName && (
+        <>
+          {players.length > 0 && (
+            <select value={pickedId} disabled={disabled}
+              onChange={e => { setPickedId(e.target.value); if (e.target.value) setTyped(""); }}
+              className="w-full bg-white/[0.02] border border-white/10 text-white text-sm rounded-md px-3 py-2">
+              <option value="">Pick keeper…</option>
+              {players.map(p => <option key={p.id} value={p.id}>#{p.shirtNumber ?? "—"} {p.firstName} {p.lastName}</option>)}
+            </select>
+          )}
+          <Input type="text" placeholder={players.length > 0 ? "…or type the keeper's name" : "Type the keeper's name"}
+            value={typed} onChange={e => { setTyped(e.target.value); if (e.target.value) setPickedId(""); }} className="text-sm" />
+        </>
+      )}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] text-white/30 mr-1">Rate</span>
+        {[1, 2, 3, 4, 5].map(n => (
+          <button key={n} disabled={!keeperChosen || disabled} onClick={() => rate(n)}
+            className={`w-8 h-8 rounded-md text-sm font-semibold transition-all disabled:opacity-30 ${
+              currentRating === n ? "bg-blue-600 text-white" : "bg-white/[0.03] text-white/50 hover:bg-white/10 border border-white/10"
+            }`}>{n}</button>
+        ))}
+        <span className="text-[10px] text-white/25 ml-1">5 = best</span>
+      </div>
+    </div>
+  );
+}
+
 function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: () => void }) {
   const { toast } = useToast();
   const [pickerSide, setPickerSide] = useState<"home" | "away" | null>(null);
@@ -127,6 +226,52 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
     for (const p of awayPlayers) m.set(p.id, { ...p, side: "away" });
     return m;
   }, [homePlayers, awayPlayers]);
+
+  // ── Individual awards (admin-only): MVP votes + goalkeeper ratings ──
+  const { data: awards } = useQuery<{ mvpVotes: any[]; gkRatings: any[] }>({
+    queryKey: ["/api/admin/tournament/games", game.id, "awards"],
+    queryFn: () => fetch(`/api/admin/tournament/games/${game.id}/awards`).then(r => r.json()),
+  });
+  const invalidateAwards = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/games", game.id, "awards"] });
+    // A typed name find-or-creates a player → refresh rosters so it resolves.
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/teams", game.homeTeamId, "players"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/teams", game.awayTeamId, "players"] });
+  };
+  const mvpMut = useMutation({
+    mutationFn: (body: any) => apiRequest("PUT", `/api/admin/tournament/games/${game.id}/mvp-vote`, body),
+    onSuccess: invalidateAwards,
+    onError: (e: any) => toast({ title: "Couldn't save MVP vote", description: e.message, variant: "destructive" }),
+  });
+  const mvpDelMut = useMutation({
+    mutationFn: (voterTeamId: number) => apiRequest("DELETE", `/api/admin/tournament/games/${game.id}/mvp-vote/${voterTeamId}`),
+    onSuccess: invalidateAwards,
+  });
+  const gkMut = useMutation({
+    mutationFn: (body: any) => apiRequest("PUT", `/api/admin/tournament/games/${game.id}/gk-rating`, body),
+    onSuccess: invalidateAwards,
+    onError: (e: any) => toast({ title: "Couldn't save keeper rating", description: e.message, variant: "destructive" }),
+  });
+  const gkDelMut = useMutation({
+    mutationFn: (teamId: number) => apiRequest("DELETE", `/api/admin/tournament/games/${game.id}/gk-rating/${teamId}`),
+    onSuccess: invalidateAwards,
+  });
+
+  const mvpByVoter = useMemo(() => {
+    const m = new Map<number, number>(); // voterTeamId → playerId voted
+    for (const v of awards?.mvpVotes ?? []) m.set(v.voterTeamId, v.playerId);
+    return m;
+  }, [awards]);
+  const gkByTeam = useMemo(() => {
+    const m = new Map<number, { playerId: number; rating: number }>();
+    for (const r of awards?.gkRatings ?? []) m.set(r.teamId, { playerId: r.playerId, rating: r.rating });
+    return m;
+  }, [awards]);
+  const nameOf = (playerId: number | undefined | null) => {
+    if (!playerId) return null;
+    const p = playerById.get(playerId);
+    return p ? `${p.firstName} ${p.lastName}` : `Player ${playerId}`;
+  };
 
   const submit = () => {
     if (!pickerSide) return;
@@ -271,6 +416,50 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
               </>
             )}
           </div>
+
+          {game.homeTeamId && game.awayTeamId && (
+            <>
+              {/* MVP votes — admin only */}
+              <div className="border-t border-white/5 pt-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-white/40 uppercase tracking-wide flex items-center gap-1.5"><Award className="w-3.5 h-3.5" /> MVP votes</div>
+                  <span className="text-[10px] text-amber-400/70 flex items-center gap-1"><Shield className="w-2.5 h-2.5" /> Private</span>
+                </div>
+                <MvpVoteRow
+                  voterLabel={homeName} targetLabel={awayName} players={awayPlayers}
+                  currentName={nameOf(mvpByVoter.get(game.homeTeamId!))}
+                  onSave={v => mvpMut.mutate({ voterTeamId: game.homeTeamId, ...v })}
+                  onClear={() => mvpDelMut.mutate(game.homeTeamId!)} disabled={mvpMut.isPending}
+                />
+                <MvpVoteRow
+                  voterLabel={awayName} targetLabel={homeName} players={homePlayers}
+                  currentName={nameOf(mvpByVoter.get(game.awayTeamId!))}
+                  onSave={v => mvpMut.mutate({ voterTeamId: game.awayTeamId, ...v })}
+                  onClear={() => mvpDelMut.mutate(game.awayTeamId!)} disabled={mvpMut.isPending}
+                />
+              </div>
+
+              {/* Goalkeeper ratings (Golden Glove) — admin only */}
+              <div className="border-t border-white/5 pt-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-white/40 uppercase tracking-wide flex items-center gap-1.5"><Shield className="w-3.5 h-3.5" /> Goalkeeper rating</div>
+                  <span className="text-[10px] text-amber-400/70 flex items-center gap-1"><Shield className="w-2.5 h-2.5" /> Referee · private</span>
+                </div>
+                <GkRatingRow
+                  teamLabel={homeName} players={homePlayers}
+                  currentName={nameOf(gkByTeam.get(game.homeTeamId!)?.playerId)} currentRating={gkByTeam.get(game.homeTeamId!)?.rating ?? null}
+                  onSave={v => gkMut.mutate({ teamId: game.homeTeamId, ...v })}
+                  onClear={() => gkDelMut.mutate(game.homeTeamId!)} disabled={gkMut.isPending}
+                />
+                <GkRatingRow
+                  teamLabel={awayName} players={awayPlayers}
+                  currentName={nameOf(gkByTeam.get(game.awayTeamId!)?.playerId)} currentRating={gkByTeam.get(game.awayTeamId!)?.rating ?? null}
+                  onSave={v => gkMut.mutate({ teamId: game.awayTeamId, ...v })}
+                  onClear={() => gkDelMut.mutate(game.awayTeamId!)} disabled={gkMut.isPending}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -306,6 +495,19 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId, "games"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId, "standings"] });
     },
+  });
+
+  // Tournament-level live-stream URL — the default "Watch" destination for the
+  // whole age group. Admins mark individual games "Go Live" (below); the app
+  // shows a LIVE badge + a Watch button that opens this URL.
+  const [streamUrl, setStreamUrl] = useState(tournament.streamUrl || "");
+  const streamUrlMut = useMutation({
+    mutationFn: (url: string) => apiRequest("PATCH", `/api/admin/tournament/tournaments/${tournamentId}`, { streamUrl: url.trim() || null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId] });
+      toast({ title: "Live stream saved", description: "This is where the app's Watch button will send viewers." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   // Teams for this tournament — used to let admins assign teams into knockout
@@ -551,9 +753,30 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                         <Goal className="w-3.5 h-3.5" />
                       </button>
                     )}
+                    {game.status !== "final" && (
+                      game.isLive ? (
+                        <button
+                          onClick={() => updateGameMut.mutate({ id: game.id, data: { isLive: false } })}
+                          className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 font-bold"
+                          title="Stop streaming this game"
+                          data-testid={`button-end-live-${game.id}`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> LIVE
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => updateGameMut.mutate({ id: game.id, data: { isLive: true } })}
+                          className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-white/40 hover:text-red-400 hover:bg-red-500/10"
+                          title="Mark this game live (shows a LIVE badge + Watch button in the app)"
+                          data-testid={`button-go-live-${game.id}`}
+                        >
+                          Go Live
+                        </button>
+                      )
+                    )}
                     {game.status !== "final" && game.homeScore !== null && game.awayScore !== null && (
                       <button
-                        onClick={() => updateGameMut.mutate({ id: game.id, data: { status: "final" } })}
+                        onClick={() => updateGameMut.mutate({ id: game.id, data: { status: "final", isLive: false } })}
                         className="text-[9px] px-2 py-0.5 rounded bg-green-500/15 text-green-400 hover:bg-green-500/25"
                         data-testid={`button-confirm-score-${game.id}`}
                       >
@@ -587,6 +810,31 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
 
   return (
     <div className="space-y-6">
+      {/* Live stream — the destination the app's "Watch Live" button opens */}
+      <div className="rounded-xl border border-red-500/15 bg-red-500/[0.03] px-4 py-3 flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 text-xs font-semibold text-red-300/90">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> Live stream
+        </div>
+        <Input
+          value={streamUrl}
+          onChange={e => setStreamUrl(e.target.value)}
+          placeholder="Paste the streaming link (e.g. https://watch.cicyouth.com/u12) — leave blank until it's ready"
+          className="flex-1 min-w-[240px] h-8 text-xs premium-input text-white"
+          data-testid="input-tournament-stream-url"
+        />
+        <button
+          onClick={() => streamUrlMut.mutate(streamUrl)}
+          disabled={streamUrlMut.isPending || streamUrl === (tournament.streamUrl || "")}
+          className="text-xs px-3 py-1.5 rounded-md bg-red-500/20 text-red-300 hover:bg-red-500/30 disabled:opacity-40 font-medium"
+          data-testid="button-save-stream-url"
+        >
+          Save
+        </button>
+        <span className="w-full text-[10px] text-white/30 sm:w-auto sm:ml-1">
+          Then hit <span className="text-red-300/80">Go Live</span> on whichever game is on camera.
+        </span>
+      </div>
+
       {groupGames.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-3">
@@ -998,6 +1246,137 @@ function TeamsTab({ tournament }: { tournament: Tournament }) {
   );
 }
 
+// Individual Awards — live leaderboards for Golden Boot (public), plus the
+// ADMIN-ONLY Golden Glove (keeper) + MVP. Golden Boot derives from goals;
+// the other two derive from votes/ratings entered per game in the goals modal.
+type AwardView = "boot" | "glove" | "mvp";
+function AwardsTab({ tournament }: { tournament: Tournament }) {
+  const tournamentId = tournament.id;
+  const [view, setView] = useState<AwardView>("boot");
+
+  const { data: bootData = [], isLoading: bootLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/tournament/tournaments", tournamentId, "top-scorers"],
+    queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/top-scorers`).then(r => r.json()),
+  });
+  const { data: gloveData = [], isLoading: gloveLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/tournament/tournaments", tournamentId, "gk-leaderboard"],
+    queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/gk-leaderboard`).then(r => r.json()),
+  });
+  const { data: mvpData = [], isLoading: mvpLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/tournament/tournaments", tournamentId, "mvp-leaderboard"],
+    queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/mvp-leaderboard`).then(r => r.json()),
+  });
+
+  const views: { id: AwardView; label: string; icon: any }[] = [
+    { id: "boot", label: "Golden Boot", icon: Goal },
+    { id: "glove", label: "Golden Glove", icon: Shield },
+    { id: "mvp", label: "MVP", icon: Award },
+  ];
+
+  const rows = view === "boot" ? bootData : view === "glove" ? gloveData : mvpData;
+  const loading = view === "boot" ? bootLoading : view === "glove" ? gloveLoading : mvpLoading;
+  const isPrivate = view !== "boot";
+
+  const rankBadge = (i: number) => {
+    const styles = ["bg-yellow-400/20 text-yellow-300 border-yellow-400/30", "bg-white/10 text-white/60 border-white/15", "bg-amber-700/20 text-amber-500/80 border-amber-700/30"];
+    return (
+      <span className={`w-7 h-7 shrink-0 rounded-full border flex items-center justify-center text-xs font-semibold ${i < 3 ? styles[i] : "bg-white/[0.03] text-white/40 border-white/10"}`}>
+        {i + 1}
+      </span>
+    );
+  };
+
+  const teamCell = (r: any) => (
+    <div className="flex items-center gap-2 min-w-0">
+      {r.teamLogoUrl
+        ? <img src={r.teamLogoUrl} alt="" className="w-5 h-5 rounded-full object-contain shrink-0" />
+        : <div className="w-5 h-5 rounded-full bg-white/5 shrink-0" />}
+      <span className="text-white/40 text-xs truncate">{r.teamName}</span>
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      {/* view toggle */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex gap-1 bg-white/[0.02] rounded-xl p-1 border border-white/5">
+          {views.map(v => (
+            <button
+              key={v.id}
+              onClick={() => setView(v.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all ${
+                view === v.id ? "bg-blue-600/20 text-blue-400 font-medium" : "text-white/30 hover:text-white/50 hover:bg-white/[0.02]"
+              }`}
+              data-testid={`award-view-${v.id}`}
+            >
+              <v.icon className="w-3.5 h-3.5" />
+              {v.label}
+            </button>
+          ))}
+        </div>
+        {isPrivate && (
+          <span className="text-[11px] px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400/80 border border-amber-500/20 flex items-center gap-1.5">
+            <Shield className="w-3 h-3" /> Private — staff only, never shown publicly
+          </span>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            {view === "boot" ? <><Goal className="w-4 h-4 text-yellow-400/80" /> Golden Boot — top scorers</>
+              : view === "glove" ? <><Shield className="w-4 h-4 text-blue-400/80" /> Golden Glove — best goalkeeper</>
+              : <><Award className="w-4 h-4 text-purple-400/80" /> Player of the Tournament (MVP)</>}
+          </h3>
+          <span className="text-xs text-white/25">{rows.length} {rows.length === 1 ? "player" : "players"}</span>
+        </div>
+
+        {view === "glove" && (
+          <p className="text-[11px] text-white/35 mb-3">Referees rate each keeper 1–5 per game (5 = best). Ranked by average rating.</p>
+        )}
+        {view === "mvp" && (
+          <p className="text-[11px] text-white/35 mb-3">Each team votes one opposition player per game. Most votes wins.</p>
+        )}
+
+        {loading ? (
+          <div className="h-24 rounded-xl bg-white/[0.02] animate-pulse" />
+        ) : rows.length === 0 ? (
+          <div className="text-center py-10 text-white/25 text-sm">
+            {view === "boot" ? "No goals recorded yet." : view === "glove" ? "No goalkeeper ratings entered yet." : "No MVP votes entered yet."}
+            <p className="text-[11px] text-white/20 mt-1">Entered per game in the Schedule tab (tap a game → scoresheet).</p>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {rows.map((r: any, i: number) => (
+              <div key={r.playerId} className="flex items-center gap-3 rounded-lg bg-white/[0.015] border border-white/5 px-3 py-2">
+                {rankBadge(i)}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-white truncate">
+                    {r.shirtNumber ? <span className="text-white/30 mr-1.5">#{r.shirtNumber}</span> : null}
+                    {r.playerName}
+                  </div>
+                  <div className="sm:hidden mt-0.5">{teamCell(r)}</div>
+                </div>
+                <div className="hidden sm:block w-48">{teamCell(r)}</div>
+                <div className="text-right shrink-0">
+                  {view === "boot" && <span className="text-lg font-bold text-white tabular-nums">{r.goals}<span className="text-[10px] font-normal text-white/30 ml-1">goals</span></span>}
+                  {view === "glove" && (
+                    <div className="flex items-baseline gap-2 justify-end">
+                      <span className="text-lg font-bold text-white tabular-nums">{Number(r.avgRating).toFixed(1)}</span>
+                      <span className="text-[10px] text-white/30">avg · {r.games} {r.games === 1 ? "game" : "games"}</span>
+                    </div>
+                  )}
+                  {view === "mvp" && <span className="text-lg font-bold text-white tabular-nums">{r.votes}<span className="text-[10px] font-normal text-white/30 ml-1">{r.votes === 1 ? "vote" : "votes"}</span></span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function TournamentDetail() {
   const [, params] = useRoute("/admin/tournaments/:id");
   const [, setLocation] = useLocation();
@@ -1019,6 +1398,7 @@ export default function TournamentDetail() {
     { id: "schedule", label: "Schedule", icon: Calendar },
     { id: "groups", label: "Groups & Draw", icon: LayoutGrid },
     { id: "teams", label: "Teams", icon: Users },
+    { id: "awards", label: "Awards", icon: Award },
   ];
 
   return (
@@ -1067,6 +1447,7 @@ export default function TournamentDetail() {
       {tab === "schedule" && <ScheduleTab tournament={tournament} />}
       {tab === "groups" && <GroupsTab tournament={tournament} />}
       {tab === "teams" && <TeamsTab tournament={tournament} />}
+      {tab === "awards" && <AwardsTab tournament={tournament} />}
     </div>
   );
 }

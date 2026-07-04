@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -2633,7 +2633,7 @@ export async function registerRoutes(
                  COUNT(*) FILTER (WHERE kind='cta_click') AS cta_clicks,
                  MAX(occurred_at) FILTER (WHERE kind='open') AS last_open
           FROM proposal_events
-          WHERE proposal_id = ANY(${ids}) AND is_internal = false
+          WHERE proposal_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND is_internal = false
           GROUP BY proposal_id`);
         for (const r of (agg.rows as any[])) statsById[r.proposal_id] = r;
       }
@@ -2869,7 +2869,7 @@ export async function registerRoutes(
     const sim = sql`GREATEST(${sql.join(e.cols.map(c => sql`similarity(lower(COALESCE(${sql.raw(c)}::text,'')), lower(${q}))`), sql`, `)})`;
     let where = sql`((${ilike}) OR (${sim} >= 0.2))`;
     if (e.extraWhere) where = sql`${where} AND ${sql.raw(e.extraWhere)}`;
-    if (e.orgCol && !isSuperAdmin) where = sql`${where} AND ${sql.raw(e.orgCol)} = ANY(${orgIds})`;
+    if (e.orgCol && !isSuperAdmin) where = sql`${where} AND ${sql.raw(e.orgCol)} IN (${sql.join(orgIds.map(i => sql`${i}`), sql`, `)})`;
     const orgSel = e.orgCol ? sql.raw(e.orgCol) : sql.raw("NULL::int");
     const metaSel = e.metaSql ? sql`(${sql.raw(e.metaSql)})::text` : sql`NULL::text`;
     const query = sql`
@@ -6198,6 +6198,126 @@ export async function registerRoutes(
     }
   });
 
+  // ─── Individual awards: MVP votes + goalkeeper (Golden Glove) ratings ───
+  // ADMIN-ONLY. Deliberately NO public endpoints — human voting could be
+  // rigged if the standings were visible mid-tournament. Entered per game
+  // alongside goals; leaderboards live under the tournament Awards tab.
+
+  // Current MVP votes + GK ratings for one game (feeds the goals modal).
+  app.get("/api/admin/tournament/games/:id/awards", requireAuth, async (req, res) => {
+    try {
+      const gameId = parseInt(req.params.id);
+      const [mvpVotes, gkRatings] = await Promise.all([
+        storage.getTournamentMvpVotesByGame(gameId),
+        storage.getTournamentGkRatingsByGame(gameId),
+      ]);
+      res.json({ mvpVotes, gkRatings });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Cast/overwrite a team's MVP vote. The voted player must be on the OTHER
+  // team. Accepts a pre-loaded playerId OR a typed name (+ playerTeamId), which
+  // find-or-creates so it works even when a squad isn't loaded.
+  app.put("/api/admin/tournament/games/:id/mvp-vote", requireAuth, async (req, res) => {
+    try {
+      const gameId = parseInt(req.params.id);
+      const game = await storage.getTournamentGame(gameId);
+      if (!game) return res.status(404).json({ message: "Game not found" });
+      const voterTeamId = Number(req.body.voterTeamId);
+      if (![game.homeTeamId, game.awayTeamId].includes(voterTeamId)) {
+        return res.status(400).json({ message: "voterTeamId must be one of this game's teams" });
+      }
+      // The player being voted for plays for the opposing team.
+      const otherTeamId = voterTeamId === game.homeTeamId ? game.awayTeamId : game.homeTeamId;
+      let playerId = req.body.playerId ? Number(req.body.playerId) : 0;
+      if (!playerId && req.body.playerName && otherTeamId) {
+        playerId = await storage.findOrCreateTournamentPlayerByName(otherTeamId, String(req.body.playerName));
+      }
+      if (!playerId) return res.status(400).json({ message: "playerId or a player name is required" });
+      // Guard: the voted player must not be on the voting team.
+      const player = await storage.getTournamentPlayer(playerId);
+      if (player && player.teamId === voterTeamId) {
+        return res.status(400).json({ message: "A team can't vote for its own player" });
+      }
+      await storage.upsertTournamentMvpVote(gameId, voterTeamId, playerId);
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/tournament/games/:id/mvp-vote/:voterTeamId", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteTournamentMvpVote(parseInt(req.params.id), parseInt(req.params.voterTeamId));
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Referee rates a team's goalkeeper 1–5 (5 = best). One rating per team/game.
+  app.put("/api/admin/tournament/games/:id/gk-rating", requireAuth, async (req, res) => {
+    try {
+      const gameId = parseInt(req.params.id);
+      const game = await storage.getTournamentGame(gameId);
+      if (!game) return res.status(404).json({ message: "Game not found" });
+      const teamId = Number(req.body.teamId);
+      if (![game.homeTeamId, game.awayTeamId].includes(teamId)) {
+        return res.status(400).json({ message: "teamId must be one of this game's teams" });
+      }
+      const rating = Number(req.body.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return res.status(400).json({ message: "rating must be an integer 1–5" });
+      }
+      let playerId = req.body.playerId ? Number(req.body.playerId) : 0;
+      if (!playerId && req.body.playerName) {
+        playerId = await storage.findOrCreateTournamentPlayerByName(teamId, String(req.body.playerName));
+      }
+      if (!playerId) return res.status(400).json({ message: "playerId or a goalkeeper name is required" });
+      await storage.upsertTournamentGkRating(gameId, teamId, playerId, rating);
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/tournament/games/:id/gk-rating/:teamId", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteTournamentGkRating(parseInt(req.params.id), parseInt(req.params.teamId));
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Admin leaderboards (private). Golden Boot mirrors the public compute but
+  // isn't status-gated so it works on any tournament state.
+  app.get("/api/admin/tournament/tournaments/:id/top-scorers", requireAuth, async (req, res) => {
+    try {
+      res.json(await storage.getTournamentTopScorers(parseInt(req.params.id)));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/tournament/tournaments/:id/mvp-leaderboard", requireAuth, async (req, res) => {
+    try {
+      res.json(await storage.getTournamentMvpLeaderboard(parseInt(req.params.id)));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/tournament/tournaments/:id/gk-leaderboard", requireAuth, async (req, res) => {
+    try {
+      res.json(await storage.getTournamentGkLeaderboard(parseInt(req.params.id)));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ─── Player age verification ───
   // Admin uploads a passport / birth certificate scan, then flips the
   // ageVerified flag once they've eyeballed it. Documents go to private
@@ -9474,6 +9594,35 @@ export async function registerRoutes(
   // now, by the cicyouth.com marketing site's live Draws/Results page (browser →
   // cross-origin). Allow cicyouth.com + Vercel previews on every /api/public/tournament
   // GET. Native app requests carry no Origin header and are unaffected.
+  // Mobile app user capture — the CIC Youth app POSTs the email of anyone who
+  // signs up / signs in, to build CIC's marketing list. Public + unauthed
+  // (the app has no user session); deduped by (org, app, email).
+  app.post("/api/public/app-users/register", async (req, res) => {
+    try {
+      const { orgId, app: appName, email, name, provider, category } = req.body || {};
+      const org = parseInt(String(orgId));
+      const cleanEmail = String(email || "").trim().toLowerCase();
+      if (!org || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+        return res.status(400).json({ message: "A valid orgId and email are required" });
+      }
+      const values = {
+        organizationId: org,
+        app: String(appName || "cic-youth").slice(0, 40),
+        email: cleanEmail,
+        name: name ? String(name).slice(0, 120) : null,
+        provider: ["email", "apple", "google"].includes(provider) ? provider : "email",
+        category: category ? String(category).slice(0, 20) : null,
+      };
+      await db.insert(appUsers).values(values).onConflictDoUpdate({
+        target: [appUsers.organizationId, appUsers.app, appUsers.email],
+        set: { name: values.name, provider: values.provider, category: values.category, updatedAt: new Date() },
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.use("/api/public/tournament", (req, res, next) => {
     const origin = req.headers.origin as string | undefined;
     if (origin && (/^https:\/\/(www\.)?cicyouth\.com$/.test(origin) || /\.vercel\.app$/.test(origin))) {
@@ -9494,6 +9643,19 @@ export async function registerRoutes(
       }
       const all = await storage.getTournaments(orgId);
       const visible = all.filter(t => t.status === "active" || t.status === "completed");
+      // Authoritative registered-team count per tournament, in one grouped
+      // query (avoids N getTournamentTeams calls that would exhaust the pool).
+      // Includes byes — a bye is a real slot in the bracket.
+      const ids = visible.map(t => t.id);
+      const teamCounts = new Map<number, number>();
+      if (ids.length) {
+        const counts = await db
+          .select({ tournamentId: tournamentTeams.tournamentId, n: sql<number>`count(*)::int` })
+          .from(tournamentTeams)
+          .where(and(inArray(tournamentTeams.tournamentId, ids), eq(tournamentTeams.active, true)))
+          .groupBy(tournamentTeams.tournamentId);
+        for (const c of counts) teamCounts.set(c.tournamentId, c.n);
+      }
       res.json(visible.map(t => ({
         id: t.id,
         name: t.name,
@@ -9504,7 +9666,9 @@ export async function registerRoutes(
         endDate: t.endDate,
         numGroups: t.numGroups,
         teamsPerGroup: t.teamsPerGroup,
+        teamCount: teamCounts.get(t.id) ?? 0,
         gameDurationMinutes: t.gameDurationMinutes,
+        streamUrl: t.streamUrl ?? null,
       })));
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -9534,6 +9698,7 @@ export async function registerRoutes(
         pointsForWin: t.pointsForWin,
         pointsForDraw: t.pointsForDraw,
         pointsForLoss: t.pointsForLoss,
+        streamUrl: t.streamUrl ?? null,
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -9626,6 +9791,9 @@ export async function registerRoutes(
         startTime: g.startTime,
         field: g.field,
         status: g.status,
+        isLive: g.isLive ?? false,
+        // Per-game stream URL, falling back to the tournament-level one.
+        streamUrl: g.streamUrl || t.streamUrl || null,
         homeTeamId: g.homeTeamId,
         awayTeamId: g.awayTeamId,
         homeTeamName: g.homeTeam?.name || g.homeTeamPlaceholder || "TBD",

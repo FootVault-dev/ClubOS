@@ -35,7 +35,6 @@ const TYPES = [
   { key: "partnership", label: "Partnership", color: "#8b5cf6" },
   { key: "investor", label: "Investor", color: "#f59e0b" },
   { key: "development", label: "Development", color: "#06b6d4" },
-  { key: "client", label: "Client", color: "#ec4899" },
   { key: "grant", label: "Grant", color: "#22c55e" },
   { key: "other", label: "Other", color: "#64748b" },
 ] as const;
@@ -319,7 +318,7 @@ export default function GroupProposals() {
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Send className="w-10 h-10 text-white/15 mb-3" />
             <div className="text-white/50 text-sm font-medium">No proposals yet</div>
-            <div className="text-white/30 text-xs mt-1 max-w-xs">Add the ones you and Ryan have sent — La Liga, the gym partners, breweries, Core Pilates — each gets a tracked link.</div>
+            <div className="text-white/30 text-xs mt-1 max-w-xs">Add the ones you and Ryan have sent — La Liga, the gym partners, breweries, investor decks — each gets a tracked link.</div>
             <Button size="sm" className="mt-4 bg-blue-600 hover:bg-blue-500 text-white text-xs"
               onClick={() => setEditing({ proposalType: "sponsorship", status: "draft", currency: "NZD", brandTags: [] })}>
               <Plus className="w-4 h-4 mr-1" /> New proposal

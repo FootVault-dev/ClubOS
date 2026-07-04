@@ -86,10 +86,12 @@ BEGIN
     RETURN;
   END IF;
 
+  -- CUFC/USG commercial proposals ONLY. Agency/client work (Conscious Studio —
+  -- Core Pilates, DF Hair, etc.) is a SEPARATE business and must never be mixed
+  -- in here. See memory feedback_conscious_studio_not_clubos.
   INSERT INTO proposal_categories (organization_id, name, proposal_type, color, sort_order) VALUES
     (v_org, 'Breweries / Beer', 'sponsorship',  '#d97706', 0),
     (v_org, 'Gyms & Fitness',   'partnership',  '#22c55e', 1),
-    (v_org, 'Core Pilates',     'client',       '#ec4899', 2),
     (v_org, 'La Liga',          'partnership',  '#8b5cf6', 3),
     (v_org, 'Padel / USC Dev',  'development',  '#06b6d4', 4),
     (v_org, 'Investor',         'investor',     '#f59e0b', 5),

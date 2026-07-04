@@ -66,7 +66,7 @@ import {
   printOrderItems, type InsertPrintOrderItem, type PrintOrderItem,
   printOrderFiles, type InsertPrintOrderFile, type PrintOrderFile,
   printOrderEvents, type InsertPrintOrderEvent, type PrintOrderEvent,
-  tournaments, tournamentGroups, tournamentTeams, tournamentPlayers, tournamentStaff, tournamentGames, tournamentGoals,
+  tournaments, tournamentGroups, tournamentTeams, tournamentPlayers, tournamentStaff, tournamentGames, tournamentGoals, tournamentMvpVotes, tournamentGkRatings,
   clubs,
   type InsertTournament, type Tournament,
   type InsertTournamentGroup, type TournamentGroup,
@@ -75,6 +75,7 @@ import {
   type InsertTournamentStaff, type TournamentStaff,
   type InsertTournamentGame, type TournamentGame,
   type InsertTournamentGoal, type TournamentGoal,
+  type TournamentMvpVote, type TournamentGkRating,
   type InsertClub, type Club,
   terms,
   type InsertTerm, type Term,
@@ -311,6 +312,23 @@ export interface IStorage {
     playerId: number; playerName: string; shirtNumber: number | null;
     teamId: number; teamName: string; teamLogoUrl: string | null;
     goals: number;
+  }[]>;
+
+  // Individual awards — ADMIN-ONLY (private). MVP votes + goalkeeper ratings.
+  getTournamentMvpVotesByGame(gameId: number): Promise<TournamentMvpVote[]>;
+  upsertTournamentMvpVote(gameId: number, voterTeamId: number, playerId: number): Promise<void>;
+  deleteTournamentMvpVote(gameId: number, voterTeamId: number): Promise<void>;
+  getTournamentGkRatingsByGame(gameId: number): Promise<TournamentGkRating[]>;
+  upsertTournamentGkRating(gameId: number, teamId: number, playerId: number, rating: number): Promise<void>;
+  deleteTournamentGkRating(gameId: number, teamId: number): Promise<void>;
+  getTournamentMvpLeaderboard(tournamentId: number): Promise<{
+    playerId: number; playerName: string; shirtNumber: number | null;
+    teamId: number; teamName: string; teamLogoUrl: string | null; votes: number;
+  }[]>;
+  getTournamentGkLeaderboard(tournamentId: number): Promise<{
+    playerId: number; playerName: string; shirtNumber: number | null;
+    teamId: number; teamName: string; teamLogoUrl: string | null;
+    games: number; avgRating: number; totalRating: number;
   }[]>;
 
   getTournamentStaff(teamId: number): Promise<TournamentStaff[]>;
@@ -2133,6 +2151,108 @@ export class DatabaseStorage implements IStorage {
       teamName: r.team_name,
       teamLogoUrl: r.team_logo_url,
       goals: r.goals,
+    }));
+  }
+
+  // ── Individual awards — ADMIN-ONLY (MVP votes + goalkeeper ratings) ──
+  async getTournamentMvpVotesByGame(gameId: number): Promise<TournamentMvpVote[]> {
+    return db.select().from(tournamentMvpVotes).where(eq(tournamentMvpVotes.gameId, gameId));
+  }
+
+  async upsertTournamentMvpVote(gameId: number, voterTeamId: number, playerId: number): Promise<void> {
+    await db.insert(tournamentMvpVotes)
+      .values({ gameId, voterTeamId, playerId })
+      .onConflictDoUpdate({
+        target: [tournamentMvpVotes.gameId, tournamentMvpVotes.voterTeamId],
+        set: { playerId },
+      });
+  }
+
+  async deleteTournamentMvpVote(gameId: number, voterTeamId: number): Promise<void> {
+    await db.delete(tournamentMvpVotes)
+      .where(and(eq(tournamentMvpVotes.gameId, gameId), eq(tournamentMvpVotes.voterTeamId, voterTeamId)));
+  }
+
+  async getTournamentGkRatingsByGame(gameId: number): Promise<TournamentGkRating[]> {
+    return db.select().from(tournamentGkRatings).where(eq(tournamentGkRatings.gameId, gameId));
+  }
+
+  async upsertTournamentGkRating(gameId: number, teamId: number, playerId: number, rating: number): Promise<void> {
+    await db.insert(tournamentGkRatings)
+      .values({ gameId, teamId, playerId, rating })
+      .onConflictDoUpdate({
+        target: [tournamentGkRatings.gameId, tournamentGkRatings.teamId],
+        set: { playerId, rating },
+      });
+  }
+
+  async deleteTournamentGkRating(gameId: number, teamId: number): Promise<void> {
+    await db.delete(tournamentGkRatings)
+      .where(and(eq(tournamentGkRatings.gameId, gameId), eq(tournamentGkRatings.teamId, teamId)));
+  }
+
+  async getTournamentMvpLeaderboard(tournamentId: number): Promise<{
+    playerId: number; playerName: string; shirtNumber: number | null;
+    teamId: number; teamName: string; teamLogoUrl: string | null; votes: number;
+  }[]> {
+    // One vote each; MVP = most votes. Join votes → player → their team.
+    const rows = await db.execute(sql`
+      SELECT
+        p.id           AS player_id,
+        (p.first_name || ' ' || p.last_name) AS player_name,
+        p.shirt_number AS shirt_number,
+        t.id           AS team_id,
+        t.name         AS team_name,
+        COALESCE(t.logo_url, c.logo_url) AS team_logo_url,
+        COUNT(*)::int  AS votes
+      FROM tournament_mvp_votes v
+      JOIN tournament_games games ON games.id = v.game_id
+      JOIN tournament_players p   ON p.id = v.player_id
+      JOIN tournament_teams t     ON t.id = p.team_id
+      LEFT JOIN clubs c           ON c.id = t.club_id
+      WHERE games.tournament_id = ${tournamentId}
+      GROUP BY p.id, p.first_name, p.last_name, p.shirt_number,
+               t.id, t.name, t.logo_url, c.logo_url
+      ORDER BY votes DESC, p.last_name ASC, p.first_name ASC
+    `);
+    return (rows as any).rows.map((r: any) => ({
+      playerId: r.player_id, playerName: r.player_name, shirtNumber: r.shirt_number,
+      teamId: r.team_id, teamName: r.team_name, teamLogoUrl: r.team_logo_url, votes: r.votes,
+    }));
+  }
+
+  async getTournamentGkLeaderboard(tournamentId: number): Promise<{
+    playerId: number; playerName: string; shirtNumber: number | null;
+    teamId: number; teamName: string; teamLogoUrl: string | null;
+    games: number; avgRating: number; totalRating: number;
+  }[]> {
+    // Golden Glove = best average keeper rating across games (5 = best).
+    // Rank by average, then by games played (more games = more reliable).
+    const rows = await db.execute(sql`
+      SELECT
+        p.id           AS player_id,
+        (p.first_name || ' ' || p.last_name) AS player_name,
+        p.shirt_number AS shirt_number,
+        t.id           AS team_id,
+        t.name         AS team_name,
+        COALESCE(t.logo_url, c.logo_url) AS team_logo_url,
+        COUNT(*)::int              AS games,
+        ROUND(AVG(r.rating), 2)::float8 AS avg_rating,
+        SUM(r.rating)::int         AS total_rating
+      FROM tournament_gk_ratings r
+      JOIN tournament_games games ON games.id = r.game_id
+      JOIN tournament_players p   ON p.id = r.player_id
+      JOIN tournament_teams t     ON t.id = r.team_id
+      LEFT JOIN clubs c           ON c.id = t.club_id
+      WHERE games.tournament_id = ${tournamentId}
+      GROUP BY p.id, p.first_name, p.last_name, p.shirt_number,
+               t.id, t.name, t.logo_url, c.logo_url
+      ORDER BY avg_rating DESC, games DESC, p.last_name ASC
+    `);
+    return (rows as any).rows.map((r: any) => ({
+      playerId: r.player_id, playerName: r.player_name, shirtNumber: r.shirt_number,
+      teamId: r.team_id, teamName: r.team_name, teamLogoUrl: r.team_logo_url,
+      games: r.games, avgRating: r.avg_rating, totalRating: r.total_rating,
     }));
   }
 
