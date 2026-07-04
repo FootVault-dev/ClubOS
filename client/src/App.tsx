@@ -23,6 +23,7 @@ import FootballInstitute from "@/pages/football-institute";
 import AdminSettings from "@/pages/admin-settings";
 import AdminEditPage from "@/pages/admin-edit-page";
 import CampPage from "@/pages/camp-page";
+import MembershipPage from "@/pages/membership-page";
 import TermsPage from "@/pages/terms";
 import PrivacyPage from "@/pages/privacy";
 import BookingPage from "@/pages/booking-page";
@@ -493,6 +494,7 @@ function App() {
             <Route path="/league/delete-account">{() => <MflLegalPage kind="delete" />}</Route>
             <Route path="/league/:slug" component={MflLandingPage} />
             <Route path="/league" component={MflLandingPage} />
+            <Route path="/membership" component={MembershipPage} />
             <Route path="/:slug/book" component={BookingPage} />
             <Route path="/:slug/class-book" component={ClassBookingPage} />
             <Route path="/:slug/checkout" component={CheckoutPage} />

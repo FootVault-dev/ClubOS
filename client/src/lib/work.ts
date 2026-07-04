@@ -74,6 +74,16 @@ export interface Goal {
   brandTags: string[]; ragStatus: Rag; period: string | null; targetDate: string | null;
   archived: boolean; sortOrder: number; measures: GoalMeasure[];
 }
+export interface TaskTemplateItem {
+  id: number; templateId: number; title: string; description: string | null;
+  offsetDays: number; priority: "low" | "medium" | "high" | "urgent";
+  departmentId: number | null; brandTags: string[]; nextStep: string | null; sortOrder: number;
+}
+export interface TaskTemplate {
+  id: number; organizationId: number; name: string; description: string | null;
+  anchorLabel: string; departmentId: number | null; brandTags: string[]; color: string;
+  archived: boolean; sortOrder: number; items: TaskTemplateItem[];
+}
 
 // ── Small shared helpers ─────────────────────────────────────────────────────
 export function memberName(team: TeamMember[], id: number | null | undefined): string | null {
@@ -100,4 +110,11 @@ export function isDoneTask(t: ProjectTask, boards: ProjectBoard[]): boolean {
   const b = boards.find(x => x.id === t.boardId);
   const g = b?.groups.find(x => x.id === t.groupId);
   return !!g?.isDone;
+}
+// Plain-English label for a playbook item's day offset relative to the anchor.
+export function offsetLabel(days: number): string {
+  if (days === 0) return "On the day";
+  const n = Math.abs(days);
+  const unit = n === 1 ? "day" : "days";
+  return days < 0 ? `${n} ${unit} before` : `${n} ${unit} after`;
 }

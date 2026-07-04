@@ -1,5 +1,5 @@
 import { storage } from "./storage";
-import { campFromForOrg } from "@shared/org-domains";
+import { campFromForOrg, fromForOrg } from "@shared/org-domains";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 
@@ -852,6 +852,77 @@ export async function sendCugcEnrolmentNotification(params: {
     replyTo: params.parentEmail || "info@cugc.co.nz",
     subject: `New enrolment — ${params.gymnastName} · ${params.programName} · ${cugcMoney(params.amount)}`,
     html: cugcEmailShell({ headline: "New Enrolment 🎉", body, footerNote: "Internal notification for CUGC admins." }),
+  });
+}
+
+// ── South Island United membership (public self-serve join) ─────────────────
+const SIU_MEMBERSHIP_NOTIFY = "daniel@southislandunited.com"; // internal "new member" recipient
+const siuEsc = (s: any) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string));
+const siuMoney = (c: number) => `$${((c || 0) / 100).toLocaleString("en-NZ", { maximumFractionDigits: 0 })}`;
+const siuPer = (i?: string) => (i === "monthly" ? " / month" : i === "lifetime" ? " (lifetime)" : " / year");
+
+/** Member welcome — SIU black/gold, sent once payment clears. */
+export async function sendMembershipWelcomeEmail(params: {
+  to: string; memberName: string; tierName: string; amount: number; billingInterval?: string; benefits?: string[]; orgId?: number;
+}): Promise<boolean> {
+  const benefits = (params.benefits || []).map((b) => `<tr><td style="padding:5px 0;color:#e6e6e6;font-size:14px;line-height:1.5;">◆&nbsp;&nbsp;${siuEsc(b)}</td></tr>`).join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+    <div style="background:linear-gradient(135deg,#000000,#1B3D24);padding:34px;border-radius:16px 16px 0 0;text-align:center;">
+      <h1 style="color:#C59949;margin:0;font-size:24px;text-transform:uppercase;letter-spacing:1.5px;">Welcome to the Club</h1>
+      <p style="color:rgba(255,255,255,0.85);margin:10px 0 0;font-size:14px;">${siuEsc(params.tierName)} Membership · South Island United</p>
+    </div>
+    <div style="background:#0A0A09;padding:32px;border:1px solid #1f1f1f;border-top:0;color:#e6e6e6;">
+      <p style="font-size:16px;margin:0 0 14px;">Kia ora ${siuEsc(params.memberName) || "there"},</p>
+      <p style="color:#b8b8b8;font-size:14px;line-height:1.65;margin:0 0 22px;">You're officially part of South Island United. Thank you for backing the club as we build something special in the OFC Pro League — your membership directly powers what we're creating.</p>
+      <div style="background:#111;border:1px solid #242424;border-radius:12px;padding:20px;margin:0 0 22px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr><td style="color:#8c8c8c;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:12px;border-bottom:1px solid #242424;">Tier</td><td style="color:#C59949;font-size:15px;font-weight:600;text-align:right;padding-bottom:12px;border-bottom:1px solid #242424;">${siuEsc(params.tierName)}</td></tr>
+          <tr><td style="color:#8c8c8c;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;padding-top:12px;">Paid</td><td style="color:#ffffff;font-size:15px;font-weight:700;text-align:right;padding-top:12px;">${siuMoney(params.amount)}${siuPer(params.billingInterval)}</td></tr>
+        </table>
+      </div>
+      ${benefits ? `<p style="color:#8c8c8c;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">What's included</p><table style="width:100%;border-collapse:collapse;margin:0 0 22px;">${benefits}</table>` : ""}
+      <p style="color:#b8b8b8;font-size:13px;line-height:1.6;margin:0;">We'll be in touch with everything you need to make the most of your membership. Questions? Just reply to this email.</p>
+    </div>
+    <p style="text-align:center;color:#8c8c8c;font-size:11px;margin:16px 0 0;">South Island United — Uniting the South</p>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: fromForOrg(params.orgId ?? 2, "South Island United"),
+    replyTo: "info@southislandunited.com",
+    subject: `Welcome to South Island United — ${params.tierName} Membership`,
+    html,
+  });
+}
+
+/** Internal "new member" notification — the club's copy. */
+export async function sendMembershipNotificationEmail(params: {
+  memberName: string; memberEmail: string; memberPhone?: string; tierName: string; amount: number; billingInterval?: string; orgId?: number;
+}): Promise<boolean> {
+  const row = (l: string, v: string) => `<tr><td style="padding:6px 0;color:#64748b;font-size:13px;">${l}</td><td style="padding:6px 0;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${v}</td></tr>`;
+  const html = `
+  <div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
+    <div style="background:linear-gradient(135deg,#000000,#1B3D24);padding:24px;border-radius:14px 14px 0 0;">
+      <h1 style="color:#C59949;margin:0;font-size:18px;">New Membership 🎉</h1>
+    </div>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-top:0;border-radius:0 0 14px 14px;padding:22px;">
+      <p style="color:#334155;font-size:14px;margin:0 0 16px;">A new member just joined and <strong>paid</strong> via the SIU membership page. Their welcome email has been sent.</p>
+      <table style="width:100%;border-collapse:collapse;">
+        ${row("Member", siuEsc(params.memberName))}
+        ${row("Email", `<a href="mailto:${siuEsc(params.memberEmail)}" style="color:#1B3D24;">${siuEsc(params.memberEmail)}</a>`)}
+        ${params.memberPhone ? row("Phone", siuEsc(params.memberPhone)) : ""}
+        ${row("Tier", siuEsc(params.tierName))}
+        ${row("Paid", siuMoney(params.amount) + siuPer(params.billingInterval))}
+      </table>
+      <p style="color:#64748b;font-size:12px;margin:16px 0 0;">Manage in ClubOS → South Island United → Membership.</p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: SIU_MEMBERSHIP_NOTIFY,
+    from: fromForOrg(params.orgId ?? 2, "South Island United Membership"),
+    replyTo: params.memberEmail,
+    subject: `New member — ${params.memberName} · ${params.tierName} · ${siuMoney(params.amount)}`,
+    html,
   });
 }
 

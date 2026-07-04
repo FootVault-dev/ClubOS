@@ -6,7 +6,7 @@
 //   • StaffMeetingView — the projectable, run-the-weekly-meeting screen.
 //   • LeadershipView   — the RAG rollup across every brand × department.
 import { useMemo, useState, type ReactNode } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -17,12 +17,13 @@ import { DatePickerInput } from "@/components/ui/date-picker-input";
 import {
   Plus, X, Check, Trash2, Target, Flag, Calendar as CalendarIcon, AlertCircle,
   ChevronRight, Trophy, Gauge, Users, ArrowUpRight, Circle, Presentation,
+  Building2, Layers, BookOpen, Rocket, Info, Clock, Zap, Sparkles, HelpCircle,
 } from "lucide-react";
 import {
   BRANDS, PRIORITY_COLORS, RAG_META, RAG_ORDER, GOAL_LEVELS,
   type Rag, type GoalLevel, type ProjectTask, type ProjectBoard, type TeamMember,
-  type Department, type Goal, type GoalMeasure,
-  memberName, deptOf, fmtDate, dayDiff, isDoneTask,
+  type Department, type Goal, type GoalMeasure, type TaskTemplate, type TaskTemplateItem,
+  memberName, deptOf, fmtDate, dayDiff, isDoneTask, offsetLabel,
 } from "@/lib/work";
 
 // ── Tiny shared bits ─────────────────────────────────────────────────────────
@@ -140,6 +141,7 @@ function TaskRow({ t, boards, departments, team, overdue, onEdit, showOwner }: {
           {dept && <DeptPill dept={dept} />}
           <BrandChips tags={t.brandTags} />
           {showOwner && owner && <span className="text-white/40">{owner}</span>}
+          {t.helperIds?.length > 0 && <span className="text-white/40 flex items-center gap-0.5" title={`${t.helperIds.length} helping`}><Users className="w-2.5 h-2.5" />{t.helperIds.length}</span>}
           {t.nextStep && <span className="text-white/40 italic truncate max-w-[220px]">→ {t.nextStep}</span>}
           {t.isIssue && <span className="text-[9px] font-semibold px-1 py-0.5 rounded bg-red-500/15 text-red-300">BLOCKER</span>}
         </div>
@@ -694,6 +696,488 @@ function RagRollup({ title, counts, total }: { title: string; counts: { r: Rag; 
             ))}
           </div>
         </>}
+    </div>
+  );
+}
+
+// ── 5. Focus — the matrix lens (By Department × By Brand) ────────────────────
+// This is the answer to "one marketing workspace, or a marketing tab in every
+// brand?" — neither. One dataset, two axes. Group by whichever axis you're
+// wearing today, optionally filter by the other. "Everything Marketing owns"
+// or "everything for MFL", from the SAME tasks.
+export function FocusView({ allTasks, boards, departments, team, onEdit }: {
+  allTasks: ProjectTask[]; boards: ProjectBoard[]; departments: Department[]; team: TeamMember[];
+  onEdit: (t: ProjectTask) => void;
+}) {
+  const [mode, setMode] = useState<"department" | "brand">("department");
+  const [filter, setFilter] = useState<string | null>(null); // slug (brand) or dept-id string
+
+  const open = useMemo(() => allTasks.filter(t => !isDoneTask(t, boards) && t.parentId == null), [allTasks, boards]);
+
+  // Cross-filter: when grouping by department, the filter narrows by brand; when
+  // grouping by brand, it narrows by department.
+  const filtered = useMemo(() => {
+    if (!filter) return open;
+    if (mode === "department") return open.filter(t => t.brandTags?.includes(filter));
+    return open.filter(t => String(t.departmentId) === filter);
+  }, [open, filter, mode]);
+
+  const groups = useMemo(() => {
+    if (mode === "department") {
+      const rows = departments.map(d => ({
+        key: String(d.id), label: d.name, color: d.color,
+        tasks: filtered.filter(t => t.departmentId === d.id),
+      }));
+      const unassigned = filtered.filter(t => t.departmentId == null);
+      if (unassigned.length) rows.push({ key: "none", label: "No department", color: "#64748b", tasks: unassigned });
+      return rows.filter(r => r.tasks.length > 0);
+    }
+    const rows = BRANDS.map(b => ({
+      key: b.slug, label: b.label, color: b.color,
+      tasks: filtered.filter(t => t.brandTags?.includes(b.slug)),
+    }));
+    const untagged = filtered.filter(t => !t.brandTags || t.brandTags.length === 0);
+    if (untagged.length) rows.push({ key: "none", label: "No brand tag", color: "#64748b", tasks: untagged });
+    return rows.filter(r => r.tasks.length > 0);
+  }, [filtered, mode, departments]);
+
+  // Chips for the cross-filter (the OTHER axis).
+  const crossChips = mode === "department"
+    ? BRANDS.map(b => ({ key: b.slug, label: b.label, color: b.color }))
+    : departments.map(d => ({ key: String(d.id), label: d.name, color: d.color }));
+
+  return (
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-5" data-testid="view-focus">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center"><Layers className="w-5 h-5 text-cyan-300" /></div>
+        <div>
+          <h2 className="text-lg font-semibold">Focus</h2>
+          <p className="text-xs text-white/40">One dataset, two axes. Group by team or brand — filter by the other.</p>
+        </div>
+      </div>
+
+      {/* Mode toggle */}
+      <div className="flex items-center gap-1 p-1 rounded-xl border border-white/[0.07] bg-white/[0.02] w-fit">
+        {([["department", "By team", Building2], ["brand", "By brand", Sparkles]] as const).map(([m, label, Icon]) => (
+          <button key={m} onClick={() => { setMode(m); setFilter(null); }} data-testid={`focus-mode-${m}`}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${mode === m ? "bg-white/[0.08] text-white" : "text-white/50 hover:text-white/80"}`}>
+            <Icon className="w-3.5 h-3.5" />{label}
+          </button>
+        ))}
+      </div>
+
+      {/* Cross-filter */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mr-1">{mode === "department" ? "Filter brand" : "Filter team"}</span>
+        {filter && <button onClick={() => setFilter(null)} className="text-[10px] px-2 py-1 rounded-md border border-white/10 text-white/50 hover:text-white">Clear</button>}
+        {crossChips.map(c => {
+          const active = filter === c.key;
+          return (
+            <button key={c.key} onClick={() => setFilter(active ? null : c.key)} data-testid={`focus-filter-${c.key}`}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
+              style={{ borderColor: active ? c.color : "rgba(255,255,255,0.1)", background: active ? `${c.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.5)" }}>
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {groups.length === 0 ? (
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-12 text-center text-white/40 text-sm">
+          No open work here yet. Tag tasks with a department and brand to see them split out.
+        </div>
+      ) : groups.map(g => (
+        <div key={g.key}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="w-2.5 h-2.5 rounded-full" style={{ background: g.color }} />
+            <h3 className="text-sm font-semibold text-white/90">{g.label}</h3>
+            <span className="text-[11px] text-white/35">{g.tasks.length}</span>
+          </div>
+          <div className="space-y-1.5">
+            {g.tasks.map(t => (
+              <TaskRow key={t.id} t={t} boards={boards} departments={departments} team={team}
+                overdue={!!t.dueDate && dayDiff(t.dueDate) < 0} onEdit={onEdit} showOwner />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── 6. Playbooks — event templates + backward planning ───────────────────────
+// The "never last-minute" engine. A Playbook is a reusable checklist for a
+// recurring event; applying it to a date generates every task back-planned from
+// the event day, so prep schedules itself.
+export function PlaybooksView({ orgId, boards, departments, team }: {
+  orgId: number; boards: ProjectBoard[]; departments: Department[]; team: TeamMember[];
+}) {
+  const [editing, setEditing] = useState<TaskTemplate | "new" | null>(null);
+  const [applying, setApplying] = useState<TaskTemplate | null>(null);
+
+  const { data: templates = [], isLoading } = useQuery<TaskTemplate[]>({
+    queryKey: ["/api/admin/task-templates", orgId],
+    queryFn: async () => {
+      const r = await fetch(`/api/admin/task-templates?organizationId=${orgId}`, { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: !!orgId,
+  });
+
+  return (
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-5" data-testid="view-playbooks">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-orange-500/10 border border-orange-500/20 flex items-center justify-center"><BookOpen className="w-5 h-5 text-orange-300" /></div>
+          <div>
+            <h2 className="text-lg font-semibold">Playbooks</h2>
+            <p className="text-xs text-white/40">Pick an event date → every prep task schedules itself. Never last-minute.</p>
+          </div>
+        </div>
+        <Button size="sm" onClick={() => setEditing("new")} data-testid="button-new-playbook" className="bg-blue-600 hover:bg-blue-700 text-white">
+          <Plus className="w-4 h-4 mr-1" /> New playbook
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="text-sm text-white/30 px-2">Loading playbooks…</div>
+      ) : templates.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-white/10 p-10 text-center text-sm text-white/40">
+          No playbooks yet. Build one for anything you run more than once — a tournament, a term launch, a sponsor onboard.
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-3">
+          {templates.map(tpl => {
+            const offsets = tpl.items.map(i => i.offsetDays);
+            const first = offsets.length ? Math.min(...offsets) : 0;
+            const last = offsets.length ? Math.max(...offsets) : 0;
+            return (
+              <div key={tpl.id} className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4 flex flex-col gap-3" data-testid={`playbook-card-${tpl.id}`}>
+                <div className="flex items-start gap-2.5">
+                  <span className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${tpl.color}1f` }}>
+                    <Rocket className="w-4 h-4" style={{ color: tpl.color }} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-white leading-snug">{tpl.name}</div>
+                    {tpl.description && <p className="text-[11px] text-white/40 mt-0.5 line-clamp-2">{tpl.description}</p>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap text-[10px] text-white/40">
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.05]"><Layers className="w-2.5 h-2.5" />{tpl.items.length} steps</span>
+                  {tpl.items.length > 0 && (
+                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.05]"><Clock className="w-2.5 h-2.5" />{first < 0 ? `${Math.abs(first)}d before` : "day of"} → {last > 0 ? `${last}d after` : "day of"}</span>
+                  )}
+                  <BrandChips tags={tpl.brandTags} />
+                </div>
+                <div className="flex items-center gap-2 mt-auto pt-1">
+                  <Button size="sm" onClick={() => setApplying(tpl)} data-testid={`button-apply-playbook-${tpl.id}`} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white h-8">
+                    <Zap className="w-3.5 h-3.5 mr-1" /> Use it
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(tpl)} className="text-white/60 hover:text-white h-8 px-2">Edit</Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && (
+        <PlaybookEditor orgId={orgId} template={editing === "new" ? null : editing} departments={departments} onClose={() => setEditing(null)} />
+      )}
+      {applying && (
+        <ApplyPlaybookModal template={applying} boards={boards} team={team} onClose={() => setApplying(null)} />
+      )}
+    </div>
+  );
+}
+
+function ApplyPlaybookModal({ template, boards, team, onClose }: {
+  template: TaskTemplate; boards: ProjectBoard[]; team: TeamMember[]; onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [boardId, setBoardId] = useState<number | null>(boards[0]?.id ?? null);
+  const [anchorDate, setAnchorDate] = useState("");
+  const [ownerId, setOwnerId] = useState<number | null>(null);
+
+  // Live preview of the resulting schedule (first/last dates) as the user types.
+  const preview = useMemo(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(anchorDate) || template.items.length === 0) return null;
+    const [y, m, d] = anchorDate.split("-").map(Number);
+    const at = (days: number) => {
+      const base = new Date(Date.UTC(y, m - 1, d, 12));
+      base.setUTCDate(base.getUTCDate() + days);
+      return base.toISOString().slice(0, 10);
+    };
+    const offsets = template.items.map(i => i.offsetDays);
+    return { start: at(Math.min(...offsets)), end: at(Math.max(...offsets)) };
+  }, [anchorDate, template.items]);
+
+  const apply = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", `/api/admin/task-templates/${template.id}/apply`, { boardId, anchorDate, ownerId });
+      return r.json();
+    },
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/projects/tasks"] });
+      toast({ title: `${res.created} tasks scheduled`, description: `Back-planned from ${template.anchorLabel.toLowerCase()} on ${fmtDate(anchorDate)}.` });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Couldn't apply playbook", description: e.message, variant: "destructive" }),
+  });
+
+  const canApply = !!boardId && /^\d{4}-\d{2}-\d{2}$/.test(anchorDate);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="w-full max-w-md bg-[#0a0e1a] border border-white/10 rounded-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+          <h2 className="text-base font-semibold flex items-center gap-2"><Zap className="w-4 h-4 text-emerald-400" /> Use “{template.name}”</h2>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg text-white/40 hover:text-white hover:bg-white/[0.06] flex items-center justify-center"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-xs text-white/50">This creates <span className="text-white font-semibold">{template.items.length} tasks</span>, each dated relative to your event. Pick the board they land on and the {template.anchorLabel.toLowerCase()}.</p>
+          <div>
+            <Label className="text-xs text-white/60 mb-1 block">Board</Label>
+            <select value={boardId ?? ""} onChange={e => setBoardId(e.target.value ? parseInt(e.target.value) : null)} className="w-full h-9 rounded-md bg-white/[0.04] border border-white/10 px-2 text-sm" data-testid="select-apply-board">
+              {boards.length === 0 && <option value="">— create a board first —</option>}
+              {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <Label className="text-xs text-white/60 mb-1 block">{template.anchorLabel} <span className="text-white/25">(the anchor date)</span></Label>
+            <DatePickerInput value={anchorDate} onChange={e => setAnchorDate(e.target.value)} className="bg-white/[0.04] border-white/10 text-white h-9" />
+          </div>
+          <div>
+            <Label className="text-xs text-white/60 mb-1 block">Assign all to <span className="text-white/25">(optional)</span></Label>
+            <select value={ownerId ?? ""} onChange={e => setOwnerId(e.target.value ? parseInt(e.target.value) : null)} className="w-full h-9 rounded-md bg-white/[0.04] border border-white/10 px-2 text-sm">
+              <option value="">Leave unassigned</option>
+              {team.map(m => <option key={m.id} value={m.id}>{m.first_name} {m.last_name}</option>)}
+            </select>
+          </div>
+          {preview && (
+            <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/[0.05] px-3 py-2 text-[11px] text-emerald-200/80 flex items-center gap-2">
+              <CalendarIcon className="w-3.5 h-3.5" /> First task lands <span className="font-semibold text-emerald-200">{fmtDate(preview.start)}</span>, last <span className="font-semibold text-emerald-200">{fmtDate(preview.end)}</span>.
+            </div>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-white/[0.06] flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose} className="text-white/50">Cancel</Button>
+          <Button size="sm" onClick={() => apply.mutate()} disabled={!canApply || apply.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white" data-testid="button-confirm-apply">
+            <Check className="w-3.5 h-3.5 mr-1" /> Schedule {template.items.length} tasks
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlaybookEditor({ orgId, template, departments, onClose }: {
+  orgId: number; template: TaskTemplate | null; departments: Department[]; onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const isEdit = !!template;
+  const [name, setName] = useState(template?.name || "");
+  const [description, setDescription] = useState(template?.description || "");
+  const [anchorLabel, setAnchorLabel] = useState(template?.anchorLabel || "Event day");
+  const [departmentId, setDepartmentId] = useState<number | null>(template?.departmentId ?? null);
+  const [brandTags, setBrandTags] = useState<string[]>(template?.brandTags || []);
+  const [savedId, setSavedId] = useState<number | null>(template?.id ?? null);
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/task-templates"] });
+
+  const saveTpl = useMutation({
+    mutationFn: async () => {
+      const body: any = { organizationId: orgId, name: name.trim(), description: description.trim() || null, anchorLabel: anchorLabel.trim() || "Event day", departmentId, brandTags };
+      if (savedId) { const r = await apiRequest("PATCH", `/api/admin/task-templates/${savedId}`, body); return r.json(); }
+      const r = await apiRequest("POST", "/api/admin/task-templates", body); return r.json();
+    },
+    onSuccess: (res: any) => { if (!savedId && res?.id) setSavedId(res.id); invalidate(); toast({ title: isEdit || savedId ? "Playbook saved" : "Playbook created — now add steps" }); },
+    onError: (e: any) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
+  });
+  const removeTpl = useMutation({
+    mutationFn: async () => apiRequest("DELETE", `/api/admin/task-templates/${savedId}`),
+    onSuccess: () => { invalidate(); toast({ title: "Playbook removed" }); onClose(); },
+  });
+
+  // Items are fetched fresh so the editor reflects saved state (incl. after create).
+  const { data: liveTemplates = [] } = useQuery<TaskTemplate[]>({
+    queryKey: ["/api/admin/task-templates", orgId],
+    queryFn: async () => { const r = await fetch(`/api/admin/task-templates?organizationId=${orgId}`, { credentials: "include" }); return r.ok ? r.json() : []; },
+    enabled: !!orgId,
+  });
+  const items = useMemo(() => (savedId ? (liveTemplates.find(t => t.id === savedId)?.items || []) : []), [liveTemplates, savedId]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="w-full max-w-2xl bg-[#0a0e1a] border border-white/10 rounded-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+          <h2 className="text-base font-semibold">{isEdit ? "Edit playbook" : "New playbook"}</h2>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg text-white/40 hover:text-white hover:bg-white/[0.06] flex items-center justify-center"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-3 max-h-[72vh] overflow-y-auto">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-white/60 mb-1 block">Name</Label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Run a tournament" autoFocus className="bg-white/[0.04] border-white/10 text-white" data-testid="input-playbook-name" />
+            </div>
+            <div>
+              <Label className="text-xs text-white/60 mb-1 block">Anchor label <span className="text-white/25">(the date it counts from)</span></Label>
+              <Input value={anchorLabel} onChange={e => setAnchorLabel(e.target.value)} placeholder="e.g. Tournament day" className="bg-white/[0.04] border-white/10 text-white" />
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs text-white/60 mb-1 block">Description <span className="text-white/25">(optional)</span></Label>
+            <Textarea value={description} onChange={e => setDescription(e.target.value)} className="bg-white/[0.04] border-white/10 text-white min-h-[50px]" />
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-white/60 mb-1 block">Default department</Label>
+              <select value={departmentId ?? ""} onChange={e => setDepartmentId(e.target.value ? parseInt(e.target.value) : null)} className="w-full h-9 rounded-md bg-white/[0.04] border border-white/10 px-2 text-sm">
+                <option value="">—</option>
+                {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label className="text-xs text-white/60 mb-1.5 block">Default brands</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {BRANDS.map(b => {
+                  const active = brandTags.includes(b.slug);
+                  return <button key={b.slug} type="button" onClick={() => setBrandTags(prev => active ? prev.filter(x => x !== b.slug) : [...prev, b.slug])} className="text-[11px] font-semibold px-2 py-1 rounded-md border transition" style={{ borderColor: active ? b.color : "rgba(255,255,255,0.1)", background: active ? `${b.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.6)" }}>{b.label}</button>;
+                })}
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => saveTpl.mutate()} disabled={!name.trim() || saveTpl.isPending} className="bg-blue-600 hover:bg-blue-700 text-white" data-testid="button-save-playbook">
+              <Check className="w-3.5 h-3.5 mr-1" /> {savedId ? "Save details" : "Create & add steps"}
+            </Button>
+          </div>
+
+          {/* Steps — only after the playbook exists */}
+          {savedId ? (
+            <PlaybookItemsEditor templateId={savedId} items={items} departments={departments} anchorLabel={anchorLabel} onChanged={invalidate} />
+          ) : (
+            <div className="rounded-lg border border-dashed border-white/10 px-3 py-2.5 text-[11px] text-white/40">Create the playbook first, then add its steps with day offsets.</div>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-white/[0.06] flex items-center justify-between gap-2">
+          <div>{isEdit && <Button variant="ghost" size="sm" onClick={() => removeTpl.mutate()} className="text-red-400 hover:text-red-300 hover:bg-red-500/10">Delete playbook</Button>}</div>
+          <Button size="sm" onClick={onClose} className="bg-white/[0.08] hover:bg-white/[0.12] text-white">Done</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlaybookItemsEditor({ templateId, items, departments, anchorLabel, onChanged }: {
+  templateId: number; items: TaskTemplateItem[]; departments: Department[]; anchorLabel: string; onChanged: () => void;
+}) {
+  const { toast } = useToast();
+  const [title, setTitle] = useState("");
+  const [offset, setOffset] = useState("-7");
+  const [rel, setRel] = useState<"before" | "after" | "on">("before");
+  const [deptId, setDeptId] = useState<number | null>(null);
+
+  const add = useMutation({
+    mutationFn: async () => {
+      const n = Math.abs(parseInt(offset) || 0);
+      const offsetDays = rel === "on" ? 0 : rel === "before" ? -n : n;
+      const r = await apiRequest("POST", `/api/admin/task-templates/${templateId}/items`, { title: title.trim(), offsetDays, departmentId: deptId });
+      return r.json();
+    },
+    onSuccess: () => { setTitle(""); onChanged(); },
+    onError: (e: any) => toast({ title: "Couldn't add step", description: e.message, variant: "destructive" }),
+  });
+  const patch = useMutation({
+    mutationFn: async ({ id, body }: { id: number; body: any }) => { const r = await apiRequest("PATCH", `/api/admin/task-template-items/${id}`, body); return r.json(); },
+    onSuccess: onChanged,
+  });
+  const del = useMutation({ mutationFn: async (id: number) => apiRequest("DELETE", `/api/admin/task-template-items/${id}`), onSuccess: onChanged });
+
+  return (
+    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 space-y-2">
+      <div className="text-[10px] uppercase tracking-wider text-white/40 font-semibold flex items-center gap-1.5"><Layers className="w-3 h-3" /> Steps — timed off “{anchorLabel}”</div>
+      {items.length === 0 && <p className="text-[11px] text-white/30 italic">No steps yet. Add the first below.</p>}
+      <div className="space-y-1">
+        {items.map(it => {
+          const dept = deptOf(departments, it.departmentId);
+          return (
+            <div key={it.id} className="flex items-center gap-2 rounded-md border border-white/[0.05] bg-white/[0.015] px-2.5 py-1.5">
+              <span className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded flex-shrink-0" style={{ background: it.offsetDays < 0 ? "#3b82f622" : it.offsetDays > 0 ? "#a855f722" : "#22c55e22", color: it.offsetDays < 0 ? "#93c5fd" : it.offsetDays > 0 ? "#d8b4fe" : "#86efac" }}>{offsetLabel(it.offsetDays)}</span>
+              <span className="flex-1 min-w-0 text-xs text-white/85 truncate">{it.title}</span>
+              {dept && <DeptPill dept={dept} />}
+              <button onClick={() => del.mutate(it.id)} className="text-white/30 hover:text-red-400 flex-shrink-0"><Trash2 className="w-3 h-3" /></button>
+            </div>
+          );
+        })}
+      </div>
+      {/* Add row */}
+      <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+        <Input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && title.trim()) add.mutate(); }} placeholder="Step, e.g. Open registrations" className="flex-1 min-w-[160px] h-8 bg-white/[0.04] border-white/10 text-white text-xs" data-testid="input-step-title" />
+        <select value={rel} onChange={e => setRel(e.target.value as any)} className="h-8 rounded bg-white/[0.04] border border-white/10 px-1.5 text-[11px]">
+          <option value="before">before</option>
+          <option value="on">on the day</option>
+          <option value="after">after</option>
+        </select>
+        {rel !== "on" && <Input value={offset} onChange={e => setOffset(e.target.value)} placeholder="days" className="w-16 h-8 bg-white/[0.04] border-white/10 text-white text-xs" title="Days" />}
+        <select value={deptId ?? ""} onChange={e => setDeptId(e.target.value ? parseInt(e.target.value) : null)} className="h-8 rounded bg-white/[0.04] border border-white/10 px-1.5 text-[11px] max-w-[130px]">
+          <option value="">Dept —</option>
+          {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <button onClick={() => title.trim() && add.mutate()} disabled={!title.trim()} className="w-8 h-8 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-30 flex items-center justify-center flex-shrink-0"><Plus className="w-3.5 h-3.5 text-white" /></button>
+      </div>
+    </div>
+  );
+}
+
+// ── 7. Guide — how to run the system (staff onboarding) ──────────────────────
+export function GuideView() {
+  return (
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-5" data-testid="view-guide">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center"><HelpCircle className="w-5 h-5 text-white/70" /></div>
+        <div>
+          <h2 className="text-lg font-semibold">How this works</h2>
+          <p className="text-xs text-white/40">A 2-minute read. This is how we keep everyone ahead, not behind.</p>
+        </div>
+      </div>
+
+      <GuideCard icon={Layers} color="#22d3ee" title="One task, two labels">
+        Every task has a <b className="text-white">Department</b> (the team that <i>owns</i> it — one) and <b className="text-white">Brands</b> (who it <i>serves</i> — as many as apply). That's it. A Marketing task for MFL is tagged Marketing + MFL. You never file it in the "wrong place" — the <b className="text-white">Focus</b> view slices the same tasks by team or by brand on demand.
+      </GuideCard>
+
+      <GuideCard icon={Users} color="#3b82f6" title="Start every day in My Work">
+        My Work gathers everything assigned to you across every brand and board, split into Overdue / Today / This week / Upcoming. If it's not on a board with your name on it, it isn't tracked — so put it on a board.
+      </GuideCard>
+
+      <GuideCard icon={Target} color="#a855f7" title="Everything ladders up to a goal">
+        Vision → Season Goals → 90-day Priorities ("Rocks") → tasks. When you make a task, link it to the Priority it serves. That's how we know the busywork is actually moving the big numbers (like closing the deficit).
+      </GuideCard>
+
+      <GuideCard icon={CalendarIcon} color="#22c55e" title="Traffic lights, not essays">
+        Set a task or goal's status: <span className="text-emerald-400 font-semibold">On track</span>, <span className="text-amber-400 font-semibold">At risk</span>, or <span className="text-red-400 font-semibold">Off track</span>. Leadership reads the colour. If something's amber or red, tick <b className="text-white">"raise as an issue"</b> and we solve it at the meeting.
+      </GuideCard>
+
+      <GuideCard icon={BookOpen} color="#f97316" title="Use a Playbook — never start from scratch">
+        Running a tournament, launching a term, onboarding a sponsor? Open <b className="text-white">Playbooks</b>, pick the event date, and every prep task schedules itself — back-planned so the early work starts early. This is how we stop things landing last-minute.
+      </GuideCard>
+
+      <GuideCard icon={Presentation} color="#10b981" title="The Monday meeting runs off one screen">
+        The <b className="text-white">Staff Meeting</b> view is the agenda, top to bottom: wins → scorecard → priorities → what's due → what's coming → blockers. No printing. It updates live as people tick things off.
+      </GuideCard>
+    </div>
+  );
+}
+
+function GuideCard({ icon: Icon, color, title, children }: { icon: any; color: string; title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4 flex gap-3.5">
+      <span className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${color}1a` }}><Icon className="w-5 h-5" style={{ color }} /></span>
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold text-white mb-1">{title}</h3>
+        <p className="text-[13px] leading-relaxed text-white/55">{children}</p>
+      </div>
     </div>
   );
 }

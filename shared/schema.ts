@@ -1703,6 +1703,49 @@ export type InsertGoalMeasure = z.infer<typeof insertGoalMeasureSchema>;
 export type Goal = typeof goals.$inferSelect;
 export type GoalMeasure = typeof goalMeasures.$inferSelect;
 
+// ── Playbooks (task templates + backward planning) ───────────────────────────
+// A reusable checklist for a recurring event (run a tournament, launch a term,
+// onboard a sponsor). Applying a playbook to an anchor date generates real tasks
+// whose due dates = anchor + offsetDays (negative = before the event), so prep
+// back-plans itself and nothing lands last-minute. See the 2026-07-05 migration.
+export const taskTemplates = pgTable("task_templates", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  // What the anchor date represents, e.g. "Tournament day", "Term start".
+  anchorLabel: text("anchor_label").notNull().default("Event day"),
+  departmentId: integer("department_id").references(() => departments.id, { onDelete: "set null" }),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  color: text("color").notNull().default("#3b82f6"),
+  archived: boolean("archived").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const taskTemplateItems = pgTable("task_template_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  templateId: integer("template_id").notNull().references(() => taskTemplates.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  // Days relative to the anchor date. Negative = before the event (prep),
+  // 0 = event day, positive = after (wrap-up). The backward-planning core.
+  offsetDays: integer("offset_days").notNull().default(0),
+  priority: taskPriorityEnum("priority").notNull().default("medium"),
+  departmentId: integer("department_id").references(() => departments.id, { onDelete: "set null" }),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  nextStep: text("next_step"),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
+export const insertTaskTemplateSchema = createInsertSchema(taskTemplates).omit({ id: true, createdAt: true });
+export const insertTaskTemplateItemSchema = createInsertSchema(taskTemplateItems).omit({ id: true });
+export type InsertTaskTemplate = z.infer<typeof insertTaskTemplateSchema>;
+export type InsertTaskTemplateItem = z.infer<typeof insertTaskTemplateItemSchema>;
+export type TaskTemplate = typeof taskTemplates.$inferSelect;
+export type TaskTemplateItem = typeof taskTemplateItems.$inferSelect;
+
 // ── Sponsorship CRM ──────────────────────────────────────────────────────────
 // Pipeline + lifecycle tracker for sponsorship deals across every brand.
 // Stages match Daniel's existing Pipedrive flow so muscle memory carries over,
@@ -2079,6 +2122,9 @@ export const members = pgTable("members", {
   joinedAt: date("joined_at"),
   renewsAt: date("renews_at"),
   notes: text("notes"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  source: text("source"),
+  paidAt: timestamp("paid_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -3218,3 +3264,94 @@ export const studioAnalyticsEvents = pgTable("studio_analytics_events", {
 export const insertStudioAnalyticsEventSchema = createInsertSchema(studioAnalyticsEvents).omit({ id: true, createdAt: true });
 export type InsertStudioAnalyticsEvent = z.infer<typeof insertStudioAnalyticsEventSchema>;
 export type StudioAnalyticsEvent = typeof studioAnalyticsEvents.$inferSelect;
+
+// ── Proposal Tracker (USG / group workspace) ────────────────────────────────
+// A CRM + link-analytics layer over EVERY proposal Daniel & Ryan send —
+// sponsorship, investor, development (USC / padel), partnership and client work.
+// Unifies partner pages (apps/partners), USG Studio pages, PDFs and external
+// decks under one sortable tracker (by type + category). Each proposal gets a
+// tracked short link — app.usg.co.nz/r/{shortCode} — that logs every open into
+// proposal_events and 302-redirects to the real link, so "what are the stats on
+// that link" is answerable for ANY link type with zero cross-origin work. The
+// `sourceTag` slug is the join key to Meet bookings (bookings.source) and Studio
+// Signal, so booking + engagement fusion is a clean later step.
+export const proposals = pgTable("proposals", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  company: text("company"),
+  // sponsorship | investor | development | partnership | client | grant | other
+  proposalType: text("proposal_type").notNull().default("sponsorship"),
+  // Free/managed label: Breweries, Gyms, La Liga, Padel / USC, Core Pilates…
+  category: text("category"),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  // draft | sent | opened | in_discussion | negotiating | won | lost | on_hold
+  status: text("status").notNull().default("draft"),
+  valueCents: integer("value_cents"),            // deal value in cents
+  currency: text("currency").notNull().default("NZD"),
+  owner: text("owner"),                          // Daniel | Ryan | free text
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  contactPhone: text("contact_phone"),
+  linkUrl: text("link_url"),                     // the real proposal page / PDF / deck
+  shortCode: text("short_code").unique(),        // tracked-link code → /r/{shortCode}
+  sourceTag: text("source_tag"),                 // slug join-key → Meet bookings + Signal
+  // Soft link to a USG Studio proposal page — no FK: studio_documents isn't live
+  // in prod yet. Holds a studio_documents.id once Studio ships.
+  studioDocumentId: integer("studio_document_id"),
+  notes: text("notes"),
+  sentAt: timestamp("sent_at"),
+  decisionAt: timestamp("decision_at"),
+  lastOpenedAt: timestamp("last_opened_at"),     // denormalised for fast sort/list
+  openCount: integer("open_count").notNull().default(0), // denormalised (total opens)
+  createdBy: integer("created_by").references(() => users.id),
+  archived: boolean("archived").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertProposalSchema = createInsertSchema(proposals).omit({ id: true, createdAt: true, updatedAt: true, openCount: true, lastOpenedAt: true });
+export type InsertProposal = z.infer<typeof insertProposalSchema>;
+export type Proposal = typeof proposals.$inferSelect;
+
+// Managed category list per workspace so Daniel curates the buckets (with a
+// colour) instead of typing free text every time — the filter chips render from
+// these. `proposalType` optionally groups a category under a type.
+export const proposalCategories = pgTable("proposal_categories", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  proposalType: text("proposal_type"),
+  color: text("color").notNull().default("#3b82f6"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgNameUnq: unique("proposal_categories_org_name_unique").on(t.organizationId, t.name),
+}));
+
+export const insertProposalCategorySchema = createInsertSchema(proposalCategories).omit({ id: true, createdAt: true });
+export type InsertProposalCategory = z.infer<typeof insertProposalCategorySchema>;
+export type ProposalCategory = typeof proposalCategories.$inferSelect;
+
+// One row per tracked-link touch. `kind`: open | cta_click | booking. Privacy:
+// coarse geo (country from the CDN header) only — no raw IP stored. `visitorId`
+// is a first-party cookie id (drives unique-visitor counts). `isInternal` flags
+// staff/self opens so they can be excluded from the real prospect numbers.
+export const proposalEvents = pgTable("proposal_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  proposalId: integer("proposal_id").notNull().references(() => proposals.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull().default("open"),
+  visitorId: text("visitor_id"),
+  device: text("device"),                        // mobile | tablet | desktop
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  country: text("country"),                      // coarse geo only — no raw IP
+  isInternal: boolean("is_internal").notNull().default(false),
+  metaJson: jsonb("meta_json").$type<Record<string, any> | null>(),
+  occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+});
+
+export const insertProposalEventSchema = createInsertSchema(proposalEvents).omit({ id: true, occurredAt: true });
+export type InsertProposalEvent = z.infer<typeof insertProposalEventSchema>;
+export type ProposalEvent = typeof proposalEvents.$inferSelect;

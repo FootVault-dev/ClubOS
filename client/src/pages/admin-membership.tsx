@@ -8,8 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Crown, X, Plus, Trash2, Users, DollarSign, Gift, Check, Star, CreditCard, Sparkles,
+  Crown, X, Plus, Trash2, Users, DollarSign, Gift, Check, Star, CreditCard, Sparkles, ExternalLink,
 } from "lucide-react";
+
+const PUBLIC_MEMBERSHIP_URL = "https://join.southislandunited.com/membership";
 
 // ── config ──────────────────────────────────────────────────────────────────
 const MEMBER_STATUS = [
@@ -92,9 +94,13 @@ export default function AdminMembership() {
           <h1 className="text-xl font-semibold flex items-center gap-2"><Crown className="w-5 h-5 text-amber-400" /> Membership Program</h1>
           <p className="text-[13px] text-white/40 mt-0.5">Tiers, members and the perks we deliver — track who's in, what they get, and that we fulfil it.</p>
         </div>
+        <a href={PUBLIC_MEMBERSHIP_URL} target="_blank" rel="noreferrer"
+          className="flex items-center gap-1.5 text-[12px] font-medium text-amber-300/90 border border-amber-500/30 bg-amber-500/[0.06] hover:bg-amber-500/[0.12] rounded-lg px-3 py-2 transition-colors">
+          <ExternalLink className="w-3.5 h-3.5" /> View public page
+        </a>
       </div>
-      <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 text-[12px] text-amber-200/90 mb-4 flex items-center gap-2">
-        <Sparkles className="w-3.5 h-3.5 shrink-0" /> Placeholder scaffold — Bronze/Silver/Gold and prices are dummies to brainstorm against. No live payments are wired yet.
+      <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 text-[12px] text-amber-200/90 mb-4 flex items-start gap-2">
+        <Sparkles className="w-3.5 h-3.5 shrink-0 mt-0.5" /> <span>The public join page + custom checkout are <strong>live and take real payments</strong> at join.southislandunited.com/membership — anyone who joins there lands here as a paid member. It's unlinked/unadvertised until you approve the tiers, prices and copy (still placeholders). Share the link when you're ready to launch.</span>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5">

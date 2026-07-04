@@ -9,13 +9,15 @@ import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, X, User, Calendar as CalendarIcon, Flag, Check, Inbox, LayoutGrid, Layers, AlertCircle, ChevronLeft, ChevronRight, Pencil, Trash2, Target, Presentation, Gauge, Users } from "lucide-react";
+import { Plus, X, User, Calendar as CalendarIcon, Flag, Check, Inbox, LayoutGrid, Layers, AlertCircle, ChevronLeft, ChevronRight, Pencil, Trash2, Target, Presentation, Gauge, Users, BookOpen, HelpCircle } from "lucide-react";
 import {
   BRANDS, PRIORITY_COLORS, RAG_META, RAG_ORDER,
   type Rag, type ProjectGroup, type ProjectBoard, type ProjectTask,
   type TeamMember, type Department, type Goal,
 } from "@/lib/work";
-import { MyWorkView, GoalsView, StaffMeetingView, LeadershipView } from "./group-work-views";
+import { MyWorkView, GoalsView, StaffMeetingView, LeadershipView, FocusView, PlaybooksView, GuideView } from "./group-work-views";
+
+type WorkView = "board" | "mine" | "calendar" | "goals" | "meeting" | "leadership" | "focus" | "playbooks" | "guide";
 
 // Types + brand/RAG vocab live in @/lib/work (shared with the Command-Centre views).
 
@@ -25,7 +27,7 @@ export default function GroupProjectsPage() {
   const orgId = currentOrg?.id;
 
   const [selectedBoardId, setSelectedBoardId] = useState<number | null>(null);
-  const [view, setView] = useState<"board" | "mine" | "calendar" | "goals" | "meeting" | "leadership">("board");
+  const [view, setView] = useState<WorkView>("board");
   const [brandFilter, setBrandFilter] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
@@ -33,6 +35,8 @@ export default function GroupProjectsPage() {
   });
   const [taskModal, setTaskModal] = useState<{ mode: "create" | "edit"; task?: ProjectTask; defaultGroupId?: number } | null>(null);
   const [boardModal, setBoardModal] = useState<{ mode: "create" | "edit"; board?: ProjectBoard } | null>(null);
+  // Mobile: the sidebar is an off-canvas drawer. Static from `sm` up.
+  const [navOpen, setNavOpen] = useState(false);
 
   const { data: me } = useQuery<{ id: number }>({ queryKey: ["/api/auth/me"] });
 
@@ -81,13 +85,15 @@ export default function GroupProjectsPage() {
   // Calendar / meeting / leadership views fetch every task across every board
   // (org-scoped) plus the org-wide events so the customer sees the full
   // alignment picture: their work + the team's work + scheduled events.
-  const needsAllTasks = view === "calendar" || view === "meeting" || view === "leadership" || view === "goals";
+  // These views must always see the org-complete task set. The board Kanban has
+  // its own brand-filtered `tasks` query; the board top-bar brand chip must NOT
+  // leak into here (Focus does its own brand grouping).
+  const needsAllTasks = view === "calendar" || view === "meeting" || view === "leadership" || view === "goals" || view === "focus";
   const { data: allTasks = [] } = useQuery<ProjectTask[]>({
-    queryKey: ["/api/admin/projects/tasks", { all: true, orgId, brand: brandFilter }],
+    queryKey: ["/api/admin/projects/tasks", { all: true, orgId }],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("organizationId", String(orgId));
-      if (brandFilter) params.set("brand", brandFilter);
       const r = await fetch(`/api/admin/projects/tasks?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error("Failed");
       return r.json();
@@ -231,29 +237,39 @@ export default function GroupProjectsPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (!orgId) return null;
+  const go = (v: WorkView) => { setView(v); setNavOpen(false); };
   return (
-    <div className="flex h-full">
-      {/* Sidebar — boards list */}
-      <aside className="w-60 border-r border-white/[0.06] flex flex-col">
-        <div className="px-4 py-4 border-b border-white/[0.06]">
-          <h1 className="text-base font-semibold">Projects</h1>
-          <p className="text-[11px] text-white/40 mt-0.5">Boards across {currentOrg?.name}</p>
+    <div className="flex h-full relative">
+      {/* Mobile backdrop when the drawer is open */}
+      {navOpen && <div className="fixed inset-0 z-30 bg-black/50 sm:hidden" onClick={() => setNavOpen(false)} />}
+
+      {/* Sidebar — off-canvas drawer on mobile, static from sm up */}
+      <aside className={`w-64 sm:w-60 border-r border-white/[0.06] flex flex-col bg-[#0a0e1a] sm:bg-transparent fixed sm:static inset-y-0 left-0 z-40 transform transition-transform duration-200 ${navOpen ? "translate-x-0" : "-translate-x-full"} sm:translate-x-0`}>
+        <div className="px-4 py-4 border-b border-white/[0.06] flex items-center justify-between">
+          <div>
+            <h1 className="text-base font-semibold">Projects</h1>
+            <p className="text-[11px] text-white/40 mt-0.5">Boards across {currentOrg?.name}</p>
+          </div>
+          <button onClick={() => setNavOpen(false)} className="sm:hidden w-7 h-7 rounded-lg text-white/40 hover:text-white hover:bg-white/[0.06] flex items-center justify-center"><X className="w-4 h-4" /></button>
         </div>
 
         {/* Command Centre — cross-cutting saved views over the one dataset */}
         {([
           { key: "mine", label: "My Work", icon: Users, badge: myTasks.length },
+          { key: "focus", label: "Focus", icon: Layers },
           { key: "goals", label: "Goals", icon: Target },
+          { key: "playbooks", label: "Playbooks", icon: BookOpen },
           { key: "meeting", label: "Staff Meeting", icon: Presentation },
           { key: "leadership", label: "Leadership", icon: Gauge },
           { key: "calendar", label: "Calendar", icon: CalendarIcon },
+          { key: "guide", label: "How it works", icon: HelpCircle },
         ] as const).map(item => {
           const Icon = item.icon;
           const active = view === item.key;
           return (
             <button
               key={item.key}
-              onClick={() => setView(item.key as any)}
+              onClick={() => go(item.key as WorkView)}
               data-testid={`button-view-${item.key}`}
               className={`flex items-center justify-between gap-2 px-4 py-2.5 text-sm transition-colors border-l-2 ${
                 active ? "bg-blue-500/[0.08] text-blue-300 border-blue-500" : "text-white/70 hover:bg-white/[0.03] border-transparent"
@@ -303,7 +319,7 @@ export default function GroupProjectsPage() {
                 }`}
               >
                 <button
-                  onClick={() => { setView("board"); setSelectedBoardId(b.id); }}
+                  onClick={() => { setSelectedBoardId(b.id); go("board"); }}
                   data-testid={`button-board-${b.id}`}
                   className={`flex-1 flex items-center gap-2 pl-4 pr-2 py-2 text-sm text-left ${active ? "text-white" : "text-white/60"}`}
                 >
@@ -325,7 +341,17 @@ export default function GroupProjectsPage() {
       </aside>
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* Mobile-only bar — hamburger + current view (drawer holds the nav) */}
+        <div className="sm:hidden flex items-center gap-3 px-4 py-3 border-b border-white/[0.06]">
+          <button onClick={() => setNavOpen(true)} data-testid="button-open-nav" className="w-9 h-9 rounded-lg border border-white/10 flex items-center justify-center text-white/70 hover:text-white">
+            <LayoutGrid className="w-4 h-4" />
+          </button>
+          <span className="text-sm font-semibold capitalize">
+            {view === "board" ? (board?.name || "Projects") : view === "mine" ? "My Work" : view === "guide" ? "How it works" : view === "meeting" ? "Staff Meeting" : view}
+          </span>
+        </div>
+
         {/* Top bar — board title, brand filter, new task. The Command-Centre
             views (My Work / Goals / Staff Meeting / Leadership) render their own
             headers, so the bar only shows for the board + calendar views. */}
@@ -392,6 +418,12 @@ export default function GroupProjectsPage() {
         <div className="flex-1 overflow-auto">
           {view === "mine" ? (
             <MyWorkView tasks={myTasks} boards={boards} team={team} departments={departments} onEdit={t => setTaskModal({ mode: "edit", task: t })} />
+          ) : view === "focus" ? (
+            <FocusView allTasks={allTasks} boards={boards} departments={departments} team={team} onEdit={t => setTaskModal({ mode: "edit", task: t })} />
+          ) : view === "playbooks" ? (
+            <PlaybooksView orgId={orgId} boards={boards} departments={departments} team={team} />
+          ) : view === "guide" ? (
+            <GuideView />
           ) : view === "goals" ? (
             <GoalsView orgId={orgId} goals={goals} departments={departments} team={team} allTasks={allTasks} />
           ) : view === "meeting" ? (
@@ -808,6 +840,7 @@ function TaskModal({
   const [ownerId, setOwnerId] = useState<number | null>(task?.ownerId ?? null);
   const [dueDate, setDueDate] = useState(task?.dueDate || "");
   const [brandTags, setBrandTags] = useState<string[]>(task?.brandTags || []);
+  const [helperIds, setHelperIds] = useState<number[]>(task?.helperIds ?? []);
   // Work-management fields
   const [departmentId, setDepartmentId] = useState<number | null>(task?.departmentId ?? null);
   const [ragStatus, setRagStatus] = useState<Rag>(task?.ragStatus ?? "none");
@@ -829,6 +862,7 @@ function TaskModal({
       ownerId,
       dueDate: dueDate || null,
       brandTags,
+      helperIds,
       departmentId,
       ragStatus,
       startDate: startDate || null,
@@ -918,6 +952,29 @@ function TaskModal({
                     }}
                   >
                     {b.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Helpers — who's pitching in (owner stays the single accountable person). */}
+          <div>
+            <Label className="text-xs text-white/60 mb-1.5 block">Helpers <span className="text-white/25">(who's helping)</span></Label>
+            <div className="flex flex-wrap gap-1.5">
+              {team.filter(m => m.id !== ownerId).length === 0 ? (
+                <span className="text-[11px] text-white/30 italic">Assign an owner and the rest of the team can be added as helpers.</span>
+              ) : team.filter(m => m.id !== ownerId).map(m => {
+                const active = helperIds.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setHelperIds(prev => active ? prev.filter(x => x !== m.id) : [...prev, m.id])}
+                    data-testid={`chip-helper-${m.id}`}
+                    className={`text-[11px] font-medium px-2 py-1 rounded-md border transition ${active ? "border-blue-400 bg-blue-500/20 text-white" : "border-white/10 text-white/55 hover:text-white/80"}`}
+                  >
+                    {active && <Check className="w-3 h-3 mr-1 inline -mt-0.5" />}{m.first_name} {m.last_name[0]}.
                   </button>
                 );
               })}

@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -17,7 +17,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -7315,6 +7315,199 @@ export async function registerRoutes(
     } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 
+  // ── Playbooks (task templates + backward planning) ─────────────────────────
+  // A Playbook is a reusable checklist for a recurring event. Applying it to an
+  // anchor date generates real tasks whose due dates = anchor + offsetDays
+  // (negative = before the event), so prep back-plans itself.
+
+  // Add N days to a plain 'YYYY-MM-DD' date, timezone-safe (UTC noon anchor so
+  // DST can never shift the day), returning 'YYYY-MM-DD'.
+  function addDaysISO(dateStr: string, days: number): string {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const base = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    base.setUTCDate(base.getUTCDate() + days);
+    return base.toISOString().slice(0, 10);
+  }
+
+  app.get("/api/admin/task-templates", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const orgId = parseInt(req.query.organizationId as string);
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(taskTemplates)
+        .where(and(eq(taskTemplates.organizationId, orgId), eq(taskTemplates.archived, false)))
+        .orderBy(asc(taskTemplates.sortOrder), asc(taskTemplates.id));
+      const tplIds = rows.map(t => t.id);
+      const items = tplIds.length > 0
+        ? await db.select().from(taskTemplateItems).where(inArray(taskTemplateItems.templateId, tplIds)).orderBy(asc(taskTemplateItems.offsetDays), asc(taskTemplateItems.sortOrder), asc(taskTemplateItems.id))
+        : [];
+      const byTpl = new Map<number, typeof items>();
+      for (const it of items) { const a = byTpl.get(it.templateId) || []; a.push(it); byTpl.set(it.templateId, a); }
+      res.json(rows.map(t => ({ ...t, items: byTpl.get(t.id) || [] })));
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/task-templates", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const orgId = parseInt(req.body?.organizationId);
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const name = String(req.body?.name || "").trim();
+      if (!name) return res.status(400).json({ message: "name required" });
+      const existing = await db.select().from(taskTemplates).where(eq(taskTemplates.organizationId, orgId));
+      const sortOrder = existing.length > 0 ? Math.max(...existing.map(t => t.sortOrder)) + 1 : 0;
+      const [created] = await db.insert(taskTemplates).values({
+        organizationId: orgId, name,
+        description: req.body?.description || null,
+        anchorLabel: String(req.body?.anchorLabel || "Event day").trim() || "Event day",
+        departmentId: req.body?.departmentId ? parseInt(req.body.departmentId) : null,
+        brandTags: Array.isArray(req.body?.brandTags) ? req.body.brandTags : [],
+        color: /^#[0-9a-fA-F]{6}$/.test(req.body?.color || "") ? req.body.color : "#3b82f6",
+        sortOrder,
+        createdBy: req.session.userId!,
+      }).returning();
+      res.json({ ...created, items: [] });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/task-templates/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(taskTemplates).where(eq(taskTemplates.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = {};
+      if (typeof req.body.name === "string" && req.body.name.trim()) patch.name = req.body.name.trim();
+      if (typeof req.body.description === "string") patch.description = req.body.description || null;
+      if (typeof req.body.anchorLabel === "string" && req.body.anchorLabel.trim()) patch.anchorLabel = req.body.anchorLabel.trim();
+      if (req.body.departmentId === null) patch.departmentId = null;
+      else if (typeof req.body.departmentId === "number") patch.departmentId = req.body.departmentId;
+      if (Array.isArray(req.body.brandTags)) patch.brandTags = req.body.brandTags;
+      if (typeof req.body.color === "string" && /^#[0-9a-fA-F]{6}$/.test(req.body.color)) patch.color = req.body.color;
+      if (typeof req.body.sortOrder === "number") patch.sortOrder = req.body.sortOrder;
+      if (typeof req.body.archived === "boolean") patch.archived = req.body.archived;
+      const [updated] = await db.update(taskTemplates).set(patch).where(eq(taskTemplates.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/task-templates/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(taskTemplates).where(eq(taskTemplates.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.update(taskTemplates).set({ archived: true }).where(eq(taskTemplates.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/task-templates/:id/items", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const templateId = parseInt(req.params.id);
+      const [tpl] = await db.select().from(taskTemplates).where(eq(taskTemplates.id, templateId));
+      if (!tpl) return res.status(404).json({ message: "Template not found" });
+      if (!(await checkUserOrg(req.session.userId!, tpl.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const title = String(req.body?.title || "").trim();
+      if (!title) return res.status(400).json({ message: "title required" });
+      const existing = await db.select().from(taskTemplateItems).where(eq(taskTemplateItems.templateId, templateId));
+      const sortOrder = existing.length > 0 ? Math.max(...existing.map(i => i.sortOrder)) + 1 : 0;
+      const [created] = await db.insert(taskTemplateItems).values({
+        templateId,
+        title,
+        description: req.body?.description || null,
+        offsetDays: Number.isFinite(parseInt(req.body?.offsetDays)) ? parseInt(req.body.offsetDays) : 0,
+        priority: ["low", "medium", "high", "urgent"].includes(req.body?.priority) ? req.body.priority : "medium",
+        departmentId: req.body?.departmentId ? parseInt(req.body.departmentId) : (tpl.departmentId ?? null),
+        brandTags: Array.isArray(req.body?.brandTags) ? req.body.brandTags : (tpl.brandTags ?? []),
+        nextStep: req.body?.nextStep || null,
+        sortOrder,
+      }).returning();
+      res.json(created);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/task-template-items/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(taskTemplateItems).where(eq(taskTemplateItems.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const [tpl] = await db.select().from(taskTemplates).where(eq(taskTemplates.id, existing.templateId));
+      if (!tpl || !(await checkUserOrg(req.session.userId!, tpl.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = {};
+      if (typeof req.body.title === "string" && req.body.title.trim()) patch.title = req.body.title.trim();
+      if (typeof req.body.description === "string") patch.description = req.body.description || null;
+      if (req.body.offsetDays !== undefined && Number.isFinite(parseInt(req.body.offsetDays))) patch.offsetDays = parseInt(req.body.offsetDays);
+      if (["low", "medium", "high", "urgent"].includes(req.body.priority)) patch.priority = req.body.priority;
+      if (req.body.departmentId === null) patch.departmentId = null;
+      else if (typeof req.body.departmentId === "number") patch.departmentId = req.body.departmentId;
+      if (Array.isArray(req.body.brandTags)) patch.brandTags = req.body.brandTags;
+      if (req.body.nextStep === null) patch.nextStep = null;
+      else if (typeof req.body.nextStep === "string") patch.nextStep = req.body.nextStep || null;
+      if (typeof req.body.sortOrder === "number") patch.sortOrder = req.body.sortOrder;
+      const [updated] = await db.update(taskTemplateItems).set(patch).where(eq(taskTemplateItems.id, id)).returning();
+      res.json(updated);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/task-template-items/:id", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(taskTemplateItems).where(eq(taskTemplateItems.id, id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const [tpl] = await db.select().from(taskTemplates).where(eq(taskTemplates.id, existing.templateId));
+      if (!tpl || !(await checkUserOrg(req.session.userId!, tpl.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(taskTemplateItems).where(eq(taskTemplateItems.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Apply a playbook to a real board + anchor date → generates the full task set
+  // with due dates back-planned from the event. The heart of "never last-minute".
+  app.post("/api/admin/task-templates/:id/apply", requireAuth, requireTab("projects"), async (req, res) => {
+    try {
+      const templateId = parseInt(req.params.id);
+      const [tpl] = await db.select().from(taskTemplates).where(eq(taskTemplates.id, templateId));
+      if (!tpl) return res.status(404).json({ message: "Template not found" });
+      if (!(await checkUserOrg(req.session.userId!, tpl.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const boardId = parseInt(req.body?.boardId);
+      const anchorDate = String(req.body?.anchorDate || "");
+      if (!boardId) return res.status(400).json({ message: "boardId required" });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) return res.status(400).json({ message: "anchorDate (YYYY-MM-DD) required" });
+      const [board] = await db.select().from(projectBoards).where(eq(projectBoards.id, boardId));
+      if (!board || board.organizationId !== tpl.organizationId) return res.status(400).json({ message: "Invalid boardId" });
+      const ownerId = req.body?.ownerId ? parseInt(req.body.ownerId) : null;
+      // Landing group = the board's first (leftmost) group.
+      const [firstGroup] = await db.select().from(projectGroups)
+        .where(eq(projectGroups.boardId, boardId)).orderBy(asc(projectGroups.displayOrder), asc(projectGroups.id)).limit(1);
+      const items = await db.select().from(taskTemplateItems)
+        .where(eq(taskTemplateItems.templateId, templateId)).orderBy(asc(taskTemplateItems.offsetDays), asc(taskTemplateItems.sortOrder));
+      if (items.length === 0) return res.status(400).json({ message: "This playbook has no steps yet." });
+      const rows = items.map((it, idx) => ({
+        organizationId: tpl.organizationId,
+        boardId,
+        groupId: firstGroup?.id ?? null,
+        parentId: null,
+        title: it.title,
+        description: it.description || null,
+        priority: it.priority,
+        ownerId,
+        dueDate: addDaysISO(anchorDate, it.offsetDays),
+        brandTags: (it.brandTags && it.brandTags.length > 0) ? it.brandTags : (tpl.brandTags ?? []),
+        departmentId: it.departmentId ?? tpl.departmentId ?? null,
+        ragStatus: "none",
+        nextStep: it.nextStep || null,
+        isIssue: false,
+        helperIds: [] as number[],
+        goalId: null,
+        displayOrder: idx,
+        createdBy: req.session.userId!,
+      }));
+      const created = await db.insert(projectTasks).values(rows).returning({ id: projectTasks.id });
+      res.json({ created: created.length, boardId, anchorLabel: tpl.anchorLabel, anchorDate });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
   // ── Sponsorship CRM ───────────────────────────────────────────────────────
   // Pipeline + deals lifecycle. All endpoints org-scoped + auth-gated.
   // Stages mirror Daniel's existing Pipedrive flow so the muscle memory
@@ -8091,6 +8284,91 @@ export async function registerRoutes(
     ["name", "email", "phone", "tierId", "tierName", "status", "billingInterval", "priceCents", "paymentStatus", "joinedAt", "renewsAt", "notes"], desc(members.createdAt), ["name"]);
   orgCrud("membership/deliverables", "membership", membershipDeliverables,
     ["title", "description", "tiers", "cadence", "status", "owner", "notes", "sortOrder"], asc(membershipDeliverables.sortOrder), ["title"]);
+
+  // ── PUBLIC: SIU membership self-serve join (embedded Stripe, main account) ──
+  const MEMBERSHIP_DEFAULT_SLUG = "south-island-united";
+  async function resolveMembershipOrg(slug?: string) {
+    const s = String(slug || MEMBERSHIP_DEFAULT_SLUG).trim();
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, s));
+    return org || null;
+  }
+
+  app.get("/api/public/membership/tiers", async (req, res) => {
+    try {
+      const org = await resolveMembershipOrg(req.query.org as string | undefined);
+      if (!org) return res.status(404).json({ message: "Not found" });
+      const tiers = await db.select().from(membershipTiers)
+        .where(and(eq(membershipTiers.organizationId, org.id), eq(membershipTiers.active, true)))
+        .orderBy(asc(membershipTiers.sortOrder));
+      res.json({ organization: { name: org.name, slug: org.slug, logoUrl: org.logoUrl }, tiers });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/public/membership/join", async (req, res) => {
+    try {
+      const { tierId, name, email, phone, orgSlug } = req.body || {};
+      if (!tierId || !String(name || "").trim() || !String(email || "").trim())
+        return res.status(400).json({ message: "name, email and tier are required" });
+      const org = await resolveMembershipOrg(orgSlug);
+      if (!org) return res.status(404).json({ message: "Not found" });
+      const [tier] = await db.select().from(membershipTiers)
+        .where(and(eq(membershipTiers.id, Number(tierId)), eq(membershipTiers.organizationId, org.id)));
+      if (!tier || !tier.active) return res.status(400).json({ message: "That membership tier isn't available" });
+      const priceCents = tier.priceCents || 0;
+      if (priceCents <= 0) return res.status(400).json({ message: "This tier isn't set up for payment yet" });
+
+      // Server owns the price — never trust the client amount.
+      const [member] = await db.insert(members).values({
+        organizationId: org.id,
+        name: String(name).trim(), email: String(email).trim(), phone: phone ? String(phone).trim() : null,
+        tierId: tier.id, tierName: tier.name, status: "pending", billingInterval: tier.billingInterval,
+        priceCents, paymentStatus: "unpaid", source: "public_join", joinedAt: new Date().toISOString().slice(0, 10),
+      }).returning();
+
+      const intent = await createPaymentIntent({
+        registrationId: member.id,
+        campName: `${org.name} — ${tier.name} Membership`,
+        totalCents: priceCents, currency: "NZD", parentEmail: String(email).trim(),
+        metadata: { kind: "membership", memberId: String(member.id), tierId: String(tier.id), orgId: String(org.id) },
+      });
+      await db.update(members).set({ stripePaymentIntentId: intent.id }).where(eq(members.id, member.id));
+      res.json({ clientSecret: intent.client_secret, memberId: member.id, amount: priceCents, tierName: tier.name, organizationSlug: org.slug });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Idempotent finalize — called by BOTH the client confirm POST and the webhook.
+  async function finalizeMembershipPayment(memberId: number, paymentIntentId?: string) {
+    const [member] = await db.select().from(members).where(eq(members.id, memberId));
+    if (!member || member.paymentStatus === "paid") return;                 // idempotent
+    const piId = paymentIntentId || member.stripePaymentIntentId;
+    if (piId) { try { const pi = await retrievePaymentIntent(piId); if (pi.status !== "succeeded") return; } catch { return; } }
+    await db.update(members).set({ paymentStatus: "paid", status: "active", paidAt: new Date(), updatedAt: new Date() }).where(eq(members.id, memberId));
+    let benefits: string[] = [];
+    if (member.tierId) { const [t] = await db.select().from(membershipTiers).where(eq(membershipTiers.id, member.tierId)); benefits = (t?.benefits as string[]) || []; }
+    try {
+      await sendMembershipWelcomeEmail({ to: member.email!, memberName: member.name, tierName: member.tierName || "Membership", amount: member.priceCents || 0, billingInterval: member.billingInterval || undefined, benefits, orgId: member.organizationId });
+      await sendMembershipNotificationEmail({ memberName: member.name, memberEmail: member.email!, memberPhone: member.phone || undefined, tierName: member.tierName || "Membership", amount: member.priceCents || 0, billingInterval: member.billingInterval || undefined, orgId: member.organizationId });
+    } catch (e) { console.error("membership emails failed", e); }
+  }
+  (globalThis as any).__finalizeMembershipPayment = finalizeMembershipPayment; // reachable from the webhook
+
+  app.post("/api/public/membership/confirm", async (req, res) => {
+    try {
+      const memberId = Number(req.body?.memberId);
+      if (!memberId) return res.status(400).json({ message: "memberId required" });
+      await finalizeMembershipPayment(memberId, req.body?.paymentIntentId);
+      const [member] = await db.select().from(members).where(eq(members.id, memberId));
+      res.json({ ok: true, status: member?.status, paymentStatus: member?.paymentStatus, tierName: member?.tierName, memberName: member?.name, amount: member?.priceCents });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.get("/api/public/membership/member/:id", async (req, res) => {
+    try {
+      const [member] = await db.select().from(members).where(eq(members.id, Number(req.params.id)));
+      if (!member) return res.status(404).json({ message: "Not found" });
+      res.json({ id: member.id, name: member.name, tierName: member.tierName, priceCents: member.priceCents, billingInterval: member.billingInterval, status: member.status, paymentStatus: member.paymentStatus });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
 
   // ── Billboard sales (Go Media contra resell) ─────────────────────────────
   // USG holds a $250k credit with Go Media; we resell at 20-30% off rate-card
@@ -10956,7 +11234,13 @@ export async function registerRoutes(
         const paymentIntent = event.data.object as any;
         const regType = paymentIntent.metadata?.registrationType;
         const registrationId = parseInt(paymentIntent.metadata?.registrationId);
-        if (regType === "league_balance" && registrationId) {
+        if (paymentIntent.metadata?.kind === "membership" && paymentIntent.metadata?.memberId) {
+          // SIU membership self-serve join — finalize + welcome/notify emails.
+          // MUST be first: createPaymentIntent stamps registrationId=memberId, so
+          // without this guard the generic registrationId branch below would treat
+          // a membership payment as a camp registration. Idempotent.
+          await finalizeMembershipPayment(Number(paymentIntent.metadata.memberId), paymentIntent.id);
+        } else if (regType === "league_balance" && registrationId) {
           // MFL instalment balance collected.
           await handleLeagueBalanceSuccess(registrationId, paymentIntent.id);
         } else if (regType === "league_share") {
