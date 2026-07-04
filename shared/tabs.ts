@@ -205,6 +205,7 @@ export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
  */
 export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "budget", // Phase 1 construction — staff salaries visible. Daniel only.
+  "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
 ]);
 
 /**

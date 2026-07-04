@@ -9,68 +9,15 @@ import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, X, User, Calendar as CalendarIcon, Flag, Check, Inbox, LayoutGrid, Layers, AlertCircle, ChevronLeft, ChevronRight, Pencil, Trash2 } from "lucide-react";
+import { Plus, X, User, Calendar as CalendarIcon, Flag, Check, Inbox, LayoutGrid, Layers, AlertCircle, ChevronLeft, ChevronRight, Pencil, Trash2, Target, Presentation, Gauge, Users } from "lucide-react";
+import {
+  BRANDS, PRIORITY_COLORS, RAG_META, RAG_ORDER,
+  type Rag, type ProjectGroup, type ProjectBoard, type ProjectTask,
+  type TeamMember, type Department, type Goal,
+} from "@/lib/work";
+import { MyWorkView, GoalsView, StaffMeetingView, LeadershipView } from "./group-work-views";
 
-// Brand vocabulary — the slugs of every org so brand_tags filter chips read
-// naturally. Stays in sync with organizations.slug values.
-const BRANDS: { slug: string; label: string; color: string }[] = [
-  { slug: "cufc",       label: "CUFC",         color: "#3b82f6" },
-  { slug: "siu",        label: "SIU",          color: "#8b5cf6" },
-  { slug: "mfl",        label: "MFL",          color: "#06b6d4" },
-  { slug: "cic",        label: "CIC",          color: "#a855f7" },
-  { slug: "usc",        label: "USC",          color: "#22c55e" },
-  { slug: "gymnastics", label: "Gymnastics",   color: "#ec4899" },
-  { slug: "usg",        label: "USG",          color: "#64748b" },
-  { slug: "print",      label: "Print",        color: "#f59e0b" },
-  { slug: "sponsorship",label: "Sponsorship",  color: "#ef4444" },
-];
-
-const PRIORITY_COLORS: Record<string, string> = {
-  low:    "#64748b",
-  medium: "#3b82f6",
-  high:   "#f59e0b",
-  urgent: "#ef4444",
-};
-
-interface ProjectGroup {
-  id: number;
-  boardId: number;
-  name: string;
-  color: string;
-  isDone: boolean;
-  displayOrder: number;
-}
-interface ProjectBoard {
-  id: number;
-  organizationId: number;
-  name: string;
-  description: string | null;
-  brandTags: string[];
-  color: string;
-  archived: boolean;
-  groups: ProjectGroup[];
-}
-interface ProjectTask {
-  id: number;
-  organizationId: number;
-  boardId: number;
-  groupId: number | null;
-  parentId: number | null;
-  title: string;
-  description: string | null;
-  priority: "low" | "medium" | "high" | "urgent";
-  ownerId: number | null;
-  dueDate: string | null;
-  brandTags: string[];
-  displayOrder: number;
-  completedAt: string | null;
-}
-interface TeamMember {
-  id: number;
-  first_name: string;
-  last_name: string;
-  email: string;
-}
+// Types + brand/RAG vocab live in @/lib/work (shared with the Command-Centre views).
 
 export default function GroupProjectsPage() {
   const { currentOrg } = useWorkspace();
@@ -78,7 +25,7 @@ export default function GroupProjectsPage() {
   const orgId = currentOrg?.id;
 
   const [selectedBoardId, setSelectedBoardId] = useState<number | null>(null);
-  const [view, setView] = useState<"board" | "mine" | "calendar">("board");
+  const [view, setView] = useState<"board" | "mine" | "calendar" | "goals" | "meeting" | "leadership">("board");
   const [brandFilter, setBrandFilter] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
@@ -127,11 +74,14 @@ export default function GroupProjectsPage() {
       return r.json();
     },
     enabled: view === "mine" || view === "calendar",
+    // Live-update the personal view during the day.
+    refetchInterval: view === "mine" ? 20000 : false,
   });
 
-  // Calendar view fetches every task across every board (org-scoped) plus the
-  // org-wide events from /api/admin/calendar-events so the customer sees the
-  // full alignment picture: their work + the team's work + scheduled events.
+  // Calendar / meeting / leadership views fetch every task across every board
+  // (org-scoped) plus the org-wide events so the customer sees the full
+  // alignment picture: their work + the team's work + scheduled events.
+  const needsAllTasks = view === "calendar" || view === "meeting" || view === "leadership" || view === "goals";
   const { data: allTasks = [] } = useQuery<ProjectTask[]>({
     queryKey: ["/api/admin/projects/tasks", { all: true, orgId, brand: brandFilter }],
     queryFn: async () => {
@@ -142,7 +92,32 @@ export default function GroupProjectsPage() {
       if (!r.ok) throw new Error("Failed");
       return r.json();
     },
-    enabled: !!orgId && view === "calendar",
+    enabled: !!orgId && needsAllTasks,
+    // Live-update the big-screen meeting + leadership rollup.
+    refetchInterval: (view === "meeting" || view === "leadership") ? 20000 : false,
+  });
+
+  // Departments (the second axis) — always loaded; the task editor + views need them.
+  const { data: departments = [] } = useQuery<Department[]>({
+    queryKey: ["/api/admin/departments", orgId],
+    queryFn: async () => {
+      const r = await fetch(`/api/admin/departments?organizationId=${orgId}`, { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: !!orgId,
+  });
+
+  // Goals ladder — Vision → Season → Priority (+ nested measures).
+  const { data: goals = [] } = useQuery<Goal[]>({
+    queryKey: ["/api/admin/goals", orgId],
+    queryFn: async () => {
+      const r = await fetch(`/api/admin/goals?organizationId=${orgId}`, { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: !!orgId,
+    refetchInterval: (view === "goals" || view === "meeting" || view === "leadership") ? 25000 : false,
   });
 
   const { rangeStart, rangeEnd } = useMemo(() => {
@@ -265,32 +240,32 @@ export default function GroupProjectsPage() {
           <p className="text-[11px] text-white/40 mt-0.5">Boards across {currentOrg?.name}</p>
         </div>
 
-        {/* My Tasks + Calendar pinned at top */}
-        <button
-          onClick={() => setView("mine")}
-          data-testid="button-view-mine"
-          className={`flex items-center justify-between gap-2 px-4 py-2.5 text-sm transition-colors border-l-2 ${
-            view === "mine" ? "bg-blue-500/[0.08] text-blue-300 border-blue-500" : "text-white/70 hover:bg-white/[0.03] border-transparent"
-          }`}
-        >
-          <span className="flex items-center gap-2">
-            <Inbox className="w-4 h-4" />
-            My Tasks
-          </span>
-          {myTasks.length > 0 && view !== "mine" && (
-            <span className="text-[10px] bg-white/[0.06] px-1.5 py-0.5 rounded">{myTasks.length}</span>
-          )}
-        </button>
-        <button
-          onClick={() => setView("calendar")}
-          data-testid="button-view-calendar"
-          className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors border-l-2 ${
-            view === "calendar" ? "bg-blue-500/[0.08] text-blue-300 border-blue-500" : "text-white/70 hover:bg-white/[0.03] border-transparent"
-          }`}
-        >
-          <CalendarIcon className="w-4 h-4" />
-          Calendar
-        </button>
+        {/* Command Centre — cross-cutting saved views over the one dataset */}
+        {([
+          { key: "mine", label: "My Work", icon: Users, badge: myTasks.length },
+          { key: "goals", label: "Goals", icon: Target },
+          { key: "meeting", label: "Staff Meeting", icon: Presentation },
+          { key: "leadership", label: "Leadership", icon: Gauge },
+          { key: "calendar", label: "Calendar", icon: CalendarIcon },
+        ] as const).map(item => {
+          const Icon = item.icon;
+          const active = view === item.key;
+          return (
+            <button
+              key={item.key}
+              onClick={() => setView(item.key as any)}
+              data-testid={`button-view-${item.key}`}
+              className={`flex items-center justify-between gap-2 px-4 py-2.5 text-sm transition-colors border-l-2 ${
+                active ? "bg-blue-500/[0.08] text-blue-300 border-blue-500" : "text-white/70 hover:bg-white/[0.03] border-transparent"
+              }`}
+            >
+              <span className="flex items-center gap-2"><Icon className="w-4 h-4" />{item.label}</span>
+              {"badge" in item && !!item.badge && item.badge > 0 && !active && (
+                <span className="text-[10px] bg-white/[0.06] px-1.5 py-0.5 rounded">{item.badge}</span>
+              )}
+            </button>
+          );
+        })}
 
         <div className="px-4 pt-4 pb-1.5 text-[10px] uppercase tracking-wider text-white/30 font-semibold flex items-center justify-between">
           <span>Boards</span>
@@ -351,17 +326,17 @@ export default function GroupProjectsPage() {
 
       {/* Main area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar — title, view toggle, brand filter, new task */}
+        {/* Top bar — board title, brand filter, new task. The Command-Centre
+            views (My Work / Goals / Staff Meeting / Leadership) render their own
+            headers, so the bar only shows for the board + calendar views. */}
+        {(view === "board" || view === "calendar") && (
         <div className="px-6 py-4 border-b border-white/[0.06] flex items-center gap-4 flex-wrap">
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold truncate">
-              {view === "mine" ? "My Tasks" : board?.name || "Select a board"}
+              {view === "calendar" ? "Calendar" : board?.name || "Select a board"}
             </h2>
             {view === "board" && board?.description && (
               <p className="text-xs text-white/40 truncate">{board.description}</p>
-            )}
-            {view === "mine" && (
-              <p className="text-xs text-white/40">{myTasks.length} task{myTasks.length === 1 ? "" : "s"} assigned to you</p>
             )}
           </div>
 
@@ -411,11 +386,18 @@ export default function GroupProjectsPage() {
             </>
           )}
         </div>
+        )}
 
         {/* Body */}
         <div className="flex-1 overflow-auto">
           {view === "mine" ? (
-            <MyTasksView tasks={myTasks} boards={boards} team={team} onEdit={t => setTaskModal({ mode: "edit", task: t })} />
+            <MyWorkView tasks={myTasks} boards={boards} team={team} departments={departments} onEdit={t => setTaskModal({ mode: "edit", task: t })} />
+          ) : view === "goals" ? (
+            <GoalsView orgId={orgId} goals={goals} departments={departments} team={team} allTasks={allTasks} />
+          ) : view === "meeting" ? (
+            <StaffMeetingView allTasks={allTasks} boards={boards} goals={goals} departments={departments} team={team} onEdit={t => setTaskModal({ mode: "edit", task: t })} />
+          ) : view === "leadership" ? (
+            <LeadershipView allTasks={allTasks} boards={boards} goals={goals} departments={departments} team={team} onEdit={t => setTaskModal({ mode: "edit", task: t })} />
           ) : view === "calendar" ? (
             <CalendarView
               year={calendarMonth.year}
@@ -465,6 +447,8 @@ export default function GroupProjectsPage() {
           board={board}
           allBoards={boards}
           team={team}
+          departments={departments}
+          goals={goals}
           defaultGroupId={taskModal.defaultGroupId}
           orgId={orgId}
           onClose={() => setTaskModal(null)}
@@ -753,13 +737,15 @@ function MyTasksView({ tasks, boards, team, onEdit }: {
 
 // ── Task modal (create/edit) ─────────────────────────────────────────────────
 function TaskModal({
-  mode, task, board, allBoards, team, defaultGroupId, orgId, onClose, onSubmit, onDelete,
+  mode, task, board, allBoards, team, departments, goals, defaultGroupId, orgId, onClose, onSubmit, onDelete,
 }: {
   mode: "create" | "edit";
   task?: ProjectTask;
   board: ProjectBoard;
   allBoards: ProjectBoard[];
   team: TeamMember[];
+  departments: Department[];
+  goals: Goal[];
   defaultGroupId?: number;
   orgId: number;
   onClose: () => void;
@@ -822,8 +808,16 @@ function TaskModal({
   const [ownerId, setOwnerId] = useState<number | null>(task?.ownerId ?? null);
   const [dueDate, setDueDate] = useState(task?.dueDate || "");
   const [brandTags, setBrandTags] = useState<string[]>(task?.brandTags || []);
+  // Work-management fields
+  const [departmentId, setDepartmentId] = useState<number | null>(task?.departmentId ?? null);
+  const [ragStatus, setRagStatus] = useState<Rag>(task?.ragStatus ?? "none");
+  const [startDate, setStartDate] = useState(task?.startDate || "");
+  const [nextStep, setNextStep] = useState(task?.nextStep || "");
+  const [isIssue, setIsIssue] = useState<boolean>(task?.isIssue ?? false);
+  const [goalId, setGoalId] = useState<number | null>(task?.goalId ?? null);
 
   const activeBoard = allBoards.find(b => b.id === boardId) || board;
+  const priorities = goals.filter(g => g.level === "priority");
 
   const submit = () => {
     if (!title.trim()) return;
@@ -835,6 +829,12 @@ function TaskModal({
       ownerId,
       dueDate: dueDate || null,
       brandTags,
+      departmentId,
+      ragStatus,
+      startDate: startDate || null,
+      nextStep: nextStep.trim() || null,
+      isIssue,
+      goalId,
     };
     if (mode === "create") {
       payload.organizationId = orgId;
@@ -901,7 +901,7 @@ function TaskModal({
             </div>
           </div>
           <div>
-            <Label className="text-xs text-white/60 mb-1.5 block">Brand tags</Label>
+            <Label className="text-xs text-white/60 mb-1.5 block">Brands / programmes <span className="text-white/25">(who it serves)</span></Label>
             <div className="flex flex-wrap gap-1.5">
               {BRANDS.map(b => {
                 const active = brandTags.includes(b.slug);
@@ -923,6 +923,45 @@ function TaskModal({
               })}
             </div>
           </div>
+
+          {/* ── Work-management fields: department = who OWNS it (single), the
+              second axis of the matrix; RAG = the meeting/leadership colour. ── */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-white/60 mb-1 block">Department <span className="text-white/25">(owns it)</span></Label>
+              <select value={departmentId ?? ""} onChange={e => setDepartmentId(e.target.value ? parseInt(e.target.value) : null)} className="w-full h-9 rounded-md bg-white/[0.04] border border-white/10 px-2 text-sm" data-testid="select-task-department">
+                <option value="">—</option>
+                {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label className="text-xs text-white/60 mb-1 block">Status (RAG)</Label>
+              <select value={ragStatus} onChange={e => setRagStatus(e.target.value as Rag)} className="w-full h-9 rounded-md bg-white/[0.04] border border-white/10 px-2 text-sm" data-testid="select-task-rag">
+                {RAG_ORDER.map(r => <option key={r} value={r}>{RAG_META[r].label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-white/60 mb-1 block">Start by <span className="text-white/25">(optional)</span></Label>
+              <DatePickerInput value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-white/[0.04] border-white/10 text-white h-9" />
+            </div>
+            <div>
+              <Label className="text-xs text-white/60 mb-1 block">Ladders up to</Label>
+              <select value={goalId ?? ""} onChange={e => setGoalId(e.target.value ? parseInt(e.target.value) : null)} className="w-full h-9 rounded-md bg-white/[0.04] border border-white/10 px-2 text-sm" data-testid="select-task-goal">
+                <option value="">— no priority —</option>
+                {priorities.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs text-white/60 mb-1 block">Next step</Label>
+            <Input value={nextStep} onChange={e => setNextStep(e.target.value)} placeholder="The single next action…" className="bg-white/[0.04] border-white/10 text-white" data-testid="input-task-nextstep" />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-white/70 cursor-pointer select-none">
+            <input type="checkbox" checked={isIssue} onChange={e => setIsIssue(e.target.checked)} className="accent-red-500 w-4 h-4" data-testid="checkbox-task-issue" />
+            Raise as an issue / blocker for the next staff meeting
+          </label>
 
           {mode === "edit" && task && (
             <SubtasksSection

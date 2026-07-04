@@ -1657,6 +1657,22 @@ export const projectTasks = pgTable("project_tasks", {
   ownerId: integer("owner_id").references(() => users.id),
   dueDate: date("due_date"),
   brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  // ── Work-management additions (2026-07-04) ──
+  // The DEPARTMENT that owns this task — the second axis of the matrix. Brand =
+  // who it serves (brandTags), Department = who's accountable (single).
+  departmentId: integer("department_id").references((): any => departments.id, { onDelete: "set null" }),
+  // Self-reported traffic light for the meeting / leadership rollup, separate
+  // from workflow status. none | on_track | at_risk | off_track.
+  ragStatus: text("rag_status").notNull().default("none"),
+  // Start-by date for backward planning ("should be underway now").
+  startDate: date("start_date"),
+  nextStep: text("next_step"),
+  // Raised as a blocker/issue to solve in the weekly meeting (IDS).
+  isIssue: boolean("is_issue").notNull().default(false),
+  // Collaborators ("who's helping"). Owner stays single (ownerId) for accountability.
+  helperIds: integer("helper_ids").array().notNull().default(sql`ARRAY[]::integer[]`),
+  // Line-of-sight: the Priority ("Rock") this task ladders up to.
+  goalId: integer("goal_id").references((): any => goals.id, { onDelete: "set null" }),
   displayOrder: integer("display_order").notNull().default(0),
   completedAt: timestamp("completed_at"),
   createdBy: integer("created_by").references(() => users.id),
@@ -1673,6 +1689,71 @@ export type InsertProjectTask = z.infer<typeof insertProjectTaskSchema>;
 export type ProjectBoard = typeof projectBoards.$inferSelect;
 export type ProjectGroup = typeof projectGroups.$inferSelect;
 export type ProjectTask = typeof projectTasks.$inferSelect;
+
+// ── Departments ──────────────────────────────────────────────────────────────
+// The team that owns work — the second axis alongside brand tags. Seeded with 7
+// defaults for the USG workspace, editable in settings. A task/goal references
+// one department (single accountable team); brands stay a multi-select tag.
+export const departments = pgTable("departments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  color: text("color").notNull().default("#3b82f6"),
+  leadUserId: integer("lead_user_id").references(() => users.id, { onDelete: "set null" }),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueOrgSlug: unique("departments_org_slug_unique").on(t.organizationId, t.slug),
+}));
+
+export const insertDepartmentSchema = createInsertSchema(departments).omit({ id: true, createdAt: true });
+export type InsertDepartment = z.infer<typeof insertDepartmentSchema>;
+export type Department = typeof departments.$inferSelect;
+
+// ── Goals ladder ─────────────────────────────────────────────────────────────
+// One self-referential table for all three tiers (level): Vision → Season Goal →
+// Priority ("Rock"). parent_id links a Priority to its Season Goal etc. Tasks link
+// up via projectTasks.goalId. Brand is a tag at every level; department = owner-team.
+export const goals = pgTable("goals", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  level: text("level").notNull().default("priority"), // vision | season | priority
+  parentId: integer("parent_id").references((): any => goals.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  ownerId: integer("owner_id").references(() => users.id, { onDelete: "set null" }),
+  departmentId: integer("department_id").references(() => departments.id, { onDelete: "set null" }),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  ragStatus: text("rag_status").notNull().default("on_track"), // none|on_track|at_risk|off_track
+  period: text("period"),        // '2026' (season) or '2026-Q3' (priority)
+  targetDate: date("target_date"),
+  archived: boolean("archived").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const goalMeasures = pgTable("goal_measures", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  goalId: integer("goal_id").notNull().references(() => goals.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  measureType: text("measure_type").notNull().default("lead"), // lead | lag
+  targetValue: decimal("target_value"),
+  currentValue: decimal("current_value").default("0"),
+  unit: text("unit"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertGoalSchema = createInsertSchema(goals).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertGoalMeasureSchema = createInsertSchema(goalMeasures).omit({ id: true, createdAt: true });
+export type InsertGoal = z.infer<typeof insertGoalSchema>;
+export type InsertGoalMeasure = z.infer<typeof insertGoalMeasureSchema>;
+export type Goal = typeof goals.$inferSelect;
+export type GoalMeasure = typeof goalMeasures.$inferSelect;
 
 // ── Sponsorship CRM ──────────────────────────────────────────────────────────
 // Pipeline + lifecycle tracker for sponsorship deals across every brand.
