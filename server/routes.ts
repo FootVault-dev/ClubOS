@@ -6318,6 +6318,50 @@ export async function registerRoutes(
     }
   });
 
+  // ─── Disciplinary cards (yellow/red) — ADMIN-ONLY (private, like awards) ───
+  app.get("/api/admin/tournament/games/:id/cards", requireAuth, async (req, res) => {
+    try {
+      res.json(await storage.getTournamentCardsByGame(parseInt(req.params.id)));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/admin/tournament/cards", requireAuth, async (req, res) => {
+    try {
+      // playerId OR typed playerName + playerTeamId (find-or-creates the player).
+      const { playerName, playerTeamId, ...body } = req.body;
+      if (!body.playerId && playerName && playerTeamId) {
+        body.playerId = await storage.findOrCreateTournamentPlayerByName(Number(playerTeamId), String(playerName));
+      }
+      if (!body.playerId) return res.status(400).json({ message: "playerId or a player name is required" });
+      if (body.cardType !== "yellow" && body.cardType !== "red") {
+        return res.status(400).json({ message: "cardType must be 'yellow' or 'red'" });
+      }
+      const card = await storage.createTournamentCard(body);
+      res.status(201).json(card);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/tournament/cards/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteTournamentCard(parseInt(req.params.id));
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/tournament/tournaments/:id/discipline", requireAuth, async (req, res) => {
+    try {
+      res.json(await storage.getTournamentDiscipline(parseInt(req.params.id)));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ─── Player age verification ───
   // Admin uploads a passport / birth certificate scan, then flips the
   // ageVerified flag once they've eyeballed it. Documents go to private

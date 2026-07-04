@@ -3,13 +3,17 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Award, Users, Calendar, LayoutGrid, Settings2, Plus, Trash2, GripVertical, X, Shield, Clock, MapPin, Pencil, Check, ChevronDown, Goal, RefreshCw } from "lucide-react";
+import { ArrowLeft, Award, Users, Calendar, LayoutGrid, Settings2, Plus, Trash2, GripVertical, X, Shield, Clock, MapPin, Pencil, Check, ChevronDown, Goal, RefreshCw, Square, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TimePickerInput } from "@/components/ui/time-picker-input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { Tournament, TournamentGroup, TournamentTeam, TournamentGame, TournamentPlayer, TournamentGoal } from "@shared/schema";
+import type { Tournament, TournamentGroup, TournamentTeam, TournamentGame, TournamentPlayer, TournamentGoal, TournamentCard } from "@shared/schema";
+
+// A player at or above this many yellow cards should sit out a game. CIC's
+// actual rule — confirm with Isaac and change here if it's not 2.
+const YELLOW_SUSPENSION_THRESHOLD = 2;
 
 type Tab = "format" | "schedule" | "groups" | "teams" | "awards";
 
@@ -180,6 +184,11 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
   const [minute, setMinute] = useState<string>("");
   const [isOwnGoal, setIsOwnGoal] = useState(false);
   const [isPenalty, setIsPenalty] = useState(false);
+  // Card entry
+  const [cardSide, setCardSide] = useState<"home" | "away" | null>(null);
+  const [cardPlayerId, setCardPlayerId] = useState<string>("");
+  const [cardTyped, setCardTyped] = useState<string>("");
+  const [cardMinute, setCardMinute] = useState<string>("");
 
   const { data: goals = [] } = useQuery<TournamentGoal[]>({
     queryKey: ["/api/admin/tournament/games", game.id, "goals"],
@@ -273,6 +282,34 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
     return p ? `${p.firstName} ${p.lastName}` : `Player ${playerId}`;
   };
 
+  // ── Disciplinary cards (admin-only) ──
+  const { data: cards = [] } = useQuery<TournamentCard[]>({
+    queryKey: ["/api/admin/tournament/games", game.id, "cards"],
+    queryFn: () => fetch(`/api/admin/tournament/games/${game.id}/cards`).then(r => r.json()),
+  });
+  const addCardMut = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/admin/tournament/cards", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/games", game.id, "cards"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/teams", game.homeTeamId, "players"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/teams", game.awayTeamId, "players"] });
+      setCardPlayerId(""); setCardTyped(""); setCardMinute("");
+    },
+    onError: (e: any) => toast({ title: "Couldn't add card", description: e.message, variant: "destructive" }),
+  });
+  const deleteCardMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/tournament/cards/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/games", game.id, "cards"] }),
+  });
+  const addCard = (cardType: "yellow" | "red") => {
+    if (!cardSide) return;
+    if (!cardPlayerId && !cardTyped.trim()) return;
+    const teamId = cardSide === "home" ? game.homeTeamId : game.awayTeamId;
+    const common = { gameId: game.id, teamId, cardType, minute: cardMinute ? parseInt(cardMinute) : null };
+    if (cardPlayerId) addCardMut.mutate({ ...common, playerId: parseInt(cardPlayerId) });
+    else addCardMut.mutate({ ...common, playerName: cardTyped.trim(), playerTeamId: teamId });
+  };
+
   const submit = () => {
     if (!pickerSide) return;
     if (!pickedPlayerId && !typedName.trim()) return;
@@ -301,8 +338,8 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-[#0a0e1a] border border-blue-500/15 rounded-2xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-white/5">
+      <div className="bg-[#0a0e1a] border border-blue-500/15 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-white/5 shrink-0">
           <div>
             <div className="text-xs text-white/40 uppercase tracking-wide">Game {game.gameNumber} · {game.stageDetail}</div>
             <h2 className="text-lg font-semibold text-white">{homeName} v {awayName}</h2>
@@ -310,7 +347,7 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
           <button onClick={onClose} className="text-white/40 hover:text-white/70"><X className="w-4 h-4" /></button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto">
           <div>
             <div className="text-xs text-white/40 uppercase tracking-wide mb-2">Goals ({goals.length})</div>
             {goals.length === 0 ? (
@@ -419,6 +456,60 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
 
           {game.homeTeamId && game.awayTeamId && (
             <>
+              {/* Disciplinary cards — admin only */}
+              <div className="border-t border-white/5 pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-white/40 uppercase tracking-wide">Cards ({cards.length})</div>
+                  <span className="text-[10px] text-amber-400/70 flex items-center gap-1"><Shield className="w-2.5 h-2.5" /> Private</span>
+                </div>
+                {cards.length > 0 && (
+                  <div className="space-y-1">
+                    {cards.map(c => {
+                      const teamName = c.teamId === game.homeTeamId ? homeName : awayName;
+                      return (
+                        <div key={c.id} className="flex items-center justify-between rounded-md bg-white/[0.02] border border-white/5 px-3 py-1.5">
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="text-white/30 text-xs w-8">{c.minute ? `${c.minute}'` : "—"}</span>
+                            <span className={`inline-block w-3 h-4 rounded-[2px] shrink-0 ${c.cardType === "red" ? "bg-red-500" : "bg-yellow-400"}`} />
+                            <span className="text-white">{nameOf(c.playerId) ?? `Player ${c.playerId}`}</span>
+                            <span className="text-white/30 text-xs">({teamName})</span>
+                          </div>
+                          <button onClick={() => deleteCardMut.mutate(c.id)} className="w-6 h-6 flex items-center justify-center rounded text-white/15 hover:text-red-400 hover:bg-red-500/10">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button size="sm" variant={cardSide === "home" ? "default" : "outline"} onClick={() => { setCardSide("home"); setCardPlayerId(""); }} className="flex-1 text-xs">{homeName}</Button>
+                  <Button size="sm" variant={cardSide === "away" ? "default" : "outline"} onClick={() => { setCardSide("away"); setCardPlayerId(""); }} className="flex-1 text-xs">{awayName}</Button>
+                </div>
+                {cardSide && (
+                  <>
+                    {(cardSide === "home" ? homePlayers : awayPlayers).length > 0 && (
+                      <select value={cardPlayerId} onChange={e => { setCardPlayerId(e.target.value); if (e.target.value) setCardTyped(""); }}
+                        className="w-full bg-white/[0.02] border border-white/10 text-white text-sm rounded-md px-3 py-2">
+                        <option value="">Pick player…</option>
+                        {(cardSide === "home" ? homePlayers : awayPlayers).map(p => <option key={p.id} value={p.id}>#{p.shirtNumber ?? "—"} {p.firstName} {p.lastName}</option>)}
+                      </select>
+                    )}
+                    <div className="flex gap-2 items-center">
+                      <Input type="text" placeholder={(cardSide === "home" ? homePlayers : awayPlayers).length > 0 ? "…or type a name" : "Type the player's name"}
+                        value={cardTyped} onChange={e => { setCardTyped(e.target.value); if (e.target.value) setCardPlayerId(""); }} className="text-sm flex-1" />
+                      <Input type="number" min="0" max="120" placeholder="Min" value={cardMinute} onChange={e => setCardMinute(e.target.value)} className="w-16 text-sm" />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => addCard("yellow")} disabled={(!cardPlayerId && !cardTyped.trim()) || addCardMut.isPending}
+                        className="flex-1 bg-yellow-500/90 hover:bg-yellow-500 text-black text-xs font-semibold">🟨 Yellow</Button>
+                      <Button size="sm" onClick={() => addCard("red")} disabled={(!cardPlayerId && !cardTyped.trim()) || addCardMut.isPending}
+                        className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold">🟥 Red</Button>
+                    </div>
+                  </>
+                )}
+              </div>
+
               {/* MVP votes — admin only */}
               <div className="border-t border-white/5 pt-4 space-y-2">
                 <div className="flex items-center justify-between">
@@ -1249,7 +1340,7 @@ function TeamsTab({ tournament }: { tournament: Tournament }) {
 // Individual Awards — live leaderboards for Golden Boot (public), plus the
 // ADMIN-ONLY Golden Glove (keeper) + MVP. Golden Boot derives from goals;
 // the other two derive from votes/ratings entered per game in the goals modal.
-type AwardView = "boot" | "glove" | "mvp";
+type AwardView = "boot" | "glove" | "mvp" | "cards";
 function AwardsTab({ tournament }: { tournament: Tournament }) {
   const tournamentId = tournament.id;
   const [view, setView] = useState<AwardView>("boot");
@@ -1266,16 +1357,27 @@ function AwardsTab({ tournament }: { tournament: Tournament }) {
     queryKey: ["/api/admin/tournament/tournaments", tournamentId, "mvp-leaderboard"],
     queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/mvp-leaderboard`).then(r => r.json()),
   });
+  const { data: cardsData = [], isLoading: cardsLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/tournament/tournaments", tournamentId, "discipline"],
+    queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/discipline`).then(r => r.json()),
+  });
 
   const views: { id: AwardView; label: string; icon: any }[] = [
     { id: "boot", label: "Golden Boot", icon: Goal },
     { id: "glove", label: "Golden Glove", icon: Shield },
     { id: "mvp", label: "MVP", icon: Award },
+    { id: "cards", label: "Cards", icon: Square },
   ];
 
-  const rows = view === "boot" ? bootData : view === "glove" ? gloveData : mvpData;
-  const loading = view === "boot" ? bootLoading : view === "glove" ? gloveLoading : mvpLoading;
+  const rows = view === "boot" ? bootData : view === "glove" ? gloveData : view === "mvp" ? mvpData : cardsData;
+  const loading = view === "boot" ? bootLoading : view === "glove" ? gloveLoading : view === "mvp" ? mvpLoading : cardsLoading;
   const isPrivate = view !== "boot";
+  const suspended = view === "cards" ? cardsData.filter((r: any) => (r.suspensions?.length ?? 0) > 0).length : 0;
+  const fmtMiss = (m: any) => {
+    if (!m) return "";
+    const d = m.gameDate ? new Date(m.gameDate + "T12:00:00").toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short" }) : "";
+    return [d, m.startTime, m.field].filter(Boolean).join(" · ");
+  };
 
   const rankBadge = (i: number) => {
     const styles = ["bg-yellow-400/20 text-yellow-300 border-yellow-400/30", "bg-white/10 text-white/60 border-white/15", "bg-amber-700/20 text-amber-500/80 border-amber-700/30"];
@@ -1326,7 +1428,8 @@ function AwardsTab({ tournament }: { tournament: Tournament }) {
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
             {view === "boot" ? <><Goal className="w-4 h-4 text-yellow-400/80" /> Golden Boot — top scorers</>
               : view === "glove" ? <><Shield className="w-4 h-4 text-blue-400/80" /> Golden Glove — best goalkeeper</>
-              : <><Award className="w-4 h-4 text-purple-400/80" /> Player of the Tournament (MVP)</>}
+              : view === "mvp" ? <><Award className="w-4 h-4 text-purple-400/80" /> Player of the Tournament (MVP)</>
+              : <><Square className="w-4 h-4 text-yellow-400/80 fill-yellow-400/80" /> Card tracker — suspensions</>}
           </h3>
           <span className="text-xs text-white/25">{rows.length} {rows.length === 1 ? "player" : "players"}</span>
         </div>
@@ -1337,13 +1440,80 @@ function AwardsTab({ tournament }: { tournament: Tournament }) {
         {view === "mvp" && (
           <p className="text-[11px] text-white/35 mb-3">Each team votes one opposition player per game. Most votes wins.</p>
         )}
+        {view === "cards" && (
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <p className="text-[11px] text-white/35">A <span className="text-red-300">red card</span> or every <span className="text-amber-300">{YELLOW_SUSPENSION_THRESHOLD} yellows</span> = miss the next game. The exact game each player misses is shown below — coordinate with the refs.</p>
+            {suspended > 0 && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-500/15 text-red-300 border border-red-500/25 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" /> {suspended} to suspend
+              </span>
+            )}
+          </div>
+        )}
 
         {loading ? (
           <div className="h-24 rounded-xl bg-white/[0.02] animate-pulse" />
         ) : rows.length === 0 ? (
           <div className="text-center py-10 text-white/25 text-sm">
-            {view === "boot" ? "No goals recorded yet." : view === "glove" ? "No goalkeeper ratings entered yet." : "No MVP votes entered yet."}
+            {view === "boot" ? "No goals recorded yet." : view === "glove" ? "No goalkeeper ratings entered yet." : view === "mvp" ? "No MVP votes entered yet." : "No cards recorded yet."}
             <p className="text-[11px] text-white/20 mt-1">Entered per game in the Schedule tab (tap a game → scoresheet).</p>
+          </div>
+        ) : view === "cards" ? (
+          <div className="space-y-1.5">
+            {rows.map((r: any) => {
+              const susps = r.suspensions ?? [];
+              const flag = susps.length > 0;
+              return (
+                <div key={r.playerId} className={`rounded-lg border px-3 py-2.5 ${flag ? "bg-red-500/[0.06] border-red-500/25" : "bg-white/[0.015] border-white/5"}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white truncate">
+                        {r.shirtNumber ? <span className="text-white/30 mr-1.5">#{r.shirtNumber}</span> : null}
+                        {r.playerName}
+                      </div>
+                      <div className="sm:hidden mt-0.5">{teamCell(r)}</div>
+                    </div>
+                    <div className="hidden sm:block w-40">{teamCell(r)}</div>
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <span className="flex items-center gap-1" title="Yellow cards">
+                        <span className="inline-block w-3 h-4 rounded-[2px] bg-yellow-400" />
+                        <span className="text-base font-bold text-white tabular-nums">{r.yellows}</span>
+                      </span>
+                      {r.reds > 0 && (
+                        <span className="flex items-center gap-1" title="Red cards">
+                          <span className="inline-block w-3 h-4 rounded-[2px] bg-red-500" />
+                          <span className="text-base font-bold text-white tabular-nums">{r.reds}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {flag && (
+                    <div className="mt-2 pt-2 border-t border-red-500/15 space-y-1.5">
+                      {susps.map((s: any, i: number) => (
+                        <div key={i} className="flex items-start gap-2 text-xs">
+                          <span className={`shrink-0 mt-px text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 whitespace-nowrap ${s.reason === "red" ? "bg-red-500/20 text-red-300" : "bg-yellow-400/15 text-yellow-300"}`}>
+                            <span className={`inline-block w-2.5 h-3.5 rounded-[1px] ${s.reason === "red" ? "bg-red-500" : "bg-yellow-400"}`} />
+                            {s.reason === "red" ? "Red" : "2 yellows"}
+                          </span>
+                          <span className="text-white/70 min-w-0">
+                            {s.missesGame ? (
+                              <>
+                                <AlertTriangle className="w-3 h-3 inline text-red-400 mr-1 -mt-0.5" />
+                                Misses <span className="text-white font-medium">Game {s.missesGame.gameNumber ?? "?"} v {s.missesGame.opponent}</span>
+                                {fmtMiss(s.missesGame) && <span className="text-white/40"> · {fmtMiss(s.missesGame)}</span>}
+                                <span className="text-white/25"> (from {s.triggerGameLabel})</span>
+                              </>
+                            ) : (
+                              <span className="text-white/40">Ban from {s.triggerGameLabel} — no later game scheduled (carries over)</span>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="space-y-1">

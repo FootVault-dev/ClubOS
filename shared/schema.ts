@@ -1199,6 +1199,19 @@ export const tournamentGkRatings = pgTable("tournament_gk_ratings", {
   uniqGk: unique().on(t.gameId, t.teamId),
 }));
 
+// Disciplinary cards — ADMIN-ONLY (private). Feeds the card-accumulation
+// tracker so staff can spot players who've picked up enough yellows to sit
+// out a game. One row per card shown (a player can have many across games).
+export const tournamentCards = pgTable("tournament_cards", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => tournamentGames.id, { onDelete: "cascade" }),
+  playerId: integer("player_id").notNull().references(() => tournamentPlayers.id, { onDelete: "cascade" }),
+  teamId: integer("team_id").notNull().references(() => tournamentTeams.id, { onDelete: "cascade" }),
+  cardType: text("card_type").notNull(), // 'yellow' | 'red'
+  minute: integer("minute"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const analyticsEvents = pgTable("analytics_events", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   visitorId: text("visitor_id").notNull(),
@@ -1278,6 +1291,7 @@ export const insertTournamentStaffSchema = createInsertSchema(tournamentStaff).o
 export const insertTournamentGameSchema = createInsertSchema(tournamentGames).omit({ id: true, createdAt: true });
 export const insertTournamentMvpVoteSchema = createInsertSchema(tournamentMvpVotes).omit({ id: true, createdAt: true });
 export const insertTournamentGkRatingSchema = createInsertSchema(tournamentGkRatings).omit({ id: true, createdAt: true });
+export const insertTournamentCardSchema = createInsertSchema(tournamentCards).omit({ id: true, createdAt: true });
 
 export const insertLeagueCompetitionSchema = createInsertSchema(leagueCompetitions).omit({ id: true, createdAt: true });
 export const insertLeagueDivisionSchema = createInsertSchema(leagueDivisions).omit({ id: true, createdAt: true });
@@ -1408,6 +1422,8 @@ export type InsertTournamentMvpVote = z.infer<typeof insertTournamentMvpVoteSche
 export type TournamentMvpVote = typeof tournamentMvpVotes.$inferSelect;
 export type InsertTournamentGkRating = z.infer<typeof insertTournamentGkRatingSchema>;
 export type TournamentGkRating = typeof tournamentGkRatings.$inferSelect;
+export type InsertTournamentCard = z.infer<typeof insertTournamentCardSchema>;
+export type TournamentCard = typeof tournamentCards.$inferSelect;
 
 export const discounts = pgTable("discounts", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),

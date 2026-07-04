@@ -66,7 +66,7 @@ import {
   printOrderItems, type InsertPrintOrderItem, type PrintOrderItem,
   printOrderFiles, type InsertPrintOrderFile, type PrintOrderFile,
   printOrderEvents, type InsertPrintOrderEvent, type PrintOrderEvent,
-  tournaments, tournamentGroups, tournamentTeams, tournamentPlayers, tournamentStaff, tournamentGames, tournamentGoals, tournamentMvpVotes, tournamentGkRatings,
+  tournaments, tournamentGroups, tournamentTeams, tournamentPlayers, tournamentStaff, tournamentGames, tournamentGoals, tournamentMvpVotes, tournamentGkRatings, tournamentCards,
   clubs,
   type InsertTournament, type Tournament,
   type InsertTournamentGroup, type TournamentGroup,
@@ -76,6 +76,7 @@ import {
   type InsertTournamentGame, type TournamentGame,
   type InsertTournamentGoal, type TournamentGoal,
   type TournamentMvpVote, type TournamentGkRating,
+  type InsertTournamentCard, type TournamentCard,
   type InsertClub, type Club,
   terms,
   type InsertTerm, type Term,
@@ -149,6 +150,23 @@ export interface StudioHotLead {
   ctaClicks: number;
   isReturning: boolean;
 }
+
+// One suspension a player must serve, with the exact game they miss.
+export type Suspension = {
+  reason: "red" | "two_yellows";
+  triggerGameId: number;
+  triggerGameLabel: string;               // e.g. "Game 12" — where it was earned
+  missesGame: {
+    gameId: number; gameNumber: number | null; opponent: string;
+    gameDate: string | null; startTime: string | null; field: string | null; stageDetail: string | null;
+  } | null;                                // null = no later fixture (their last game / knockout TBD)
+};
+export type DisciplineRow = {
+  playerId: number; playerName: string; shirtNumber: number | null;
+  teamId: number; teamName: string; teamLogoUrl: string | null;
+  yellows: number; reds: number;
+  suspensions: Suspension[];
+};
 
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
@@ -330,6 +348,12 @@ export interface IStorage {
     teamId: number; teamName: string; teamLogoUrl: string | null;
     games: number; avgRating: number; totalRating: number;
   }[]>;
+
+  // Disciplinary cards — ADMIN-ONLY.
+  getTournamentCardsByGame(gameId: number): Promise<TournamentCard[]>;
+  createTournamentCard(data: InsertTournamentCard): Promise<TournamentCard>;
+  deleteTournamentCard(id: number): Promise<void>;
+  getTournamentDiscipline(tournamentId: number): Promise<DisciplineRow[]>;
 
   getTournamentStaff(teamId: number): Promise<TournamentStaff[]>;
   createTournamentStaff(data: InsertTournamentStaff): Promise<TournamentStaff>;
@@ -2254,6 +2278,134 @@ export class DatabaseStorage implements IStorage {
       teamId: r.team_id, teamName: r.team_name, teamLogoUrl: r.team_logo_url,
       games: r.games, avgRating: r.avg_rating, totalRating: r.total_rating,
     }));
+  }
+
+  // ── Disciplinary cards — ADMIN-ONLY (yellow/red tracker) ──
+  async getTournamentCardsByGame(gameId: number): Promise<TournamentCard[]> {
+    return db.select().from(tournamentCards).where(eq(tournamentCards.gameId, gameId)).orderBy(asc(tournamentCards.minute));
+  }
+
+  async createTournamentCard(data: InsertTournamentCard): Promise<TournamentCard> {
+    const [c] = await db.insert(tournamentCards).values(data).returning();
+    return c;
+  }
+
+  async deleteTournamentCard(id: number): Promise<void> {
+    await db.delete(tournamentCards).where(eq(tournamentCards.id, id));
+  }
+
+  async getTournamentDiscipline(tournamentId: number): Promise<DisciplineRow[]> {
+    // Card totals per player PLUS computed suspensions with the exact game each
+    // suspended player misses. Rules: a red card = miss the team's next game;
+    // every 2nd yellow (2,4,6…) accumulated = miss the team's next game. The
+    // "next game" is resolved from the team's own fixtures in chronological order.
+    const YELLOW_BAN_EVERY = 2;
+
+    // Games (for fixtures + chronology) + team names (for opponent labels).
+    const games = await db.select().from(tournamentGames).where(eq(tournamentGames.tournamentId, tournamentId));
+    const teams = await db.select({ id: tournamentTeams.id, name: tournamentTeams.name })
+      .from(tournamentTeams).where(eq(tournamentTeams.tournamentId, tournamentId));
+    const teamName = new Map<number, string>(teams.map(t => [t.id, t.name]));
+
+    // Chronological order key: date → time → game number (zero-padded, stable).
+    const orderKey = (g: any) =>
+      `${g.gameDate || "9999-99-99"} ${g.startTime || "99:99"} ${String(g.gameNumber ?? 999999).padStart(6, "0")}`;
+    const orderOf = new Map<number, string>(games.map(g => [g.id, orderKey(g)]));
+
+    // Per-team fixtures, sorted chronologically.
+    const teamFixtures = new Map<number, any[]>();
+    for (const g of games) {
+      for (const tid of [g.homeTeamId, g.awayTeamId]) {
+        if (!tid) continue;
+        if (!teamFixtures.has(tid)) teamFixtures.set(tid, []);
+        teamFixtures.get(tid)!.push(g);
+      }
+    }
+    for (const arr of teamFixtures.values()) arr.sort((a, b) => orderKey(a).localeCompare(orderKey(b)));
+
+    // The team's first fixture strictly AFTER a given game (by order key).
+    const nextFixtureAfter = (teamId: number, afterGameId: number) => {
+      const fixtures = teamFixtures.get(teamId) || [];
+      const after = orderOf.get(afterGameId) || "";
+      const g = fixtures.find(f => (orderOf.get(f.id) || "").localeCompare(after) > 0);
+      if (!g) return null;
+      const oppId = g.homeTeamId === teamId ? g.awayTeamId : g.homeTeamId;
+      const opponent = (oppId && teamName.get(oppId)) || g.homeTeamPlaceholder || g.awayTeamPlaceholder || "TBD";
+      return {
+        gameId: g.id, gameNumber: g.gameNumber, opponent,
+        gameDate: g.gameDate, startTime: g.startTime, field: g.field, stageDetail: g.stageDetail,
+      };
+    };
+
+    // All cards joined to player + team.
+    const cardRows = (await db.execute(sql`
+      SELECT
+        cd.id AS id, cd.game_id AS game_id, cd.card_type AS card_type,
+        p.id AS player_id, (p.first_name || ' ' || p.last_name) AS player_name, p.shirt_number AS shirt_number,
+        t.id AS team_id, t.name AS team_name, COALESCE(t.logo_url, c.logo_url) AS team_logo_url
+      FROM tournament_cards cd
+      JOIN tournament_games games ON games.id = cd.game_id
+      JOIN tournament_players p   ON p.id = cd.player_id
+      JOIN tournament_teams t     ON t.id = cd.team_id
+      LEFT JOIN clubs c           ON c.id = t.club_id
+      WHERE games.tournament_id = ${tournamentId}
+    `) as any).rows as any[];
+
+    // Group by player.
+    const byPlayer = new Map<number, DisciplineRow & { _cards: any[] }>();
+    for (const r of cardRows) {
+      let row = byPlayer.get(r.player_id);
+      if (!row) {
+        row = {
+          playerId: r.player_id, playerName: r.player_name, shirtNumber: r.shirt_number,
+          teamId: r.team_id, teamName: r.team_name, teamLogoUrl: r.team_logo_url,
+          yellows: 0, reds: 0, suspensions: [], _cards: [],
+        };
+        byPlayer.set(r.player_id, row);
+      }
+      row._cards.push(r);
+      if (r.card_type === "yellow") row.yellows++; else if (r.card_type === "red") row.reds++;
+    }
+
+    // Walk each player's cards in chronological order → suspensions.
+    const gameLabel = (gameId: number) => {
+      const g = games.find(x => x.id === gameId);
+      return g ? `Game ${g.gameNumber ?? gameId}` : `Game ${gameId}`;
+    };
+    const out: DisciplineRow[] = [];
+    for (const row of byPlayer.values()) {
+      const cards = row._cards.sort((a, b) => (orderOf.get(a.game_id) || "").localeCompare(orderOf.get(b.game_id) || ""));
+      let yellowCount = 0;
+      const suspensions: Suspension[] = [];
+      for (const cd of cards) {
+        if (cd.card_type === "red") {
+          suspensions.push({ reason: "red", triggerGameId: cd.game_id, triggerGameLabel: gameLabel(cd.game_id), missesGame: nextFixtureAfter(row.teamId, cd.game_id) });
+        } else if (cd.card_type === "yellow") {
+          yellowCount++;
+          if (yellowCount % YELLOW_BAN_EVERY === 0) {
+            suspensions.push({ reason: "two_yellows", triggerGameId: cd.game_id, triggerGameLabel: gameLabel(cd.game_id), missesGame: nextFixtureAfter(row.teamId, cd.game_id) });
+          }
+        }
+      }
+      const { _cards, ...clean } = row;
+      out.push({ ...clean, suspensions });
+    }
+
+    // Suspended players first (by their earliest missed game), then most cards.
+    const firstMissKey = (r: DisciplineRow) => {
+      const withGame = r.suspensions.map(s => s.missesGame).filter(Boolean) as NonNullable<Suspension["missesGame"]>[];
+      if (withGame.length === 0) return "~"; // no scheduled miss → sort after
+      return withGame.map(g => `${g.gameDate || "9999"} ${g.startTime || "99:99"}`).sort()[0];
+    };
+    out.sort((a, b) => {
+      const aSusp = a.suspensions.length > 0, bSusp = b.suspensions.length > 0;
+      if (aSusp !== bSusp) return aSusp ? -1 : 1;
+      if (aSusp && bSusp) { const k = firstMissKey(a).localeCompare(firstMissKey(b)); if (k) return k; }
+      if (b.reds !== a.reds) return b.reds - a.reds;
+      if (b.yellows !== a.yellows) return b.yellows - a.yellows;
+      return a.playerName.localeCompare(b.playerName);
+    });
+    return out;
   }
 
   async getTournamentStaff(teamId: number): Promise<TournamentStaff[]> {
