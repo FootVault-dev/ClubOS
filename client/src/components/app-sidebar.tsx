@@ -98,6 +98,7 @@ const siuNav = [
   ...campsNav,
   { tab: "licensing", title: "OFC Licensing", url: "/admin/licensing", icon: Award },
   { tab: "events", title: "Community Events", url: "/admin/events", icon: Calendar },
+  { tab: "membership", title: "Membership", url: "/admin/membership", icon: Crown },
 ];
 
 const venueNav = [

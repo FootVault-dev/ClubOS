@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, departments, goals, goalMeasures } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -8031,6 +8031,66 @@ export async function registerRoutes(
       res.json({ ok: true });
     } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
+
+  // ── SIU tools: community-event tasks + membership program ────────────────
+  // Small org-scoped CRUD helper (grants pattern): list?organizationId, create,
+  // patch/:id, delete/:id — all requireTab-gated + checkUserOrg-scoped.
+  const orgCrud = (
+    path: string, tab: string, table: any, fields: readonly string[], listOrder: any, requiredFields: string[] = [],
+  ) => {
+    app.get(`/api/admin/${path}`, requireAuth, requireTab(tab), async (req, res) => {
+      try {
+        const orgId = parseInt(String(req.query.organizationId));
+        if (!orgId) return res.status(400).json({ message: "organizationId required" });
+        if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+        const rows = await db.select().from(table).where(eq(table.organizationId, orgId)).orderBy(listOrder);
+        res.json(rows);
+      } catch (e: any) { res.status(500).json({ message: e.message }); }
+    });
+    app.post(`/api/admin/${path}`, requireAuth, requireTab(tab), async (req, res) => {
+      try {
+        const orgId = parseInt(String(req.body?.organizationId));
+        if (!orgId) return res.status(400).json({ message: "organizationId required" });
+        if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+        for (const rf of requiredFields) if (!String(req.body?.[rf] ?? "").trim()) return res.status(400).json({ message: `${rf} required` });
+        const values: any = { organizationId: orgId };
+        for (const k of fields) if (k in (req.body || {})) values[k] = req.body[k] === "" ? null : req.body[k];
+        const [row] = await db.insert(table).values(values).returning();
+        res.json(row);
+      } catch (e: any) { res.status(400).json({ message: e.message }); }
+    });
+    app.patch(`/api/admin/${path}/:id`, requireAuth, requireTab(tab), async (req, res) => {
+      try {
+        const id = parseInt(String(req.params.id));
+        const [existing] = await db.select().from(table).where(eq(table.id, id));
+        if (!existing) return res.status(404).json({ message: "not found" });
+        if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+        const patch: any = { updatedAt: new Date() };
+        for (const k of fields) if (k in (req.body || {})) patch[k] = req.body[k] === "" ? null : req.body[k];
+        const [u] = await db.update(table).set(patch).where(eq(table.id, id)).returning();
+        res.json(u);
+      } catch (e: any) { res.status(400).json({ message: e.message }); }
+    });
+    app.delete(`/api/admin/${path}/:id`, requireAuth, requireTab(tab), async (req, res) => {
+      try {
+        const id = parseInt(String(req.params.id));
+        const [existing] = await db.select().from(table).where(eq(table.id, id));
+        if (!existing) return res.status(404).json({ message: "not found" });
+        if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+        await db.delete(table).where(eq(table.id, id));
+        res.json({ ok: true });
+      } catch (e: any) { res.status(400).json({ message: e.message }); }
+    });
+  };
+
+  orgCrud("community-event-tasks", "events", communityEventTasks,
+    ["eventId", "title", "dueDate", "done", "owner", "sortOrder"], asc(communityEventTasks.sortOrder), ["title"]);
+  orgCrud("membership/tiers", "membership", membershipTiers,
+    ["name", "slug", "tagline", "priceCents", "billingInterval", "color", "benefits", "active", "sortOrder"], asc(membershipTiers.sortOrder), ["name"]);
+  orgCrud("membership/members", "membership", members,
+    ["name", "email", "phone", "tierId", "tierName", "status", "billingInterval", "priceCents", "paymentStatus", "joinedAt", "renewsAt", "notes"], desc(members.createdAt), ["name"]);
+  orgCrud("membership/deliverables", "membership", membershipDeliverables,
+    ["title", "description", "tiers", "cadence", "status", "owner", "notes", "sortOrder"], asc(membershipDeliverables.sortOrder), ["title"]);
 
   // ── Billboard sales (Go Media contra resell) ─────────────────────────────
   // USG holds a $250k credit with Go Media; we resell at 20-30% off rate-card

@@ -181,6 +181,7 @@ export const TABS_BY_WORKSPACE_TYPE: Record<WorkspaceType, TabDef[]> = {
 const siuExtraTabs: TabDef[] = [
   { slug: "licensing", title: "OFC Licensing", url: "/admin/licensing" },
   { slug: "events", title: "Community Events", url: "/admin/events" },
+  { slug: "membership", title: "Membership", url: "/admin/membership" },
 ];
 
 export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {

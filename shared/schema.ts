@@ -2029,6 +2029,82 @@ export const communityEvents = pgTable("community_events", {
 export const insertCommunityEventSchema = createInsertSchema(communityEvents).omit({ id: true, createdAt: true, updatedAt: true });
 export type CommunityEvent = typeof communityEvents.$inferSelect;
 
+// Tasks/deadlines attached to a community event (drives the events calendar).
+export const communityEventTasks = pgTable("community_event_tasks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  eventId: integer("event_id").notNull().references(() => communityEvents.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  dueDate: date("due_date"),
+  done: boolean("done").notNull().default(false),
+  owner: text("owner"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertCommunityEventTaskSchema = createInsertSchema(communityEventTasks).omit({ id: true, createdAt: true, updatedAt: true });
+export type CommunityEventTask = typeof communityEventTasks.$inferSelect;
+
+// ── Membership Program (SIU workspace) — PLACEHOLDER scaffold ────────────────
+// Tiers (Bronze/Silver/Gold placeholders), members CRM, deliverables/perks
+// roadmap for fulfilment. No live payments wired yet — prices are placeholders.
+export const membershipTiers = pgTable("membership_tiers", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  tagline: text("tagline"),
+  priceCents: integer("price_cents").notNull().default(0),
+  billingInterval: text("billing_interval").notNull().default("yearly"),
+  color: text("color"),
+  benefits: jsonb("benefits").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const members = pgTable("members", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  tierId: integer("tier_id").references(() => membershipTiers.id, { onDelete: "set null" }),
+  tierName: text("tier_name"),
+  status: text("status").notNull().default("active"),
+  billingInterval: text("billing_interval"),
+  priceCents: integer("price_cents"),
+  paymentStatus: text("payment_status").notNull().default("unpaid"),
+  joinedAt: date("joined_at"),
+  renewsAt: date("renews_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const membershipDeliverables = pgTable("membership_deliverables", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  tiers: jsonb("tiers").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  cadence: text("cadence"),
+  status: text("status").notNull().default("idea"),
+  owner: text("owner"),
+  notes: text("notes"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertMembershipTierSchema = createInsertSchema(membershipTiers).omit({ id: true, createdAt: true, updatedAt: true });
+export type MembershipTier = typeof membershipTiers.$inferSelect;
+export const insertMemberSchema = createInsertSchema(members).omit({ id: true, createdAt: true, updatedAt: true });
+export type Member = typeof members.$inferSelect;
+export const insertMembershipDeliverableSchema = createInsertSchema(membershipDeliverables).omit({ id: true, createdAt: true, updatedAt: true });
+export type MembershipDeliverable = typeof membershipDeliverables.$inferSelect;
+
 // ── Billboard sales (Go Media contra resell) ────────────────────────────────
 // USG holds a $250k contra credit with Go Media. We resell slices of that
 // credit to local businesses at 20-30% off rate-card, target $200k revenue.
