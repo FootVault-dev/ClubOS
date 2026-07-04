@@ -51,6 +51,7 @@ import AdminTeam from "@/pages/admin-team";
 import GroupDashboard from "@/pages/group-dashboard";
 import GroupCalendar from "@/pages/group-calendar";
 import GroupSponsorship from "@/pages/group-sponsorship";
+import GroupProposals from "@/pages/group-proposals";
 import GroupGrants from "@/pages/group-grants";
 import AdminLicensing from "@/pages/admin-licensing";
 import AdminEvents from "@/pages/admin-events";
@@ -132,10 +133,10 @@ import PrintCheckout from "@/pages/print-checkout";
 import PrintOrderStatus from "@/pages/print-order-status";
 import PrintUpload from "@/pages/print-upload";
 import { Search, Bell } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
+import { CommandPalette } from "@/components/command-palette";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading, error } = useQuery({
@@ -206,6 +207,7 @@ function AdminRouter() {
         <Route path="/admin/calendar" component={GroupCalendar} />
         <Route path="/admin/projects" component={GroupProjects} />
         <Route path="/admin/sponsorship" component={GroupSponsorship} />
+        <Route path="/admin/proposals" component={GroupProposals} />
         <Route path="/admin/grants" component={GroupGrants} />
         <Route path="/admin/budget/cost-centres/:slug" component={GroupBudgetCostCentre} />
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
@@ -388,14 +390,16 @@ function AdminLayout() {
               <div className="flex items-center gap-3">
                 <SidebarTrigger data-testid="button-sidebar-toggle" className="text-white/30 hover:text-white/50 transition-colors duration-300" />
               </div>
-              <div className="relative max-w-md flex-1">
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event("clubos:open-search"))}
+                data-testid="input-global-search"
+                className="relative max-w-md flex-1 flex items-center h-9 pl-9 pr-2 text-[13px] premium-input text-white/40 rounded-xl text-left hover:text-white/60 transition-colors"
+              >
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-blue-400/30" />
-                <Input
-                  placeholder="Search..."
-                  className="pl-9 h-9 text-[13px] premium-input text-white/80 rounded-xl"
-                  data-testid="input-global-search"
-                />
-              </div>
+                <span className="flex-1 truncate">Search everything…</span>
+                <kbd className="hidden sm:inline-flex items-center text-[10px] text-white/30 border border-white/10 rounded px-1.5 py-0.5">⌘K</kbd>
+              </button>
               <div className="flex items-center gap-2">
                 <Button variant="ghost" size="icon" className="text-white/30 hover:text-white/50 relative transition-colors duration-300 rounded-xl">
                   <Bell className="w-4 h-4" />
@@ -407,6 +411,7 @@ function AdminLayout() {
             </main>
           </div>
         </div>
+        <CommandPalette />
       </SidebarProvider>
     </AuthGuard>
   );

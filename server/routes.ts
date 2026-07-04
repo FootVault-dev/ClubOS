@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -2565,6 +2565,366 @@ export async function registerRoutes(
       console.error("[objects] serve error:", error);
       res.status(500).end();
     }
+  });
+
+  // ============ PROPOSAL TRACKER (group / USG workspace) ============
+  // A CRM + link-analytics layer over every proposal Daniel & Ryan send —
+  // sponsorship, investor, development (USC / padel), partnership, client work.
+  // Each proposal gets a tracked short link (/r/:code) whose opens land in
+  // proposal_events, so the tab shows real stats on the link that was sent.
+
+  // Ambiguity-free short code (no 0/O/1/l).
+  const PROPOSAL_CODE_ALPHABET = "23456789abcdefghijkmnpqrstuvwxyz";
+  const genProposalCode = (len = 7): string => {
+    const bytes = crypto.randomBytes(len);
+    let out = "";
+    for (let i = 0; i < len; i++) out += PROPOSAL_CODE_ALPHABET[bytes[i] % PROPOSAL_CODE_ALPHABET.length];
+    return out;
+  };
+  const deviceFromUA = (ua: string | undefined): string => {
+    if (!ua) return "unknown";
+    if (/iPad|Tablet/i.test(ua)) return "tablet";
+    if (/Mobi|Android|iPhone|iPod/i.test(ua)) return "mobile";
+    return "desktop";
+  };
+  const coarseGeo = (req: Request): string | null =>
+    (req.headers["cf-ipcountry"] as string) ||
+    (req.headers["x-vercel-ip-country"] as string) ||
+    (req.headers["fly-region"] as string) || null;
+  const readReqCookie = (req: Request, name: string): string | null => {
+    const raw = req.headers.cookie;
+    if (!raw) return null;
+    for (const part of raw.split(";")) {
+      const [k, ...v] = part.trim().split("=");
+      if (k === name) return decodeURIComponent(v.join("="));
+    }
+    return null;
+  };
+  // Whitelist + coerce the mutable proposal fields (avoids drizzle-zod Date pitfalls).
+  const pickProposalFields = (b: any) => {
+    const out: any = {};
+    const strs = ["title","company","proposalType","category","status","currency","owner","contactName","contactEmail","contactPhone","linkUrl","sourceTag","notes"];
+    for (const f of strs) if (b[f] !== undefined) out[f] = b[f] === null || b[f] === "" ? (f === "title" ? "Untitled proposal" : null) : String(b[f]);
+    if (b.brandTags !== undefined) out.brandTags = Array.isArray(b.brandTags) ? b.brandTags.map(String) : [];
+    if (b.valueCents !== undefined) out.valueCents = b.valueCents === null || b.valueCents === "" ? null : Math.round(Number(b.valueCents));
+    if (b.studioDocumentId !== undefined) out.studioDocumentId = b.studioDocumentId ? Number(b.studioDocumentId) : null;
+    if (b.archived !== undefined) out.archived = !!b.archived;
+    for (const d of ["sentAt","decisionAt"]) if (b[d] !== undefined) out[d] = b[d] ? new Date(b[d]) : null;
+    return out;
+  };
+
+  // List proposals for a workspace, each with real engagement stats (staff/self
+  // opens excluded from the numbers).
+  app.get("/api/admin/proposals", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(proposals)
+        .where(eq(proposals.organizationId, orgId))
+        .orderBy(desc(proposals.updatedAt));
+      const ids = rows.map(r => r.id);
+      const statsById: Record<number, any> = {};
+      if (ids.length) {
+        const agg = await db.execute(sql`
+          SELECT proposal_id,
+                 COUNT(*) FILTER (WHERE kind='open') AS opens,
+                 COUNT(DISTINCT COALESCE(visitor_id, 'e'||id::text)) FILTER (WHERE kind='open') AS unique_opens,
+                 COUNT(*) FILTER (WHERE kind='cta_click') AS cta_clicks,
+                 MAX(occurred_at) FILTER (WHERE kind='open') AS last_open
+          FROM proposal_events
+          WHERE proposal_id = ANY(${ids}) AND is_internal = false
+          GROUP BY proposal_id`);
+        for (const r of (agg.rows as any[])) statsById[r.proposal_id] = r;
+      }
+      res.json(rows.map(r => ({
+        ...r,
+        stats: {
+          opens: Number(statsById[r.id]?.opens ?? 0),
+          uniqueOpens: Number(statsById[r.id]?.unique_opens ?? 0),
+          ctaClicks: Number(statsById[r.id]?.cta_clicks ?? 0),
+          lastOpen: statsById[r.id]?.last_open ?? r.lastOpenedAt ?? null,
+        },
+      })));
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/proposals", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      let shortCode = genProposalCode();
+      for (let i = 0; i < 5; i++) {
+        const dupe = await db.select({ id: proposals.id }).from(proposals).where(eq(proposals.shortCode, shortCode)).limit(1);
+        if (!dupe.length) break;
+        shortCode = genProposalCode();
+      }
+      const fields = pickProposalFields(req.body);
+      const [row] = await db.insert(proposals).values({
+        organizationId: orgId,
+        title: fields.title || "Untitled proposal",
+        ...fields,
+        shortCode,
+        createdBy: req.session.userId!,
+        sentAt: fields.sentAt ?? (fields.status && fields.status !== "draft" ? new Date() : null),
+        updatedAt: new Date(),
+      }).returning();
+      res.status(201).json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/proposals/:id", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const fields = pickProposalFields(req.body);
+      // Stamp sentAt the first time it leaves draft.
+      if (fields.status && fields.status !== "draft" && !existing.sentAt && fields.sentAt === undefined) fields.sentAt = new Date();
+      const [row] = await db.update(proposals).set({ ...fields, updatedAt: new Date() }).where(eq(proposals.id, id)).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/proposals/:id", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(proposals).where(eq(proposals.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Per-proposal link analytics — the "stats on the link" view.
+  app.get("/api/admin/proposals/:id/analytics", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [p] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
+      if (!p) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, p.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const internalFilter = req.query.includeInternal === "1" ? sql`` : sql` AND is_internal = false`;
+      const summary = await db.execute(sql`
+        SELECT COUNT(*) FILTER (WHERE kind='open') AS opens,
+               COUNT(DISTINCT COALESCE(visitor_id,'e'||id::text)) FILTER (WHERE kind='open') AS unique_opens,
+               COUNT(*) FILTER (WHERE kind='cta_click') AS cta_clicks,
+               MIN(occurred_at) FILTER (WHERE kind='open') AS first_open,
+               MAX(occurred_at) FILTER (WHERE kind='open') AS last_open
+        FROM proposal_events WHERE proposal_id = ${id}${internalFilter}`);
+      const byDay = await db.execute(sql`
+        SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day,
+               COUNT(*) FILTER (WHERE kind='open') AS opens
+        FROM proposal_events WHERE proposal_id = ${id}${internalFilter} AND occurred_at > now() - interval '30 days'
+        GROUP BY day ORDER BY day`);
+      const byDevice = await db.execute(sql`
+        SELECT COALESCE(device,'unknown') AS device, COUNT(*) AS n
+        FROM proposal_events WHERE proposal_id = ${id} AND kind='open'${internalFilter}
+        GROUP BY device ORDER BY n DESC`);
+      const byReferrer = await db.execute(sql`
+        SELECT COALESCE(NULLIF(referrer,''),'direct') AS referrer, COUNT(*) AS n
+        FROM proposal_events WHERE proposal_id = ${id} AND kind='open'${internalFilter}
+        GROUP BY referrer ORDER BY n DESC LIMIT 8`);
+      const timeline = await db.execute(sql`
+        SELECT kind, occurred_at, device, referrer, country, is_internal
+        FROM proposal_events WHERE proposal_id = ${id}
+        ORDER BY occurred_at DESC LIMIT 100`);
+      res.json({
+        summary: (summary.rows as any[])[0] ?? {},
+        byDay: byDay.rows, byDevice: byDevice.rows, byReferrer: byReferrer.rows, timeline: timeline.rows,
+      });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // ── Proposal categories (managed buckets: Breweries, Gyms, La Liga, …) ──────
+  app.get("/api/admin/proposal-categories", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      const rows = await db.select().from(proposalCategories)
+        .where(and(eq(proposalCategories.organizationId, orgId), eq(proposalCategories.archived, false)))
+        .orderBy(asc(proposalCategories.sortOrder), asc(proposalCategories.name));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+  app.post("/api/admin/proposal-categories", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const name = String(req.body.name || "").trim();
+      if (!name) return res.status(400).json({ message: "name required" });
+      const [row] = await db.insert(proposalCategories).values({
+        organizationId: orgId, name,
+        proposalType: req.body.proposalType ? String(req.body.proposalType) : null,
+        color: req.body.color ? String(req.body.color) : "#3b82f6",
+        sortOrder: req.body.sortOrder != null ? Number(req.body.sortOrder) : 0,
+      }).onConflictDoNothing().returning();
+      if (!row) {
+        const [existing] = await db.select().from(proposalCategories)
+          .where(and(eq(proposalCategories.organizationId, orgId), eq(proposalCategories.name, name))).limit(1);
+        return res.json(existing);
+      }
+      res.status(201).json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+  app.patch("/api/admin/proposal-categories/:id", requireAuth, requireTab("proposals"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(proposalCategories).where(eq(proposalCategories.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = {};
+      if (req.body.name !== undefined) patch.name = String(req.body.name).trim();
+      if (req.body.color !== undefined) patch.color = String(req.body.color);
+      if (req.body.proposalType !== undefined) patch.proposalType = req.body.proposalType ? String(req.body.proposalType) : null;
+      if (req.body.sortOrder !== undefined) patch.sortOrder = Number(req.body.sortOrder);
+      if (req.body.archived !== undefined) patch.archived = !!req.body.archived;
+      const [row] = await db.update(proposalCategories).set(patch).where(eq(proposalCategories.id, id)).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Public tracked proposal link — logs the open, then 302s to the real link.
+  // Works for ANY link type (partner page, PDF, Studio page, external deck) with
+  // no cross-origin work: Daniel sends app.usg.co.nz/r/{code}.
+  app.get("/r/:code", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim();
+      const [p] = await db.select().from(proposals).where(eq(proposals.shortCode, code)).limit(1);
+      if (!p || !p.linkUrl) return res.status(404).type("html").send("<h1>Link not found</h1><p>This tracked link is no longer active.</p>");
+      let target = p.linkUrl.trim();
+      if (!/^https?:\/\//i.test(target)) target = "https://" + target;
+      let vid = readReqCookie(req, "usg_pv");
+      if (!vid) {
+        vid = "pv_" + crypto.randomBytes(12).toString("hex");
+        res.cookie("usg_pv", vid, { httpOnly: true, sameSite: "lax", maxAge: 1000 * 60 * 60 * 24 * 365, path: "/" });
+      }
+      const isInternal = !!req.session?.userId || req.query.preview === "1";
+      await db.insert(proposalEvents).values({
+        proposalId: p.id, kind: "open", visitorId: vid,
+        device: deviceFromUA(req.headers["user-agent"] as string),
+        userAgent: String(req.headers["user-agent"] || "").slice(0, 400),
+        referrer: String(req.headers["referer"] || "").slice(0, 400),
+        country: coarseGeo(req), isInternal,
+      });
+      if (!isInternal) {
+        await db.update(proposals)
+          .set({ openCount: sql`${proposals.openCount} + 1`, lastOpenedAt: new Date() })
+          .where(eq(proposals.id, p.id));
+      }
+      res.redirect(302, target);
+    } catch (error: any) {
+      console.error("[/r/:code] error", error);
+      res.status(500).type("html").send("Something went wrong.");
+    }
+  });
+
+  // ============ GLOBAL SEARCH ============
+  // One fuzzy, typo-tolerant, case-insensitive search across ClubOS. pg_trgm
+  // similarity + ILIKE. Org-scoped for non-super-admins; the org-less shared
+  // people pools (contacts / registrations) are leadership-only.
+  type SearchEntity = {
+    type: string; table: string; labelSql: string; sublabelSql: string;
+    metaSql?: string; orgCol: string | null; cols: string[];
+    extraWhere?: string; leadershipOnly?: boolean;
+  };
+  const SEARCH_ENTITIES: SearchEntity[] = [
+    { type: "proposal", table: "proposals", labelSql: "title", sublabelSql: "COALESCE(company, category)", orgCol: "organization_id", cols: ["title","company","category","contact_name","contact_email"], extraWhere: "archived = false" },
+    { type: "prospect", table: "sponsorship_prospects", labelSql: "company", sublabelSql: "COALESCE(sector, contact_name)", orgCol: "organization_id", cols: ["company","contact_name","contact_email","sector","decision_maker_name"] },
+    { type: "deal", table: "sponsorship_deals", labelSql: "COALESCE(sponsor_company, title)", sublabelSql: "title", orgCol: "organization_id", cols: ["sponsor_company","title","primary_contact_name","primary_contact_email"] },
+    { type: "grant_funder", table: "grant_funders", labelSql: "name", sublabelSql: "COALESCE(funder_type, geography)", orgCol: "organization_id", cols: ["name","contact_name","contact_email","what_they_fund"], extraWhere: "archived = false" },
+    { type: "grant_app", table: "grant_applications", labelSql: "project_title", sublabelSql: "funder_name", orgCol: "organization_id", cols: ["project_title","funder_name","reference_number","purpose"] },
+    { type: "esign_doc", table: "esign_documents", labelSql: "title", sublabelSql: "status", orgCol: "organization_id", cols: ["title"] },
+    { type: "esign_signer", table: "esign_signers", labelSql: "name", sublabelSql: "email", metaSql: "document_id", orgCol: "organization_id", cols: ["name","email","signature_name"] },
+    { type: "member", table: "members", labelSql: "name", sublabelSql: "COALESCE(tier_name, email)", orgCol: "organization_id", cols: ["name","email","phone","tier_name"] },
+    { type: "task", table: "project_tasks", labelSql: "title", sublabelSql: "COALESCE(rag_status, priority)", orgCol: "organization_id", cols: ["title","description","next_step"] },
+    { type: "league_team", table: "league_teams", labelSql: "name", sublabelSql: "contact_name", orgCol: "organization_id", cols: ["name","contact_name","contact_email"] },
+    { type: "tournament_team", table: "tournament_teams", labelSql: "name", sublabelSql: "COALESCE(club_name, contact_name)", metaSql: "tournament_id", orgCol: null, cols: ["name","club_name","contact_name","contact_email"] },
+    { type: "club", table: "clubs", labelSql: "name", sublabelSql: "COALESCE(short_name, contact_name)", orgCol: "organization_id", cols: ["name","short_name","contact_name","contact_email"] },
+    { type: "print_order", table: "print_orders", labelSql: "COALESCE(title, 'Order '||order_number)", sublabelSql: "COALESCE(customer_company, customer_name)", orgCol: "organization_id", cols: ["order_number","customer_name","customer_company","title","customer_email"] },
+    { type: "print_contact", table: "print_contacts", labelSql: "(first_name||' '||last_name)", sublabelSql: "COALESCE(company, email)", orgCol: "organization_id", cols: ["first_name","last_name","company","email"] },
+    { type: "inbox", table: "inbox_messages", labelSql: "COALESCE(name, email)", sublabelSql: "COALESCE(subject, channel)", orgCol: "organization_id", cols: ["name","email","subject","body"] },
+    { type: "cugc_reg", table: "cugc_registrations", labelSql: "gymnast_name", sublabelSql: "COALESCE(parent_name, program_name)", orgCol: "organization_id", cols: ["gymnast_name","parent_name","email","phone"] },
+    { type: "fi_app", table: "football_institute_applications", labelSql: "applicant_name", sublabelSql: "COALESCE(current_club, email)", orgCol: "organization_id", cols: ["applicant_name","parent_name","email","current_club","current_school"] },
+    { type: "community_event", table: "community_events", labelSql: "title", sublabelSql: "COALESCE(partner, location)", orgCol: "organization_id", cols: ["title","partner","location","description"] },
+    { type: "facility_booking", table: "facility_bookings", labelSql: "customer_name", sublabelSql: "COALESCE(customer_club, customer_email)", orgCol: "organization_id", cols: ["customer_name","customer_email","customer_club","customer_phone"] },
+    { type: "program", table: "programs", labelSql: "name", sublabelSql: "COALESCE(location, slug)", orgCol: "organization_id", cols: ["name","location","slug"] },
+    { type: "discount", table: "discounts", labelSql: "COALESCE(title, code)", sublabelSql: "code", orgCol: "organization_id", cols: ["title","code"] },
+    { type: "billboard_deal", table: "billboard_deals", labelSql: "customer_name", sublabelSql: "contact_name", orgCol: "organization_id", cols: ["customer_name","contact_name","contact_email"] },
+    // Org-less shared pools — leadership only.
+    { type: "contact", table: "contacts", labelSql: "(first_name||' '||last_name)", sublabelSql: "COALESCE(email, phone, team_name)", metaSql: "type", orgCol: null, cols: ["first_name","last_name","email","phone","team_name"], leadershipOnly: true },
+    { type: "registration", table: "registrations", labelSql: "COALESCE(team_name, 'Order #'||order_number)", sublabelSql: "COALESCE(source, referral_source)", orgCol: null, cols: ["order_number","team_name","notes"], leadershipOnly: true },
+  ];
+
+  const runEntitySearch = async (e: SearchEntity, q: string, like: string, orgIds: number[], isSuperAdmin: boolean, perLimit: number) => {
+    const ilike = sql.join(e.cols.map(c => sql`${sql.raw(c)}::text ILIKE ${like}`), sql` OR `);
+    // Fuzzy score = best per-column trigram similarity (case-folded). Reused in
+    // the WHERE (>= 0.2 → typo-tolerant) and the SELECT (ranking). 0.2 is looser
+    // than pg_trgm's default 0.3 so single-letter typos still match, and it's an
+    // explicit predicate (not the `%` GUC, which is a per-connection setting that
+    // wouldn't hold across the pooled connections the parallel queries run on).
+    const sim = sql`GREATEST(${sql.join(e.cols.map(c => sql`similarity(lower(COALESCE(${sql.raw(c)}::text,'')), lower(${q}))`), sql`, `)})`;
+    let where = sql`((${ilike}) OR (${sim} >= 0.2))`;
+    if (e.extraWhere) where = sql`${where} AND ${sql.raw(e.extraWhere)}`;
+    if (e.orgCol && !isSuperAdmin) where = sql`${where} AND ${sql.raw(e.orgCol)} = ANY(${orgIds})`;
+    const orgSel = e.orgCol ? sql.raw(e.orgCol) : sql.raw("NULL::int");
+    const metaSel = e.metaSql ? sql`(${sql.raw(e.metaSql)})::text` : sql`NULL::text`;
+    const query = sql`
+      SELECT ${sql.raw(`'${e.type}'`)}::text AS type, id::text AS id,
+             (${sql.raw(e.labelSql)})::text AS label,
+             (${sql.raw(e.sublabelSql)})::text AS sublabel,
+             ${metaSel} AS meta, ${orgSel} AS org_id,
+             ${sim} AS score
+      FROM ${sql.raw(e.table)}
+      WHERE ${where}
+      ORDER BY score DESC NULLS LAST
+      LIMIT ${perLimit}`;
+    const result = await db.execute(query);
+    return result.rows as any[];
+  };
+
+  app.get("/api/search", requireAuth, async (req, res) => {
+    try {
+      const q = String(req.query.q || "").trim();
+      if (q.length < 2) return res.json({ query: q, groups: [] });
+      const like = `%${q.replace(/[%_\\]/g, m => "\\" + m)}%`;
+      const user = await storage.getUser(req.session.userId!);
+      const memberships = await storage.getUserOrganizations(req.session.userId!);
+      const isSuperAdmin = user?.role === "super_admin";
+      const orgIds = (memberships as any[]).map(o => o.id);
+      const isLeadership = isSuperAdmin || (memberships as any[]).some(o => o.userRole === "admin" || o.userRole === "manager");
+      if (!isSuperAdmin && orgIds.length === 0) return res.json({ query: q, groups: [] });
+      // org id → slug so the client can switch workspace before navigating.
+      const orgSlugById: Record<number, string> = {};
+      for (const o of (memberships as any[])) orgSlugById[o.id] = o.slug;
+      if (isSuperAdmin) {
+        const allOrgs = await db.select({ id: organizations.id, slug: organizations.slug }).from(organizations);
+        for (const o of allOrgs) orgSlugById[o.id] = o.slug;
+      }
+      const entities = SEARCH_ENTITIES.filter(e => (e.leadershipOnly ? isLeadership : true));
+      const settled = await Promise.allSettled(entities.map(e => runEntitySearch(e, q, like, orgIds, isSuperAdmin, 6)));
+      const byType: Record<string, any[]> = {};
+      settled.forEach((s, i) => {
+        if (s.status === "rejected") { console.error("[search]", entities[i].type, s.reason?.message); return; }
+        for (const r of s.value) {
+          (byType[r.type] ||= []).push({
+            type: r.type, id: r.id, label: r.label || "(untitled)", sublabel: r.sublabel || null,
+            meta: r.meta || null,
+            orgId: r.org_id != null ? Number(r.org_id) : null,
+            orgSlug: r.org_id != null ? (orgSlugById[Number(r.org_id)] || null) : null,
+            score: r.score == null ? 0 : Number(r.score),
+          });
+        }
+      });
+      const groups = Object.entries(byType).map(([type, items]) => {
+        items.sort((a, b) => b.score - a.score);
+        return { type, items, best: items[0]?.score ?? 0 };
+      }).sort((a, b) => b.best - a.best);
+      res.json({ query: q, groups });
+    } catch (error: any) { console.error("[search] error", error); res.status(500).json({ message: error.message }); }
   });
 
   app.get("/api/admin/venue/facilities", requireAuth, async (req, res) => {
@@ -8306,9 +8666,9 @@ export async function registerRoutes(
 
   app.post("/api/public/membership/join", async (req, res) => {
     try {
-      const { tierId, name, email, phone, orgSlug } = req.body || {};
-      if (!tierId || !String(name || "").trim() || !String(email || "").trim())
-        return res.status(400).json({ message: "name, email and tier are required" });
+      const { tierId, name, email, phone, orgSlug, utmSource, utmMedium, utmCampaign, fbclid, fbp, fbc, userAgent } = req.body || {};
+      if (!tierId || !String(name || "").trim() || !String(email || "").trim() || !String(phone || "").trim())
+        return res.status(400).json({ message: "name, email, phone and tier are required" });
       const org = await resolveMembershipOrg(orgSlug);
       if (!org) return res.status(404).json({ message: "Not found" });
       const [tier] = await db.select().from(membershipTiers)
@@ -8317,19 +8677,25 @@ export async function registerRoutes(
       const priceCents = tier.priceCents || 0;
       if (priceCents <= 0) return res.status(400).json({ message: "This tier isn't set up for payment yet" });
 
-      // Server owns the price — never trust the client amount.
+      // Server owns the price — never trust the client amount. UTM/fbclid stamped
+      // for attribution parity with the camp funnel; fbp/fbc/userAgent ride the PI
+      // metadata for the server-side Meta CAPI Purchase on success.
       const [member] = await db.insert(members).values({
         organizationId: org.id,
         name: String(name).trim(), email: String(email).trim(), phone: phone ? String(phone).trim() : null,
         tierId: tier.id, tierName: tier.name, status: "pending", billingInterval: tier.billingInterval,
         priceCents, paymentStatus: "unpaid", source: "public_join", joinedAt: new Date().toISOString().slice(0, 10),
+        utmSource: utmSource || null, utmMedium: utmMedium || null, utmCampaign: utmCampaign || null, fbclid: fbclid || null,
       }).returning();
 
       const intent = await createPaymentIntent({
         registrationId: member.id,
         campName: `${org.name} — ${tier.name} Membership`,
         totalCents: priceCents, currency: "NZD", parentEmail: String(email).trim(),
-        metadata: { kind: "membership", memberId: String(member.id), tierId: String(tier.id), orgId: String(org.id) },
+        metadata: {
+          kind: "membership", memberId: String(member.id), tierId: String(tier.id), orgId: String(org.id),
+          ...(fbp ? { fbp: String(fbp) } : {}), ...(fbc ? { fbc: String(fbc) } : {}), ...(userAgent ? { userAgent: String(userAgent).slice(0, 480) } : {}),
+        },
       });
       await db.update(members).set({ stripePaymentIntentId: intent.id }).where(eq(members.id, member.id));
       res.json({ clientSecret: intent.client_secret, memberId: member.id, amount: priceCents, tierName: tier.name, organizationSlug: org.slug });
@@ -8341,8 +8707,22 @@ export async function registerRoutes(
     const [member] = await db.select().from(members).where(eq(members.id, memberId));
     if (!member || member.paymentStatus === "paid") return;                 // idempotent
     const piId = paymentIntentId || member.stripePaymentIntentId;
-    if (piId) { try { const pi = await retrievePaymentIntent(piId); if (pi.status !== "succeeded") return; } catch { return; } }
+    let piMeta: any = {};
+    if (piId) { try { const pi = await retrievePaymentIntent(piId); if (pi.status !== "succeeded") return; piMeta = pi.metadata || {}; } catch { return; } }
     await db.update(members).set({ paymentStatus: "paid", status: "active", paidAt: new Date(), updatedAt: new Date() }).where(eq(members.id, memberId));
+    // Server-side Meta CAPI Purchase — dedupes with the client pixel via the shared
+    // deterministic eventId `purchase_member_<id>`. Fires exactly once (idempotent guard above).
+    const [fn, ...rest] = (member.name || "").trim().split(/\s+/);
+    try {
+      await sendPurchaseEvent({
+        registrationId: member.id, campId: member.tierId || 0,
+        totalCents: member.priceCents || 0, currency: "NZD",
+        email: member.email || "", phone: member.phone || undefined,
+        firstName: fn || undefined, lastName: rest.join(" ") || undefined,
+        fbp: piMeta.fbp || undefined, fbc: piMeta.fbc || undefined, userAgent: piMeta.userAgent || undefined,
+        ipAddress: undefined, eventId: `purchase_member_${member.id}`,
+      });
+    } catch (e) { console.error("membership CAPI failed", e); }
     let benefits: string[] = [];
     if (member.tierId) { const [t] = await db.select().from(membershipTiers).where(eq(membershipTiers.id, member.tierId)); benefits = (t?.benefits as string[]) || []; }
     try {
@@ -8368,6 +8748,17 @@ export async function registerRoutes(
       if (!member) return res.status(404).json({ message: "Not found" });
       res.json({ id: member.id, name: member.name, tierName: member.tierName, priceCents: member.priceCents, billingInterval: member.billingInterval, status: member.status, paymentStatus: member.paymentStatus });
     } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // "How did you hear about us" — post-join attribution answer.
+  app.patch("/api/public/membership/member/:id/attribution", async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const src = String(req.body?.referralSource || "").slice(0, 120);
+      if (!id || !src) return res.status(400).json({ message: "referralSource required" });
+      await db.update(members).set({ referralSource: src, updatedAt: new Date() }).where(eq(members.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 
   // ── Billboard sales (Go Media contra resell) ─────────────────────────────

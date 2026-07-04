@@ -2125,6 +2125,11 @@ export const members = pgTable("members", {
   stripePaymentIntentId: text("stripe_payment_intent_id"),
   source: text("source"),
   paidAt: timestamp("paid_at"),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  fbclid: text("fbclid"),
+  referralSource: text("referral_source"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

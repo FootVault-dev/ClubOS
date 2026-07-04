@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { Check, X, Lock, ShieldCheck, ArrowRight, Crown, Star, Sparkles, ChevronDown } from "lucide-react";
+import { initPixel, trackEvent, getFbp, getFbc } from "@/lib/meta-pixel";
+
+const PIXEL_ID = (import.meta as any).env?.VITE_META_PIXEL_ID;
+const CONTENT_CATEGORY = "SIU Membership";
+const HDYHAU = ["Instagram", "Facebook", "Word of mouth", "Friend or family", "Google", "At a game", "Email", "Other"];
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "");
 
@@ -54,6 +59,16 @@ export default function MembershipPage() {
       .then((d) => { setTiers(d.tiers || []); if (d.organization?.name) setOrgName(d.organization.name); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
+
+  // Meta pixel — page-view + ViewContent (parity with the camp funnel).
+  useEffect(() => {
+    if (PIXEL_ID) { initPixel(PIXEL_ID); trackEvent("ViewContent", { content_name: "Membership", content_category: CONTENT_CATEGORY, currency: "NZD" }); }
+  }, []);
+
+  const openJoin = (t: Tier) => {
+    if (PIXEL_ID) trackEvent("InitiateCheckout", { content_name: t.name, content_category: CONTENT_CATEGORY, value: t.priceCents / 100, currency: "NZD" });
+    setJoin(t);
+  };
 
   const scrollToTiers = () => document.getElementById("tiers")?.scrollIntoView({ behavior: "smooth" });
 
@@ -139,9 +154,9 @@ export default function MembershipPage() {
                         </div>
                       ))}
                     </div>
-                    <button onClick={() => setJoin(t)} className="w-full font-semibold transition-transform hover:scale-[1.02]"
+                    <button onClick={() => openJoin(t)} className="w-full font-semibold transition-transform hover:scale-[1.02]"
                       style={{ background: featured ? SIU.gold : "transparent", color: featured ? SIU.black : SIU.white, border: featured ? "none" : `1px solid ${SIU.gold}`, padding: "13px", borderRadius: 12, fontSize: 14.5 }}
-                      data-testid={`join-${t.slug}`}>
+                      data-testid={`cta-join-${t.slug}`}>
                       Join {t.name}
                     </button>
                   </div>
@@ -181,7 +196,7 @@ export default function MembershipPage() {
 
 // ── Join modal: details → embedded payment → done ────────────────────────────
 function JoinModal({ tier, onClose }: { tier: Tier; onClose: () => void }) {
-  const [step, setStep] = useState<"details" | "pay" | "done">("details");
+  const [step, setStep] = useState<"details" | "pay" | "hdyhau" | "done">("details");
   const [form, setForm] = useState({ name: "", email: "", phone: "" });
   const [clientSecret, setClientSecret] = useState("");
   const [memberId, setMemberId] = useState(0);
@@ -189,10 +204,15 @@ function JoinModal({ tier, onClose }: { tier: Tier; onClose: () => void }) {
   const [submitting, setSubmitting] = useState(false);
 
   const start = async () => {
-    if (!form.name.trim() || !form.email.trim()) { setErr("Please enter your name and email."); return; }
+    if (!form.name.trim() || !form.email.trim() || !form.phone.trim()) { setErr("Please enter your name, email and phone number."); return; }
     setSubmitting(true); setErr("");
     try {
-      const r = await fetch("/api/public/membership/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tierId: tier.id, ...form }) });
+      const u = new URLSearchParams(window.location.search);
+      const r = await fetch("/api/public/membership/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        tierId: tier.id, ...form,
+        utmSource: u.get("utm_source") || undefined, utmMedium: u.get("utm_medium") || undefined, utmCampaign: u.get("utm_campaign") || undefined,
+        fbclid: u.get("fbclid") || undefined, fbp: getFbp() || undefined, fbc: getFbc() || undefined, userAgent: navigator.userAgent,
+      }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.message || "Something went wrong. Please try again.");
       setClientSecret(d.clientSecret); setMemberId(d.memberId); setStep("pay");
@@ -219,9 +239,9 @@ function JoinModal({ tier, onClose }: { tier: Tier; onClose: () => void }) {
               <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13.5, marginBottom: 6 }}>Enter your details to join as a <strong style={{ color: SIU.gold }}>{tier.name}</strong> member.</p>
               {(["name", "email", "phone"] as const).map((k) => (
                 <div key={k}>
-                  <label className="block text-[11px] uppercase tracking-wide mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>{k === "phone" ? "Phone (optional)" : k}</label>
+                  <label className="block text-[11px] uppercase tracking-wide mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>{k}</label>
                   <input value={(form as any)[k]} onChange={(e) => setForm((p) => ({ ...p, [k]: e.target.value }))}
-                    type={k === "email" ? "email" : "text"} placeholder={k === "email" ? "you@email.com" : k === "phone" ? "021…" : "Your name"}
+                    type={k === "email" ? "email" : k === "phone" ? "tel" : "text"} placeholder={k === "email" ? "you@email.com" : k === "phone" ? "021…" : "Your name"}
                     className="w-full rounded-lg px-3 py-2.5 text-[14px] focus:outline-none"
                     style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", color: SIU.white }} />
                 </div>
@@ -243,8 +263,25 @@ function JoinModal({ tier, onClose }: { tier: Tier; onClose: () => void }) {
               variables: { colorPrimary: SIU.gold, colorBackground: "#141412", colorText: "#ffffff", colorTextSecondary: "rgba(255,255,255,0.6)", fontFamily: "system-ui, sans-serif", borderRadius: "10px", fontSizeBase: "14px" },
               rules: { ".Tab--selected": { borderColor: SIU.gold }, ".Input:focus": { borderColor: SIU.gold, boxShadow: `0 0 0 1px ${SIU.gold}` } },
             } }}>
-              <PayForm tier={tier} memberId={memberId} email={form.email} name={form.name} onDone={() => setStep("done")} />
+              <PayForm tier={tier} memberId={memberId} email={form.email} name={form.name} onDone={() => setStep("hdyhau")} />
             </Elements>
+          )}
+
+          {step === "hdyhau" && (
+            <div className="space-y-3">
+              <div className="text-center mb-1">
+                <div className="w-12 h-12 rounded-full mx-auto flex items-center justify-center mb-3" style={{ background: `${SIU.gold}18`, border: `1px solid ${SIU.gold}` }}><Check className="w-6 h-6" style={{ color: SIU.gold }} /></div>
+                <h3 style={{ fontFamily: DISPLAY, fontSize: "1.3rem", textTransform: "uppercase" }}>You're in!</h3>
+                <p style={{ color: "rgba(255,255,255,0.55)", fontSize: 13 }}>Quick one — how did you hear about us?</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {HDYHAU.map((s) => (
+                  <button key={s} onClick={() => { fetch(`/api/public/membership/member/${memberId}/attribution`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ referralSource: s }) }).catch(() => {}); setStep("done"); }}
+                    className="text-[13px] py-2.5 rounded-lg transition-colors hover:border-white/30" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.85)" }}>{s}</button>
+                ))}
+              </div>
+              <button onClick={() => setStep("done")} className="w-full text-[12px] pt-1" style={{ color: "rgba(255,255,255,0.4)" }}>Skip</button>
+            </div>
           )}
 
           {step === "done" && (
@@ -281,6 +318,10 @@ function PayForm({ tier, memberId, email, name, onDone }: { tier: Tier; memberId
     if (error) { setErr(error.message || "Payment failed. Please try again."); setProcessing(false); return; }
     if (paymentIntent && (paymentIntent.status === "succeeded" || paymentIntent.status === "processing")) {
       try { await fetch("/api/public/membership/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ memberId, paymentIntentId: paymentIntent.id }) }); } catch {}
+      // Client Purchase pixel — shares the deterministic eventId with the server CAPI so Meta dedupes.
+      if (PIXEL_ID && paymentIntent.status === "succeeded") {
+        trackEvent("Purchase", { value: tier.priceCents / 100, currency: "NZD", content_name: tier.name, content_category: CONTENT_CATEGORY, content_ids: [String(memberId)] }, `purchase_member_${memberId}`);
+      }
       onDone();
     } else { setErr("Payment could not be processed. Please try another method."); setProcessing(false); }
   };
