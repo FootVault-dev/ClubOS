@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Plus, X, Landmark, FileText, DollarSign, Award, Search, Star, Mail, Phone,
-  ExternalLink, Trash2, AlertCircle, TrendingUp,
+  ExternalLink, Trash2, AlertCircle, TrendingUp, CalendarDays, Sparkles, Clock,
 } from "lucide-react";
 
 const BRANDS = [
@@ -137,7 +137,7 @@ export default function GroupGrants() {
   const { currentOrg } = useWorkspace();
   const { toast } = useToast();
   const orgId = currentOrg?.id;
-  const [view, setView] = useState<"applications" | "funders">("applications");
+  const [view, setView] = useState<"applications" | "calendar" | "funders">("applications");
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [appModal, setAppModal] = useState<{ mode: "create" | "edit"; app?: Partial<GrantApplication> } | null>(null);
@@ -248,8 +248,9 @@ export default function GroupGrants() {
         {/* Sub-nav */}
         <div className="flex items-center gap-1 mt-4 border-b border-white/[0.06] -mb-4">
           {([
-            { key: "applications", label: "Applications", icon: FileText },
-            { key: "funders",      label: "Funders",      icon: Landmark },
+            { key: "applications", label: "Applications", icon: FileText,     count: apps.length },
+            { key: "calendar",     label: "Calendar",     icon: CalendarDays, count: null as number | null },
+            { key: "funders",      label: "Funders",      icon: Landmark,     count: funders.filter(f => !f.archived).length },
           ] as const).map(t => {
             const Icon = t.icon;
             const active = view === t.key;
@@ -260,7 +261,7 @@ export default function GroupGrants() {
                 }`}>
                 <Icon className="w-3.5 h-3.5" />
                 {t.label}
-                <span className="text-[9px] text-white/30 font-normal">{t.key === "applications" ? apps.length : funders.filter(f => !f.archived).length}</span>
+                {t.count != null && <span className="text-[9px] text-white/30 font-normal">{t.count}</span>}
               </button>
             );
           })}
@@ -347,6 +348,8 @@ export default function GroupGrants() {
             </div>
           )
         )}
+
+        {view === "calendar" && <CalendarView orgId={orgId} />}
 
         {view === "funders" && (
           fundersLoading ? (
@@ -728,5 +731,245 @@ function FunderModal({ modal, onClose, onSave, onDelete, saving }: {
         </div>
       </div>
     </ModalShell>
+  );
+}
+
+// ── Calendar view ───────────────────────────────────────────────────────────
+// Structured deadline calendar built from the verified grant_funder_deadlines
+// research: act-now (next 60 days), surplus/opportunity windows, a month-banded
+// timeline across 2026–2028, and always-open funders. Every date carries a
+// confidence chip so projected years never read as certain.
+
+interface GrantDeadline {
+  id: number;
+  funderName: string;
+  label: string | null;
+  kind: string | null;             // fixed_round | rolling | eofy_surplus | notable_opportunity
+  opensOn: string | null;
+  closesOn: string | null;
+  decisionOn: string | null;
+  eventYear: number | null;
+  amountHint: string | null;
+  confidence: string | null;       // verified | likely | inferred
+  relevance: string | null;        // core | conditional | ruled_out
+  proSportExcluded: boolean | null;
+  sourceUrl: string | null;
+  note: string | null;
+}
+
+const CAL_MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const CAL_MONF = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const CAL_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const isISO = (v: string | null | undefined): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+const dlActionable = (d: GrantDeadline): string | null =>
+  isISO(d.closesOn) ? d.closesOn : isISO(d.opensOn) ? d.opensOn : isISO(d.decisionOn) ? d.decisionOn : null;
+const shortFunder = (n: string) => n.split(/[—(]/)[0].trim();
+const calFmt = (s: string) => { const [, m, dd] = s.split("-"); return `${parseInt(dd)} ${CAL_MON[parseInt(m)]}`; };
+
+function ConfChip({ c }: { c: string | null }) {
+  const cfg: Record<string, { t: string; cl: string }> = {
+    verified: { t: "verified", cl: "text-emerald-400 bg-emerald-500/10" },
+    likely: { t: "likely", cl: "text-amber-400 bg-amber-500/10" },
+    inferred: { t: "projected", cl: "text-sky-400/80 bg-sky-500/10" },
+  };
+  const v = cfg[c || ""]; if (!v) return null;
+  return <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap ${v.cl}`}>{v.t}</span>;
+}
+
+function CalendarView({ orgId }: { orgId: number }) {
+  const [year, setYear] = useState<string>("2026");
+  const [rel, setRel] = useState<"core" | "all">("core");
+  const [kind, setKind] = useState<string>("all");
+
+  const { data: deadlines = [], isLoading } = useQuery<GrantDeadline[]>({
+    queryKey: ["/api/admin/grants/deadlines", orgId],
+    queryFn: async () => {
+      const r = await fetch(`/api/admin/grants/deadlines?organizationId=${orgId}`, { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to load deadlines");
+      return r.json();
+    },
+    enabled: !!orgId,
+  });
+
+  const today = useMemo(() => { const t = new Date(); t.setHours(0, 0, 0, 0); return t; }, []);
+  const daysUntil = (s: string) => { const [y, m, d] = s.split("-").map(Number); return Math.round((new Date(y, m - 1, d).getTime() - today.getTime()) / 86400000); };
+  const relOk = (r: string | null) => rel === "core" ? r === "core" : true; // "all" = core + conditional (ruled-out not seeded)
+
+  const dated = useMemo(() => deadlines.filter(d => dlActionable(d)), [deadlines]);
+
+  const actNow = useMemo(() => dated
+    .filter(d => d.kind !== "rolling" && relOk(d.relevance))
+    .filter(d => { const n = daysUntil(dlActionable(d)!); return n >= 0 && n <= 60; })
+    .sort((a, b) => dlActionable(a)! < dlActionable(b)! ? -1 : 1), [dated, rel]);
+
+  const surplus = useMemo(() => {
+    const seen = new Set<string>();
+    return deadlines
+      .filter(d => (d.kind === "eofy_surplus" || d.kind === "notable_opportunity") && relOk(d.relevance))
+      .filter(d => { const a = dlActionable(d); return a ? daysUntil(a) >= -40 : true; })
+      .sort((a, b) => (dlActionable(a) || `${a.eventYear}-99`) < (dlActionable(b) || `${b.eventYear}-99`) ? -1 : 1)
+      .filter(d => { const k = d.funderName + (dlActionable(d) || d.eventYear); if (seen.has(k)) return false; seen.add(k); return true; });
+  }, [deadlines, rel]);
+
+  const timeline = useMemo(() => dated
+    .filter(d => d.kind !== "rolling" && relOk(d.relevance))
+    .filter(d => year === "all" || dlActionable(d)!.startsWith(year) || String(d.eventYear) === year)
+    .filter(d => kind === "all" || d.kind === kind)
+    .sort((a, b) => dlActionable(a)! < dlActionable(b)! ? -1 : 1), [dated, year, rel, kind]);
+
+  const rolling = useMemo(() => {
+    const seen = new Set<string>();
+    return deadlines.filter(d => d.kind === "rolling" && relOk(d.relevance))
+      .filter(d => { const f = shortFunder(d.funderName); if (seen.has(f)) return false; seen.add(f); return true; });
+  }, [deadlines, rel]);
+
+  if (isLoading) return <div className="p-4 space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>;
+  if (!deadlines.length) return (
+    <div className="p-10 text-center text-white/40 text-sm">
+      <CalendarDays className="w-8 h-8 mx-auto mb-3 text-white/20" />No deadlines loaded yet.
+    </div>
+  );
+
+  const Pill = ({ on, onClick, children, accent }: { on: boolean; onClick: () => void; children: React.ReactNode; accent?: boolean }) => (
+    <button onClick={onClick} className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition ${
+      on ? (accent ? "bg-amber-500/20 border-amber-500/50 text-amber-200" : "bg-white text-black border-white") : "border-white/10 text-white/50 hover:text-white/80"
+    }`}>{children}</button>
+  );
+
+  const groups: { ym: string; items: GrantDeadline[] }[] = [];
+  for (const d of timeline) {
+    const ym = dlActionable(d)!.slice(0, 7);
+    let g = groups.find(x => x.ym === ym);
+    if (!g) { g = { ym, items: [] }; groups.push(g); }
+    g.items.push(d);
+  }
+
+  return (
+    <div className="p-4 space-y-6" data-testid="calendar-view">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-white/30 mr-0.5">Year</span>
+          {["all", "2026", "2027", "2028"].map(y => <Pill key={y} on={year === y} onClick={() => setYear(y)}>{y === "all" ? "All" : y}</Pill>)}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-white/30 mr-0.5">Show</span>
+          <Pill on={rel === "core"} onClick={() => setRel("core")}>Core</Pill>
+          <Pill on={rel === "all"} onClick={() => setRel("all")}>All</Pill>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-white/30 mr-0.5">Type</span>
+          <Pill on={kind === "all"} onClick={() => setKind("all")}>All</Pill>
+          <Pill on={kind === "fixed_round"} onClick={() => setKind("fixed_round")}>Rounds</Pill>
+          <Pill on={kind === "eofy_surplus"} onClick={() => setKind("eofy_surplus")} accent>★ Surplus</Pill>
+        </div>
+      </div>
+
+      <section>
+        <div className="flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-red-400" /><h3 className="text-sm font-semibold">Act now</h3><span className="text-[11px] text-white/30">next 60 days · {actNow.length}</span></div>
+        {actNow.length === 0 ? <div className="text-xs text-white/30 py-2">Nothing due in the next 60 days.</div> : (
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+            {actNow.map(d => {
+              const n = daysUntil(dlActionable(d)!);
+              const u = n <= 14 ? "#ef4444" : n <= 45 ? "#f59e0b" : "rgba(255,255,255,0.14)";
+              return (
+                <div key={d.id} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3" style={{ borderLeft: `3px solid ${u}` }}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-xs font-semibold">{calFmt(dlActionable(d)!)}</span>
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ color: u, background: `${u}22` }}>{n === 0 ? "today" : n === 1 ? "1 day" : `${n} days`}</span>
+                  </div>
+                  <div className="text-[13px] font-semibold text-white/90 leading-tight">{shortFunder(d.funderName)}</div>
+                  <div className="text-[11px] text-white/50 mt-0.5 leading-snug">{d.label}</div>
+                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                    <ConfChip c={d.confidence} />
+                    {d.amountHint && <span className="text-[10px] text-amber-300/80 bg-amber-500/10 px-1.5 py-0.5 rounded">{d.amountHint}</span>}
+                    {d.proSportExcluded && <span className="text-[9px] text-red-400/80 bg-red-500/10 px-1.5 py-0.5 rounded-full">pro-excl</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {surplus.length > 0 && (
+        <section>
+          <div className="flex items-center gap-2 mb-2"><Sparkles className="w-4 h-4 text-amber-400" /><h3 className="text-sm font-semibold">Surplus &amp; opportunity windows</h3></div>
+          <p className="text-[11px] text-white/40 mb-3 max-w-2xl leading-relaxed">Class-4 gaming societies must give away at least 40% of proceeds each financial year, so trusts with a 31 March year-end run bigger final intakes around February–March. Time a strong, evidenced ask into these. <span className="text-white/25">(Air Rescue is not one — its fund runs dry near its June year-end.)</span></p>
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+            {surplus.map(d => {
+              const a = dlActionable(d);
+              return (
+                <div key={d.id} className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
+                  <div className="flex items-center justify-between gap-2 mb-1"><span className="text-xs font-semibold text-amber-300">★ {a ? `${calFmt(a)} ${a.slice(0, 4)}` : `~${d.eventYear}`}</span><ConfChip c={d.confidence} /></div>
+                  <div className="text-[13px] font-semibold text-white/90 leading-tight">{shortFunder(d.funderName)}</div>
+                  <div className="text-[11px] text-white/50 mt-0.5 leading-snug line-clamp-3">{d.note || d.label}</div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <section>
+        <div className="flex items-center gap-2 mb-3"><CalendarDays className="w-4 h-4 text-emerald-400" /><h3 className="text-sm font-semibold">Timeline</h3><span className="text-[11px] text-white/30">{timeline.length} deadlines</span></div>
+        {groups.length === 0 ? <div className="text-xs text-white/30 py-2">No deadlines match these filters.</div> : (
+          <div className="space-y-4">
+            {groups.map(g => {
+              const [y, m] = g.ym.split("-");
+              return (
+                <div key={g.ym}>
+                  <div className="flex items-center gap-3 mb-1.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-white/80">{CAL_MONF[parseInt(m)]}</span>
+                    <span className="text-[10px] text-white/30">{y}</span>
+                    <div className="flex-1 h-px bg-white/[0.06]" />
+                    <span className="text-[10px] text-white/25">{g.items.length}</span>
+                  </div>
+                  {g.items.map(d => {
+                    const a = dlActionable(d)!;
+                    const past = daysUntil(a) < 0;
+                    const surp = d.kind === "eofy_surplus" || d.kind === "notable_opportunity";
+                    const dow = CAL_DOW[new Date(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10)).getDay()];
+                    return (
+                      <div key={d.id} className={`grid grid-cols-[52px_1fr] sm:grid-cols-[66px_1fr_auto] gap-3 items-baseline px-2.5 py-2 rounded-lg ${surp ? "bg-amber-500/[0.04]" : "hover:bg-white/[0.02]"}`} style={past ? { opacity: 0.5 } : undefined}>
+                        <div className="text-[12px] font-semibold text-white/80">{calFmt(a)}<span className="block text-[9px] text-white/30 font-normal">{dow}</span></div>
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-medium text-white/90">{surp && <span className="text-amber-400 mr-1">★</span>}{shortFunder(d.funderName)}</div>
+                          <div className="text-[11px] text-white/45 leading-snug">{d.label}</div>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap sm:justify-end col-span-2 sm:col-span-1 mt-1 sm:mt-0">
+                          {d.amountHint && <span className="text-[10px] text-amber-300/80 bg-amber-500/10 px-1.5 py-0.5 rounded">{d.amountHint}</span>}
+                          <ConfChip c={d.confidence} />
+                          {d.relevance === "conditional" && <span className="text-[9px] text-white/30 border border-dashed border-white/15 px-1.5 py-0.5 rounded">if we deliver there</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {rolling.length > 0 && (
+        <section>
+          <div className="flex items-center gap-2 mb-3"><TrendingUp className="w-4 h-4 text-white/40" /><h3 className="text-sm font-semibold">Always open</h3><span className="text-[11px] text-white/30">apply anytime · {rolling.length}</span></div>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {rolling.map(d => (
+              <div key={d.id} className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+                <div className="text-[13px] font-semibold text-white/85">{shortFunder(d.funderName)}</div>
+                <div className="text-[11px] text-white/45 mt-0.5 leading-snug">{d.label}{d.amountHint ? ` · ${d.amountHint}` : ""}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="flex items-center gap-x-4 gap-y-1.5 flex-wrap pt-3 border-t border-white/[0.06] text-[10px] text-white/30">
+        <span className="flex items-center gap-1"><ConfChip c="verified" /> read off the funder's site</span>
+        <span className="flex items-center gap-1"><ConfChip c="likely" /> strong secondary source</span>
+        <span className="flex items-center gap-1"><ConfChip c="inferred" /> projected from the funder's annual pattern — confirm before submitting</span>
+      </div>
+    </div>
   );
 }

@@ -1915,10 +1915,36 @@ export const grantApplications = pgTable("grant_applications", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Structured application-window calendar: one row per funding window (a dated
+// round, a rolling window, or an end-of-financial-year surplus window) so the
+// Grants tab can render a real deadline calendar. Dates stored as YYYY-MM-DD
+// text; carries funderName + display fields so the calendar renders standalone
+// even when a window has no matching funder row.
+export const grantFunderDeadlines = pgTable("grant_funder_deadlines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  funderId: integer("funder_id").references(() => grantFunders.id, { onDelete: "set null" }),
+  funderName: text("funder_name").notNull(),
+  label: text("label"),
+  kind: text("kind"),                        // fixed_round | rolling | eofy_surplus | notable_opportunity
+  opensOn: text("opens_on"),                 // YYYY-MM-DD
+  closesOn: text("closes_on"),               // YYYY-MM-DD
+  decisionOn: text("decision_on"),           // YYYY-MM-DD
+  eventYear: integer("event_year"),
+  amountHint: text("amount_hint"),
+  confidence: text("confidence"),            // verified | likely | inferred
+  relevance: text("relevance"),              // core | conditional | ruled_out
+  proSportExcluded: boolean("pro_sport_excluded"),
+  sourceUrl: text("source_url"),
+  note: text("note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const insertGrantFunderSchema = createInsertSchema(grantFunders).omit({ id: true, createdAt: true, updatedAt: true });
 export type GrantFunder = typeof grantFunders.$inferSelect;
 export const insertGrantApplicationSchema = createInsertSchema(grantApplications).omit({ id: true, createdAt: true, updatedAt: true });
 export type GrantApplication = typeof grantApplications.$inferSelect;
+export type GrantFunderDeadline = typeof grantFunderDeadlines.$inferSelect;
 
 // ── OFC Pro League licensing tracker (SIU workspace) ────────────────────────
 // Live workbook of every licensing criterion + its evidence sub-items. Seeded
