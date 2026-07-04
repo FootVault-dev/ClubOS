@@ -32,6 +32,7 @@ export interface NativeGuardianBlock {
 
 export interface RenderNativeOpts {
   brand: Record<string, any>;   // { orgLabel, accent, accentDeep, ... }
+  settings?: Record<string, any>; // { detailsHeading, counterSignerRole, ... }
   content: NativeTemplateContent;
   values: Record<string, string>; // merged variable + form values for {{key}} substitution
   formSpec: NativeFormField[];    // details schedule rows (rendered in order)
@@ -180,9 +181,9 @@ export async function renderNativePdf(opts: RenderNativeOpts): Promise<Uint8Arra
     y -= 6;
   }
 
-  // ── Referee details schedule ────────────────────────────────────────────
+  // ── Details schedule ────────────────────────────────────────────────────
   if (opts.formSpec.length) {
-    heading("Referee Details");
+    heading(opts.settings?.detailsHeading || "Referee Details");
     const labelW = 168;
     for (const f of opts.formSpec) {
       const raw = opts.formData?.[f.key];

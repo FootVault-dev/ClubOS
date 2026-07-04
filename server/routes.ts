@@ -9946,6 +9946,7 @@ export async function registerRoutes(
     const { renderNativePdf } = await import("./esign-native-pdf");
     return renderNativePdf({
       brand: tpl.brand as Record<string, any>,
+      settings: tpl.settings as Record<string, any>,
       content: tpl.content as any,
       values,
       formSpec: form.map((f) => ({ key: f.key, label: f.label, type: f.type, required: f.required })),

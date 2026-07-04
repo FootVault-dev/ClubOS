@@ -301,7 +301,7 @@ export function NativeSign({ token, data }: { token: string; data: NativeSignDat
             {/* Your details — the form lives inside the document */}
             <section className="mt-10">
               <div className="w-6 h-1 rounded-full mb-2.5" style={{ background: B.gold }} />
-              <h2 className="text-[17px] font-bold">Referee Details</h2>
+              <h2 className="text-[17px] font-bold">{n.settings?.detailsHeading || "Referee Details"}</h2>
               {isPrimary ? (
                 <>
                   <p className="text-[13px] mt-1 mb-4" style={{ color: "#75705f" }}>Fill these in — they become part of the signed agreement.</p>
