@@ -15692,10 +15692,36 @@ export async function registerRoutes(
     try {
       const reg0 = await storage.getRegistration(parseInt(String(req.body?.registrationId)));
       if (!reg0) return res.status(404).json({ message: "Not found" });
-      if (reg0.paymentMode !== "installment" || !(reg0.balanceCents && reg0.balanceCents > 0)) {
+      const isWeekly = reg0.paymentMode === "deposit_weekly";
+      if (reg0.paymentMode !== "installment" && !isWeekly) {
         return res.status(400).json({ message: "No balance due" });
       }
       if (reg0.balanceStatus === "paid") return res.status(400).json({ message: "Balance already paid" });
+
+      // Payoff amount: installment = the scheduled balance; deposit_weekly = the
+      // remaining UNPAID weeks (weeks already charged by the subscription are
+      // excluded). Paying this cancels the weekly subscription on success.
+      const weeklyC = reg0.weeklyAmountCents ?? 0, wt = reg0.weeksTotal ?? 0, wp = reg0.weeksPaid ?? 0;
+      const payoffCents = isWeekly ? Math.max(0, (wt - wp) * weeklyC) : (reg0.balanceCents ?? 0);
+      if (payoffCents <= 0) return res.status(400).json({ message: "No balance due" });
+
+      const program0 = await storage.getProgram(reg0.programId);
+
+      // Reload-safe: if a balance PaymentIntent already exists and is still open
+      // (not paid/cancelled), reuse it rather than 409'ing on the claim lock. This
+      // makes the customer's "pay in full" link survive reloads + a staff pre-test.
+      if (reg0.balancePaymentIntentId) {
+        try {
+          const existing = await retrievePaymentIntent(reg0.balancePaymentIntentId);
+          if (existing && existing.status !== "succeeded" && existing.status !== "canceled" && existing.client_secret) {
+            return res.json({
+              clientSecret: existing.client_secret, registrationId: reg0.id,
+              amountCents: existing.amount, currency: "NZD", teamName: reg0.teamName,
+              slug: program0?.slug || "", payInFull: isWeekly,
+            });
+          }
+        } catch { /* fall through and create a fresh intent */ }
+      }
 
       // Atomically claim the balance ('charging') so the cron can't also charge
       // it concurrently. Returns null if it's already mid-charge or paid.
@@ -15708,8 +15734,8 @@ export async function registerRoutes(
       const program = await storage.getProgram(reg.programId);
       const pi = await createPaymentIntent({
         registrationId: reg.id,
-        campName: `${program?.name || "Mini Football Leagues"} — balance`,
-        totalCents: reg.balanceCents!,
+        campName: `${program?.name || "Mini Football Leagues"} — ${isWeekly ? "pay in full" : "balance"}`,
+        totalCents: payoffCents,
         currency: "NZD",
         parentEmail: contact?.email || "",
         ...(reg.stripeCustomerId ? { customerId: reg.stripeCustomerId } : {}),
@@ -15720,10 +15746,11 @@ export async function registerRoutes(
       res.json({
         clientSecret: pi.client_secret,
         registrationId: reg.id,
-        amountCents: reg.balanceCents,
+        amountCents: payoffCents,
         currency: "NZD",
         teamName: reg.teamName,
         slug: program?.slug || "",
+        payInFull: isWeekly,
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

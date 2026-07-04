@@ -19,7 +19,7 @@ import { db } from "./db";
 import { registrations, leagueTeams, type Registration } from "@shared/schema";
 import { eq, and, or, ne, lt, lte, inArray } from "drizzle-orm";
 import { storage } from "./storage";
-import { createOffSessionPaymentIntent, retrievePaymentIntent } from "./stripe";
+import { createOffSessionPaymentIntent, retrievePaymentIntent, stripe } from "./stripe";
 import { sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail } from "./email";
 import { sendPurchaseEvent } from "./meta-capi";
 
@@ -41,7 +41,10 @@ export async function claimBalance(
   const staleBefore = new Date(Date.now() - STALE_CHARGING_MS);
   const conds = [
     eq(registrations.id, registrationId),
-    eq(registrations.paymentMode, "installment"),
+    // 'installment' = the cron-charged single balance; 'deposit_weekly' = a
+    // customer choosing to pay off their remaining weekly plan in full (the
+    // subscription is cancelled on success in handleLeagueBalanceSuccess).
+    inArray(registrations.paymentMode, ["installment", "deposit_weekly"]),
     ne(registrations.balanceStatus, "paid"),
     or(
       inArray(registrations.balanceStatus, ["scheduled", "failed"]),
@@ -64,11 +67,25 @@ export async function handleLeagueBalanceSuccess(registrationId: number, balance
   if (!reg) return;
   if (reg.balanceStatus === "paid") return; // already done
 
+  // deposit_weekly payoff: the customer just paid the remaining unpaid weeks in
+  // one go, so cancel the weekly subscription (no more $X/week charges), mark
+  // every week paid, and record the amount actually charged.
+  const isWeekly = reg.paymentMode === "deposit_weekly";
+  const weeklyC = reg.weeklyAmountCents ?? 0, wt = reg.weeksTotal ?? 0, wp = reg.weeksPaid ?? 0;
+  const chargedCents = isWeekly ? Math.max(0, (wt - wp) * weeklyC) : (reg.balanceCents ?? 0);
+  const amountPaidCents = isWeekly ? ((reg.depositCents ?? 0) + wt * weeklyC) : ((reg.depositCents ?? 0) + (reg.balanceCents ?? 0));
+
   await storage.updateRegistration(registrationId, {
     balanceStatus: "paid",
-    amountPaid: (((reg.depositCents ?? 0) + (reg.balanceCents ?? 0)) / 100).toFixed(2),
+    amountPaid: (amountPaidCents / 100).toFixed(2),
+    ...(isWeekly ? { weeksPaid: wt } : {}),
     ...(balancePaymentIntentId ? { balancePaymentIntentId } : {}),
-  });
+  } as any);
+
+  if (isWeekly && reg.stripeSubscriptionId) {
+    try { await stripe.subscriptions.cancel(reg.stripeSubscriptionId); }
+    catch (e) { console.error(`[MFL payoff] cancel sub ${reg.stripeSubscriptionId} failed:`, e); }
+  }
 
   const [team] = await db.select().from(leagueTeams).where(eq(leagueTeams.registrationId, registrationId));
   if (team) await storage.updateLeagueTeam(team.id, { paymentStatus: "paid_in_full" } as any);
@@ -82,13 +99,13 @@ export async function handleLeagueBalanceSuccess(registrationId: number, balance
       captainEmail: captain.email || "",
       captainName: captain.firstName,
       teamName: reg.teamName || "Your team",
-      balancePaid: `$${((reg.balanceCents ?? 0) / 100).toFixed(2)} NZD`,
+      balancePaid: `$${(chargedCents / 100).toFixed(2)} NZD`,
     }).catch((e) => console.error("[MFL balance] paid email failed:", e));
 
     sendPurchaseEvent({
       registrationId,
       campId: program.id,
-      totalCents: reg.balanceCents ?? 0,
+      totalCents: chargedCents,
       currency: reg.currency || "NZD",
       email: captain.email || "",
       phone: captain.phone || undefined,
