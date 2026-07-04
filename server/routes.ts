@@ -12663,6 +12663,53 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ── Signal analytics (read-only) ──────────────────────────────────────────
+  // Registered BEFORE /:id so the literal "analytics" segment on hot-leads is not
+  // swallowed by the :id param route.
+
+  // GET /api/admin/studio/analytics/hot-leads — workspace "who's warm right now"
+  // feed across all PUBLISHED docs (non-internal sessions active in the last 48h).
+  app.get("/api/admin/studio/analytics/hot-leads", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const leads = await storage.getStudioHotLeads(orgId);
+      res.json(leads);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // GET /api/admin/studio/:id/analytics — per-proposal overview + section heatmap.
+  app.get("/api/admin/studio/:id/analytics", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const doc = await storage.getStudioDocumentById(id);
+      if (!doc || doc.organizationId !== orgId) return res.status(404).json({ message: "Not found" });
+      const [overview, sections] = await Promise.all([
+        storage.getStudioDocumentAnalytics(id),
+        storage.getStudioSectionEngagement(id),
+      ]);
+      res.json({ overview, sections });
+    } catch (e: any) {
+      console.error("[Studio analytics] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // GET /api/admin/studio/:id/analytics/sessions — the per-recipient session timeline.
+  app.get("/api/admin/studio/:id/analytics/sessions", requireAuth, requireTab("studio"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const doc = await storage.getStudioDocumentById(id);
+      if (!doc || doc.organizationId !== orgId) return res.status(404).json({ message: "Not found" });
+      const sessions = await storage.getStudioDocumentSessions(id);
+      res.json(sessions);
+    } catch (e: any) {
+      console.error("[Studio analytics sessions] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // GET /api/admin/studio/:id — one document (org-scoped).
   app.get("/api/admin/studio/:id", requireAuth, requireTab("studio"), async (req, res) => {
     try {
@@ -12812,6 +12859,16 @@ export async function registerRoutes(
           },
         });
 
+        // TODO(studio/signal-alert): the #1 money feature — a real-time
+        //   "🔥 {partner} is reading the {brand} proposal" push on the FIRST
+        //   non-internal session of a PUBLISHED doc. NOT built here: this app has
+        //   no server-side Telegram/notify util today (grep found none) and wiring
+        //   one needs new infra + config (bot token + chat id in env). Recommended
+        //   trigger when that util lands: detect first touch by checking the
+        //   session was just inserted (upsert returned firstSeenAt === lastSeenAt)
+        //   AND doc.status === 'published' AND !body.internal, dedupe per sessionId
+        //   (in-memory Set is fine — best-effort), and fire-and-forget so it NEVER
+        //   blocks this 204 ingest. Also fire on the first cta_click / forward.
         const rows = events.slice(0, 200).map((e: any) => ({
           documentId: doc.id,
           sessionId,

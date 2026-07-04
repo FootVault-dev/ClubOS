@@ -107,6 +107,7 @@ import StudioPreviewPage from "@/pages/studio-preview";
 import StudioHome from "@/pages/studio/StudioHome";
 import StudioNew from "@/pages/studio/StudioNew";
 import StudioEditor from "@/pages/studio/StudioEditor";
+import StudioAnalytics from "@/pages/studio/StudioAnalytics";
 import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
@@ -181,6 +182,7 @@ function AdminRouter() {
         <Route path="/admin/print-email" component={PrintsEmail} />
         <Route path="/admin/integrations" component={PrintsIntegrations} />
         <Route path="/admin/studio/new" component={StudioNew} />
+        <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
         <Route path="/admin/studio" component={StudioHome} />
         <Route path="/admin/esign" component={ESign} />
@@ -204,6 +206,7 @@ function AdminRouter() {
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
         <Route path="/admin/studio/new" component={StudioNew} />
+        <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
         <Route path="/admin/studio" component={StudioHome} />
         <Route path="/admin/esign" component={ESign} />
@@ -232,6 +235,7 @@ function AdminRouter() {
         <Route path="/admin/camps/:id" component={AdminCampDetail} />
         <Route path="/admin/camps/:campId/session/:dateId/:sessionType" component={AdminSessionRoll} />
         <Route path="/admin/studio/new" component={StudioNew} />
+        <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
         <Route path="/admin/studio" component={StudioHome} />
         <Route path="/admin/esign" component={ESign} />
@@ -260,6 +264,7 @@ function AdminRouter() {
         <Route path="/admin/cic-push" component={CicPush} />
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/studio/new" component={StudioNew} />
+        <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
         <Route path="/admin/studio" component={StudioHome} />
         <Route path="/admin/esign" component={ESign} />
@@ -288,6 +293,7 @@ function AdminRouter() {
         <Route path="/admin/discounts" component={AdminDiscounts} />
         <Route path="/admin/league-settings" component={LeagueSettings} />
         <Route path="/admin/studio/new" component={StudioNew} />
+        <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
         <Route path="/admin/studio" component={StudioHome} />
         <Route path="/admin/esign" component={ESign} />
@@ -313,6 +319,7 @@ function AdminRouter() {
         <Route path="/admin/venue-settings" component={VenueSettings} />
         <Route path="/admin/website" component={VenueWebsite} />
         <Route path="/admin/studio/new" component={StudioNew} />
+        <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
         <Route path="/admin/studio" component={StudioHome} />
         <Route path="/admin/esign" component={ESign} />
@@ -348,6 +355,7 @@ function AdminRouter() {
       <Route path="/admin/licensing" component={AdminLicensing} />
       <Route path="/admin/events" component={AdminEvents} />
       <Route path="/admin/studio/new" component={StudioNew} />
+      <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
       <Route path="/admin/studio/:id" component={StudioEditor} />
       <Route path="/admin/studio" component={StudioHome} />
       <Route component={NotFound} />

@@ -3,6 +3,11 @@ import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, ne } from "drizzle
 import crypto from "crypto";
 import { contentHashOf } from "./studio/hash";
 import {
+  blockWordCount, expectedReadMs as studioExpectedReadMs, readRatio as studioReadRatio,
+  classifyRead, collectBlockStrings,
+} from "@shared/studio-signal";
+import type { Block } from "@shared/studio-blocks";
+import {
   users, contacts, contactRelationships, programs,
   programSessions, registrations, auditLogs, settings,
   sessionBookings, programDiscounts,
@@ -79,6 +84,70 @@ import {
   studioAnalyticsSessions, type StudioAnalyticsSession,
   studioAnalyticsEvents,
 } from "@shared/schema";
+import type { ReadClass } from "@shared/studio-signal";
+
+// ── Studio "Signal" analytics read models (aggregation query outputs) ─────────
+export interface StudioKeyCount { key: string; count: number; }
+export interface StudioDocumentOverview {
+  uniqueVisitors: number;
+  totalSessions: number;
+  returningVisitors: number;
+  avgEngagedMs: number;
+  medianEngagedMs: number;
+  avgScrollPct: number;
+  ctaClicks: number;          // total cta_click events (non-internal)
+  ctaClickSessions: number;   // distinct sessions that clicked the CTA
+  reachedEndSessions: number; // sessions with maxScroll >= 98%
+  scrolledHalfSessions: number;
+  deviceSplit: StudioKeyCount[];
+  countrySplit: StudioKeyCount[];
+  sourceSplit: StudioKeyCount[];
+  firstActivityAt: string | null;
+  lastActivityAt: string | null;
+}
+export interface StudioSessionRow {
+  id: number;
+  sessionId: string;
+  visitorId: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  engagedMs: number;
+  maxScrollPct: number;
+  device: string | null;
+  country: string | null;
+  sourceTag: string | null;
+  ctaClicks: number;
+  isReturning: boolean;
+}
+export interface StudioSectionRow {
+  blockId: string;
+  type: string;
+  label: string;
+  wordCount: number;
+  expectedReadMs: number;
+  medianDwellMs: number;
+  avgDwellMs: number;
+  reachedSessions: number;
+  reachedPct: number;
+  readRatio: number | null;
+  readClass: ReadClass;
+}
+export interface StudioSectionEngagement { totalSessions: number; sections: StudioSectionRow[]; }
+export interface StudioHotLead {
+  documentId: number;
+  title: string;
+  brandId: string;
+  partner: string | null; // best available partner label (source tag / slug)
+  sessionId: string;
+  visitorId: string | null;
+  lastSeenAt: string;
+  engagedMs: number;
+  maxScrollPct: number;
+  device: string | null;
+  country: string | null;
+  ctaClicks: number;
+  isReturning: boolean;
+}
 
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
@@ -436,6 +505,12 @@ export interface IStorage {
     utmJson?: Record<string, any> | null; country?: string | null; isInternal?: boolean;
   }): Promise<StudioAnalyticsSession>;
   insertStudioAnalyticsEvents(batch: (typeof studioAnalyticsEvents.$inferInsert)[]): Promise<void>;
+
+  // Signal aggregation reads (admin dashboard). All EXCLUDE isInternal sessions.
+  getStudioDocumentAnalytics(documentId: number): Promise<StudioDocumentOverview>;
+  getStudioDocumentSessions(documentId: number): Promise<StudioSessionRow[]>;
+  getStudioSectionEngagement(documentId: number): Promise<StudioSectionEngagement>;
+  getStudioHotLeads(orgId: number): Promise<StudioHotLead[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2592,6 +2667,230 @@ export class DatabaseStorage implements IStorage {
     if (!batch.length) return;
     await db.insert(studioAnalyticsEvents).values(batch);
   }
+
+  // ── Signal aggregation reads ──────────────────────────────────────────────
+  // Every query below EXCLUDES is_internal = true sessions (staff / author
+  // previews) so the dashboard only ever shows real prospect engagement.
+
+  async getStudioDocumentAnalytics(documentId: number): Promise<StudioDocumentOverview> {
+    // Session-level rollup. unique visitors = distinct visitor_id, treating a null
+    // visitor_id session as its own visitor so we never under-count.
+    const agg = await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total_sessions,
+        COUNT(DISTINCT COALESCE(visitor_id, 'sid:' || session_id))::int AS unique_visitors,
+        COALESCE(AVG(engaged_ms), 0) AS avg_engaged_ms,
+        COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY engaged_ms), 0) AS median_engaged_ms,
+        COALESCE(AVG(max_scroll_pct), 0) AS avg_scroll_pct,
+        COUNT(*) FILTER (WHERE max_scroll_pct >= 50)::int AS scrolled_half,
+        COUNT(*) FILTER (WHERE max_scroll_pct >= 98)::int AS reached_end,
+        MIN(first_seen_at) AS first_activity,
+        MAX(last_seen_at) AS last_activity
+      FROM studio_analytics_sessions
+      WHERE document_id = ${documentId} AND is_internal = false
+    `);
+    const a = (agg.rows[0] || {}) as any;
+
+    const ret = await db.execute(sql`
+      SELECT COUNT(*)::int AS returning FROM (
+        SELECT visitor_id FROM studio_analytics_sessions
+        WHERE document_id = ${documentId} AND is_internal = false AND visitor_id IS NOT NULL
+        GROUP BY visitor_id HAVING COUNT(DISTINCT session_id) > 1
+      ) t
+    `);
+
+    // CTA clicks come from events, scoped to non-internal sessions via a join.
+    const cta = await db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE e.type = 'cta_click')::int AS cta_clicks,
+        COUNT(DISTINCT e.session_id) FILTER (WHERE e.type = 'cta_click')::int AS cta_sessions
+      FROM studio_analytics_events e
+      JOIN studio_analytics_sessions s
+        ON s.document_id = e.document_id AND s.session_id = e.session_id
+      WHERE e.document_id = ${documentId} AND s.is_internal = false
+    `);
+    const c = (cta.rows[0] || {}) as any;
+
+    const splitOf = async (col: "device" | "country" | "source_tag"): Promise<StudioKeyCount[]> => {
+      const r = await db.execute(sql`
+        SELECT COALESCE(${sql.raw(col)}, 'unknown') AS key, COUNT(*)::int AS count
+        FROM studio_analytics_sessions
+        WHERE document_id = ${documentId} AND is_internal = false
+        GROUP BY 1 ORDER BY count DESC
+      `);
+      return (r.rows as any[]).map((x) => ({ key: String(x.key), count: Number(x.count) }));
+    };
+    const [deviceSplit, countrySplit, sourceSplit] = await Promise.all([
+      splitOf("device"), splitOf("country"), splitOf("source_tag"),
+    ]);
+
+    return {
+      uniqueVisitors: Number(a.unique_visitors ?? 0),
+      totalSessions: Number(a.total_sessions ?? 0),
+      returningVisitors: Number((ret.rows[0] as any)?.returning ?? 0),
+      avgEngagedMs: Math.round(Number(a.avg_engaged_ms ?? 0)),
+      medianEngagedMs: Math.round(Number(a.median_engaged_ms ?? 0)),
+      avgScrollPct: Math.round(Number(a.avg_scroll_pct ?? 0)),
+      ctaClicks: Number(c.cta_clicks ?? 0),
+      ctaClickSessions: Number(c.cta_sessions ?? 0),
+      reachedEndSessions: Number(a.reached_end ?? 0),
+      scrolledHalfSessions: Number(a.scrolled_half ?? 0),
+      deviceSplit, countrySplit, sourceSplit,
+      firstActivityAt: a.first_activity ? new Date(a.first_activity).toISOString() : null,
+      lastActivityAt: a.last_activity ? new Date(a.last_activity).toISOString() : null,
+    };
+  }
+
+  async getStudioDocumentSessions(documentId: number): Promise<StudioSessionRow[]> {
+    const r = await db.execute(sql`
+      SELECT
+        s.id, s.session_id, s.visitor_id, s.first_seen_at, s.last_seen_at,
+        s.engaged_ms, s.max_scroll_pct, s.device, s.country, s.source_tag,
+        (SELECT COUNT(*)::int FROM studio_analytics_events e
+           WHERE e.document_id = s.document_id AND e.session_id = s.session_id
+             AND e.type = 'cta_click') AS cta_clicks,
+        (s.visitor_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM studio_analytics_sessions p
+           WHERE p.document_id = s.document_id AND p.visitor_id = s.visitor_id
+             AND p.is_internal = false AND p.first_seen_at < s.first_seen_at
+        )) AS is_returning
+      FROM studio_analytics_sessions s
+      WHERE s.document_id = ${documentId} AND s.is_internal = false
+      ORDER BY s.last_seen_at DESC
+      LIMIT 500
+    `);
+    return (r.rows as any[]).map((x) => ({
+      id: Number(x.id),
+      sessionId: String(x.session_id),
+      visitorId: x.visitor_id != null ? String(x.visitor_id) : null,
+      firstSeenAt: new Date(x.first_seen_at).toISOString(),
+      lastSeenAt: new Date(x.last_seen_at).toISOString(),
+      engagedMs: Number(x.engaged_ms ?? 0),
+      maxScrollPct: Number(x.max_scroll_pct ?? 0),
+      device: x.device != null ? String(x.device) : null,
+      country: x.country != null ? String(x.country) : null,
+      sourceTag: x.source_tag != null ? String(x.source_tag) : null,
+      ctaClicks: Number(x.cta_clicks ?? 0),
+      isReturning: !!x.is_returning,
+    }));
+  }
+
+  async getStudioSectionEngagement(documentId: number): Promise<StudioSectionEngagement> {
+    const doc = await this.getStudioDocumentById(documentId);
+    const blocks: Block[] = ((doc?.contentJson as any)?.blocks ?? []) as Block[];
+
+    // Total non-internal sessions = the denominator for "% reached".
+    const totRes = await db.execute(sql`
+      SELECT COUNT(*)::int AS n FROM studio_analytics_sessions
+      WHERE document_id = ${documentId} AND is_internal = false
+    `);
+    const totalSessions = Number((totRes.rows[0] as any)?.n ?? 0);
+
+    // Per (block, session): summed dwell + whether it was touched. Then per block:
+    // distinct sessions reached + median/avg of per-session dwell.
+    const perBlock = await db.execute(sql`
+      WITH per AS (
+        SELECT e.block_id, e.session_id,
+          COALESCE(SUM(e.dwell_ms) FILTER (WHERE e.type = 'section_exit'), 0) AS dwell_ms
+        FROM studio_analytics_events e
+        JOIN studio_analytics_sessions s
+          ON s.document_id = e.document_id AND s.session_id = e.session_id
+        WHERE e.document_id = ${documentId} AND s.is_internal = false
+          AND e.block_id IS NOT NULL
+          AND e.type IN ('section_enter', 'section_exit')
+        GROUP BY e.block_id, e.session_id
+      )
+      SELECT block_id,
+        COUNT(*)::int AS reached_sessions,
+        COALESCE(AVG(dwell_ms), 0) AS avg_dwell_ms,
+        COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY dwell_ms), 0) AS median_dwell_ms
+      FROM per
+      GROUP BY block_id
+    `);
+    const byBlock = new Map<string, { reached: number; avg: number; median: number }>();
+    for (const x of perBlock.rows as any[]) {
+      byBlock.set(String(x.block_id), {
+        reached: Number(x.reached_sessions ?? 0),
+        avg: Math.round(Number(x.avg_dwell_ms ?? 0)),
+        median: Math.round(Number(x.median_dwell_ms ?? 0)),
+      });
+    }
+
+    const sections: StudioSectionRow[] = blocks.map((block) => {
+      const stat = byBlock.get(block.id) ?? { reached: 0, avg: 0, median: 0 };
+      const wordCount = blockWordCount(block);
+      const reachedPct = totalSessions > 0 ? Math.round((stat.reached / totalSessions) * 100) : 0;
+      const ratio = studioReadRatio(stat.median, wordCount);
+      return {
+        blockId: block.id,
+        type: block.type,
+        label: studioSectionLabel(block),
+        wordCount,
+        expectedReadMs: studioExpectedReadMs(wordCount),
+        medianDwellMs: stat.median,
+        avgDwellMs: stat.avg,
+        reachedSessions: stat.reached,
+        reachedPct,
+        readRatio: ratio == null ? null : Math.round(ratio * 100) / 100,
+        readClass: classifyRead(ratio, reachedPct),
+      };
+    });
+
+    return { totalSessions, sections };
+  }
+
+  async getStudioHotLeads(orgId: number): Promise<StudioHotLead[]> {
+    // Across this workspace's PUBLISHED docs: non-internal sessions active in the
+    // last 48h, ranked by a blended score (engaged time + scroll depth + recency).
+    const r = await db.execute(sql`
+      SELECT
+        d.id AS document_id, d.title, d.brand_id,
+        COALESCE(d.source_tag, d.slug) AS partner,
+        s.session_id, s.visitor_id, s.last_seen_at, s.engaged_ms, s.max_scroll_pct,
+        s.device, s.country,
+        (SELECT COUNT(*)::int FROM studio_analytics_events e
+           WHERE e.document_id = s.document_id AND e.session_id = s.session_id
+             AND e.type = 'cta_click') AS cta_clicks,
+        (s.visitor_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM studio_analytics_sessions p
+           WHERE p.document_id = s.document_id AND p.visitor_id = s.visitor_id
+             AND p.is_internal = false AND p.first_seen_at < s.first_seen_at
+        )) AS is_returning
+      FROM studio_analytics_sessions s
+      JOIN studio_documents d ON d.id = s.document_id
+      WHERE d.organization_id = ${orgId} AND d.status = 'published'
+        AND s.is_internal = false
+        AND s.last_seen_at >= now() - interval '48 hours'
+      ORDER BY (
+        s.engaged_ms / 1000.0
+        + s.max_scroll_pct
+        + GREATEST(0, 2880 - EXTRACT(EPOCH FROM (now() - s.last_seen_at)) / 60)
+      ) DESC
+      LIMIT 30
+    `);
+    return (r.rows as any[]).map((x) => ({
+      documentId: Number(x.document_id),
+      title: String(x.title),
+      brandId: String(x.brand_id),
+      partner: x.partner != null ? String(x.partner) : null,
+      sessionId: String(x.session_id),
+      visitorId: x.visitor_id != null ? String(x.visitor_id) : null,
+      lastSeenAt: new Date(x.last_seen_at).toISOString(),
+      engagedMs: Number(x.engaged_ms ?? 0),
+      maxScrollPct: Number(x.max_scroll_pct ?? 0),
+      device: x.device != null ? String(x.device) : null,
+      country: x.country != null ? String(x.country) : null,
+      ctaClicks: Number(x.cta_clicks ?? 0),
+      isReturning: !!x.is_returning,
+    }));
+  }
+}
+
+// A short human label for a content block (first prose string, else the type).
+function studioSectionLabel(block: Block): string {
+  const first = collectBlockStrings(block).find((s) => s && s.trim().length > 0);
+  if (first) return first.trim().replace(/\s+/g, " ").slice(0, 60);
+  return block.type.replace(/_/g, " ");
 }
 
 export const storage = new DatabaseStorage();

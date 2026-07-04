@@ -10,9 +10,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import {
-  Sparkles, Plus, Copy, ExternalLink, FileText, Clock, CheckCircle2, ChevronRight,
+  Sparkles, Plus, Copy, ExternalLink, FileText, Clock, CheckCircle2, ChevronRight, Radar, Flame,
 } from "lucide-react";
 import { brandName, type StudioDocRow } from "./studio-shared";
+import { HotLeadsView, type HotLead } from "./StudioAnalytics";
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   draft: { label: "Draft", cls: "text-amber-300 bg-amber-400/10 border-amber-400/25" },

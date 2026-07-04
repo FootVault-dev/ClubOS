@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ArrowLeft, Save, Send, Wand2, Copy, ExternalLink, Monitor, Smartphone,
-  Sparkles, History, RefreshCw, Check,
+  Sparkles, History, RefreshCw, Check, Radar,
 } from "lucide-react";
 import type { PageDoc } from "@shared/studio-blocks";
 import { BrandTheme } from "@/studio-blocks/theme";
@@ -252,6 +252,13 @@ export default function StudioEditor() {
               <p className="text-[11px] text-white/35 mt-1.5">
                 Tracks engagement with <span className="text-white/50">?source={sourceTag}</span>. Works once ClubOS is deployed to its live domain.
               </p>
+              <button
+                onClick={() => navigate(`/admin/studio/${id}/signal`)}
+                className="mt-2.5 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] text-white/80 text-xs font-medium py-2 transition-colors"
+                data-testid="button-open-signal"
+              >
+                <Radar className="w-3.5 h-3.5" /> View Signal — who's reading it
+              </button>
             </div>
           )}
 
