@@ -32,6 +32,7 @@ import multer from "multer";
 import sharp from "sharp";
 import { detectDnsProvider, getCnameHost, getApexDomain } from "./dns/detectProvider";
 import { isGoDaddyConfigured, checkConnection as checkGoDaddyConnection, setCnameRecord as setGoDaddyCname, ownsDomain as goDaddyOwnsDomain, getRecords as getGoDaddyRecords, setForwarding as setGoDaddyForwarding, getForwarding as getGoDaddyForwarding } from "./dns/godaddyClient";
+import { mountMcpServer } from "./mcp";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -12313,6 +12314,14 @@ export async function registerRoutes(
     const { OPENAPI_V1_SPEC } = await import("./openapi-v1");
     res.json(OPENAPI_V1_SPEC);
   });
+
+  // ─── MCP server (Model Context Protocol) ────────────────────────────────
+  // Exposes the read-only /api/v1 surface as MCP tools so a staff member can
+  // connect their Claude client to ClubOS with their scoped API key. Reuses the
+  // exact same key auth, scope + workspace gating, audit log and rate limit as
+  // /api/v1 — see server/mcp.ts. POST /mcp is guarded by requireApiKey and every
+  // tool forwards to the matching /api/v1 endpoint over loopback.
+  mountMcpServer(app, requireApiKey);
 
   // ─── United Prints Routes ───────────────────────────────────
 
