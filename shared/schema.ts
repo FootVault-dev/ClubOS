@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, time, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, time, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -2992,3 +2992,127 @@ export const esignTemplates = pgTable("esign_templates", {
 export const insertEsignTemplateSchema = createInsertSchema(esignTemplates).omit({ id: true, createdAt: true });
 export type InsertEsignTemplate = z.infer<typeof insertEsignTemplateSchema>;
 export type EsignTemplate = typeof esignTemplates.$inferSelect;
+
+
+// ---- USG Studio (brand-aware AI proposal pages) ----
+// Data foundation for "USG Studio": generate on-brand proposal pages, publish them
+// on an unguessable share link, and measure how prospects actually read them.
+// Content-block schema (the { meta, blocks[] } page doc) lives in shared/studio-blocks.ts.
+// This increment is data only — no routes / services / UI yet.
+
+// The "Brand Pack" as data — one row per brand org. Replaces the hardcoded voice
+// strings in server/ai.ts: voice, messaging, lexicon, banned terms, CTA rules, the
+// theme token set to render in, and how the brand maps to live ClubOS data.
+export const orgBrandContext = pgTable("org_brand_context", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().unique().references(() => organizations.id, { onDelete: "cascade" }), // one per brand
+  brandId: text("brand_id").notNull(),                                                   // slug, e.g. 'mfl'
+  voiceJson: jsonb("voice_json").$type<Record<string, any> | null>(),                    // tone / adjectives / dials / sentence rules
+  messagingJson: jsonb("messaging_json").$type<Record<string, any> | null>(),            // positioning, key messages, taglines, do-not-claim
+  lexiconJson: jsonb("lexicon_json").$type<Record<string, any> | null>(),                // approved / careful / banned terms → replacement
+  bannedTerms: jsonb("banned_terms").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  ctaConventionsJson: jsonb("cta_conventions_json").$type<Record<string, any> | null>(), // how this brand phrases / routes CTAs
+  themeRef: text("theme_ref"),                                                           // points at the brand theme / token set
+  dataBindingsJson: jsonb("data_bindings_json").$type<Record<string, any> | null>(),     // reg URL patterns, current-term source, etc.
+  version: text("version").notNull().default("v1.0.0"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertOrgBrandContextSchema = createInsertSchema(orgBrandContext).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertOrgBrandContext = z.infer<typeof insertOrgBrandContextSchema>;
+export type OrgBrandContext = typeof orgBrandContext.$inferSelect;
+
+// A generated artifact — the proposal page. token gates the public share link
+// (unguessable, same mechanic as esignSigners.token: crypto.randomBytes → base64url,
+// generated in the route). contentJson = the validated { meta, blocks[] } page doc
+// (shared/studio-blocks.ts). status: draft | published | archived.
+export const studioDocuments = pgTable("studio_documents", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),   // unguessable public share link
+  slug: text("slug"),
+  brandId: text("brand_id").notNull(),
+  format: text("format").notNull().default("proposal"),
+  title: text("title").notNull(),
+  status: text("status").notNull().default("draft"),
+  contentJson: jsonb("content_json").$type<Record<string, any>>().notNull(), // PageDoc — see shared/studio-blocks.ts
+  schemaVersion: integer("schema_version").notNull().default(1),
+  contentHash: text("content_hash"),
+  sourceTag: text("source_tag"),             // the ?source= attribution slug
+  createdBy: integer("created_by").notNull(), // users.id of the staff creator
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  publishedAt: timestamp("published_at"),
+});
+
+export const insertStudioDocumentSchema = createInsertSchema(studioDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertStudioDocument = z.infer<typeof insertStudioDocumentSchema>;
+export type StudioDocument = typeof studioDocuments.$inferSelect;
+
+// Immutable snapshot per publish / edit — rollback + don't-clobber concurrent
+// edits. One row per (document, versionInt).
+export const studioDocumentVersions = pgTable("studio_document_versions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  documentId: integer("document_id").notNull().references(() => studioDocuments.id, { onDelete: "cascade" }),
+  versionInt: integer("version_int").notNull(),
+  contentJson: jsonb("content_json").$type<Record<string, any>>().notNull(),
+  editOps: jsonb("edit_ops").$type<Record<string, any> | null>(), // what changed vs the prior version
+  label: text("label"),
+  createdBy: integer("created_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  docVersionUnq: unique("studio_document_versions_doc_version_unique").on(t.documentId, t.versionInt),
+}));
+
+export const insertStudioDocumentVersionSchema = createInsertSchema(studioDocumentVersions).omit({ id: true, createdAt: true });
+export type InsertStudioDocumentVersion = z.infer<typeof insertStudioDocumentVersionSchema>;
+export type StudioDocumentVersion = typeof studioDocumentVersions.$inferSelect;
+
+// One row per viewing session of a proposal — the "Signal" layer. engagedMs is
+// ACTIVE / engaged time only (not tab-open). Privacy: coarse geo only — no raw IP
+// is ever stored (country is derived or a salted hash at ingest). isInternal flags
+// staff / owner preview views, excluded from prospect analytics.
+export const studioAnalyticsSessions = pgTable("studio_analytics_sessions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  documentId: integer("document_id").notNull().references(() => studioDocuments.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull(),   // client sessionStorage uuid
+  visitorId: text("visitor_id"),             // persistent localStorage id (counts return visits)
+  firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+  engagedMs: integer("engaged_ms").notNull().default(0),
+  maxScrollPct: integer("max_scroll_pct").notNull().default(0),
+  device: text("device"),                    // mobile | tablet | desktop
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  sourceTag: text("source_tag"),
+  utmJson: jsonb("utm_json").$type<Record<string, any> | null>(),
+  country: text("country"),                  // coarse geo only — no raw IP stored
+  isInternal: boolean("is_internal").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertStudioAnalyticsSessionSchema = createInsertSchema(studioAnalyticsSessions).omit({ id: true, createdAt: true });
+export type InsertStudioAnalyticsSession = z.infer<typeof insertStudioAnalyticsSessionSchema>;
+export type StudioAnalyticsSession = typeof studioAnalyticsSessions.$inferSelect;
+
+// Granular events within a session (section dwell / scroll velocity / CTA clicks /
+// heartbeats). blockId points at a content block id (shared/studio-blocks.ts) for
+// per-section hotspots. clientTs is the client event time in epoch ms.
+export const studioAnalyticsEvents = pgTable("studio_analytics_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  documentId: integer("document_id").notNull().references(() => studioDocuments.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull(),
+  type: text("type").notNull(),              // pageview|section_enter|section_exit|scroll|click|cta_click|heartbeat|reached_end|visible|hidden
+  blockId: text("block_id"),                 // which content block (section hotspots / dwell)
+  scrollPct: integer("scroll_pct"),
+  scrollVelocity: integer("scroll_velocity"), // px/s — skim vs read
+  dwellMs: integer("dwell_ms"),              // time in a section on section_exit
+  metaJson: jsonb("meta_json").$type<Record<string, any> | null>(), // click target / href, etc.
+  clientTs: bigint("client_ts", { mode: "number" }), // client event time (epoch ms)
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertStudioAnalyticsEventSchema = createInsertSchema(studioAnalyticsEvents).omit({ id: true, createdAt: true });
+export type InsertStudioAnalyticsEvent = z.infer<typeof insertStudioAnalyticsEventSchema>;
+export type StudioAnalyticsEvent = typeof studioAnalyticsEvents.$inferSelect;
