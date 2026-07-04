@@ -43,6 +43,7 @@ import {
   FolderKanban,
   FileText,
   FileSignature,
+  Sparkles,
   Send,
   ExternalLink,
   Sun,
@@ -111,6 +112,7 @@ const venueNav = [
 ];
 
 const campsSecondary = [
+  { tab: "studio", title: "Studio", url: "/admin/studio", icon: Sparkles },
   { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
@@ -130,6 +132,7 @@ const leagueNav = [
 ];
 
 const venueSecondary = [
+  { tab: "studio", title: "Studio", url: "/admin/studio", icon: Sparkles },
   { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
@@ -137,6 +140,7 @@ const venueSecondary = [
 ];
 
 const leagueSecondary = [
+  { tab: "studio", title: "Studio", url: "/admin/studio", icon: Sparkles },
   { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
@@ -157,6 +161,7 @@ const tournamentNav = [
 ];
 
 const tournamentSecondary = [
+  { tab: "studio", title: "Studio", url: "/admin/studio", icon: Sparkles },
   { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
@@ -179,6 +184,7 @@ const gymnasticsNav = [
 ];
 
 const gymnasticsSecondary = [
+  { tab: "studio", title: "Studio", url: "/admin/studio", icon: Sparkles },
   { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
@@ -195,6 +201,7 @@ const groupNav = [
 ];
 
 const groupSecondary = [
+  { tab: "studio", title: "Studio", url: "/admin/studio", icon: Sparkles },
   { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
@@ -215,6 +222,7 @@ const printsNav = [
 
 const printsSecondary = [
   { tab: "integrations", title: "Integrations", url: "/admin/integrations", icon: Globe },
+  { tab: "studio", title: "Studio", url: "/admin/studio", icon: Sparkles },
   { tab: "esign", title: "E-Sign", url: "/admin/esign", icon: FileSignature },
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },

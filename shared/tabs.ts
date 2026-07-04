@@ -55,6 +55,7 @@ const campsTabs: TabDef[] = [
   { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
+  { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
@@ -72,6 +73,7 @@ const venueTabs: TabDef[] = [
   { slug: "addons", title: "Add-ons", url: "/admin/addons" },
   { slug: "people", title: "People & Access", url: "/admin/people" },
   { slug: "payments", title: "Payments", url: "/admin/payments" },
+  { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
@@ -88,6 +90,7 @@ const leagueTabs: TabDef[] = [
   { slug: "inbox", title: "Inbox", url: "/admin/inbox" },
   { slug: "rewards", title: "Rewards", url: "/admin/rewards" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
+  { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
@@ -107,6 +110,7 @@ const tournamentTabs: TabDef[] = [
   { slug: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
+  { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
@@ -120,6 +124,7 @@ const gymnasticsTabs: TabDef[] = [
   { slug: "cugc-free-sessions", title: "Free Sessions", url: "/admin/cugc-free-sessions" },
   { slug: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics" },
   { slug: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox" },
+  { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
@@ -133,6 +138,7 @@ const groupTabs: TabDef[] = [
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
   { slug: "grants", title: "Grants", url: "/admin/grants" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
+  { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
@@ -150,6 +156,7 @@ const printsTabs: TabDef[] = [
   { slug: "landing", title: "Landing Pages", url: "/admin/print-landing" },
   { slug: "email", title: "Email Sender", url: "/admin/print-email" },
   { slug: "integrations", title: "Integrations", url: "/admin/integrations", secondary: true },
+  { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
   { slug: "domains", title: "Domains", url: "/admin/domains", secondary: true },
@@ -192,6 +199,7 @@ export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
 export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "budget", // Phase 1 construction — staff salaries visible. Daniel only.
   "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
+  "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.
 ]);
 
 /**
