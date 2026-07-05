@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, time, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, time, jsonb, uuid } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -3441,3 +3441,175 @@ export const proposalEvents = pgTable("proposal_events", {
 export const insertProposalEventSchema = createInsertSchema(proposalEvents).omit({ id: true, occurredAt: true });
 export type InsertProposalEvent = z.infer<typeof insertProposalEventSchema>;
 export type ProposalEvent = typeof proposalEvents.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Shop — native e-commerce module (MFL Store pilot, Shopify replacement).
+// Generic multi-brand: everything hangs off organization_id; MFL (org 3) is
+// the first store. Money = integer NZD cents (except costUsd, a supplier cost
+// REFERENCE only — USD, ex shipping/duties — never used in calculations).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const shopProducts = pgTable("shop_products", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  slug: text("slug").notNull(),
+  title: text("title").notNull(),
+  subtitle: text("subtitle"),
+  description: text("description"),
+  type: text("type").notNull().default("shirt"),        // 'kit' | 'shirt' | ... open-ended
+  priceCents: integer("price_cents").notNull().default(0),
+  compareAtCents: integer("compare_at_cents"),
+  costUsd: decimal("cost_usd", { precision: 10, scale: 2 }),  // reference only (USD, ex shipping/duties)
+  badge: text("badge"),
+  status: text("status").notNull().default("draft"),    // 'draft' | 'active' | 'archived'
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgSlugUnq: uniqueIndex("shop_products_org_slug_unique").on(t.organizationId, t.slug),
+}));
+export const insertShopProductSchema = createInsertSchema(shopProducts).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertShopProduct = z.infer<typeof insertShopProductSchema>;
+export type ShopProduct = typeof shopProducts.$inferSelect;
+
+export const shopProductColours = pgTable("shop_product_colours", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  productId: integer("product_id").notNull().references(() => shopProducts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  swatchHex: text("swatch_hex"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+});
+export const insertShopProductColourSchema = createInsertSchema(shopProductColours).omit({ id: true });
+export type InsertShopProductColour = z.infer<typeof insertShopProductColourSchema>;
+export type ShopProductColour = typeof shopProductColours.$inferSelect;
+
+// colourId null = product-level image.
+export const shopProductImages = pgTable("shop_product_images", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  productId: integer("product_id").notNull().references(() => shopProducts.id, { onDelete: "cascade" }),
+  colourId: integer("colour_id").references(() => shopProductColours.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  alt: text("alt"),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertShopProductImageSchema = createInsertSchema(shopProductImages).omit({ id: true });
+export type InsertShopProductImage = z.infer<typeof insertShopProductImageSchema>;
+export type ShopProductImage = typeof shopProductImages.$inferSelect;
+
+// Variant = colour × size. Stock lives here.
+export const shopVariants = pgTable("shop_variants", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  productId: integer("product_id").notNull().references(() => shopProducts.id, { onDelete: "cascade" }),
+  colourId: integer("colour_id").notNull().references(() => shopProductColours.id, { onDelete: "cascade" }),
+  size: text("size").notNull(),
+  sku: text("sku"),
+  stock: integer("stock").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+}, (t) => ({
+  colourSizeUnq: uniqueIndex("shop_variants_colour_size_unique").on(t.colourId, t.size),
+}));
+export const insertShopVariantSchema = createInsertSchema(shopVariants).omit({ id: true });
+export type InsertShopVariant = z.infer<typeof insertShopVariantSchema>;
+export type ShopVariant = typeof shopVariants.$inferSelect;
+
+export const shopShippingOptions = pgTable("shop_shipping_options", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  label: text("label").notNull(),
+  description: text("description"),
+  priceCents: integer("price_cents").notNull().default(0),
+  requiresAddress: boolean("requires_address").notNull().default(false),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertShopShippingOptionSchema = createInsertSchema(shopShippingOptions).omit({ id: true });
+export type InsertShopShippingOption = z.infer<typeof insertShopShippingOptionSchema>;
+export type ShopShippingOption = typeof shopShippingOptions.$inferSelect;
+
+// kind 'percent' → value is a whole percent (10 = 10%); 'fixed' → value is cents.
+export const shopDiscountCodes = pgTable("shop_discount_codes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
+  kind: text("kind").notNull().default("percent"),
+  value: integer("value").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  startsAt: timestamp("starts_at"),
+  endsAt: timestamp("ends_at"),
+  maxUses: integer("max_uses"),
+  usedCount: integer("used_count").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgCodeUnq: uniqueIndex("shop_discount_codes_org_code_unique").on(t.organizationId, t.code),
+}));
+export const insertShopDiscountCodeSchema = createInsertSchema(shopDiscountCodes).omit({ id: true, createdAt: true });
+export type InsertShopDiscountCode = z.infer<typeof insertShopDiscountCodeSchema>;
+export type ShopDiscountCode = typeof shopDiscountCodes.$inferSelect;
+
+// Totals are GST-INCLUSIVE; gstCents = NZ GST content = round(total * 3 / 23).
+// orderToken = public status-lookup key; orderNumber = human "MFL-1001".
+export const shopOrders = pgTable("shop_orders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  orderNumber: text("order_number").unique(),
+  orderToken: uuid("order_token").notNull().unique().default(sql`gen_random_uuid()`),
+  status: text("status").notNull().default("pending"),
+  // 'pending' | 'paid' | 'processing' | 'ready_for_pickup' | 'shipped' |
+  // 'completed' | 'cancelled' | 'refunded'
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  shippingOptionId: integer("shipping_option_id").references(() => shopShippingOptions.id, { onDelete: "set null" }),
+  shippingLabel: text("shipping_label"),
+  shippingCents: integer("shipping_cents").notNull().default(0),
+  addressLine1: text("address_line1"),
+  addressLine2: text("address_line2"),
+  suburb: text("suburb"),
+  city: text("city"),
+  postcode: text("postcode"),
+  subtotalCents: integer("subtotal_cents").notNull().default(0),
+  discountCents: integer("discount_cents").notNull().default(0),
+  discountCode: text("discount_code"),
+  gstCents: integer("gst_cents").notNull().default(0),
+  totalCents: integer("total_cents").notNull().default(0),
+  currency: text("currency").notNull().default("NZD"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  contactId: integer("contact_id").references(() => contacts.id),
+  source: text("source").notNull().default("online"),   // POS-ready
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  utmContent: text("utm_content"),
+  utmTerm: text("utm_term"),
+  fbclid: text("fbclid"),
+  gclid: text("gclid"),
+  visitorId: text("visitor_id"),
+  notes: text("notes"),
+  paidAt: timestamp("paid_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertShopOrderSchema = createInsertSchema(shopOrders).omit({ id: true, orderToken: true, createdAt: true, updatedAt: true });
+export type InsertShopOrder = z.infer<typeof insertShopOrderSchema>;
+export type ShopOrder = typeof shopOrders.$inferSelect;
+
+// Line items snapshot everything at purchase time so history never drifts.
+export const shopOrderItems = pgTable("shop_order_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  orderId: integer("order_id").notNull().references(() => shopOrders.id, { onDelete: "cascade" }),
+  productId: integer("product_id").references(() => shopProducts.id, { onDelete: "set null" }),
+  variantId: integer("variant_id").references(() => shopVariants.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  colourName: text("colour_name"),
+  size: text("size"),
+  imageUrl: text("image_url"),
+  unitCents: integer("unit_cents").notNull().default(0),
+  qty: integer("qty").notNull().default(1),
+  lineCents: integer("line_cents").notNull().default(0),
+  costUsdSnapshot: decimal("cost_usd_snapshot", { precision: 10, scale: 2 }),
+});
+export const insertShopOrderItemSchema = createInsertSchema(shopOrderItems).omit({ id: true });
+export type InsertShopOrderItem = z.infer<typeof insertShopOrderItemSchema>;
+export type ShopOrderItem = typeof shopOrderItems.$inferSelect;
