@@ -134,6 +134,7 @@ const leagueNav = [
   { tab: "loyalty", title: "Loyalty", url: "/admin/loyalty", icon: Crown },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "business-plan", title: "Business Plan", url: "/admin/business-plan", icon: FileText },
+  { tab: "store", title: "Store", url: "/admin/store", icon: ShoppingCart },
 ];
 
 const venueSecondary = [

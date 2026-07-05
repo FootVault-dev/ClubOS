@@ -84,6 +84,7 @@ import LeagueLoyalty from "@/pages/league-loyalty";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
+import LeagueStore from "@/pages/league-store";
 import CicInbox from "@/pages/cic-inbox";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import CicMailer from "@/pages/cic-mailer";
@@ -297,6 +298,7 @@ function AdminRouter() {
         <Route path="/admin/loyalty" component={LeagueLoyalty} />
         <Route path="/admin/analytics" component={LeagueAnalytics} />
         <Route path="/admin/business-plan" component={LeagueBusinessPlan} />
+        <Route path="/admin/store" component={LeagueStore} />
         <Route path="/admin/inbox" component={LeagueInbox} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />

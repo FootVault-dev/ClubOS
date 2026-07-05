@@ -92,6 +92,7 @@ const leagueTabs: TabDef[] = [
   { slug: "loyalty", title: "Loyalty", url: "/admin/loyalty" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "business-plan", title: "Business Plan", url: "/admin/business-plan" },
+  { slug: "store", title: "Store", url: "/admin/store" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -207,6 +208,7 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
   "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.
   "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.
+  "store", // MFL Store (native e-commerce, Shopify replacement pilot) — dark launch, Daniel only. Remove to open to admins/managers.
 ]);
 
 /**
