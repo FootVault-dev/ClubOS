@@ -57,6 +57,7 @@ import {
   BellRing,
   CalendarCheck,
   Waves,
+  MessageCircle,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -97,6 +98,7 @@ const campsNav = [
 const siuNav = [
   ...campsNav,
   { tab: "licensing", title: "OFC Licensing", url: "/admin/licensing", icon: Award },
+  { tab: "declarations", title: "Declarations", url: "/admin/declarations", icon: FileSignature },
   { tab: "events", title: "Community Events", url: "/admin/events", icon: Calendar },
   { tab: "membership", title: "Membership", url: "/admin/membership", icon: Crown },
 ];
@@ -160,6 +162,7 @@ const tournamentNav = [
   { tab: "food-truck", title: "Food Truck", url: "/admin/food-truck", icon: Truck },
   { tab: "vendors", title: "Vendors", url: "/admin/vendors", icon: UtensilsCrossed },
   { tab: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations", icon: Inbox },
+  { tab: "cic-livechat", title: "Live Chat", url: "/admin/cic-livechat", icon: MessageCircle },
   { tab: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer", icon: Mail },
   { tab: "cic-push", title: "Notifications", url: "/admin/cic-push", icon: BellRing },
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },

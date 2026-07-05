@@ -324,6 +324,13 @@ export interface IStorage {
   deleteTournamentPlayer(id: number): Promise<void>;
 
   getTournamentGoalsByGame(gameId: number): Promise<TournamentGoal[]>;
+  // Public match timeline: scorers + minutes for one game (goals only — never
+  // cards/MVP/keeper, which stay admin-only). Own-goal scorer names are
+  // suppressed (returned null) to avoid publicly naming a youth player for an OG.
+  getPublicGameGoals(gameId: number): Promise<{
+    id: number; minute: number | null; playerName: string | null;
+    teamId: number; isOwnGoal: boolean; isPenalty: boolean;
+  }[]>;
   createTournamentGoal(data: InsertTournamentGoal): Promise<TournamentGoal>;
   deleteTournamentGoal(id: number): Promise<void>;
   getTournamentTopScorers(tournamentId: number): Promise<{
@@ -2128,6 +2135,38 @@ export class DatabaseStorage implements IStorage {
 
   async getTournamentGoalsByGame(gameId: number): Promise<TournamentGoal[]> {
     return db.select().from(tournamentGoals).where(eq(tournamentGoals.gameId, gameId)).orderBy(asc(tournamentGoals.minute));
+  }
+
+  // Public match timeline — scorer name + minute per goal for one game. Joins
+  // the player for the name; own goals return a null name so a child is never
+  // publicly named for an OG (the goal still shows, credited to the right team).
+  // Minute-less goals sort to the end; ties break by insertion order.
+  async getPublicGameGoals(gameId: number): Promise<{
+    id: number; minute: number | null; playerName: string | null;
+    teamId: number; isOwnGoal: boolean; isPenalty: boolean;
+  }[]> {
+    const rows = await db.execute(sql`
+      SELECT
+        g.id          AS id,
+        g.minute      AS minute,
+        g.team_id     AS team_id,
+        g.is_own_goal AS is_own_goal,
+        g.is_penalty  AS is_penalty,
+        CASE WHEN g.is_own_goal THEN NULL
+             ELSE (p.first_name || ' ' || p.last_name) END AS player_name
+      FROM tournament_goals g
+      JOIN tournament_players p ON p.id = g.player_id
+      WHERE g.game_id = ${gameId}
+      ORDER BY g.minute ASC NULLS LAST, g.id ASC
+    `);
+    return (rows as any).rows.map((r: any) => ({
+      id: r.id,
+      minute: r.minute,
+      playerName: r.player_name,
+      teamId: r.team_id,
+      isOwnGoal: r.is_own_goal,
+      isPenalty: r.is_penalty,
+    }));
   }
 
   async createTournamentGoal(data: InsertTournamentGoal): Promise<TournamentGoal> {

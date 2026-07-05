@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, time, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -583,6 +583,69 @@ export const inboxMessages = pgTable("inbox_messages", {
   handledByUserId: integer("handled_by_user_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ── Live chat ────────────────────────────────────────────────────────────────
+// Powers the reusable Intercom-style chat widget on the brand marketing sites
+// (cicyouth.com, and reusable across MFL/CUGC/USG). A conversation is a threaded
+// exchange between a website visitor and staff, scoped to an org. Managed in
+// ClubOS → (workspace) → Live Chat. Distinct from inbox_messages (one-shot forms).
+export const chatConversations = pgTable("chat_conversations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  token: text("token").notNull(),              // opaque public handle held by the visitor's browser
+  brandKey: text("brand_key"),                 // which site started it, e.g. 'cicyouth'
+  visitorName: text("visitor_name"),
+  visitorEmail: text("visitor_email"),
+  visitorPhone: text("visitor_phone"),
+  status: text("status").notNull().default("open"),   // 'open'|'closed'
+  sourceUrl: text("source_url"),
+  userAgent: text("user_agent"),
+  agentUnread: integer("agent_unread").notNull().default(0),    // visitor msgs staff hasn't opened
+  visitorUnread: integer("visitor_unread").notNull().default(0), // agent msgs visitor hasn't seen
+  lastVisitorAt: timestamp("last_visitor_at"),
+  lastAgentAt: timestamp("last_agent_at"),
+  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  tokenUnq: uniqueIndex("chat_conv_token_unq").on(t.token),
+  orgRecentIdx: index("chat_conv_org_recent_idx").on(t.organizationId, t.lastMessageAt),
+}));
+
+export const chatMessages = pgTable("chat_messages", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  conversationId: integer("conversation_id").notNull(),
+  sender: text("sender").notNull(),            // 'visitor'|'agent'|'system'
+  authorName: text("author_name"),             // staff display name for agent messages
+  authorUserId: integer("author_user_id"),     // staff user id for agent messages
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  convIdx: index("chat_msg_conv_idx").on(t.conversationId, t.id),
+}));
+
+// ── CIC interest registrations ───────────────────────────────────────────────
+// Structured "Register Your Interest" submissions from cicyouth.com. One row per
+// club/registration — a club admin registers ALL the age groups they want in one
+// hit and is the single contact for all of them (ageGroups holds every selected
+// grade). Powers the age-group board in ClubOS → Tournaments → CIC → Registrations
+// (slots fill per grade with the exact team contact + the timestamp they registered).
+export const cicInterestRegistrations = pgTable("cic_interest_registrations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  club: text("club"),
+  location: text("location"),  // "Melbourne, Australia" — where the team is travelling from
+  ageGroups: text("age_groups").array().notNull().default(sql`ARRAY[]::text[]`), // e.g. {U9,U11,U13}
+  status: text("status").notNull().default("new"),  // 'new'|'confirmed'|'declined'|'archived'
+  notes: text("notes"),
+  sourceUrl: text("source_url"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("cic_interest_org_idx").on(t.organizationId, t.createdAt),
+}));
 
 // Email suppression list — anyone who unsubscribed from broadcasts. Per-org
 // (organizationId null = global). The mailer audience resolver excludes these.
@@ -1329,6 +1392,9 @@ export type RewardBuilderEvent = typeof rewardBuilderEvents.$inferSelect;
 export type RewardSeasonMember = typeof rewardSeasonMembers.$inferSelect;
 export type RewardSeasonReward = typeof rewardSeasonRewards.$inferSelect;
 export type InboxMessage = typeof inboxMessages.$inferSelect;
+export type ChatConversation = typeof chatConversations.$inferSelect;
+export type ChatMessage = typeof chatMessages.$inferSelect;
+export type CicInterestRegistration = typeof cicInterestRegistrations.$inferSelect;
 
 export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
 export const insertUserOrganizationSchema = createInsertSchema(userOrganizations).omit({ id: true });
@@ -3226,6 +3292,88 @@ export const esignTemplates = pgTable("esign_templates", {
 export const insertEsignTemplateSchema = createInsertSchema(esignTemplates).omit({ id: true, createdAt: true });
 export type InsertEsignTemplate = z.infer<typeof insertEsignTemplateSchema>;
 export type EsignTemplate = typeof esignTemplates.$inferSelect;
+
+
+// ---- OFC Payables Declarations (Document F.05) ----
+// A roster-declaration built on the e-Sign primitives: every listed player +
+// club staff member individually confirms (on a branded signing page) that the
+// club has paid all their contractual obligations; the club's authorised
+// signatory then certifies. Finalising collates one master PDF in the OFC F.05
+// template layout (Players table + Club Staff table + certification block),
+// plus per-person proof and a Certificate of Completion. Separate tables from
+// esign_* so this cannot affect live referee/vendor signing.
+export const payablesDeclarations = pgTable("payables_declarations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  criterion: text("criterion").notNull().default("F.05"),
+  season: text("season"),                                  // e.g. '2026/27'
+  clubName: text("club_name").notNull(),                   // legal applicant name
+  asOfDate: text("as_of_date"),                            // YYYY-MM-DD paid-up-to date
+  statement: text("statement").notNull(),                  // confirmation wording ({{club}} {{season}} {{as_of}} merged)
+  signatoryName: text("signatory_name"),                   // authorised signatory of the club
+  signatoryTitle: text("signatory_title"),                 // their job title
+  signatorySignatureName: text("signatory_signature_name"), // typed name at certification
+  signatorySignatureImage: text("signatory_signature_image"), // base64 png drawn signature
+  signatorySignedAt: timestamp("signatory_signed_at"),
+  signatoryIp: text("signatory_ip"),
+  status: text("status").notNull().default("draft"),       // draft | collecting | completed | voided
+  signedPdf: text("signed_pdf"),                           // base64 finalised master PDF
+  docHash: text("doc_hash"),                               // sha256 of source render
+  createdBy: integer("created_by"),                        // users.id
+  sentAt: timestamp("sent_at"),
+  completedAt: timestamp("completed_at"),
+  voidedAt: timestamp("voided_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPayablesDeclarationSchema = createInsertSchema(payablesDeclarations).omit({ id: true, createdAt: true });
+export type InsertPayablesDeclaration = z.infer<typeof insertPayablesDeclarationSchema>;
+export type PayablesDeclaration = typeof payablesDeclarations.$inferSelect;
+
+// One row per listed player/staff member. token gates the public signing link.
+export const payablesDeclarationSignatories = pgTable("payables_declaration_signatories", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  declarationId: integer("declaration_id").notNull().references(() => payablesDeclarations.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  groupKind: text("group_kind").notNull().default("player"), // 'player' | 'staff'
+  name: text("name").notNull(),
+  email: text("email"),                                    // nullable → in-person signing via copy-link
+  roleTitle: text("role_title"),                           // optional (squad no. / staff role)
+  sortOrder: integer("sort_order").notNull().default(0),
+  token: text("token").notNull().unique(),
+  status: text("status").notNull().default("pending"),     // pending | viewed | signed | declined
+  signatureName: text("signature_name"),
+  signatureImage: text("signature_image"),
+  consentedAt: timestamp("consented_at"),
+  viewedAt: timestamp("viewed_at"),
+  signedAt: timestamp("signed_at"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  declineReason: text("decline_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPayablesDeclarationSignatorySchema = createInsertSchema(payablesDeclarationSignatories).omit({ id: true, createdAt: true });
+export type InsertPayablesDeclarationSignatory = z.infer<typeof insertPayablesDeclarationSignatorySchema>;
+export type PayablesDeclarationSignatory = typeof payablesDeclarationSignatories.$inferSelect;
+
+// Immutable audit trail per declaration.
+export const payablesDeclarationEvents = pgTable("payables_declaration_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  declarationId: integer("declaration_id").notNull().references(() => payablesDeclarations.id, { onDelete: "cascade" }),
+  signatoryId: integer("signatory_id"),
+  type: text("type").notNull(),
+  actorEmail: text("actor_email"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  meta: jsonb("meta").$type<Record<string, any> | null>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPayablesDeclarationEventSchema = createInsertSchema(payablesDeclarationEvents).omit({ id: true, createdAt: true });
+export type InsertPayablesDeclarationEvent = z.infer<typeof insertPayablesDeclarationEventSchema>;
+export type PayablesDeclarationEvent = typeof payablesDeclarationEvents.$inferSelect;
 
 
 // ---- USG Studio (brand-aware AI proposal pages) ----

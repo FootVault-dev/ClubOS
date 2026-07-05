@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -11,13 +11,13 @@ import { fromForOrg } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
-import { eq, ne, and, or, sql, asc, desc, inArray, isNull } from "drizzle-orm";
+import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -9885,6 +9885,30 @@ export async function registerRoutes(
     }
   });
 
+  // Per-game match timeline — scorers + goal times for one game. Powers the
+  // "match details" popup on cicyouth.com/fixtures + the CIC Youth app. PUBLIC,
+  // but goals ONLY: cards, MVP votes and keeper ratings stay admin-only. The
+  // game's tournament must be active/completed (guards draft data).
+  app.get("/api/public/tournament/games/:id/goals", async (req, res) => {
+    try {
+      const game = await storage.getTournamentGame(parseInt(req.params.id));
+      if (!game) return res.status(404).json({ message: "Game not found" });
+      const t = await storage.getTournament(game.tournamentId);
+      if (!t || (t.status !== "active" && t.status !== "completed")) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      const goals = await storage.getPublicGameGoals(game.id);
+      res.json({
+        gameId: game.id,
+        homeTeamId: game.homeTeamId,
+        awayTeamId: game.awayTeamId,
+        goals,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ─────────────────────────── CIC SKILLS CHALLENGE ───────────────────────────
   // Side-competition at the Christchurch International Cup. Four categories:
   // {U10, U11} × {90-Second Juggling, Dribble Pass & Finish}.
@@ -11488,6 +11512,460 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   // ───────────────────────────────── END E-SIGN ─────────────────────────────────
+
+  // ──────────────────────── OFC PAYABLES DECLARATIONS (F.05) ─────────────────────
+  // Roster declaration: every listed player + club-staff member individually
+  // confirms (on a branded signing page) that the club has paid all their
+  // contractual obligations; the club's authorised signatory then certifies,
+  // and it all collates into one master PDF (OFC F.05 layout) + per-person proof
+  // + Certificate of Completion. Built on the e-Sign primitives but on its own
+  // tables so it cannot affect live referee/vendor signing.
+
+  const DECL_STATEMENT_DEFAULT =
+    "In connection with the granting of a licence for the {{season}} season, we the undersigned confirm that our employer {{club}} has paid all contractual obligations due as agreed in our respective contracts as of {{as_of}} by the date of this letter.";
+  const DECL_TITLE_DEFAULT = "Confirmation of No Overdue Payables towards Players and Club Staff";
+  const DECL_CLUB_DEFAULT = "Christchurch United Football Club Incorporated";
+
+  const declRenderStatement = (d: typeof payablesDeclarations.$inferSelect): string =>
+    String(d.statement || DECL_STATEMENT_DEFAULT)
+      .replace(/\{\{club\}\}/g, d.clubName || "____")
+      .replace(/\{\{season\}\}/g, d.season || "20XX/YY")
+      .replace(/\{\{as_of\}\}/g, d.asOfDate ? esignFmtDateNZ(d.asOfDate) : "____");
+
+  async function declLog(declarationId: number, signatoryId: number | null, type: string, o?: { actorEmail?: string | null; ip?: string | null; userAgent?: string | null; meta?: any }) {
+    await db.insert(payablesDeclarationEvents).values({
+      declarationId, signatoryId: signatoryId ?? null, type,
+      actorEmail: o?.actorEmail ?? null, ip: o?.ip ?? null,
+      userAgent: o?.userAgent ? String(o.userAgent).slice(0, 300) : null, meta: o?.meta ?? null,
+    });
+  }
+
+  function declSerializeSignatory(s: typeof payablesDeclarationSignatories.$inferSelect) {
+    return {
+      id: s.id, group: s.groupKind, name: s.name, email: s.email, roleTitle: s.roleTitle,
+      sortOrder: s.sortOrder, status: s.status, token: s.token,
+      signedAt: s.signedAt, viewedAt: s.viewedAt, declineReason: s.declineReason,
+    };
+  }
+  function declSerialize(d: typeof payablesDeclarations.$inferSelect, sigs: (typeof payablesDeclarationSignatories.$inferSelect)[]) {
+    const players = sigs.filter((s) => s.groupKind === "staff" ? false : true).filter((s) => s.groupKind === "player");
+    const staff = sigs.filter((s) => s.groupKind === "staff");
+    const count = (arr: typeof sigs) => ({ total: arr.length, signed: arr.filter((s) => s.status === "signed").length });
+    return {
+      id: d.id, title: d.title, criterion: d.criterion, season: d.season, clubName: d.clubName,
+      asOfDate: d.asOfDate, statementTemplate: d.statement, statement: declRenderStatement(d),
+      signatoryName: d.signatoryName, signatoryTitle: d.signatoryTitle, signatorySignedAt: d.signatorySignedAt,
+      status: d.status, createdAt: d.createdAt, sentAt: d.sentAt, completedAt: d.completedAt,
+      hasSignedPdf: !!d.signedPdf,
+      counts: { players: count(players), staff: count(staff) },
+      signatories: sigs.slice().sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id).map(declSerializeSignatory),
+    };
+  }
+
+  async function declOrgBrand(orgId: number): Promise<{ orgLabel: string; accent: string; accentDeep: string; logoUrl: string }> {
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));
+    return {
+      orgLabel: org?.name || "South Island United",
+      accent: "#C59949",
+      accentDeep: "#937224",
+      logoUrl: `/logos/${org?.slug || "south-island-united"}.png`,
+    };
+  }
+
+  const declInviteHtml = (p: { name: string; club: string; title: string; link: string; fromName: string }) => `
+    <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <div style="height:6px;background:linear-gradient(90deg,#937224,#C59949,#E4C56A)"></div>
+      <div style="padding:28px 24px">
+        <p style="font-size:15px">Kia ora ${p.name},</p>
+        <p style="font-size:15px;line-height:1.6">${p.fromName} needs your electronic signature to confirm, for OFC club licensing, that <strong>${p.club}</strong> has paid all contractual obligations owed to you under your contract.</p>
+        <p style="font-size:17px;font-weight:700;margin:16px 0">${p.title}</p>
+        <p style="margin:26px 0"><a href="${p.link}" style="background:#C59949;color:#111;font-weight:700;text-decoration:none;padding:13px 26px;border-radius:10px;display:inline-block">Review &amp; sign</a></p>
+        <p style="font-size:12px;color:#888;line-height:1.6">Or paste this link into your browser:<br>${p.link}</p>
+        <p style="font-size:11px;color:#aaa;margin-top:24px">Signing is electronic and legally valid under the Contract and Commercial Law Act 2017 (NZ). Takes under a minute.</p>
+      </div>
+    </div>`;
+
+  async function declEmailPending(declId: number, orgId: number, onlyIds?: number[]) {
+    const [d] = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.id, declId));
+    if (!d) return 0;
+    const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, declId));
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));
+    const fromName = org?.name || "South Island United";
+    const base = appBaseUrl();
+    const { sendEmail } = await import("./email");
+    let sent = 0;
+    for (const s of sigs) {
+      if (s.status === "signed" || s.status === "declined") continue;
+      if (!s.email) continue;
+      if (onlyIds && !onlyIds.includes(s.id)) continue;
+      try {
+        await sendEmail({
+          to: s.email,
+          from: fromForOrg(orgId, fromName),
+          subject: `Please confirm — ${d.title}`,
+          html: declInviteHtml({ name: s.name, club: d.clubName, title: d.title, link: `${base}/declaration/${s.token}`, fromName }),
+        });
+        sent += 1;
+      } catch { /* keep going */ }
+    }
+    return sent;
+  }
+
+  // Compute a stable content fingerprint over the statement + roster (order-independent within a group).
+  function declDocHash(d: typeof payablesDeclarations.$inferSelect, sigs: (typeof payablesDeclarationSignatories.$inferSelect)[]): string {
+    const canon = JSON.stringify({
+      statement: declRenderStatement(d),
+      club: d.clubName, season: d.season, asOf: d.asOfDate,
+      signatory: { name: d.signatoryName, title: d.signatoryTitle },
+      people: sigs.slice().sort((a, b) => a.id - b.id).map((s) => ({ g: s.groupKind, n: s.name, e: s.email, st: s.status, at: s.signedAt ? new Date(s.signedAt).toISOString() : null })),
+    });
+    return crypto.createHash("sha256").update(canon).digest("hex");
+  }
+
+  async function declBuildMasterPdf(declId: number, finalHash?: string): Promise<{ bytes: Uint8Array; hash: string }> {
+    const [d] = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.id, declId));
+    if (!d) throw new Error("Declaration not found");
+    const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, declId)).orderBy(payablesDeclarationSignatories.sortOrder, payablesDeclarationSignatories.id);
+    const brand = await declOrgBrand(d.organizationId);
+    const logoBytes = await esignLogoBytes(brand.logoUrl);
+    const hash = finalHash || declDocHash(d, sigs);
+    const map = (s: typeof payablesDeclarationSignatories.$inferSelect) => ({
+      name: s.name, email: s.email, group: (s.groupKind === "staff" ? "staff" : "player") as "player" | "staff",
+      roleTitle: s.roleTitle, status: s.status, signatureName: s.signatureName, signatureImage: s.signatureImage,
+      viewedAt: s.viewedAt, signedAt: s.signedAt, ip: s.ip,
+    });
+    const { renderPayablesMasterPdf } = await import("./payables-pdf");
+    const bytes = await renderPayablesMasterPdf({
+      brand: { orgLabel: brand.orgLabel, accent: brand.accent, accentDeep: brand.accentDeep },
+      logoBytes,
+      title: d.title, criterion: d.criterion, season: d.season, clubName: d.clubName,
+      asOfDateLabel: d.asOfDate ? esignFmtDateNZ(d.asOfDate) : null,
+      statement: declRenderStatement(d),
+      signatory: { name: d.signatoryName, title: d.signatoryTitle, signatureName: d.signatorySignatureName, signatureImage: d.signatorySignatureImage, signedAt: d.signatorySignedAt },
+      players: sigs.filter((s) => s.groupKind !== "staff").map(map),
+      staff: sigs.filter((s) => s.groupKind === "staff").map(map),
+      envelopeId: d.id, docHash: hash, completedAt: d.completedAt || new Date(),
+    });
+    return { bytes, hash };
+  }
+
+  // ---- Admin ----
+  app.get("/api/admin/declarations", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const decls = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.organizationId, orgId)).orderBy(desc(payablesDeclarations.createdAt));
+      const ids = decls.map((d) => d.id);
+      const sigs = ids.length ? await db.select().from(payablesDeclarationSignatories).where(inArray(payablesDeclarationSignatories.declarationId, ids)) : [];
+      res.json(decls.map((d) => declSerialize(d, sigs.filter((s) => s.declarationId === d.id))));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/declarations", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const b = req.body ?? {};
+      const sender = req.session.userId ? (await db.select().from(usersTable).where(eq(usersTable.id, req.session.userId)))[0] : null;
+      const senderName = sender ? [sender.firstName, sender.lastName].filter(Boolean).join(" ").trim() : "";
+      const [d] = await db.insert(payablesDeclarations).values({
+        organizationId: orgId,
+        title: esignClean(b.title, 160) || DECL_TITLE_DEFAULT,
+        criterion: esignClean(b.criterion, 12) || "F.05",
+        season: esignClean(b.season, 20),
+        clubName: esignClean(b.clubName, 160) || DECL_CLUB_DEFAULT,
+        asOfDate: /^\d{4}-\d{2}-\d{2}$/.test(String(b.asOfDate || "")) ? String(b.asOfDate) : null,
+        statement: esignClean(b.statement, 1200) || DECL_STATEMENT_DEFAULT,
+        signatoryName: esignClean(b.signatoryName, 120) || senderName || null,
+        signatoryTitle: esignClean(b.signatoryTitle, 120),
+        status: "draft",
+        createdBy: req.session.userId ?? null,
+      }).returning();
+      await declLog(d.id, null, "created", { actorEmail: sender?.email, ip: esignIp(req), userAgent: req.headers["user-agent"] });
+      res.json(declSerialize(d, []));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/declarations/:id", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, id));
+      const events = await db.select().from(payablesDeclarationEvents).where(eq(payablesDeclarationEvents.declarationId, id)).orderBy(desc(payablesDeclarationEvents.createdAt)).limit(200);
+      res.json({ ...declSerialize(d, sigs), events: events.map((e) => ({ id: e.id, type: e.type, actorEmail: e.actorEmail, ip: e.ip, createdAt: e.createdAt, meta: e.meta })) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.patch("/api/admin/declarations/:id", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      if (d.status === "completed" || d.status === "voided") return res.status(400).json({ message: "This declaration is closed and can no longer be edited." });
+      const b = req.body ?? {};
+      const patch: any = {};
+      if (b.title !== undefined) patch.title = esignClean(b.title, 160) || DECL_TITLE_DEFAULT;
+      if (b.season !== undefined) patch.season = esignClean(b.season, 20);
+      if (b.clubName !== undefined) patch.clubName = esignClean(b.clubName, 160) || DECL_CLUB_DEFAULT;
+      if (b.asOfDate !== undefined) patch.asOfDate = /^\d{4}-\d{2}-\d{2}$/.test(String(b.asOfDate || "")) ? String(b.asOfDate) : null;
+      if (b.statement !== undefined) patch.statement = esignClean(b.statement, 1200) || DECL_STATEMENT_DEFAULT;
+      if (b.signatoryName !== undefined) patch.signatoryName = esignClean(b.signatoryName, 120);
+      if (b.signatoryTitle !== undefined) patch.signatoryTitle = esignClean(b.signatoryTitle, 120);
+      if (Object.keys(patch).length) await db.update(payablesDeclarations).set(patch).where(eq(payablesDeclarations.id, id));
+      const [fresh] = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.id, id));
+      const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, id));
+      res.json(declSerialize(fresh, sigs));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Add one or many signatories. Body: { signatories: [{ group, name, email?, roleTitle? }] }
+  app.post("/api/admin/declarations/:id/signatories", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      if (d.status === "completed" || d.status === "voided") return res.status(400).json({ message: "This declaration is closed." });
+      const incoming = Array.isArray(req.body?.signatories) ? req.body.signatories : [];
+      const clean = incoming
+        .map((s: any) => ({
+          group: s?.group === "staff" ? "staff" : "player",
+          name: String(s?.name ?? "").trim().slice(0, 120),
+          email: s?.email ? String(s.email).trim().toLowerCase().slice(0, 160) : null,
+          roleTitle: s?.roleTitle ? String(s.roleTitle).trim().slice(0, 80) : null,
+        }))
+        .filter((s: any) => s.name && (!s.email || /.+@.+\..+/.test(s.email)));
+      if (!clean.length) return res.status(400).json({ message: "Add at least one name. Emails, if given, must be valid." });
+      const existing = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, id));
+      const nextOrder: Record<string, number> = { player: 0, staff: 0 };
+      for (const s of existing) nextOrder[s.groupKind] = Math.max(nextOrder[s.groupKind] || 0, s.sortOrder + 1);
+      for (const s of clean) {
+        await db.insert(payablesDeclarationSignatories).values({
+          declarationId: id, organizationId: orgId, groupKind: s.group, name: s.name, email: s.email, roleTitle: s.roleTitle,
+          sortOrder: nextOrder[s.group]++, token: esignToken(),
+        });
+      }
+      await declLog(id, null, "signatories_added", { ip: esignIp(req), meta: { count: clean.length } });
+      const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, id));
+      const [fresh] = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.id, id));
+      res.json(declSerialize(fresh, sigs));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.patch("/api/admin/declarations/:id/signatories/:sid", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const sid = parseInt(String(req.params.sid));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      const [sig] = await db.select().from(payablesDeclarationSignatories).where(and(eq(payablesDeclarationSignatories.id, sid), eq(payablesDeclarationSignatories.declarationId, id)));
+      if (!sig) return res.status(404).json({ message: "Signatory not found" });
+      const b = req.body ?? {};
+      const patch: any = {};
+      if (b.name !== undefined) patch.name = String(b.name).trim().slice(0, 120) || sig.name;
+      if (b.email !== undefined) { const e = String(b.email || "").trim().toLowerCase(); if (e && !/.+@.+\..+/.test(e)) return res.status(400).json({ message: "Invalid email" }); patch.email = e || null; }
+      if (b.roleTitle !== undefined) patch.roleTitle = b.roleTitle ? String(b.roleTitle).trim().slice(0, 80) : null;
+      if (b.group !== undefined) patch.groupKind = b.group === "staff" ? "staff" : "player";
+      if (Object.keys(patch).length) await db.update(payablesDeclarationSignatories).set(patch).where(eq(payablesDeclarationSignatories.id, sid));
+      const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, id));
+      res.json(declSerialize(d, sigs));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/declarations/:id/signatories/:sid", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const sid = parseInt(String(req.params.sid));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      await db.delete(payablesDeclarationSignatories).where(and(eq(payablesDeclarationSignatories.id, sid), eq(payablesDeclarationSignatories.declarationId, id)));
+      const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, id));
+      res.json(declSerialize(d, sigs));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/declarations/:id/send", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      if (d.status === "voided") return res.status(400).json({ message: "Declaration is voided." });
+      const onlyIds = Array.isArray(req.body?.signatoryIds) ? req.body.signatoryIds.map((n: any) => parseInt(String(n))).filter(Boolean) : undefined;
+      const sent = await declEmailPending(id, orgId, onlyIds);
+      if (d.status === "draft") await db.update(payablesDeclarations).set({ status: "collecting", sentAt: new Date() }).where(eq(payablesDeclarations.id, id));
+      await declLog(id, null, "sent", { ip: esignIp(req), meta: { emailed: sent } });
+      res.json({ ok: true, emailed: sent });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/declarations/:id/signatories/:sid/remind", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const sid = parseInt(String(req.params.sid));
+      const sent = await declEmailPending(id, orgId, [sid]);
+      await declLog(id, sid, "reminded", { ip: esignIp(req) });
+      res.json({ ok: true, emailed: sent });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // The authorised signatory certifies + finalises → build the master PDF.
+  app.post("/api/admin/declarations/:id/certify", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      if (d.status === "completed") return res.status(400).json({ message: "Already certified and completed." });
+      if (d.status === "voided") return res.status(400).json({ message: "Declaration is voided." });
+      const b = req.body ?? {};
+      if (b.consent !== true) return res.status(400).json({ message: "Please tick the certification consent to continue." });
+      const typed = String(b.signatureName ?? "").trim();
+      if (typed.length < 2) return res.status(400).json({ message: "Type your full name to certify." });
+      const name = esignClean(b.name, 120) || d.signatoryName;
+      const title = esignClean(b.title, 120) || d.signatoryTitle;
+      const sigImg = b.signatureImage ? String(b.signatureImage).slice(0, 400000) : null;
+      // Stamp signatory + finalise.
+      await db.update(payablesDeclarations).set({
+        signatoryName: name, signatoryTitle: title,
+        signatorySignatureName: typed.slice(0, 120), signatorySignatureImage: sigImg,
+        signatorySignedAt: new Date(), signatoryIp: esignIp(req),
+        completedAt: new Date(),
+      }).where(eq(payablesDeclarations.id, id));
+      const sigs = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.declarationId, id));
+      const [d2] = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.id, id));
+      const hash = declDocHash(d2, sigs);
+      const { bytes } = await declBuildMasterPdf(id, hash);
+      const signedB64 = Buffer.from(bytes).toString("base64");
+      await db.update(payablesDeclarations).set({ status: "completed", signedPdf: signedB64, docHash: hash }).where(eq(payablesDeclarations.id, id));
+      await declLog(id, null, "certified", { actorEmail: undefined, ip: esignIp(req), meta: { players: sigs.filter((s) => s.groupKind !== "staff").length, staff: sigs.filter((s) => s.groupKind === "staff").length } });
+      await declLog(id, null, "completed", { ip: esignIp(req) });
+      // email the completed master to the creator / certifier
+      try {
+        const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));
+        const fromName = org?.name || "South Island United";
+        const recipients = new Set<string>();
+        if (d.createdBy) { const [u] = await db.select().from(usersTable).where(eq(usersTable.id, d.createdBy)); if (u?.email) recipients.add(u.email); }
+        const me = req.session.userId ? (await db.select().from(usersTable).where(eq(usersTable.id, req.session.userId)))[0] : null;
+        if (me?.email) recipients.add(me.email);
+        const { sendEmail } = await import("./email");
+        const attachment = { filename: `${esignSafeName(d.title)}-${d.criterion}.pdf`, content: signedB64, contentType: "application/pdf" };
+        for (const to of Array.from(recipients)) {
+          try { await sendEmail({ to, from: fromForOrg(orgId, fromName), subject: `Completed: ${d.title} (OFC ${d.criterion})`, html: `<div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a"><div style="height:6px;background:linear-gradient(90deg,#937224,#C59949,#E4C56A)"></div><div style="padding:28px 24px"><p style="font-size:17px;font-weight:700">✓ Declaration certified</p><p style="font-size:15px;line-height:1.6"><strong>${d.title}</strong> has been certified and completed. The master PDF (roster signatures + per-person proof + Certificate of Completion) is attached for your OFC submission.</p></div></div>`, attachments: [attachment] }); } catch { /* keep going */ }
+        }
+      } catch { /* email best-effort */ }
+      const [fresh] = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.id, id));
+      res.json(declSerialize(fresh, sigs));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Render the master PDF (finalised if completed, else a live draft) → base64.
+  app.post("/api/admin/declarations/:id/render", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      if (d.status === "completed" && d.signedPdf) return res.json({ pdf: d.signedPdf, final: true });
+      const { bytes } = await declBuildMasterPdf(id);
+      res.json({ pdf: Buffer.from(bytes).toString("base64"), final: false });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/declarations/:id/void", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      await db.update(payablesDeclarations).set({ status: "voided", voidedAt: new Date() }).where(eq(payablesDeclarations.id, id));
+      await declLog(id, null, "voided", { ip: esignIp(req) });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/declarations/:id", requireAuth, requireTab("declarations"), async (req, res) => {
+    try {
+      const orgId = await esignOrgId(req);
+      const id = parseInt(String(req.params.id));
+      const [d] = await db.select().from(payablesDeclarations).where(and(eq(payablesDeclarations.id, id), eq(payablesDeclarations.organizationId, orgId)));
+      if (!d) return res.status(404).json({ message: "Not found" });
+      await db.delete(payablesDeclarations).where(eq(payablesDeclarations.id, id));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ---- Public signing ----
+  async function declLoadByToken(token: string) {
+    const [sig] = await db.select().from(payablesDeclarationSignatories).where(eq(payablesDeclarationSignatories.token, token));
+    if (!sig) return null;
+    const [d] = await db.select().from(payablesDeclarations).where(eq(payablesDeclarations.id, sig.declarationId));
+    if (!d) return null;
+    return { sig, d };
+  }
+
+  app.get("/api/declaration/:token", async (req, res) => {
+    try {
+      const loaded = await declLoadByToken(String(req.params.token));
+      if (!loaded) return res.status(404).json({ message: "This signing link is not valid." });
+      const { sig, d } = loaded;
+      if (d.status === "voided") return res.status(410).json({ message: "This declaration has been withdrawn. Please contact the club." });
+      if (sig.status === "pending") {
+        await db.update(payablesDeclarationSignatories).set({ status: "viewed", viewedAt: new Date() }).where(eq(payablesDeclarationSignatories.id, sig.id));
+        await declLog(d.id, sig.id, "viewed", { actorEmail: sig.email, ip: esignIp(req), userAgent: req.headers["user-agent"] });
+      }
+      const brand = await declOrgBrand(d.organizationId);
+      res.json({
+        signatory: { name: sig.name, group: sig.groupKind, roleTitle: sig.roleTitle, status: sig.status === "pending" ? "viewed" : sig.status, signedAt: sig.signedAt },
+        title: d.title, criterion: d.criterion, clubName: d.clubName, season: d.season,
+        asOfLabel: d.asOfDate ? esignFmtDateNZ(d.asOfDate) : null,
+        statement: declRenderStatement(d),
+        brand: { orgLabel: brand.orgLabel, accent: brand.accent, accentDeep: brand.accentDeep, logoUrl: brand.logoUrl },
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/declaration/:token", async (req, res) => {
+    try {
+      const loaded = await declLoadByToken(String(req.params.token));
+      if (!loaded) return res.status(404).json({ message: "This signing link is not valid." });
+      const { sig, d } = loaded;
+      if (d.status === "voided") return res.status(410).json({ message: "This declaration has been withdrawn." });
+      if (sig.status === "signed") return res.status(400).json({ message: "You've already signed — thank you." });
+      const b = req.body ?? {};
+      if (b.consent !== true) return res.status(400).json({ message: "Please tick the box to confirm before signing." });
+      const typed = String(b.signatureName ?? "").trim();
+      if (typed.length < 2) return res.status(400).json({ message: "Please type your full name." });
+      const sigImg = b.signatureImage ? String(b.signatureImage).slice(0, 400000) : null;
+      const now = new Date();
+      await db.update(payablesDeclarationSignatories).set({
+        status: "signed", signatureName: typed.slice(0, 120), signatureImage: sigImg,
+        consentedAt: now, signedAt: now, viewedAt: sig.viewedAt || now,
+        ip: esignIp(req), userAgent: String(req.headers["user-agent"] || "").slice(0, 300),
+      }).where(eq(payablesDeclarationSignatories.id, sig.id));
+      if (d.status === "draft") await db.update(payablesDeclarations).set({ status: "collecting" }).where(eq(payablesDeclarations.id, d.id));
+      await declLog(d.id, sig.id, "signed", { actorEmail: sig.email, ip: esignIp(req), userAgent: req.headers["user-agent"] });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/declaration/:token/decline", async (req, res) => {
+    try {
+      const loaded = await declLoadByToken(String(req.params.token));
+      if (!loaded) return res.status(404).json({ message: "Invalid link" });
+      const { sig, d } = loaded;
+      if (sig.status === "signed") return res.status(400).json({ message: "Already signed." });
+      const reason = esignClean(req.body?.reason, 300);
+      await db.update(payablesDeclarationSignatories).set({ status: "declined", declineReason: reason, ip: esignIp(req) }).where(eq(payablesDeclarationSignatories.id, sig.id));
+      await declLog(d.id, sig.id, "declined", { actorEmail: sig.email, ip: esignIp(req), meta: { reason } });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  // ────────────────────── END OFC PAYABLES DECLARATIONS ──────────────────────
 
   app.get("/api/public/camps", async (_req, res) => {
     try {
@@ -15601,6 +16079,291 @@ export async function registerRoutes(
       if (!["new", "read", "replied", "archived"].includes(status)) return res.status(400).json({ message: "invalid status" });
       const orgId = await skillsOrgId();
       await db.update(inboxMessages).set({ status }).where(and(eq(inboxMessages.id, parseInt(req.params.id)), eq(inboxMessages.organizationId, orgId)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── CIC "Register Your Interest" (structured, multi age-group) ───────────────
+  // A club admin registers every age group they want in one submission and is the
+  // single contact for all of them. Stored as one row (age_groups = all selected
+  // grades) → the age-group board in Tournaments → CIC → Registrations.
+  const CIC_AGE_GROUPS = ["U9", "U10", "U11", "U12", "U13", "U14", "U15"];
+  app.options("/api/public/cic/register-interest", (req, res) => { setCicCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cic/register-interest", async (req, res) => {
+    setCicCors(req, res);
+    try {
+      const firstName = String(req.body.firstName || "").trim();
+      const lastName = String(req.body.lastName || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const club = String(req.body.club || "").trim();
+      const location = String(req.body.location || "").trim();
+      const ageGroups = Array.isArray(req.body.ageGroups)
+        ? req.body.ageGroups.map((g: any) => String(g).trim()).filter((g: string) => CIC_AGE_GROUPS.includes(g))
+        : [];
+      if (!firstName || !/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Please add your name and a valid email." });
+      if (!phone) return res.status(400).json({ message: "Please add a phone number." });
+      if (!location) return res.status(400).json({ message: "Please add your city." });
+      if (ageGroups.length === 0) return res.status(400).json({ message: "Please select at least one age group." });
+
+      const orgId = await skillsOrgId();
+      await db.insert(cicInterestRegistrations).values({
+        organizationId: orgId, firstName, lastName: lastName || null, email,
+        phone: phone || null, club: club || null, location: location || null, ageGroups,
+        sourceUrl: String(req.body.sourceUrl || "cicyouth.com").slice(0, 500), status: "new",
+      });
+      try {
+        await sendCicInterestNotification({
+          to: "info@cicyouth.com", firstName, lastName: lastName || undefined, email,
+          phone: phone || undefined, club: club || undefined, location: location || undefined, ageGroups, sourceUrl: String(req.body.sourceUrl || ""),
+        });
+      } catch (e) { console.error("[CIC register-interest] email failed:", e); }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[CIC register-interest] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // Admin: structured interest registrations (grouped into the age-group board client-side).
+  app.get("/api/admin/cic/registrations", requireAuth, async (_req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const rows = await db.select().from(cicInterestRegistrations)
+        .where(eq(cicInterestRegistrations.organizationId, orgId))
+        .orderBy(desc(cicInterestRegistrations.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/admin/cic/registrations/:id/status", requireAuth, async (req, res) => {
+    try {
+      const status = String(req.body.status || "");
+      if (!["new", "confirmed", "declined", "archived"].includes(status)) return res.status(400).json({ message: "invalid status" });
+      const orgId = await skillsOrgId();
+      await db.update(cicInterestRegistrations).set({ status })
+        .where(and(eq(cicInterestRegistrations.id, parseInt(req.params.id)), eq(cicInterestRegistrations.organizationId, orgId)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── Live Chat ─────────────────────────────────────────────────────────────
+  // Powers the reusable Intercom-style chat widget on the brand marketing sites.
+  // A conversation is a threaded exchange (visitor ↔ staff), scoped to an org via
+  // a small brand registry, and managed in ClubOS → (workspace) → Live Chat.
+  // Public endpoints are CORS-open to the brand sites; admin endpoints are session-
+  // gated. Reusable across brands by adding a CHAT_BRANDS entry + pointing that
+  // brand's widget at /api/public/chat/* (see LiveChatWidget in the brand site).
+  type ChatBrand = { orgSlug: string; brandName: string; fromEmail: string; notifyEmail: string; accent: string; siteUrl: string };
+  const CHAT_BRANDS: Record<string, ChatBrand> = {
+    cicyouth: {
+      orgSlug: "christchurch-international-cup",
+      brandName: "Christchurch International Cup",
+      fromEmail: "noreply@cicyouth.com",
+      notifyEmail: "info@cicyouth.com",
+      accent: "#c9a43e",
+      siteUrl: "https://cicyouth.com",
+    },
+    // Add more brands here to reuse the widget (mfl, cugc, usg…). Each needs a
+    // matching org slug + a from/notify email on a verified sending domain.
+  };
+  const chatOrgCache: Record<string, number> = {};
+  async function chatOrgId(slug: string): Promise<number> {
+    if (chatOrgCache[slug]) return chatOrgCache[slug];
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
+    if (!org) throw new Error(`chat: org not found for slug ${slug}`);
+    chatOrgCache[slug] = org.id;
+    return org.id;
+  }
+  const CHAT_ORIGINS = [
+    "https://cicyouth.com", "https://www.cicyouth.com",
+    "https://cic7s.com", "https://www.cic7s.com",
+    "https://minifootball.co.nz", "https://www.minifootball.co.nz",
+    "https://cugc.co.nz", "https://www.cugc.co.nz",
+    "https://usg.co.nz", "https://www.usg.co.nz",
+  ];
+  const setChatCors = (req: any, res: any) => {
+    const origin = req.headers.origin || "";
+    if (CHAT_ORIGINS.includes(origin) || /\.vercel\.app$/.test(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+    }
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  };
+
+  // Start a new conversation with the visitor's first message.
+  app.options("/api/public/chat/start", (req, res) => { setChatCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/chat/start", async (req, res) => {
+    setChatCors(req, res);
+    try {
+      const brandKey = String(req.body.brandKey || "").trim();
+      const brand = CHAT_BRANDS[brandKey];
+      if (!brand) return res.status(400).json({ message: "Unknown chat brand." });
+      const name = String(req.body.name || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const message = String(req.body.message || "").trim();
+      if (!name || !/.+@.+\..+/.test(email) || !message) {
+        return res.status(400).json({ message: "Please add your name, a valid email and a message." });
+      }
+      const orgId = await chatOrgId(brand.orgSlug);
+      const token = crypto.randomBytes(24).toString("base64url");
+      const now = new Date();
+      const [conv] = await db.insert(chatConversations).values({
+        organizationId: orgId, token, brandKey,
+        visitorName: name, visitorEmail: email, visitorPhone: phone || null,
+        sourceUrl: String(req.body.sourceUrl || "").slice(0, 500) || null,
+        userAgent: String(req.headers["user-agent"] || "").slice(0, 400) || null,
+        status: "open", agentUnread: 1, lastVisitorAt: now, lastMessageAt: now,
+      }).returning({ id: chatConversations.id });
+      await db.insert(chatMessages).values({ conversationId: conv.id, sender: "visitor", body: message });
+      try {
+        await sendChatNewConversationNotification({
+          to: brand.notifyEmail, brandName: brand.brandName, fromEmail: brand.fromEmail, accent: brand.accent,
+          visitorName: name, visitorEmail: email, visitorPhone: phone || undefined,
+          message, sourceUrl: String(req.body.sourceUrl || ""),
+          adminUrl: "https://app.usg.co.nz/admin/cic-livechat",
+        });
+      } catch (e) { console.error("[chat start] email failed:", e); }
+      res.json({ ok: true, token });
+    } catch (e: any) { console.error("[chat start] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // Poll / restore a conversation. ?since=<id> returns only newer messages.
+  app.get("/api/public/chat/:token", async (req, res) => {
+    setChatCors(req, res);
+    try {
+      const token = String(req.params.token || "");
+      const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.token, token)).limit(1);
+      if (!conv) return res.status(404).json({ message: "not found" });
+      const since = parseInt(String(req.query.since || "0")) || 0;
+      const msgs = await db.select().from(chatMessages)
+        .where(and(eq(chatMessages.conversationId, conv.id), gt(chatMessages.id, since)))
+        .orderBy(asc(chatMessages.id));
+      // Visitor has seen the thread → clear their unread counter.
+      if (conv.visitorUnread > 0) await db.update(chatConversations).set({ visitorUnread: 0 }).where(eq(chatConversations.id, conv.id));
+      res.json({
+        conversation: { status: conv.status, visitorName: conv.visitorName },
+        messages: msgs.map((m) => ({ id: m.id, sender: m.sender, authorName: m.authorName, body: m.body, createdAt: m.createdAt })),
+      });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Visitor posts a follow-up message.
+  app.options("/api/public/chat/:token/message", (req, res) => { setChatCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/chat/:token/message", async (req, res) => {
+    setChatCors(req, res);
+    try {
+      const token = String(req.params.token || "");
+      const body = String(req.body.body || "").trim();
+      if (!body) return res.status(400).json({ message: "empty message" });
+      const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.token, token)).limit(1);
+      if (!conv) return res.status(404).json({ message: "not found" });
+      const now = new Date();
+      // Debounce staff email: skip if the visitor sent a message in the last 60s.
+      const recentlyActive = conv.lastVisitorAt && (now.getTime() - new Date(conv.lastVisitorAt).getTime() < 60_000);
+      await db.insert(chatMessages).values({ conversationId: conv.id, sender: "visitor", body });
+      await db.update(chatConversations).set({
+        agentUnread: (conv.agentUnread || 0) + 1, status: "open", lastVisitorAt: now, lastMessageAt: now,
+      }).where(eq(chatConversations.id, conv.id));
+      if (!recentlyActive) {
+        const brand = CHAT_BRANDS[conv.brandKey || ""] || CHAT_BRANDS.cicyouth;
+        try {
+          await sendChatNewConversationNotification({
+            to: brand.notifyEmail, brandName: brand.brandName, fromEmail: brand.fromEmail, accent: brand.accent,
+            visitorName: conv.visitorName || undefined, visitorEmail: conv.visitorEmail || undefined, visitorPhone: conv.visitorPhone || undefined,
+            message: body, sourceUrl: conv.sourceUrl || undefined, adminUrl: "https://app.usg.co.nz/admin/cic-livechat",
+          });
+        } catch (e) { console.error("[chat message] email failed:", e); }
+      }
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── Live Chat admin (CIC workspace) ─────────────────────────────────────────
+  // List conversations with a last-message preview + unread counts.
+  app.get("/api/admin/cic/chat/conversations", requireAuth, async (_req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const convs = await db.select().from(chatConversations)
+        .where(eq(chatConversations.organizationId, orgId))
+        .orderBy(desc(chatConversations.lastMessageAt)).limit(300);
+      const ids = convs.map((c) => c.id);
+      let previews: Record<number, { body: string; sender: string }> = {};
+      if (ids.length) {
+        const lastIds = await db.select({ cid: chatMessages.conversationId, mid: sql<number>`max(${chatMessages.id})` })
+          .from(chatMessages).where(inArray(chatMessages.conversationId, ids)).groupBy(chatMessages.conversationId);
+        const midToCid: Record<number, number> = {};
+        lastIds.forEach((l) => { midToCid[Number(l.mid)] = l.cid; });
+        const midList = lastIds.map((l) => Number(l.mid));
+        if (midList.length) {
+          const lastMsgs = await db.select().from(chatMessages).where(inArray(chatMessages.id, midList));
+          lastMsgs.forEach((m) => { previews[m.conversationId] = { body: m.body, sender: m.sender }; });
+        }
+      }
+      res.json(convs.map((c) => ({
+        id: c.id, visitorName: c.visitorName, visitorEmail: c.visitorEmail, visitorPhone: c.visitorPhone,
+        status: c.status, agentUnread: c.agentUnread, sourceUrl: c.sourceUrl,
+        lastMessageAt: c.lastMessageAt, createdAt: c.createdAt,
+        preview: previews[c.id]?.body || "", previewSender: previews[c.id]?.sender || "",
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Open one conversation (full thread) + clear the staff unread counter.
+  app.get("/api/admin/cic/chat/conversations/:id", requireAuth, async (req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const id = parseInt(req.params.id);
+      const [conv] = await db.select().from(chatConversations)
+        .where(and(eq(chatConversations.id, id), eq(chatConversations.organizationId, orgId))).limit(1);
+      if (!conv) return res.status(404).json({ message: "not found" });
+      const msgs = await db.select().from(chatMessages).where(eq(chatMessages.conversationId, id)).orderBy(asc(chatMessages.id));
+      if (conv.agentUnread > 0) await db.update(chatConversations).set({ agentUnread: 0 }).where(eq(chatConversations.id, id));
+      res.json({ conversation: { ...conv, agentUnread: 0 }, messages: msgs });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Staff reply → appended to the thread + the visitor is emailed if they're away.
+  app.post("/api/admin/cic/chat/conversations/:id/reply", requireAuth, async (req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const id = parseInt(req.params.id);
+      const body = String(req.body.body || "").trim();
+      if (!body) return res.status(400).json({ message: "empty reply" });
+      const [conv] = await db.select().from(chatConversations)
+        .where(and(eq(chatConversations.id, id), eq(chatConversations.organizationId, orgId))).limit(1);
+      if (!conv) return res.status(404).json({ message: "not found" });
+      const user = req.session.userId ? await storage.getUser(req.session.userId) : null;
+      const authorName = user?.firstName || "CIC Team";
+      const now = new Date();
+      const [msg] = await db.insert(chatMessages).values({
+        conversationId: id, sender: "agent", authorName, authorUserId: user?.id ?? null, body,
+      }).returning();
+      await db.update(chatConversations).set({
+        visitorUnread: (conv.visitorUnread || 0) + 1, agentUnread: 0, status: "open", lastAgentAt: now, lastMessageAt: now,
+      }).where(eq(chatConversations.id, id));
+      // Re-engage the visitor by email if they've stepped away (and aren't already
+      // sitting on an unread reply — avoids double emails within a burst).
+      const awayMs = now.getTime() - (conv.lastVisitorAt ? new Date(conv.lastVisitorAt).getTime() : 0);
+      if (conv.visitorEmail && conv.visitorUnread === 0 && awayMs > 120_000) {
+        const brand = CHAT_BRANDS[conv.brandKey || ""] || CHAT_BRANDS.cicyouth;
+        try {
+          await sendChatReplyNotification({
+            to: conv.visitorEmail, brandName: brand.brandName, fromEmail: brand.fromEmail, replyTo: brand.notifyEmail, accent: brand.accent,
+            visitorName: conv.visitorName || undefined, agentName: authorName, message: body, chatUrl: `${brand.siteUrl}/#chat`,
+          });
+        } catch (e) { console.error("[chat reply] visitor email failed:", e); }
+      }
+      res.json({ ok: true, message: msg });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Open / close a conversation.
+  app.post("/api/admin/cic/chat/conversations/:id/status", requireAuth, async (req, res) => {
+    try {
+      const status = String(req.body.status || "");
+      if (!["open", "closed"].includes(status)) return res.status(400).json({ message: "invalid status" });
+      const orgId = await skillsOrgId();
+      await db.update(chatConversations).set({ status })
+        .where(and(eq(chatConversations.id, parseInt(req.params.id)), eq(chatConversations.organizationId, orgId)));
       res.json({ ok: true });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });

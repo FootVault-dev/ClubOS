@@ -56,6 +56,7 @@ import GroupGrants from "@/pages/group-grants";
 import AdminLicensing from "@/pages/admin-licensing";
 import AdminEvents from "@/pages/admin-events";
 import AdminMembership from "@/pages/admin-membership";
+import AdminDeclarations from "@/pages/admin-declarations";
 import GroupProjects from "@/pages/group-projects";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
@@ -85,6 +86,7 @@ import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
 import CicInbox from "@/pages/cic-inbox";
+import CicLiveChat from "@/pages/cic-livechat";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
@@ -108,6 +110,7 @@ import TournamentFoodTruck from "@/pages/tournament-food-truck";
 import TournamentVendors from "@/pages/tournament-vendors";
 import ESign from "@/pages/esign";
 import SignPage from "@/pages/sign";
+import SignDeclaration from "@/pages/sign-declaration";
 import StudioPublicPage from "@/pages/studio-public";
 import StudioPreviewPage from "@/pages/studio-preview";
 import StudioHome from "@/pages/studio/StudioHome";
@@ -268,6 +271,7 @@ function AdminRouter() {
         <Route path="/admin/vendors" component={TournamentVendors} />
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
         <Route path="/admin/cic-registrations" component={CicInbox} />
+        <Route path="/admin/cic-livechat" component={CicLiveChat} />
         <Route path="/admin/cic-mailer" component={CicMailer} />
         <Route path="/admin/cic-push" component={CicPush} />
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
@@ -363,6 +367,7 @@ function AdminRouter() {
       <Route path="/admin/settings" component={AdminSettings} />
       <Route path="/admin/team" component={AdminTeam} />
       <Route path="/admin/licensing" component={AdminLicensing} />
+      <Route path="/admin/declarations" component={AdminDeclarations} />
       <Route path="/admin/events" component={AdminEvents} />
       <Route path="/admin/membership" component={AdminMembership} />
       <Route path="/admin/studio/new" component={StudioNew} />
@@ -466,6 +471,7 @@ function App() {
             <Route path="/reset-password" component={ResetPassword} />
             <Route path="/calendar/rsvp/:token" component={RsvpPage} />
             <Route path="/sign/:token" component={SignPage} />
+            <Route path="/declaration/:token" component={SignDeclaration} />
             {/* USG Studio — public proposal pages (unlisted, no auth). Must
                 precede the 2-segment /:slug/* and 1-segment /:slug routes. */}
             <Route path="/p/:token" component={StudioPublicPage} />

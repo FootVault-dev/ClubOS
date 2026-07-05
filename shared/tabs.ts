@@ -107,6 +107,7 @@ const tournamentTabs: TabDef[] = [
   { slug: "food-truck", title: "Food Truck", url: "/admin/food-truck" },
   { slug: "vendors", title: "Vendors", url: "/admin/vendors" },
   { slug: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations" },
+  { slug: "cic-livechat", title: "Live Chat", url: "/admin/cic-livechat" },
   { slug: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer" },
   { slug: "cic-push", title: "Notifications", url: "/admin/cic-push" },
   { slug: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents" },
@@ -181,6 +182,7 @@ export const TABS_BY_WORKSPACE_TYPE: Record<WorkspaceType, TabDef[]> = {
 // tools that must NOT appear for CUFC. Appended to SIU's tab set by slug.
 const siuExtraTabs: TabDef[] = [
   { slug: "licensing", title: "OFC Licensing", url: "/admin/licensing" },
+  { slug: "declarations", title: "Declarations", url: "/admin/declarations" },
   { slug: "events", title: "Community Events", url: "/admin/events" },
   { slug: "membership", title: "Membership", url: "/admin/membership" },
 ];

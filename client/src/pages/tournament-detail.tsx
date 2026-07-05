@@ -182,8 +182,9 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
   const [pickedPlayerId, setPickedPlayerId] = useState<string>("");
   const [typedName, setTypedName] = useState<string>("");
   const [minute, setMinute] = useState<string>("");
-  const [isOwnGoal, setIsOwnGoal] = useState(false);
-  const [isPenalty, setIsPenalty] = useState(false);
+  // Goal type — one choice per goal. Maps to the isPenalty / isOwnGoal flags the
+  // API + public match timeline already use (a plain goal = both false).
+  const [goalType, setGoalType] = useState<"goal" | "penalty" | "own_goal">("goal");
   // Card entry
   const [cardSide, setCardSide] = useState<"home" | "away" | null>(null);
   const [cardPlayerId, setCardPlayerId] = useState<string>("");
@@ -216,8 +217,7 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
       setPickedPlayerId("");
       setTypedName("");
       setMinute("");
-      setIsOwnGoal(false);
-      setIsPenalty(false);
+      setGoalType("goal");
     },
     onError: (e: any) => toast({ title: "Couldn't add goal", description: e.message, variant: "destructive" }),
   });
@@ -313,6 +313,8 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
   const submit = () => {
     if (!pickerSide) return;
     if (!pickedPlayerId && !typedName.trim()) return;
+    const isOwnGoal = goalType === "own_goal";
+    const isPenalty = goalType === "penalty";
     const scorerTeamId = pickerSide === "home" ? game.homeTeamId : game.awayTeamId;
     const common = {
       gameId: game.id,
@@ -428,18 +430,47 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
                   </p>
                 )}
 
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number" min="0" max="120" placeholder="Min"
-                    value={minute} onChange={e => setMinute(e.target.value)}
-                    className="w-20 text-sm"
-                  />
-                  <label className="flex items-center gap-1.5 text-xs text-white/60">
-                    <input type="checkbox" checked={isPenalty} onChange={e => setIsPenalty(e.target.checked)} /> Penalty
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-white/60">
-                    <input type="checkbox" checked={isOwnGoal} onChange={e => setIsOwnGoal(e.target.checked)} /> Own goal
-                  </label>
+                <div className="space-y-3">
+                  {/* Goal type — pick one (a goal is exactly one of these) */}
+                  <div>
+                    <label className="block text-[11px] font-medium text-white/50 mb-1.5">Goal type</label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {([["goal", "Goal"], ["penalty", "Penalty"], ["own_goal", "Own goal"]] as const).map(([val, lbl]) => (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => setGoalType(val)}
+                          className={`rounded-md px-3 py-2 text-xs font-semibold transition border ${
+                            goalType === val
+                              ? "bg-blue-600 border-blue-500 text-white"
+                              : "bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:border-white/25"
+                          }`}
+                        >
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                    {goalType === "own_goal" && (
+                      <p className="mt-1.5 text-[11px] text-amber-400/80">
+                        Own goal by a {pickerSide === "home" ? homeName : awayName} player — counts as a goal for {pickerSide === "home" ? awayName : homeName}.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Goal time */}
+                  <div>
+                    <label className="block text-[11px] font-medium text-white/50 mb-1.5">
+                      Goal time <span className="text-white/30">— the minute it was scored (feeds the match timeline)</span>
+                    </label>
+                    <div className="relative w-24">
+                      <Input
+                        type="number" min="0" max="120" placeholder="e.g. 34"
+                        value={minute} onChange={e => setMinute(e.target.value)}
+                        className="w-24 text-sm pr-6"
+                      />
+                      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 text-sm">'</span>
+                    </div>
+                  </div>
                 </div>
 
                 <Button

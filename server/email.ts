@@ -646,6 +646,125 @@ export async function sendCicContactNotification(params: {
   });
 }
 
+/** CIC — a club registered its interest (one or more age groups) via the
+ *  cicyouth.com "Register Your Interest" form. Emails info@cicyouth.com. */
+export async function sendCicInterestNotification(params: {
+  to: string; firstName: string; lastName?: string; email: string; phone?: string;
+  club?: string; location?: string; ageGroups: string[]; sourceUrl?: string;
+}): Promise<boolean> {
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#9aa0a6;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const name = `${params.firstName}${params.lastName ? " " + params.lastName : ""}`.trim();
+  const chips = params.ageGroups.map((g) =>
+    `<span style="display:inline-block;background:#c9a43e;color:#0b0b08;font-weight:700;font-size:12px;padding:4px 10px;border-radius:999px;margin:0 6px 6px 0;">${g}</span>`).join("");
+  const rows = [
+    row("Contact", name || "—"),
+    ...(params.club ? [row("Club", params.club)] : []),
+    ...(params.location ? [row("City", params.location)] : []),
+    row("Email", params.email || "—"),
+    ...(params.phone ? [row("Phone", params.phone)] : []),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#c9a43e;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch International Cup</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">New Registration of Interest</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#9aa0a6;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin:18px 0 10px;">Age groups (${params.ageGroups.length})</p>
+        <div>${chips || '<span style="color:#5a5a5a;font-size:13px;">None specified</span>'}</div>
+        ${params.sourceUrl ? `<p style="color:#5a5a5a;font-size:11px;margin:18px 0 0;">via ${params.sourceUrl}</p>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Football Club<br/>Saved in ClubOS → Tournaments → CIC → Registrations (organised by age group).
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch International Cup <noreply@cicyouth.com>",
+    replyTo: params.email || "info@cicyouth.com",
+    subject: `New interest registration${name ? ` from ${name}` : ""} — ${params.ageGroups.join(", ") || "CIC"}`,
+    html,
+  });
+}
+
+/** Live chat — a website visitor started a new conversation. Notifies staff so
+ *  they can jump into ClubOS → (workspace) → Live Chat and reply. Brand-agnostic. */
+export async function sendChatNewConversationNotification(params: {
+  to: string; brandName: string; fromEmail: string; accent?: string;
+  visitorName?: string; visitorEmail?: string; visitorPhone?: string;
+  message: string; sourceUrl?: string; adminUrl?: string;
+}): Promise<boolean> {
+  const accent = params.accent || "#c9a43e";
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#9aa0a6;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("From", params.visitorName || "Website visitor"),
+    ...(params.visitorEmail ? [row("Email", params.visitorEmail)] : []),
+    ...(params.visitorPhone ? [row("Phone", params.visitorPhone)] : []),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:${accent};margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${params.brandName}</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">New live chat message</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:18px 0 0;white-space:pre-wrap;">${(params.message || "").replace(/</g, "&lt;")}</p>
+        ${params.sourceUrl ? `<p style="color:#5a5a5a;font-size:11px;margin:16px 0 0;">via ${params.sourceUrl}</p>` : ""}
+        ${params.adminUrl ? `<div style="text-align:center;margin:22px 0 4px;"><a href="${params.adminUrl}" style="display:inline-block;background:${accent};color:#0b0b08;font-weight:700;font-size:14px;text-decoration:none;padding:11px 22px;border-radius:10px;">Reply in ClubOS</a></div>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">Reply live in ClubOS → Live Chat. The visitor is emailed when you respond.</p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: `${params.brandName} <${params.fromEmail}>`,
+    replyTo: params.visitorEmail || undefined,
+    subject: `New live chat${params.visitorName ? ` from ${params.visitorName}` : ""} — ${params.brandName}`,
+    html,
+  });
+}
+
+/** Live chat — staff replied while the visitor was away. Emails the visitor the
+ *  reply so they come back to the conversation. Brand-agnostic. */
+export async function sendChatReplyNotification(params: {
+  to: string; brandName: string; fromEmail: string; replyTo?: string; accent?: string;
+  visitorName?: string; agentName?: string; message: string; chatUrl?: string;
+}): Promise<boolean> {
+  const accent = params.accent || "#c9a43e";
+  const hi = params.visitorName ? `Hi ${params.visitorName.split(" ")[0]},` : "Hi there,";
+  const who = params.agentName ? `${params.agentName} from ${params.brandName}` : `The ${params.brandName} team`;
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:520px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:${accent};margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">${params.brandName}</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">You have a reply</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.6;margin:0 0 14px;">${hi}</p>
+        <p style="color:#9aa0a6;font-size:13px;margin:0 0 6px;">${who} replied to your message:</p>
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:0;white-space:pre-wrap;border-left:3px solid ${accent};padding:2px 0 2px 14px;">${(params.message || "").replace(/</g, "&lt;")}</p>
+        ${params.chatUrl ? `<div style="text-align:center;margin:24px 0 4px;"><a href="${params.chatUrl}" style="display:inline-block;background:${accent};color:#0b0b08;font-weight:700;font-size:14px;text-decoration:none;padding:11px 22px;border-radius:10px;">Continue the conversation</a></div>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">Just reply to this email and it reaches us too.</p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: `${params.brandName} <${params.fromEmail}>`,
+    replyTo: params.replyTo || params.fromEmail,
+    subject: `${params.agentName ? params.agentName + " replied" : "You have a reply"} — ${params.brandName}`,
+    html,
+  });
+}
+
 /** Club logo licence — a participating club's rep signed the CIC logo agreement
  *  (cicyouth.com/club-logo-agreement). Emails info@cicyouth.com the proof record. */
 export async function sendClubLogoConsentNotification(params: {
