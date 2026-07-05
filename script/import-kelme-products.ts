@@ -123,6 +123,11 @@ async function main() {
         created++;
       }
 
+      // product-level card image (colour_id NULL) = first image of the first colour
+      await pool.query(
+        `INSERT INTO shop_product_images (product_id, colour_id, url, alt, sort_order) VALUES ($1,NULL,$2,$3,0)`,
+        [productId, colours[0].urls[0], title]);
+
       let cSort = 0;
       for (const c of colours) {
         cSort += 10;
