@@ -3547,6 +3547,16 @@ export const insertShopDiscountCodeSchema = createInsertSchema(shopDiscountCodes
 export type InsertShopDiscountCode = z.infer<typeof insertShopDiscountCodeSchema>;
 export type ShopDiscountCode = typeof shopDiscountCodes.$inferSelect;
 
+// Shop customisation contract (stored as jsonb on shop_order_items; the
+// storefront is built against EXACTLY these shapes):
+export interface ShopSponsorSlot { text?: string; logoUrl?: string } // logoUrl wins if both
+export interface ShopKitCustomisation {
+  frontSponsor?: ShopSponsorSlot;
+  backTopSponsor?: ShopSponsorSlot;
+  backBottomSponsor?: ShopSponsorSlot;
+}
+export interface ShopUnitPersonalisation { name?: string; number?: string } // number = 1–2 digits
+
 // Totals are GST-INCLUSIVE; gstCents = NZ GST content = round(total * 3 / 23).
 // orderToken = public status-lookup key; orderNumber = human "MFL-1001".
 export const shopOrders = pgTable("shop_orders", {
@@ -3587,6 +3597,12 @@ export const shopOrders = pgTable("shop_orders", {
   gclid: text("gclid"),
   visitorId: text("visitor_id"),
   notes: text("notes"),
+  // Player Pay (group payment): 'standard' | 'player_pay'. player_pay orders
+  // start as status='awaiting_players' and flip to 'paid' (all_paid_at set)
+  // when the LAST shop_order_shares row is paid.
+  paymentMode: text("payment_mode").notNull().default("standard"),
+  teamName: text("team_name"),
+  allPaidAt: timestamp("all_paid_at"),
   paidAt: timestamp("paid_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -3609,7 +3625,34 @@ export const shopOrderItems = pgTable("shop_order_items", {
   qty: integer("qty").notNull().default(1),
   lineCents: integer("line_cents").notNull().default(0),
   costUsdSnapshot: decimal("cost_usd_snapshot", { precision: 10, scale: 2 }),
+  // Kit customisation (sponsor slots) + per-shirt personalisation. When units
+  // is present its length === qty. Personalisation is included in the price
+  // ($0 — no price impact).
+  customisation: jsonb("customisation").$type<ShopKitCustomisation | null>(),
+  units: jsonb("units").$type<ShopUnitPersonalisation[] | null>(),
 });
 export const insertShopOrderItemSchema = createInsertSchema(shopOrderItems).omit({ id: true });
 export type InsertShopOrderItem = z.infer<typeof insertShopOrderItemSchema>;
 export type ShopOrderItem = typeof shopOrderItems.$inferSelect;
+
+// Player Pay — one row per player on a payment_mode='player_pay' order.
+// shareToken is the public pay-link key; amounts sum EXACTLY to the order
+// total (shipping split evenly, remainder cents on the last share).
+export const shopOrderShares = pgTable("shop_order_shares", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  orderId: integer("order_id").notNull().references(() => shopOrders.id, { onDelete: "cascade" }),
+  playerName: text("player_name").notNull(),
+  playerEmail: text("player_email").notNull(),
+  playerPhone: text("player_phone"),
+  size: text("size").notNull(),
+  shirtName: text("shirt_name"),
+  shirtNumber: text("shirt_number"),
+  amountCents: integer("amount_cents").notNull(),
+  shareToken: uuid("share_token").notNull().unique().default(sql`gen_random_uuid()`),
+  status: text("status").notNull().default("pending"), // 'pending' | 'paid'
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  paidAt: timestamp("paid_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export type InsertShopOrderShare = typeof shopOrderShares.$inferInsert;
+export type ShopOrderShare = typeof shopOrderShares.$inferSelect;
