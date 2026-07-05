@@ -566,6 +566,114 @@ export async function sendMflWaitlistNotification(params: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// MFL Store — shop order emails (black + gold brand, same shell as league mail)
+// ---------------------------------------------------------------------------
+
+export interface ShopOrderEmailLine {
+  title: string;
+  colourName?: string | null;
+  size?: string | null;
+  qty: number;
+  lineCents: number;
+}
+
+const shopMoney = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
+/** Order confirmation → the customer. Totals are GST-inclusive. */
+export async function sendShopOrderConfirmation(params: {
+  to: string;
+  firstName: string;
+  orderNumber: string;
+  lines: ShopOrderEmailLine[];
+  subtotalCents: number;
+  discountCents: number;
+  discountCode?: string | null;
+  shippingLabel?: string | null;
+  shippingCents: number;
+  gstCents: number;
+  totalCents: number;
+  requiresAddress: boolean;
+  addressSummary?: string | null;
+}): Promise<boolean> {
+  const firstName = (params.firstName || "").trim() || "there";
+  const lineRows = params.lines.map((l) => {
+    const detail = [l.colourName, l.size].filter(Boolean).join(" · ");
+    return mflRow(`${l.qty} × ${l.title}${detail ? ` (${detail})` : ""}`, shopMoney(l.lineCents));
+  });
+  const rows = [
+    ...lineRows,
+    ...(params.discountCents > 0
+      ? [mflRow(`Discount${params.discountCode ? ` (${params.discountCode})` : ""}`, `−${shopMoney(params.discountCents)}`)]
+      : []),
+    mflRow(params.shippingLabel || "Shipping", params.shippingCents > 0 ? shopMoney(params.shippingCents) : "Free"),
+    mflRow("Total paid", shopMoney(params.totalCents), true),
+  ].join("");
+  const fulfilment = params.requiresAddress
+    ? `We're packing your order now and will ship it to:<br/><strong style="color:#ffffff;">${params.addressSummary || ""}</strong>`
+    : `We'll email you as soon as it's ready to collect from <strong style="color:#ffffff;">United Sports Centre, 466 Yaldhurst Rd</strong>.`;
+  const bodyHtml = `
+    <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:0;">Hey ${firstName},</p>
+    <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:14px 0 0;">
+      Thanks for your order — it's confirmed. Your order number is <strong style="color:#d1b96e;">${params.orderNumber}</strong>.
+    </p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px; margin:18px 0 0;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    <p style="color:#8a8a8a; font-size:12px; line-height:1.6; margin:10px 0 0;">All prices include GST (GST content ${shopMoney(params.gstCents)}).</p>
+    <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:16px 0 0;">${fulfilment}</p>`;
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: MFL_REPLY_TO,
+    subject: `Order confirmed — ${params.orderNumber}`,
+    html: mflShell({ heading: "Order confirmed ⚽", bodyHtml }),
+  });
+}
+
+/** New paid order heads-up → the MFL coordinator (info@minifootball.co.nz).
+ *  Reply-To is the customer so staff can reply straight from their inbox. */
+export async function sendShopOrderNotification(params: {
+  to: string;
+  orderNumber: string;
+  customerName: string;
+  email: string;
+  phone?: string | null;
+  lines: ShopOrderEmailLine[];
+  totalCents: number;
+  shippingLabel?: string | null;
+  requiresAddress: boolean;
+  addressSummary?: string | null;
+}): Promise<boolean> {
+  const rows = [
+    mflRow("Order", params.orderNumber),
+    mflRow("Customer", params.customerName || "—"),
+    mflRow("Email", params.email || "—"),
+    ...(params.phone ? [mflRow("Phone", params.phone)] : []),
+    ...params.lines.map((l) => {
+      const detail = [l.colourName, l.size].filter(Boolean).join(" · ");
+      return mflRow(`${l.qty} × ${l.title}${detail ? ` (${detail})` : ""}`, shopMoney(l.lineCents));
+    }),
+    mflRow(params.shippingLabel || "Fulfilment", params.requiresAddress ? (params.addressSummary || "Courier") : "Pickup"),
+    mflRow("Total paid", shopMoney(params.totalCents), true),
+  ].join("");
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:16px; font-weight:600; margin:0 0 14px;">New store order 🛒</p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    <p style="color:#8a8a8a; font-size:13px; line-height:1.6; margin:16px 0 0;">
+      Manage it in ClubOS → Mini Football → Store → Orders.
+    </p>`;
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: params.email || MFL_REPLY_TO,
+    subject: `New order ${params.orderNumber} — ${params.customerName}`,
+    html: mflShell({ heading: "New store order", bodyHtml }),
+  });
+}
+
 /** CIC 7's "Register Your Interest" submission → the tournament team (info@cic7s.com).
  *  Reply-To is the registrant so staff can reply straight from their inbox. */
 export async function sendCic7sRegistrationNotification(params: {

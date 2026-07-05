@@ -35,6 +35,7 @@ import sharp from "sharp";
 import { detectDnsProvider, getCnameHost, getApexDomain } from "./dns/detectProvider";
 import { isGoDaddyConfigured, checkConnection as checkGoDaddyConnection, setCnameRecord as setGoDaddyCname, ownsDomain as goDaddyOwnsDomain, getRecords as getGoDaddyRecords, setForwarding as setGoDaddyForwarding, getForwarding as getGoDaddyForwarding } from "./dns/godaddyClient";
 import { mountMcpServer } from "./mcp";
+import { registerShopRoutes, finalizeShopOrderPaid } from "./shop-routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -11910,6 +11911,18 @@ export async function registerRoutes(
             console.error("[Stripe Webhook] Print order handler failed:", e);
           }
         }
+        // Shop order branch (MFL Store) — detected by metadata.shopOrderId,
+        // mirroring the print-orders branch above. Finalize is idempotent
+        // (atomic pending→paid gate), so webhook retries and the client
+        // confirm fallback can't double-fire stock/emails/Purchase.
+        const shopOrderId = parseInt(pi.metadata?.shopOrderId);
+        if (shopOrderId) {
+          try {
+            await finalizeShopOrderPaid(shopOrderId, pi.id);
+          } catch (e) {
+            console.error("[Stripe Webhook] Shop order handler failed:", e);
+          }
+        }
       } else if (event.type === "invoice.paid") {
         // Weekly subscription invoice succeeded. Advance the next pending
         // booking for that subscription → 'paid'.
@@ -17239,6 +17252,10 @@ export async function registerRoutes(
       res.json(buildCashflowInsight());
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+
+  // Shop — native e-commerce module (MFL Store pilot). All routes live in
+  // server/shop-routes.ts; the only other touchpoint is the webhook branch above.
+  registerShopRoutes(app);
 
   return httpServer;
 }
