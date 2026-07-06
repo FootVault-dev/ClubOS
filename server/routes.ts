@@ -9813,6 +9813,27 @@ export async function registerRoutes(
     }
   });
 
+  // Human-readable knockout placeholders for the public API (the website AND the
+  // native app read these names directly). Turns internal codes into plain English:
+  //   "R2#3" -> "Seed 8"   |   "A1" -> "Pool A 1st"   |   "W G45" -> "Winner · SF 1 CUP"
+  // roundByNum maps a game number to its round label so W/L refs name the round.
+  function cicPrettyPlaceholder(raw: string | null | undefined, roundByNum: Map<number, string | null>): string {
+    const s = (raw ?? "").trim();
+    if (!s || s.toUpperCase() === "TBD") return "TBD";
+    const ord = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"];
+    let m = /^R\s*([1-4])\s*#\s*([1-9])$/i.exec(s);
+    if (m) return `Seed ${(parseInt(m[1], 10) - 1) * 5 + parseInt(m[2], 10)}`;
+    m = /^([A-E])\s*([1-9])$/i.exec(s);
+    if (m) { const p = parseInt(m[2], 10); return `Pool ${m[1].toUpperCase()} ${ord[p - 1] ?? `${p}th`}`; }
+    m = /^([WL])\s*G\s*0*(\d+)$/i.exec(s);
+    if (m) {
+      const who = m[1].toUpperCase() === "W" ? "Winner" : "Loser";
+      const n = parseInt(m[2], 10);
+      const r = roundByNum.get(n);
+      return r ? `${who} · ${r}` : `${who} Game ${n}`;
+    }
+    return s;
+  }
   app.get("/api/public/tournament/tournaments/:id/games", async (req, res) => {
     try {
       const t = await storage.getTournament(parseInt(req.params.id));
@@ -9822,6 +9843,8 @@ export async function registerRoutes(
       const games = await storage.getTournamentGames(t.id);
       const category = req.query.stage as string | undefined;
       const filtered = category ? games.filter(g => g.stage === category) : games;
+      const roundByNum = new Map<number, string | null>();
+      for (const g of games) if (g.gameNumber != null) roundByNum.set(g.gameNumber, g.stageDetail);
       const clubLogo = await clubLogoMapForTournament(t.id);
       const resolveLogo = (team: { id: number; logoUrl: string | null } | undefined) =>
         team ? (team.logoUrl || clubLogo.get(team.id) || null) : null;
@@ -9840,8 +9863,8 @@ export async function registerRoutes(
         streamUrl: g.streamUrl || t.streamUrl || null,
         homeTeamId: g.homeTeamId,
         awayTeamId: g.awayTeamId,
-        homeTeamName: g.homeTeam?.name || g.homeTeamPlaceholder || "TBD",
-        awayTeamName: g.awayTeam?.name || g.awayTeamPlaceholder || "TBD",
+        homeTeamName: g.homeTeam?.name || cicPrettyPlaceholder(g.homeTeamPlaceholder, roundByNum),
+        awayTeamName: g.awayTeam?.name || cicPrettyPlaceholder(g.awayTeamPlaceholder, roundByNum),
         homeTeamLogo: resolveLogo(g.homeTeam),
         awayTeamLogo: resolveLogo(g.awayTeam),
         homeScore: g.homeScore,
