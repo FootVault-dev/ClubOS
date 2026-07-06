@@ -97,6 +97,30 @@ function absUrl(brand: ShopBrand, url: string | null | undefined): string | null
   return url.startsWith("/") ? `${brand.assetBase}${url}` : url;
 }
 
+// KELME render naming: `…_02.webp` shots are the true back views (the `…B_01`
+// shots are flat fronts). Matches the storefront's BACK_RE.
+const BACK_IMG_RX = /_[0-9a-z]+_02\.(webp|jpe?g|png)$/i;
+
+/** Resolve a team-order item's colourId + back-view image for kit previews. */
+async function teamKitViews(
+  brand: ShopBrand,
+  item: { productId: number | null; colourName: string | null } | undefined,
+): Promise<{ colourId: string; backImage: string | null }> {
+  if (!item?.productId) return { colourId: "", backImage: null };
+  try {
+    const colours = await db.select().from(shopProductColours)
+      .where(eq(shopProductColours.productId, item.productId));
+    const colour = colours.find((c) => c.name === item.colourName) || colours[0];
+    if (!colour) return { colourId: "", backImage: null };
+    const imgs = await db.select().from(shopProductImages)
+      .where(eq(shopProductImages.colourId, colour.id));
+    const back = imgs.find((i) => BACK_IMG_RX.test(i.url));
+    return { colourId: String(colour.id), backImage: back ? absUrl(brand, back.url) : null };
+  } catch {
+    return { colourId: "", backImage: null };
+  }
+}
+
 const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_RX = /.+@.+\..+/;
 
@@ -1379,22 +1403,39 @@ export function registerShopRoutes(app: Express) {
         .where(eq(shopOrderShares.orderId, order.id))
         .orderBy(asc(shopOrderShares.id));
       const paidCount = shares.filter((s) => s.status === "paid").length;
+      const views = await teamKitViews(brand, item);
 
       res.json({
         orderNumber: order.orderNumber || `#${order.id}`,
         teamName: order.teamName,
         coachFirstName: order.firstName,
         product: {
+          productId: String(item?.productId ?? ""),
+          colourId: views.colourId,
           title: item?.title || "Team kit",
           colourName: item?.colourName || null,
           image: absUrl(brand, item?.imageUrl),
+          backImage: views.backImage,
         },
         customisation: item?.customisation || null,
+        unitDollars: toDollars(item?.unitCents ?? 0),
         shippingLabel: order.shippingLabel,
+        shippingDollars: toDollars(order.shippingCents ?? 0),
         totalDollars: toDollars(order.totalCents),
         paidCount,
         playerCount: shares.length,
         allPaid: shares.length > 0 && paidCount === shares.length,
+        // `shares` is the storefront contract; `players` kept as a back-compat alias.
+        shares: shares.map((s) => ({
+          playerName: s.playerName,
+          playerNumber: s.shirtNumber,
+          size: s.size,
+          amountDollars: toDollars(s.amountCents),
+          status: s.status,
+          payUrl: `${brand.storefrontBase}/pay/${s.shareToken}`,
+          shareToken: s.shareToken,
+          paidAt: s.paidAt,
+        })),
         players: shares.map((s) => ({
           name: s.playerName,
           number: s.shirtNumber,
@@ -1463,15 +1504,22 @@ export function registerShopRoutes(app: Express) {
       const { share, order } = found;
 
       const [item] = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
+      const views = await teamKitViews(brand, item);
       res.json({
         orderNumber: order.orderNumber || `#${order.id}`,
         teamName: order.teamName,
         coachFirstName: order.firstName,
+        // Flat fields are the storefront contract; nested `player` kept as alias.
+        playerName: share.playerName,
+        playerNumber: share.shirtNumber,
+        size: share.size,
         player: { name: share.playerName, number: share.shirtNumber, size: share.size },
+        customisation: item?.customisation || null,
         product: {
           title: item?.title || "Team kit",
           colourName: item?.colourName || null,
           image: absUrl(brand, item?.imageUrl),
+          backImage: views.backImage,
         },
         amountDollars: toDollars(share.amountCents),
         status: share.status,
