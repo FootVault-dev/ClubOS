@@ -16,7 +16,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
   ShoppingCart, Plus, Search, Pencil, Trash2, X, ArrowUp, ArrowDown,
-  ImagePlus, Package, Truck, Tag, RefreshCw, Copy, Mail, Phone,
+  ImagePlus, Package, Truck, Tag, RefreshCw, Copy, Mail, Phone, Printer, Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,14 +40,26 @@ type ShopProductT = {
   badge: string | null; status: string; sortOrder: number;
   colours: ShopColourT[]; images: ShopImageT[]; totalStock: number;
 };
+type SponsorSlotT = { text?: string; logoUrl?: string }; // logoUrl wins if both
+type KitCustomisationT = {
+  frontSponsor?: SponsorSlotT; backTopSponsor?: SponsorSlotT; backBottomSponsor?: SponsorSlotT;
+};
+type UnitPersonalisationT = { name?: string; number?: string };
 type ShopOrderRowT = {
   id: number; orderNumber: string | null; status: string; firstName: string; lastName: string;
   email: string; phone: string; totalCents: number; itemsCount: number; createdAt: string;
   shippingLabel: string | null;
+  paymentMode: string; teamName: string | null; playerCount: number; paidCount: number;
 };
 type ShopOrderItemT = {
   id: number; title: string; colourName: string | null; size: string | null; imageUrl: string | null;
   unitCents: number; qty: number; lineCents: number;
+  customisation: KitCustomisationT | null; units: UnitPersonalisationT[] | null;
+};
+type ShopShareT = {
+  id: number; playerName: string; playerEmail: string; playerPhone: string | null;
+  size: string; shirtName: string | null; shirtNumber: string | null; amountCents: number;
+  status: string; paidAt: string | null; payUrl: string | null; shareToken: string;
 };
 type ShopOrderDetailT = ShopOrderRowT & {
   shippingCents: number; subtotalCents: number; discountCents: number; discountCode: string | null;
@@ -55,8 +67,8 @@ type ShopOrderDetailT = ShopOrderRowT & {
   city: string | null; postcode: string | null; stripePaymentIntentId: string | null;
   utmSource: string | null; utmMedium: string | null; utmCampaign: string | null;
   utmContent: string | null; utmTerm: string | null; fbclid: string | null; gclid: string | null;
-  visitorId: string | null; notes: string | null; paidAt: string | null; source: string;
-  items: ShopOrderItemT[];
+  visitorId: string | null; notes: string | null; paidAt: string | null; allPaidAt: string | null; source: string;
+  items: ShopOrderItemT[]; shares: ShopShareT[];
 };
 type ShippingOptionT = {
   id: number; label: string; description: string | null; priceCents: number;
@@ -82,6 +94,7 @@ async function uploadImage(file: File): Promise<string> {
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   pending: { label: "Pending", cls: "bg-amber-400/10 text-amber-400 border-amber-400/20" },
+  awaiting_players: { label: "Players paying", cls: "bg-amber-400/10 text-amber-400 border-amber-400/20" },
   paid: { label: "Paid", cls: "bg-emerald-400/10 text-emerald-400 border-emerald-400/20" },
   processing: { label: "Processing", cls: "bg-blue-400/10 text-blue-400 border-blue-400/20" },
   ready_for_pickup: { label: "Ready for pickup", cls: "bg-purple-400/10 text-purple-400 border-purple-400/20" },
@@ -98,6 +111,18 @@ function StatusPill({ status }: { status: string }) {
       {meta.label}
     </span>
   );
+}
+
+/** Order pill — 'awaiting_players' shows live Player Pay progress in amber. */
+function OrderStatusPill({ order }: { order: { status: string; paidCount?: number; playerCount?: number } }) {
+  if (order.status === "awaiting_players") {
+    return (
+      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap uppercase tracking-wide bg-amber-400/10 text-amber-400 border-amber-400/20">
+        Players paying ({order.paidCount ?? 0}/{order.playerCount ?? 0})
+      </span>
+    );
+  }
+  return <StatusPill status={order.status} />;
 }
 
 function ProductStatusPill({ status }: { status: string }) {
@@ -652,7 +677,8 @@ function OrdersSection({ orgId }: { orgId: number }) {
       const q = search.toLowerCase();
       return `${o.firstName} ${o.lastName}`.toLowerCase().includes(q)
         || o.email.toLowerCase().includes(q)
-        || (o.orderNumber || "").toLowerCase().includes(q);
+        || (o.orderNumber || "").toLowerCase().includes(q)
+        || (o.teamName || "").toLowerCase().includes(q);
     }), [orders, statusFilter, search]);
 
   return (
@@ -702,11 +728,11 @@ function OrdersSection({ orgId }: { orgId: number }) {
                   </td>
                   <td className="px-5 py-3.5">
                     <p className="text-sm font-medium text-white/80">{o.firstName} {o.lastName}</p>
-                    <p className="text-xs text-white/30">{o.email}</p>
+                    <p className="text-xs text-white/30">{o.teamName ? `${o.teamName} · ` : ""}{o.email}</p>
                   </td>
                   <td className="px-5 py-3.5 text-sm text-white/40 hidden md:table-cell">{o.itemsCount}</td>
                   <td className="px-5 py-3.5 text-sm font-semibold text-white/80 whitespace-nowrap">{formatCurrency(o.totalCents, { fromCents: true })}</td>
-                  <td className="px-5 py-3.5"><StatusPill status={o.status} /></td>
+                  <td className="px-5 py-3.5"><OrderStatusPill order={o} /></td>
                 </tr>
               ))}
             </tbody>
@@ -778,7 +804,7 @@ function OrderDetailModal({ orgId, orderId, onClose }: { orgId: number; orderId:
         <div className="flex items-center justify-between p-5 border-b border-white/5 sticky top-0 bg-[#0a0e1a] z-10">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold text-white font-mono">{order.orderNumber || `#${order.id}`}</h2>
-            <StatusPill status={order.status} />
+            <OrderStatusPill order={order} />
           </div>
           <button onClick={onClose} className="text-white/30 hover:text-white/60" data-testid="button-close-order-modal"><X className="w-5 h-5" /></button>
         </div>
@@ -837,6 +863,12 @@ function OrderDetailModal({ orgId, orderId, onClose }: { orgId: number; orderId:
               </div>
             </div>
           </div>
+
+          {/* Print spec (kit customisation + roster) — Dima's source of truth */}
+          <PrintSpecPanel order={order} />
+
+          {/* Player Pay — who's paid their share */}
+          <PlayerPayPanel order={order} />
 
           {/* Customer + delivery */}
           <div className="grid sm:grid-cols-2 gap-3">
@@ -908,6 +940,163 @@ function Row({ label, value, muted }: { label: string; value: string; muted?: bo
     <div className="flex items-center justify-between">
       <span className={`text-xs ${muted ? "text-white/25" : "text-white/40"}`}>{label}</span>
       <span className={`text-xs ${muted ? "text-white/25" : "text-white/60"}`}>{value}</span>
+    </div>
+  );
+}
+
+// ── Print spec — sponsor slots + roster, monospace clarity for Dima ─────────
+
+const SPONSOR_SLOT_LABELS: { key: keyof KitCustomisationT; label: string }[] = [
+  { key: "frontSponsor", label: "Front sponsor" },
+  { key: "backTopSponsor", label: "Back top sponsor" },
+  { key: "backBottomSponsor", label: "Back bottom sponsor" },
+];
+
+function PrintSpecPanel({ order }: { order: ShopOrderDetailT }) {
+  const isPlayerPay = order.paymentMode === "player_pay";
+  const specItems = order.items.filter((i) => i.customisation || (i.units && i.units.length > 0));
+  if (specItems.length === 0 && !(isPlayerPay && (order.shares?.length ?? 0) > 0)) return null;
+
+  // Roster: player_pay orders carry sizes on the shares; standard orders carry
+  // one size per line item with per-shirt units.
+  const roster: { name: string; number: string; size: string }[] = isPlayerPay
+    ? (order.shares || []).map((s) => ({
+        name: s.shirtName || s.playerName,
+        number: s.shirtNumber ? `#${s.shirtNumber}` : "",
+        size: s.size,
+      }))
+    : order.items.flatMap((i) =>
+        (i.units || []).map((u) => ({
+          name: u.name || "",
+          number: u.number ? `#${u.number}` : "",
+          size: i.size || "",
+        })),
+      ).filter((r) => r.name || r.number);
+
+  const sponsorSlots = specItems.flatMap((i) =>
+    SPONSOR_SLOT_LABELS
+      .map(({ key, label }) => ({ label, slot: i.customisation?.[key] }))
+      .filter((s) => s.slot && (s.slot.text || s.slot.logoUrl)),
+  );
+
+  return (
+    <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.03] p-4 space-y-3" data-testid="panel-print-spec">
+      <p className="text-[10px] text-amber-400/90 uppercase tracking-wider font-semibold flex items-center gap-1.5">
+        <Printer className="w-3.5 h-3.5" /> Print spec
+      </p>
+
+      {sponsorSlots.length > 0 && (
+        <div className="space-y-2">
+          {sponsorSlots.map((s, i) => (
+            <div key={`${s.label}-${i}`} className="flex items-center justify-between gap-3">
+              <span className="text-xs text-white/40">{s.label}</span>
+              {s.slot!.logoUrl ? (
+                <a href={s.slot!.logoUrl} target="_blank" rel="noreferrer" title="Open full-size logo">
+                  <img
+                    src={s.slot!.logoUrl}
+                    alt={`${s.label} logo`}
+                    className="h-20 max-w-[180px] object-contain bg-white rounded-lg p-1.5 border border-white/10"
+                  />
+                </a>
+              ) : (
+                <span className="text-sm font-mono font-semibold text-white/90 text-right">{s.slot!.text}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {roster.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full font-mono text-[13px]">
+            <thead>
+              <tr className="border-b border-white/10">
+                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold py-1.5 pr-3">#</th>
+                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold py-1.5 pr-3">Name</th>
+                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold py-1.5 pr-3">Number</th>
+                <th className="text-right text-[10px] text-white/30 uppercase tracking-wider font-semibold py-1.5">Size</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roster.map((r, i) => (
+                <tr key={i} className="border-b border-white/[0.04] last:border-0">
+                  <td className="py-1.5 pr-3 text-white/30">{i + 1}</td>
+                  <td className="py-1.5 pr-3 text-white/90">{r.name || "—"}</td>
+                  <td className="py-1.5 pr-3 text-amber-300/90">{r.number}</td>
+                  <td className="py-1.5 text-right text-white/90">{r.size || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Player Pay — share progress + per-player pay links ──────────────────────
+
+function PlayerPayPanel({ order }: { order: ShopOrderDetailT }) {
+  const { toast } = useToast();
+  if (order.paymentMode !== "player_pay") return null;
+  const shares = order.shares || [];
+  const paid = shares.filter((s) => s.status === "paid").length;
+  const allPaid = shares.length > 0 && paid === shares.length;
+  const pct = shares.length > 0 ? Math.round((paid / shares.length) * 100) : 0;
+
+  return (
+    <div className="rounded-xl border border-white/5 bg-white/[0.02] p-4 space-y-3" data-testid="panel-player-pay">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] text-white/30 uppercase tracking-wider font-semibold flex items-center gap-1.5">
+          <Users className="w-3.5 h-3.5" /> Player Pay{order.teamName ? ` — ${order.teamName}` : ""}
+        </p>
+        <span className={`text-xs font-semibold ${allPaid ? "text-emerald-400" : "text-amber-400"}`}>
+          {paid}/{shares.length} paid
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${allPaid ? "bg-emerald-400" : "bg-amber-400"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <tbody>
+            {shares.map((s) => (
+              <tr key={s.id} className="border-b border-white/[0.04] last:border-0" data-testid={`share-row-${s.id}`}>
+                <td className="py-2 pr-3">
+                  <p className="text-sm text-white/80">{s.playerName}</p>
+                  <p className="text-xs text-white/30">{s.playerEmail}</p>
+                </td>
+                <td className="py-2 pr-3 text-sm text-white/70 whitespace-nowrap">{formatCurrency(s.amountCents, { fromCents: true })}</td>
+                <td className="py-2 pr-3">
+                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${
+                    s.status === "paid"
+                      ? "bg-emerald-400/10 text-emerald-400 border-emerald-400/20"
+                      : "bg-amber-400/10 text-amber-400 border-amber-400/20"
+                  }`}>
+                    {s.status === "paid" ? "Paid" : "Awaiting"}
+                  </span>
+                </td>
+                <td className="py-2 pr-3 text-xs text-white/30 whitespace-nowrap">
+                  {s.paidAt ? new Date(s.paidAt).toLocaleString("en-NZ", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}
+                </td>
+                <td className="py-2 text-right">
+                  {s.payUrl && (
+                    <button
+                      onClick={() => { navigator.clipboard?.writeText(s.payUrl!); toast({ title: "Pay link copied", description: s.playerName }); }}
+                      className="w-7 h-7 inline-flex items-center justify-center rounded-lg hover:bg-white/5 text-white/30 hover:text-white/70"
+                      title={`Copy ${s.playerName}'s pay link`}
+                      data-testid={`button-copy-payurl-${s.id}`}
+                    ><Copy className="w-3.5 h-3.5" /></button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
