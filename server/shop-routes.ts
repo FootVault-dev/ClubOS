@@ -75,6 +75,20 @@ const SHOP_BRANDS: Record<string, ShopBrand> = {
     ],
     storefrontBase: "https://shop.minifootball.co.nz",
   },
+  cic: {
+    brandKey: "cic",
+    orgId: 5,
+    storeName: "CIC Store",
+    orderPrefix: "CIC",
+    assetBase: "https://join.cicyouth.com",
+    currency: "NZD",
+    adminEmail: "info@cicyouth.com",
+    allowedOrigins: [
+      /^https:\/\/(www\.)?cicyouth\.com$/,
+      /^https:\/\/shop\.cicyouth\.com$/,
+    ],
+    storefrontBase: "https://shop.cicyouth.com",
+  },
 };
 
 function shopBrand(brandKey: string): ShopBrand | undefined {
@@ -320,7 +334,9 @@ async function priceCart(
       throw new ShopError(`${product.title} (${colour.name} · ${it.size}) is out of stock.`, 409);
     }
     const image = images.find((im) => im.colourId === colour.id) || images.find((im) => im.productId === product.id && im.colourId == null) || null;
-    const unitCents = product.priceCents;
+    // Per-variant price wins when set (gift-card denominations); otherwise the
+    // product price (all standard products, incl. every MFL kit).
+    const unitCents = variant.priceCents ?? product.priceCents;
     return {
       product, colour, variant, qty: it.qty,
       unitCents, lineCents: unitCents * it.qty,
@@ -822,7 +838,13 @@ export function registerShopRoutes(app: Express) {
                 .map((im) => ({ url: absUrl(brand, im.url), alt: im.alt || `${p.title} — ${c.name}` })),
               sizes: variants
                 .filter((v) => v.colourId === c.id)
-                .map((v) => ({ size: v.size, inStock: v.stock > 0 })),
+                .map((v) => ({
+                  size: v.size,
+                  inStock: v.stock > 0,
+                  // Only variable-price products (e.g. gift cards) carry a per-variant
+                  // price; MFL kits leave this null so the field is omitted.
+                  ...(v.priceCents != null ? { priceDollars: toDollars(v.priceCents) } : {}),
+                })),
             })),
             description: p.description || undefined,
             badge: p.badge || undefined,

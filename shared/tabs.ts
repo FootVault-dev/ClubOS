@@ -113,6 +113,7 @@ const tournamentTabs: TabDef[] = [
   { slug: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
+  { slug: "store", title: "Store", url: "/admin/store" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },

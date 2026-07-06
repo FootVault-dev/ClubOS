@@ -3505,6 +3505,10 @@ export const shopVariants = pgTable("shop_variants", {
   size: text("size").notNull(),
   sku: text("sku"),
   stock: integer("stock").notNull().default(0),
+  // Optional per-variant price override (NZD cents). Null → use the product
+  // price (all MFL kits). Used by variable-price products like the CIC Gift Card
+  // where each denomination variant carries its own price.
+  priceCents: integer("price_cents"),
   active: boolean("active").notNull().default(true),
 }, (t) => ({
   colourSizeUnq: uniqueIndex("shop_variants_colour_size_unique").on(t.colourId, t.size),
