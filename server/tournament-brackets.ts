@@ -7,31 +7,52 @@
 //                    (rank 1-4 = pool finishing position, #n = nth-best at that
 //                    rank, ranked by pts→GD→GF). Used by the 20-team grades
 //                    (5 winners + 3 best 2nds → Cup; 2 remaining 2nds + all
-//                    3rds + best 4th → Plate; remaining 4ths → placement).
+//                    5 thirds + best 4th → Plate; remaining 4ths → placement RR 17-20).
 //   • "W G27"      → winner of game number 27
 //   • "L G30"      → loser  of game number 30
 //
-// This resolver fills in the actual team IDs once the source is decided:
-//   - a pool position resolves only when EVERY group game in that pool is final
-//     (so the standings order is settled),
+// EARLY (partial) resolution — a slot is filled at the EARLIEST moment its team
+// is mathematically confirmed, not only when every game is played:
+//   - a pool position resolves as soon as it is CLINCHED (the team's points
+//     floor beats every rival's points ceiling, so its finishing place cannot
+//     change no matter the remaining results),
+//   - a cross-pool seed resolves once EVERY pool's contributing position is
+//     clinched AND those teams have finished all their games (so GD/GF, and thus
+//     the cross-pool order, are final),
 //   - a W/L reference resolves once that game is final (penalties break a draw).
 //
+// BYE handling (19-team grades with a "Bye" team, e.g. U14 Pool E): bye games
+// grant 0 goals / 0 points to BOTH sides (they are excluded from the standings),
+// and a "Bye" team is NEVER ranked into a Cup or Plate seed — it only occupies
+// the pre-assigned 17th–20th placement slots. Bye games are also ignored when
+// judging whether a pool is finished.
+//
 // It runs a fixpoint so quarters → semis → finals cascade in one call, and it
-// ONLY ever touches slots that have a placeholder. Games with no placeholder
-// (e.g. the U10–U14 finals, which admins assign by hand) are never modified.
-// Re-running is safe and idempotent — it always recomputes from current results,
-// so correcting a score automatically re-flows the bracket downstream.
+// ONLY ever touches slots that have a placeholder. Games with a fixed team and
+// no placeholder (e.g. a hand-assigned Bye placement slot) are never modified.
+// Re-running is safe and idempotent — it always recomputes from current results.
 
 import { storage } from "./storage";
 
 const POOL_RE = /^([A-E])\s*([1-9])$/i;
 const RANK_RE = /^R\s*([1-4])\s*#\s*([1-9])$/i;
 const WL_RE = /^([WL])\s*G\s*0*(\d+)$/i;
+const PTS_WIN = 3;
 
 export async function resolveTournamentBrackets(tournamentId: number): Promise<number> {
   const games = await storage.getTournamentGames(tournamentId);
   if (games.length === 0) return 0;
   const groups = await storage.getTournamentGroups(tournamentId);
+  const teams = await storage.getTournamentTeams(tournamentId);
+
+  // "Bye" teams are excluded from all seeding — they only sit in pre-assigned
+  // placement slots. Games involving a Bye grant nothing to anyone.
+  const byeTeamIds = new Set<number>(
+    teams.filter(t => /^\s*bye\s*$/i.test(t.name || "")).map(t => t.id),
+  );
+  const isByeGame = (g: (typeof games)[number]) =>
+    (g.homeTeamId != null && byeTeamIds.has(g.homeTeamId)) ||
+    (g.awayTeamId != null && byeTeamIds.has(g.awayTeamId));
 
   // Pool letter ("A".."E") → groupId.
   const letterToGroupId = new Map<string, number>();
@@ -40,50 +61,82 @@ export async function resolveTournamentBrackets(tournamentId: number): Promise<n
     if (m) letterToGroupId.set(m[1].toUpperCase(), g.id);
   }
 
-  // Pool completeness: a pool is "settled" only when all its group games are final.
-  const poolProgress = new Map<number, { final: number; total: number }>();
-  for (const g of games) {
-    if (g.stage === "group" && g.groupId != null) {
-      const e = poolProgress.get(g.groupId) || { final: 0, total: 0 };
-      e.total++;
-      if (g.status === "final") e.final++;
-      poolProgress.set(g.groupId, e);
-    }
-  }
-
-  // Current standings, grouped by groupId (already sorted best-first).
+  // Standings, grouped by pool, best-first. getTournamentGroupStandings already
+  // excludes bye games (so real teams get 0 from byes and the Bye is not listed).
   const standings = await storage.getTournamentGroupStandings(tournamentId);
   const standingsByGid = new Map<number, typeof standings>();
   for (const s of standings) {
-    if (s.groupId == null) continue;
+    if (s.groupId == null || byeTeamIds.has(s.teamId)) continue;
     const arr = standingsByGid.get(s.groupId) || [];
     arr.push(s);
     standingsByGid.set(s.groupId, arr);
   }
 
-  // Game number → game (same object refs as `games`, so in-memory updates are seen).
-  const byNum = new Map<number, (typeof games)[number]>();
-  for (const g of games) if (g.gameNumber != null) byNum.set(g.gameNumber, g);
+  // Remaining (not-yet-final, non-bye) group games per team — for clinch maths.
+  const remainingByTeam = new Map<number, number>();
+  for (const g of games) {
+    if (g.stage !== "group" || g.status === "final" || isByeGame(g)) continue;
+    for (const tid of [g.homeTeamId, g.awayTeamId]) {
+      if (tid != null && !byeTeamIds.has(tid)) remainingByTeam.set(tid, (remainingByTeam.get(tid) || 0) + 1);
+    }
+  }
+  const remOf = (tid: number) => remainingByTeam.get(tid) || 0;
 
+  // Per pool, which finishing positions are CLINCHED, and to whom. A team X is
+  // "surely above" Y when X's points floor exceeds Y's points ceiling
+  // (X.pts > Y.pts + 3·gamesLeft(Y)) — then X finishes above Y in every outcome,
+  // regardless of goal difference. X's place is locked when every other team is
+  // decisively above or below it (best possible place == worst possible place).
+  const lockedPos = new Map<number, Map<number, number>>(); // gid → (rank → teamId)
+  for (const [gid, table] of standingsByGid) {
+    const posMap = new Map<number, number>();
+    for (const x of table) {
+      let aboveSure = 0, belowSure = 0;
+      for (const y of table) {
+        if (y.teamId === x.teamId) continue;
+        if (y.pts > x.pts + PTS_WIN * remOf(x.teamId)) aboveSure++;
+        else if (x.pts > y.pts + PTS_WIN * remOf(y.teamId)) belowSure++;
+      }
+      const best = aboveSure + 1;
+      const worst = table.length - belowSure;
+      if (best === worst) posMap.set(best, x.teamId);
+    }
+    lockedPos.set(gid, posMap);
+  }
+
+  // Game number → game (first wins; knockout game numbers are unique).
+  const byNum = new Map<number, (typeof games)[number]>();
+  for (const g of games) if (g.gameNumber != null && !byNum.has(g.gameNumber)) byNum.set(g.gameNumber, g);
+
+  const rowOf = (gid: number, teamId: number) =>
+    standingsByGid.get(gid)?.find(r => r.teamId === teamId);
+
+  // Pool position — resolves as soon as that finishing place is clinched.
   function resolvePoolPos(letter: string, rank: number): number | null {
     const gid = letterToGroupId.get(letter.toUpperCase());
     if (gid == null) return null;
-    const prog = poolProgress.get(gid);
-    if (!prog || prog.total === 0 || prog.final < prog.total) return null; // pool not settled yet
-    const table = standingsByGid.get(gid);
-    if (!table || table.length < rank) return null;
-    return table[rank - 1].teamId;
+    return lockedPos.get(gid)?.get(rank) ?? null;
   }
 
-  // Cross-pool: the nth-best team finishing `rank`-th across ALL pools. Only
-  // resolves once EVERY pool's group stage is complete (so the cross-pool order
-  // is stable). Ties broken by pts → GD → GF (matches the standings sort).
+  // Cross-pool: the nth-best team finishing `rank`-th across all pools. Resolves
+  // once EVERY pool that HAS a rank-th place has it clinched AND that team has no
+  // games left (final GD/GF), so the cross-pool order is exact. Pools with fewer
+  // than `rank` real teams (e.g. a Bye-shrunk pool for rank 4) simply don't
+  // contribute a team at that rank. Bye teams are never present here.
   function resolveCrossPool(rank: number, n: number): number | null {
-    let anyPool = false;
-    for (const [, prog] of poolProgress) { anyPool = true; if (prog.total === 0 || prog.final < prog.total) return null; }
-    if (!anyPool) return null;
     const atRank: typeof standings = [];
-    for (const [, table] of standingsByGid) if (table.length >= rank) atRank.push(table[rank - 1]);
+    let anyPool = false;
+    for (const [gid, table] of standingsByGid) {
+      if (table.length < rank) continue; // pool has no team at this finishing place
+      anyPool = true;
+      const tid = lockedPos.get(gid)?.get(rank);
+      if (tid == null) return null;      // not clinched yet in this pool
+      if (remOf(tid) > 0) return null;   // team still playing → GD/GF not final
+      const row = rowOf(gid, tid);
+      if (!row) return null;
+      atRank.push(row);
+    }
+    if (!anyPool) return null;
     atRank.sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
     return atRank.length >= n ? atRank[n - 1].teamId : null;
   }
@@ -117,7 +170,7 @@ export async function resolveTournamentBrackets(tournamentId: number): Promise<n
   }
 
   let updated = 0;
-  // Fixpoint: QFs resolve from pools, SFs from QFs, finals from SFs. Cap passes.
+  // Fixpoint: pools → QFs, QFs → SFs, SFs → finals cascade in one call.
   for (let pass = 0; pass < 6; pass++) {
     let changed = 0;
     for (const g of games) {
