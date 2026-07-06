@@ -651,8 +651,18 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Manual override: set the team AND clear the auto-fill placeholder, so the
+  // bracket resolver won't overwrite the admin's choice on the next score save.
+  // Lets admins instantly correct/seed any knockout slot when the draw is a
+  // one-off exception (bye, undersized pool, etc.) — speed of comms is critical.
   const assignTeam = (gameId: number, side: "home" | "away", teamId: number) =>
-    updateGameMut.mutate({ id: gameId, data: { [side === "home" ? "homeTeamId" : "awayTeamId"]: teamId } });
+    updateGameMut.mutate({
+      id: gameId,
+      data: {
+        [side === "home" ? "homeTeamId" : "awayTeamId"]: teamId,
+        [side === "home" ? "homeTeamPlaceholder" : "awayTeamPlaceholder"]: null,
+      },
+    });
 
   const startEditing = (game: GameWithRelations) => {
     setEditingGameId(game.id);
@@ -792,15 +802,22 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                   )}
                 </td>
                 <td className="px-3 py-2.5 text-right">
-                  {isKnockout && !game.homeTeam && !game.homeTeamPlaceholder ? (
-                    <Select value={game.homeTeamId ? String(game.homeTeamId) : ""} onValueChange={v => assignTeam(game.id, "home", Number(v))}>
-                      <SelectTrigger className="w-44 h-7 text-xs premium-input text-white ml-auto" data-testid={`select-home-team-${game.id}`}>
-                        <SelectValue placeholder="Assign team" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {sortedTeams.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                  {isKnockout ? (
+                    <div className="flex flex-col items-end gap-0.5">
+                      <Select value={game.homeTeamId ? String(game.homeTeamId) : ""} onValueChange={v => assignTeam(game.id, "home", Number(v))}>
+                        <SelectTrigger className="w-44 h-7 text-xs premium-input text-white ml-auto" data-testid={`select-home-team-${game.id}`}>
+                          <SelectValue placeholder={game.homeTeamPlaceholder || "Assign team"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {sortedTeams.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      {game.homeTeamPlaceholder
+                        ? <span className="text-[10px] text-white/25">auto · {game.homeTeamPlaceholder}</span>
+                        : game.homeTeamId
+                          ? <span className="text-[10px] text-amber-400/60">manual override</span>
+                          : null}
+                    </div>
                   ) : (
                     <span className="text-sm text-white/70 font-medium">{homeName}</span>
                   )}
@@ -833,15 +850,22 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                   )}
                 </td>
                 <td className="px-3 py-2.5 text-left">
-                  {isKnockout && !game.awayTeam && !game.awayTeamPlaceholder ? (
-                    <Select value={game.awayTeamId ? String(game.awayTeamId) : ""} onValueChange={v => assignTeam(game.id, "away", Number(v))}>
-                      <SelectTrigger className="w-44 h-7 text-xs premium-input text-white" data-testid={`select-away-team-${game.id}`}>
-                        <SelectValue placeholder="Assign team" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {sortedTeams.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                  {isKnockout ? (
+                    <div className="flex flex-col items-start gap-0.5">
+                      <Select value={game.awayTeamId ? String(game.awayTeamId) : ""} onValueChange={v => assignTeam(game.id, "away", Number(v))}>
+                        <SelectTrigger className="w-44 h-7 text-xs premium-input text-white" data-testid={`select-away-team-${game.id}`}>
+                          <SelectValue placeholder={game.awayTeamPlaceholder || "Assign team"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {sortedTeams.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      {game.awayTeamPlaceholder
+                        ? <span className="text-[10px] text-white/25">auto · {game.awayTeamPlaceholder}</span>
+                        : game.awayTeamId
+                          ? <span className="text-[10px] text-amber-400/60">manual override</span>
+                          : null}
+                    </div>
                   ) : (
                     <span className="text-sm text-white/70 font-medium">{awayName}</span>
                   )}
@@ -994,6 +1018,12 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
               <RefreshCw className={`w-3 h-3 ${resolveBracketsMut.isPending ? "animate-spin" : ""}`} /> Recompute brackets
             </button>
           </div>
+          <p className="text-[11px] text-white/35 mb-3 leading-relaxed">
+            Slots fill automatically as results come in (<span className="text-white/45">auto · CODE</span>). To handle
+            a one-off (bye, undersized pool, late change), just pick any team from a dropdown — that
+            <span className="text-amber-400/70"> locks it in (manual override)</span> and it won't be auto-changed.
+            Goes live instantly.
+          </p>
           {Array.from(knockoutByDate.entries()).map(([dateKey, gamesForDate]) => (
             <div key={dateKey} className="mb-4">
               <div className="px-3 py-2 bg-white/[0.03] border border-white/[0.05] rounded-t-xl">
