@@ -3551,6 +3551,7 @@ export type ShopDiscountCode = typeof shopDiscountCodes.$inferSelect;
 // storefront is built against EXACTLY these shapes):
 export interface ShopSponsorSlot { text?: string; logoUrl?: string } // logoUrl wins if both
 export interface ShopKitCustomisation {
+  teamLogo?: ShopSponsorSlot; // team crest — chest, over the heart
   frontSponsor?: ShopSponsorSlot;
   backTopSponsor?: ShopSponsorSlot;
   backBottomSponsor?: ShopSponsorSlot;

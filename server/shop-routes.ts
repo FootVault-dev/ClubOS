@@ -187,9 +187,11 @@ function parseKitCustomisation(raw: any): ShopKitCustomisation | null {
   if (raw == null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) throw new ShopError("Kit customisation is invalid.");
   const out: ShopKitCustomisation = {};
+  const teamLogo = parseSponsorSlot(raw.teamLogo);
   const front = parseSponsorSlot(raw.frontSponsor);
   const backTop = parseSponsorSlot(raw.backTopSponsor);
   const backBottom = parseSponsorSlot(raw.backBottomSponsor);
+  if (teamLogo) out.teamLogo = teamLogo;
   if (front) out.frontSponsor = front;
   if (backTop) out.backTopSponsor = backTop;
   if (backBottom) out.backBottomSponsor = backBottom;
@@ -222,6 +224,7 @@ function parseUnits(raw: any, qty: number): ShopUnitPersonalisation[] | null {
 function sponsorSummary(customisation: ShopKitCustomisation | null | undefined) {
   if (!customisation) return [];
   const slots: { label: string; slot?: ShopSponsorSlot }[] = [
+    { label: "Team logo (chest crest)", slot: customisation.teamLogo },
     { label: "Front sponsor", slot: customisation.frontSponsor },
     { label: "Back top sponsor", slot: customisation.backTopSponsor },
     { label: "Back bottom sponsor", slot: customisation.backBottomSponsor },

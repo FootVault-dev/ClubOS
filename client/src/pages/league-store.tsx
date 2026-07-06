@@ -42,7 +42,7 @@ type ShopProductT = {
 };
 type SponsorSlotT = { text?: string; logoUrl?: string }; // logoUrl wins if both
 type KitCustomisationT = {
-  frontSponsor?: SponsorSlotT; backTopSponsor?: SponsorSlotT; backBottomSponsor?: SponsorSlotT;
+  teamLogo?: SponsorSlotT; frontSponsor?: SponsorSlotT; backTopSponsor?: SponsorSlotT; backBottomSponsor?: SponsorSlotT;
 };
 type UnitPersonalisationT = { name?: string; number?: string };
 type ShopOrderRowT = {
@@ -947,6 +947,7 @@ function Row({ label, value, muted }: { label: string; value: string; muted?: bo
 // ── Print spec — sponsor slots + roster, monospace clarity for Dima ─────────
 
 const SPONSOR_SLOT_LABELS: { key: keyof KitCustomisationT; label: string }[] = [
+  { key: "teamLogo", label: "Team logo (chest crest)" },
   { key: "frontSponsor", label: "Front sponsor" },
   { key: "backTopSponsor", label: "Back top sponsor" },
   { key: "backBottomSponsor", label: "Back bottom sponsor" },
