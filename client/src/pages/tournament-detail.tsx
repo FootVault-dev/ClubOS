@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { TimePickerInput } from "@/components/ui/time-picker-input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { Tournament, TournamentGroup, TournamentTeam, TournamentGame, TournamentPlayer, TournamentGoal, TournamentCard } from "@shared/schema";
+import type { Tournament, TournamentGroup, TournamentTeam, TournamentGame, TournamentPlayer, TournamentGoal, TournamentCard, TournamentPenaltyKick } from "@shared/schema";
 
 // A player at or above this many yellow cards should sit out a game. CIC's
 // actual rule — confirm with Isaac and change here if it's not 2.
@@ -175,6 +175,207 @@ function GkRatingRow({ teamLabel, players, currentName, currentRating, onSave, o
         <span className="text-[10px] text-white/25 ml-1">5 = best</span>
       </div>
     </div>
+  );
+}
+
+// Penalty shootout entry — for knockout games that finish level. Two modes,
+// maximum optionality (Daniel's ask):
+//   • Quick score  — just the shootout result (e.g. 4–3). Enough to advance the
+//                     bracket; writes home/away penalties on the game row.
+//   • Kick-by-kick — the full order like a pro football app: each kick shows the
+//                     team, a green ✓ (scored) or red ✗ (missed/saved), in order.
+// Whichever mode is used, the running totals sync server-side so the knockout
+// bracket auto-advances the correct team.
+function PenaltyShootout({
+  game, homeName, awayName,
+}: {
+  game: GameWithRelations; homeName: string; awayName: string;
+}) {
+  const { toast } = useToast();
+  const gamesKey = ["/api/admin/tournament/tournaments", game.tournamentId, "games"];
+  const kicksKey = ["/api/admin/tournament/games", game.id, "shootout"];
+
+  const { data: kicks = [] } = useQuery<TournamentPenaltyKick[]>({
+    queryKey: kicksKey,
+    queryFn: () => fetch(`/api/admin/tournament/games/${game.id}/shootout`).then(r => r.json()),
+  });
+
+  const [userMode, setUserMode] = useState<"quick" | "kicks" | null>(null);
+  const mode = userMode ?? (kicks.length > 0 ? "kicks" : "quick");
+
+  const [qHome, setQHome] = useState<string>(game.homePenalties?.toString() ?? "");
+  const [qAway, setQAway] = useState<string>(game.awayPenalties?.toString() ?? "");
+  const [takerHome, setTakerHome] = useState("");
+  const [takerAway, setTakerAway] = useState("");
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: kicksKey });
+    queryClient.invalidateQueries({ queryKey: gamesKey });
+  };
+
+  const addKickMut = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/admin/tournament/shootout", data),
+    onSuccess: () => { invalidateAll(); setTakerHome(""); setTakerAway(""); },
+    onError: (e: any) => toast({ title: "Couldn't add penalty", description: e.message, variant: "destructive" }),
+  });
+  const delKickMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/tournament/shootout/${id}`),
+    onSuccess: invalidateAll,
+  });
+  const savePensMut = useMutation({
+    mutationFn: (data: { homePenalties: number | null; awayPenalties: number | null }) =>
+      apiRequest("PATCH", `/api/admin/tournament/games/${game.id}`, data),
+    onSuccess: () => { invalidateAll(); toast({ title: "Penalty result saved" }); },
+    onError: (e: any) => toast({ title: "Couldn't save penalties", description: e.message, variant: "destructive" }),
+  });
+
+  const homeId = game.homeTeamId, awayId = game.awayTeamId;
+  const homePens = kicks.filter(k => k.teamId === homeId && k.scored).length;
+  const awayPens = kicks.filter(k => k.teamId === awayId && k.scored).length;
+
+  const logKick = (side: "home" | "away", scored: boolean) => {
+    const teamId = side === "home" ? homeId : awayId;
+    if (!teamId) return;
+    const taker = (side === "home" ? takerHome : takerAway).trim();
+    addKickMut.mutate({
+      gameId: game.id, teamId, scored,
+      ...(taker ? { playerName: taker, playerTeamId: teamId } : {}),
+    });
+  };
+
+  const saveQuick = () => {
+    const h = qHome === "" ? null : parseInt(qHome);
+    const a = qAway === "" ? null : parseInt(qAway);
+    savePensMut.mutate({ homePenalties: h, awayPenalties: a });
+  };
+
+  // A little tally chip that reads like a scoreboard.
+  const tallyHome = mode === "kicks" ? homePens : (qHome === "" ? "–" : qHome);
+  const tallyAway = mode === "kicks" ? awayPens : (qAway === "" ? "–" : qAway);
+
+  return (
+    <div className="border-t border-white/5 pt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-white/40 uppercase tracking-wide flex items-center gap-1.5">
+          <span className="text-sm">🥅</span> Penalty shootout
+        </div>
+        <div className="flex items-center gap-2 rounded-md bg-white/[0.03] px-2.5 py-1">
+          <span className="text-[11px] text-white/50 max-w-[80px] truncate">{homeName}</span>
+          <span className="text-sm font-bold tabular-nums text-white">{tallyHome}</span>
+          <span className="text-white/25 text-xs">–</span>
+          <span className="text-sm font-bold tabular-nums text-white">{tallyAway}</span>
+          <span className="text-[11px] text-white/50 max-w-[80px] truncate">{awayName}</span>
+        </div>
+      </div>
+
+      {/* Mode toggle */}
+      <div className="grid grid-cols-2 gap-1.5">
+        {([["kicks", "Kick-by-kick"], ["quick", "Just the score"]] as const).map(([val, lbl]) => (
+          <button
+            key={val} type="button" onClick={() => setUserMode(val)}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition border ${
+              mode === val ? "bg-blue-600 border-blue-500 text-white"
+                           : "bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:border-white/25"
+            }`}
+          >
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {mode === "quick" ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-center gap-2">
+            <span className="text-xs text-white/50 w-24 text-right truncate">{homeName}</span>
+            <Input type="number" min="0" value={qHome} onChange={e => setQHome(e.target.value)}
+              className="w-14 h-9 text-center text-sm premium-input text-white" placeholder="0" />
+            <span className="text-white/25">–</span>
+            <Input type="number" min="0" value={qAway} onChange={e => setQAway(e.target.value)}
+              className="w-14 h-9 text-center text-sm premium-input text-white" placeholder="0" />
+            <span className="text-xs text-white/50 w-24 truncate">{awayName}</span>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={saveQuick} disabled={savePensMut.isPending}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs">
+              {savePensMut.isPending ? "Saving…" : "Save penalty result"}
+            </Button>
+            {(game.homePenalties != null || game.awayPenalties != null || qHome !== "" || qAway !== "") && (
+              <Button size="sm" variant="outline"
+                onClick={() => { setQHome(""); setQAway(""); savePensMut.mutate({ homePenalties: null, awayPenalties: null }); }}
+                className="text-xs">Clear</Button>
+            )}
+          </div>
+          <p className="text-[11px] text-white/35">Records just the result — enough to send the winner through the bracket. Switch to kick-by-kick to log the full shootout order.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {/* Existing kicks, in order — mirrored like a broadcast summary */}
+          {kicks.length > 0 && (
+            <div className="space-y-1">
+              {kicks.map(k => {
+                const home = k.teamId === homeId;
+                return (
+                  <div key={k.id} className="grid grid-cols-[auto_1fr_auto_1fr_auto] items-center gap-2 rounded-md bg-white/[0.02] border border-white/5 px-2 py-1.5">
+                    <span className="text-[10px] text-white/30 tabular-nums w-5">#{k.kickNumber}</span>
+                    <div className={`flex items-center gap-1.5 min-w-0 ${home ? "justify-start" : "justify-end opacity-30"}`}>
+                      {home && <KickMark scored={k.scored} />}
+                      <span className="text-xs text-white/70 truncate">{home ? homeName : ""}</span>
+                    </div>
+                    <span className="text-[9px] text-white/20 uppercase">v</span>
+                    <div className={`flex items-center gap-1.5 min-w-0 ${!home ? "justify-end" : "justify-start opacity-30"}`}>
+                      <span className="text-xs text-white/70 truncate">{!home ? awayName : ""}</span>
+                      {!home && <KickMark scored={k.scored} />}
+                    </div>
+                    <button onClick={() => delKickMut.mutate(k.id)}
+                      className="w-5 h-5 flex items-center justify-center rounded text-white/15 hover:text-red-400 hover:bg-red-500/10">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Log the next kick — tap the team's ✓ or ✗ as each penalty is taken.
+              2-line layout keeps it from overflowing on a narrow phone. */}
+          {([["home", homeName, takerHome, setTakerHome], ["away", awayName, takerAway, setTakerAway]] as const).map(([side, name, taker, setTaker]) => (
+            <div key={side} className="rounded-md bg-white/[0.02] border border-white/5 p-2 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-white/70 truncate min-w-0">{name}</span>
+                <div className="flex gap-1.5 shrink-0">
+                  <button type="button" onClick={() => logKick(side, true)} disabled={addKickMut.isPending}
+                    className="h-8 px-2.5 flex items-center gap-1 rounded-md bg-green-500/15 text-green-400 hover:bg-green-500/25 text-xs font-semibold disabled:opacity-40"
+                    title="Scored" data-testid={`button-pen-scored-${side}`}>
+                    <Check className="w-3.5 h-3.5" /> Scored
+                  </button>
+                  <button type="button" onClick={() => logKick(side, false)} disabled={addKickMut.isPending}
+                    className="h-8 px-2.5 flex items-center gap-1 rounded-md bg-red-500/15 text-red-400 hover:bg-red-500/25 text-xs font-semibold disabled:opacity-40"
+                    title="Missed or saved" data-testid={`button-pen-missed-${side}`}>
+                    <X className="w-3.5 h-3.5" /> Missed
+                  </button>
+                </div>
+              </div>
+              <Input type="text" placeholder="Taker name (optional)" value={taker}
+                onChange={e => setTaker(e.target.value)} className="text-xs h-7 w-full" />
+            </div>
+          ))}
+          <p className="text-[11px] text-white/35">Tap each team's ✓ or ✗ as the kicks are taken — the order and the running score build automatically. The winner flows through the bracket once the game is marked <span className="text-white/50 font-medium">Final</span>.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Green tick (scored) / red cross (missed) — the pro-app shootout mark.
+function KickMark({ scored }: { scored: boolean }) {
+  return scored ? (
+    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-500 text-white" title="Scored">
+      <Check className="h-2.5 w-2.5" strokeWidth={3.5} />
+    </span>
+  ) : (
+    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-500 text-white" title="Missed / saved">
+      <X className="h-2.5 w-2.5" strokeWidth={3.5} />
+    </span>
   );
 }
 
@@ -489,6 +690,11 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
 
           {game.homeTeamId && game.awayTeamId && (
             <>
+              {/* Penalty shootout — knockout games only (group games can't go to pens) */}
+              {game.stage !== "group" && (
+                <PenaltyShootout game={game} homeName={homeName} awayName={awayName} />
+              )}
+
               {/* Disciplinary cards — admin only */}
               <div className="border-t border-white/5 pt-4 space-y-3">
                 <div className="flex items-center justify-between">
@@ -868,10 +1074,17 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                 </td>
                 <td className="px-1 py-2.5">
                   {game.status === "final" ? (
-                    <div className="flex items-center justify-center gap-1">
-                      <span className="text-sm font-bold text-white/90 w-6 text-right">{game.homeScore}</span>
-                      <span className="text-white/20 text-xs">-</span>
-                      <span className="text-sm font-bold text-white/90 w-6 text-left">{game.awayScore}</span>
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <span className="text-sm font-bold text-white/90 w-6 text-right">{game.homeScore}</span>
+                        <span className="text-white/20 text-xs">-</span>
+                        <span className="text-sm font-bold text-white/90 w-6 text-left">{game.awayScore}</span>
+                      </div>
+                      {game.homePenalties != null && game.awayPenalties != null && (
+                        <span className="text-[9px] font-semibold text-amber-400/80 tabular-nums leading-tight">
+                          {game.homePenalties}-{game.awayPenalties} pens
+                        </span>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center justify-center gap-1">

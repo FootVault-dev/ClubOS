@@ -66,7 +66,7 @@ import {
   printOrderItems, type InsertPrintOrderItem, type PrintOrderItem,
   printOrderFiles, type InsertPrintOrderFile, type PrintOrderFile,
   printOrderEvents, type InsertPrintOrderEvent, type PrintOrderEvent,
-  tournaments, tournamentGroups, tournamentTeams, tournamentPlayers, tournamentStaff, tournamentGames, tournamentGoals, tournamentMvpVotes, tournamentGkRatings, tournamentCards,
+  tournaments, tournamentGroups, tournamentTeams, tournamentPlayers, tournamentStaff, tournamentGames, tournamentGoals, tournamentMvpVotes, tournamentGkRatings, tournamentCards, tournamentPenaltyKicks,
   clubs,
   type InsertTournament, type Tournament,
   type InsertTournamentGroup, type TournamentGroup,
@@ -77,6 +77,7 @@ import {
   type InsertTournamentGoal, type TournamentGoal,
   type TournamentMvpVote, type TournamentGkRating,
   type InsertTournamentCard, type TournamentCard,
+  type InsertTournamentPenaltyKick, type TournamentPenaltyKick,
   type InsertClub, type Club,
   terms,
   type InsertTerm, type Term,
@@ -361,6 +362,18 @@ export interface IStorage {
   createTournamentCard(data: InsertTournamentCard): Promise<TournamentCard>;
   deleteTournamentCard(id: number): Promise<void>;
   getTournamentDiscipline(tournamentId: number): Promise<DisciplineRow[]>;
+
+  // Penalty shootout — kick-by-kick order for knockout games that finish level.
+  getPenaltyKicksByGame(gameId: number): Promise<TournamentPenaltyKick[]>;
+  addPenaltyKick(data: InsertTournamentPenaltyKick): Promise<TournamentPenaltyKick>;
+  deletePenaltyKick(id: number): Promise<number | null>; // returns the affected gameId
+  // Recompute home/away penalty totals on the game row from its kicks (scored
+  // count per team) and write them back — keeps the bracket resolver correct.
+  syncShootoutTotals(gameId: number): Promise<{ home: number; away: number }>;
+  // Public, privacy-safe shootout timeline (taker name only on scored kicks).
+  getPublicShootout(gameId: number): Promise<{
+    kickNumber: number; teamId: number; scored: boolean; playerName: string | null;
+  }[]>;
 
   getTournamentStaff(teamId: number): Promise<TournamentStaff[]>;
   createTournamentStaff(data: InsertTournamentStaff): Promise<TournamentStaff>;
@@ -2331,6 +2344,85 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTournamentCard(id: number): Promise<void> {
     await db.delete(tournamentCards).where(eq(tournamentCards.id, id));
+  }
+
+  // ── Penalty shootout ──────────────────────────────────────────────────────
+  async getPenaltyKicksByGame(gameId: number): Promise<TournamentPenaltyKick[]> {
+    return db.select().from(tournamentPenaltyKicks)
+      .where(eq(tournamentPenaltyKicks.gameId, gameId))
+      .orderBy(asc(tournamentPenaltyKicks.kickNumber));
+  }
+
+  async addPenaltyKick(data: InsertTournamentPenaltyKick): Promise<TournamentPenaltyKick> {
+    // Concrete shape (drizzle-zod Insert* types infer loosely here).
+    const d = data as { gameId: number; teamId: number; scored: boolean; kickNumber?: number | null; playerId?: number | null };
+    // kickNumber is the running order; if not supplied, append to the end.
+    let kickNumber = d.kickNumber;
+    if (kickNumber == null) {
+      const existing = await this.getPenaltyKicksByGame(d.gameId);
+      kickNumber = (existing.at(-1)?.kickNumber ?? 0) + 1;
+    }
+    const [k] = await db.insert(tournamentPenaltyKicks).values({ ...d, kickNumber } as any).returning();
+    return k;
+  }
+
+  async deletePenaltyKick(id: number): Promise<number | null> {
+    // Delete, then re-sequence the remaining kicks 1..n so the order stays
+    // contiguous (no gaps) for display. Returns the game it belonged to.
+    const [row] = await db.select().from(tournamentPenaltyKicks).where(eq(tournamentPenaltyKicks.id, id));
+    await db.delete(tournamentPenaltyKicks).where(eq(tournamentPenaltyKicks.id, id));
+    if (!row) return null;
+    const remaining = await this.getPenaltyKicksByGame(row.gameId);
+    for (let i = 0; i < remaining.length; i++) {
+      if (remaining[i].kickNumber !== i + 1) {
+        await db.update(tournamentPenaltyKicks)
+          .set({ kickNumber: i + 1 })
+          .where(eq(tournamentPenaltyKicks.id, remaining[i].id));
+      }
+    }
+    return row.gameId;
+  }
+
+  async syncShootoutTotals(gameId: number): Promise<{ home: number; away: number }> {
+    const game = await this.getTournamentGame(gameId);
+    if (!game) return { home: 0, away: 0 };
+    const kicks = await this.getPenaltyKicksByGame(gameId);
+    if (kicks.length === 0) {
+      // No kicks logged — leave any manually-entered totals untouched (the
+      // "quick score" path sets home/away penalties directly).
+      return { home: game.homePenalties ?? 0, away: game.awayPenalties ?? 0 };
+    }
+    const home = kicks.filter(k => k.teamId === game.homeTeamId && k.scored).length;
+    const away = kicks.filter(k => k.teamId === game.awayTeamId && k.scored).length;
+    await db.update(tournamentGames)
+      .set({ homePenalties: home, awayPenalties: away })
+      .where(eq(tournamentGames.id, gameId));
+    return { home, away };
+  }
+
+  async getPublicShootout(gameId: number): Promise<{
+    kickNumber: number; teamId: number; scored: boolean; playerName: string | null;
+  }[]> {
+    const rows = await db.execute(sql`
+      SELECT
+        k.kick_number AS kick_number,
+        k.team_id     AS team_id,
+        k.scored      AS scored,
+        -- Only ever publicly name a child for a SCORED penalty — never for a
+        -- miss (mirrors the own-goal suppression rule).
+        CASE WHEN k.scored AND p.id IS NOT NULL
+             THEN (p.first_name || ' ' || p.last_name) ELSE NULL END AS player_name
+      FROM tournament_penalty_kicks k
+      LEFT JOIN tournament_players p ON p.id = k.player_id
+      WHERE k.game_id = ${gameId}
+      ORDER BY k.kick_number ASC
+    `);
+    return (rows as any).rows.map((r: any) => ({
+      kickNumber: r.kick_number,
+      teamId: r.team_id,
+      scored: r.scored,
+      playerName: r.player_name,
+    }));
   }
 
   async getTournamentDiscipline(tournamentId: number): Promise<DisciplineRow[]> {

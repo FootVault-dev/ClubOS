@@ -1275,6 +1275,24 @@ export const tournamentCards = pgTable("tournament_cards", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Penalty shootout — one row per kick, IN ORDER. Only used for knockout games
+// that finish level. The game row's home_penalties / away_penalties hold the
+// running TOTALS (source of truth for bracket advancement — see
+// tournament-brackets.ts); these rows add the pro-app kick-by-kick sequence:
+// which team took it, whether it was scored (green ✓) or missed/saved (red ✗),
+// and an optional taker. Totals are kept in sync from these rows on every
+// change. Public display shows the taker's name only for SCORED kicks (we
+// never publicly name a child who missed) — mirrors the own-goal rule.
+export const tournamentPenaltyKicks = pgTable("tournament_penalty_kicks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => tournamentGames.id, { onDelete: "cascade" }),
+  kickNumber: integer("kick_number").notNull(), // running order across both teams: 1,2,3…
+  teamId: integer("team_id").notNull().references(() => tournamentTeams.id, { onDelete: "cascade" }),
+  scored: boolean("scored").notNull(), // true = goal (✓), false = missed/saved (✗)
+  playerId: integer("player_id").references(() => tournamentPlayers.id, { onDelete: "set null" }), // optional taker
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const analyticsEvents = pgTable("analytics_events", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   visitorId: text("visitor_id").notNull(),
@@ -1355,6 +1373,7 @@ export const insertTournamentGameSchema = createInsertSchema(tournamentGames).om
 export const insertTournamentMvpVoteSchema = createInsertSchema(tournamentMvpVotes).omit({ id: true, createdAt: true });
 export const insertTournamentGkRatingSchema = createInsertSchema(tournamentGkRatings).omit({ id: true, createdAt: true });
 export const insertTournamentCardSchema = createInsertSchema(tournamentCards).omit({ id: true, createdAt: true });
+export const insertTournamentPenaltyKickSchema = createInsertSchema(tournamentPenaltyKicks).omit({ id: true, createdAt: true });
 
 export const insertLeagueCompetitionSchema = createInsertSchema(leagueCompetitions).omit({ id: true, createdAt: true });
 export const insertLeagueDivisionSchema = createInsertSchema(leagueDivisions).omit({ id: true, createdAt: true });
@@ -1490,6 +1509,8 @@ export type InsertTournamentGkRating = z.infer<typeof insertTournamentGkRatingSc
 export type TournamentGkRating = typeof tournamentGkRatings.$inferSelect;
 export type InsertTournamentCard = z.infer<typeof insertTournamentCardSchema>;
 export type TournamentCard = typeof tournamentCards.$inferSelect;
+export type InsertTournamentPenaltyKick = z.infer<typeof insertTournamentPenaltyKickSchema>;
+export type TournamentPenaltyKick = typeof tournamentPenaltyKicks.$inferSelect;
 
 export const discounts = pgTable("discounts", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),

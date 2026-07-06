@@ -6364,6 +6364,57 @@ export async function registerRoutes(
     }
   });
 
+  // ─── Penalty shootout — kick-by-kick order for knockout games that draw ───
+  // The game row's home/away penalties (settable via PATCH game for the "quick
+  // score" path) drive bracket advancement; these routes manage the ordered
+  // sequence and keep those totals in sync so the resolver picks the right
+  // winner however pens were entered.
+  app.get("/api/admin/tournament/games/:id/shootout", requireAuth, async (req, res) => {
+    try {
+      res.json(await storage.getPenaltyKicksByGame(parseInt(req.params.id)));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/admin/tournament/shootout", requireAuth, async (req, res) => {
+    try {
+      // playerId is OPTIONAL (youth games often have no roster). If a name is
+      // typed, find-or-create the taker so the shootout can name a scorer.
+      const { playerName, playerTeamId, ...body } = req.body;
+      if (!body.playerId && playerName && playerTeamId) {
+        body.playerId = await storage.findOrCreateTournamentPlayerByName(Number(playerTeamId), String(playerName));
+      }
+      if (!body.gameId || !body.teamId || typeof body.scored !== "boolean") {
+        return res.status(400).json({ message: "gameId, teamId and scored (boolean) are required" });
+      }
+      const kick = await storage.addPenaltyKick(body);
+      // Recompute totals from the kicks, then re-flow the bracket (a shootout
+      // result decides a knockout, which fills downstream slots).
+      await storage.syncShootoutTotals(Number(body.gameId));
+      const game = await storage.getTournamentGame(Number(body.gameId));
+      if (game) { try { await resolveTournamentBrackets(game.tournamentId); } catch (e) { console.error("[brackets] resolve failed", e); } }
+      res.status(201).json(kick);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/tournament/shootout/:id", requireAuth, async (req, res) => {
+    try {
+      // deletePenaltyKick returns the affected gameId so we can resync + re-resolve.
+      const gameId = await storage.deletePenaltyKick(parseInt(req.params.id));
+      if (gameId) {
+        await storage.syncShootoutTotals(gameId);
+        const game = await storage.getTournamentGame(gameId);
+        if (game) { try { await resolveTournamentBrackets(game.tournamentId); } catch (e) { console.error("[brackets] resolve failed", e); } }
+      }
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
   // ─── Player age verification ───
   // Admin uploads a passport / birth certificate scan, then flips the
   // ageVerified flag once they've eyeballed it. Documents go to private
@@ -10153,11 +10204,17 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Not found" });
       }
       const goals = await storage.getPublicGameGoals(game.id);
+      const shootout = await storage.getPublicShootout(game.id);
       res.json({
         gameId: game.id,
         homeTeamId: game.homeTeamId,
         awayTeamId: game.awayTeamId,
+        homeScore: game.homeScore,
+        awayScore: game.awayScore,
+        homePenalties: game.homePenalties,
+        awayPenalties: game.awayPenalties,
         goals,
+        shootout,
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
