@@ -17,19 +17,27 @@
  */
 
 import type { Express, Request, Response, NextFunction } from "express";
+import multer from "multer";
+import { randomUUID } from "crypto";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { db } from "./db";
 import { and, asc, desc, eq, inArray, or, ilike, sql } from "drizzle-orm";
 import { storage } from "./storage";
 import { requireAuth, requireTab } from "./auth";
 import { stripe, retrievePaymentIntent } from "./stripe";
-import { sendShopOrderConfirmation, sendShopOrderNotification, type ShopOrderEmailLine } from "./email";
+import {
+  sendShopOrderConfirmation, sendShopOrderNotification, type ShopOrderEmailLine,
+  sendShopShareInvite, sendShopTeamSetupSummary, sendShopShareReceipt,
+  sendShopTeamAllPaidConfirmation, sendShopPrintReadyNotification,
+} from "./email";
 import { sendServerEvent } from "./meta-capi";
 import {
   shopProducts, shopProductColours, shopProductImages, shopVariants,
-  shopShippingOptions, shopDiscountCodes, shopOrders, shopOrderItems,
+  shopShippingOptions, shopDiscountCodes, shopOrders, shopOrderItems, shopOrderShares,
   type ShopProduct, type ShopProductColour, type ShopProductImage,
   type ShopVariant, type ShopShippingOption, type ShopDiscountCode,
-  type ShopOrder, type ShopOrderItem,
+  type ShopOrder, type ShopOrderItem, type ShopOrderShare,
+  type ShopKitCustomisation, type ShopSponsorSlot, type ShopUnitPersonalisation,
 } from "@shared/schema";
 
 // ─── Brand registry — add a row per brand to open a new store ──────────────
@@ -47,6 +55,9 @@ interface ShopBrand {
   adminEmail: string;
   /** Extra origins allowed to call the public shop API for this brand. */
   allowedOrigins: RegExp[];
+  /** Absolute base of the standalone storefront — used to build the Player Pay
+   *  `/pay/{shareToken}` and coach `/team/{orderToken}` links in emails. */
+  storefrontBase: string;
 }
 
 const SHOP_BRANDS: Record<string, ShopBrand> = {
@@ -62,6 +73,7 @@ const SHOP_BRANDS: Record<string, ShopBrand> = {
       /^https:\/\/(www\.)?minifootball\.co\.nz$/,
       /^https:\/\/shop\.minifootball\.co\.nz$/,
     ],
+    storefrontBase: "https://shop.minifootball.co.nz",
   },
 };
 
@@ -105,12 +117,95 @@ function slugify(text: string): string {
 }
 
 const ORDER_STATUSES = [
-  "pending", "paid", "processing", "ready_for_pickup",
+  "pending", "awaiting_players", "paid", "processing", "ready_for_pickup",
   "shipped", "completed", "cancelled", "refunded",
 ] as const;
 
 /** Statuses that count as money in the till for stats. */
 const PAID_STATUSES = ["paid", "processing", "ready_for_pickup", "shipped", "completed"];
+
+// ─── Kit customisation — validation (contract in @shared/schema) ────────────
+// Personalisation is included in the price ($0 — NO price impact anywhere).
+// Sanitise everything that ends up in a print spec: strip control chars, cap
+// lengths, and only accept sponsor logos our own upload endpoint minted
+// (Supabase public shop-images bucket) so arbitrary URLs can't reach Dima.
+
+const CONTROL_CHARS_RX = /[\u0000-\u001F\u007F]/g;
+const SHIRT_NUMBER_RX = /^\d{1,2}$/;
+const SHOP_LOGO_BUCKET = "shop-images";
+
+function sanitizeText(value: any, maxLen: number): string {
+  return String(value ?? "").replace(CONTROL_CHARS_RX, "").trim().slice(0, maxLen);
+}
+
+/** Public URL prefix every customer-supplied sponsor logoUrl must carry. */
+function shopLogoUrlPrefix(): string {
+  const base = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+  return `${base}/storage/v1/object/public/${SHOP_LOGO_BUCKET}/`;
+}
+
+function parseSponsorSlot(raw: any): ShopSponsorSlot | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const slot: ShopSponsorSlot = {};
+  const text = sanitizeText(raw.text, 60);
+  if (text) slot.text = text;
+  const logoUrl = String(raw.logoUrl || "").trim();
+  if (logoUrl) {
+    if (!process.env.SUPABASE_URL || !logoUrl.startsWith(shopLogoUrlPrefix())) {
+      throw new ShopError("Sponsor logos must be uploaded through the store.");
+    }
+    slot.logoUrl = logoUrl; // logoUrl wins over text when both are present
+  }
+  return slot.text || slot.logoUrl ? slot : undefined;
+}
+
+function parseKitCustomisation(raw: any): ShopKitCustomisation | null {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new ShopError("Kit customisation is invalid.");
+  const out: ShopKitCustomisation = {};
+  const front = parseSponsorSlot(raw.frontSponsor);
+  const backTop = parseSponsorSlot(raw.backTopSponsor);
+  const backBottom = parseSponsorSlot(raw.backBottomSponsor);
+  if (front) out.frontSponsor = front;
+  if (backTop) out.backTopSponsor = backTop;
+  if (backBottom) out.backBottomSponsor = backBottom;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Shirt name ≤ 14 chars; number = 1–2 digits (kept as a string). */
+function parseUnitPersonalisation(raw: any): ShopUnitPersonalisation {
+  const unit: ShopUnitPersonalisation = {};
+  const name = sanitizeText(raw?.name, 14);
+  if (name) unit.name = name;
+  const number = String(raw?.number ?? "").trim();
+  if (number) {
+    if (!SHIRT_NUMBER_RX.test(number)) throw new ShopError("Shirt numbers must be 1–2 digits.");
+    unit.number = number;
+  }
+  return unit;
+}
+
+/** Per-shirt personalisation list — when present, length MUST equal qty. */
+function parseUnits(raw: any, qty: number): ShopUnitPersonalisation[] | null {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) throw new ShopError("Shirt personalisation is invalid.");
+  if (raw.length !== qty) throw new ShopError("Add a name/number entry for every shirt in the line.");
+  const units = raw.map(parseUnitPersonalisation);
+  return units.some((u) => u.name || u.number) ? units : null;
+}
+
+/** Print-spec sponsor rows for the READY TO PRINT email. */
+function sponsorSummary(customisation: ShopKitCustomisation | null | undefined) {
+  if (!customisation) return [];
+  const slots: { label: string; slot?: ShopSponsorSlot }[] = [
+    { label: "Front sponsor", slot: customisation.frontSponsor },
+    { label: "Back top sponsor", slot: customisation.backTopSponsor },
+    { label: "Back bottom sponsor", slot: customisation.backBottomSponsor },
+  ];
+  return slots
+    .filter((s) => s.slot && (s.slot.text || s.slot.logoUrl))
+    .map((s) => ({ label: s.label, text: s.slot!.text, logoUrl: s.slot!.logoUrl }));
+}
 
 // ─── Server-authoritative cart pricing (shared by quote + checkout) ─────────
 
@@ -325,6 +420,7 @@ export async function finalizeShopOrderPaid(orderId: number, paymentIntentId: st
 
   const emailLines: ShopOrderEmailLine[] = items.map((i) => ({
     title: i.title, colourName: i.colourName, size: i.size, qty: i.qty, lineCents: i.lineCents,
+    units: i.units || undefined,
   }));
   const requiresAddress = !!order.addressLine1;
   const addressSummary = requiresAddress
@@ -394,6 +490,212 @@ export async function finalizeShopOrderPaid(orderId: number, paymentIntentId: st
 
   console.log(`[Shop] Order ${order.orderNumber || order.id} finalized as paid (${paymentIntentId})`);
   return true;
+}
+
+// ─── Player Pay — share finalize (webhook + client-confirm share this) ──────
+// Same idempotency discipline as finalizeShopOrderPaid: an atomic
+// pending→paid gate on the SHARE means the receipt fires once, and an atomic
+// awaiting_players→paid gate on the ORDER means the one-time team side
+// effects (stock, coach + admin emails, the Purchase CAPI event) fire exactly
+// once even when the last two players pay in the same second.
+
+export async function finalizeShopSharePaid(shareId: number, paymentIntentId: string): Promise<boolean> {
+  const [share] = await db.update(shopOrderShares)
+    .set({ status: "paid", paidAt: new Date(), stripePaymentIntentId: paymentIntentId })
+    .where(and(eq(shopOrderShares.id, shareId), eq(shopOrderShares.status, "pending")))
+    .returning();
+  if (!share) return false; // already finalized (or unknown)
+
+  const [order] = await db.select().from(shopOrders).where(eq(shopOrders.id, share.orderId));
+  if (!order) return true; // share row won the gate but the order is gone — nothing else to do
+  const [item] = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
+
+  // Player receipt — best-effort, the share is already paid.
+  try {
+    await sendShopShareReceipt({
+      to: share.playerEmail,
+      playerName: share.playerName,
+      teamName: order.teamName || "your team",
+      orderNumber: order.orderNumber || `#${order.id}`,
+      kitTitle: item?.title || "Team kit",
+      size: share.size,
+      shirtNumber: share.shirtNumber,
+      amountCents: share.amountCents,
+    });
+  } catch (e) {
+    console.error("[Shop] share receipt email failed:", e);
+  }
+
+  console.log(`[Shop] Share ${share.id} (order ${order.orderNumber || order.id}) paid (${paymentIntentId})`);
+
+  // All paid? → flip the order.
+  const [{ remaining }] = (await db.execute(sql`
+    SELECT COUNT(*)::int AS remaining FROM shop_order_shares
+    WHERE order_id = ${order.id} AND status <> 'paid'
+  `)).rows as any[];
+  if (Number(remaining) === 0) {
+    await finalizeTeamOrderAllPaid(order.id);
+  }
+  return true;
+}
+
+/** One-time team-order completion — adapted from finalizeShopOrderPaid but
+ *  gated on awaiting_players→paid and stock-decremented by ROSTER SIZE COUNTS
+ *  (the single line item spans multiple size variants). */
+async function finalizeTeamOrderAllPaid(orderId: number): Promise<void> {
+  const [order] = await db.update(shopOrders)
+    .set({ status: "paid", paidAt: new Date(), allPaidAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(shopOrders.id, orderId), eq(shopOrders.status, "awaiting_players")))
+    .returning();
+  if (!order) return; // another share's finalize already won the gate
+
+  const brand = shopBrandByOrgId(order.organizationId);
+  const [item] = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
+  const shares = await db.select().from(shopOrderShares)
+    .where(eq(shopOrderShares.orderId, order.id))
+    .orderBy(asc(shopOrderShares.id));
+
+  // Stock down by roster size counts. The line item snapshots colourName, so
+  // resolve colour → variants; if the colour/variant has since been deleted we
+  // log and move on (snapshots keep the print spec intact regardless).
+  if (item?.productId && item.colourName) {
+    try {
+      const [colour] = await db.select().from(shopProductColours).where(and(
+        eq(shopProductColours.productId, item.productId),
+        eq(shopProductColours.name, item.colourName),
+      ));
+      if (colour) {
+        const sizeCounts = new Map<string, number>();
+        for (const s of shares) sizeCounts.set(s.size, (sizeCounts.get(s.size) || 0) + 1);
+        for (const [size, count] of Array.from(sizeCounts.entries())) {
+          await db.execute(sql`
+            UPDATE shop_variants SET stock = GREATEST(stock - ${count}, 0)
+            WHERE colour_id = ${colour.id} AND size = ${size}
+          `);
+        }
+      } else {
+        console.error(`[Shop] team order ${order.id}: colour "${item.colourName}" no longer exists — stock not decremented`);
+      }
+    } catch (e) {
+      console.error(`[Shop] team order ${order.id} stock decrement failed:`, e);
+    }
+  }
+
+  const roster = shares.map((s) => ({ name: s.shirtName || s.playerName, number: s.shirtNumber, size: s.size }));
+  const requiresAddress = !!order.addressLine1;
+  const addressSummary = requiresAddress
+    ? [order.addressLine1, order.addressLine2, order.suburb, order.city, order.postcode].filter(Boolean).join(", ")
+    : null;
+
+  // Emails are best-effort — the order is already paid.
+  try {
+    await sendShopTeamAllPaidConfirmation({
+      to: order.email,
+      coachFirstName: order.firstName,
+      teamName: order.teamName || "Your team",
+      orderNumber: order.orderNumber || `#${order.id}`,
+      playerCount: shares.length,
+      totalCents: order.totalCents,
+      shippingLabel: order.shippingLabel,
+      requiresAddress,
+      addressSummary,
+    });
+  } catch (e) {
+    console.error("[Shop] team all-paid coach email failed:", e);
+  }
+  try {
+    await sendShopPrintReadyNotification({
+      to: brand?.adminEmail || "info@minifootball.co.nz",
+      orderNumber: order.orderNumber || `#${order.id}`,
+      teamName: order.teamName || "—",
+      coachName: `${order.firstName} ${order.lastName}`.trim(),
+      coachEmail: order.email,
+      coachPhone: order.phone,
+      kitTitle: item?.title || "Team kit",
+      colourName: item?.colourName,
+      sponsors: sponsorSummary(item?.customisation),
+      roster,
+      totalCents: order.totalCents,
+      shippingLabel: order.shippingLabel,
+      requiresAddress,
+      addressSummary,
+    });
+  } catch (e) {
+    console.error("[Shop] print-ready admin email failed:", e);
+  }
+
+  // ONE server Purchase event for the FULL order total (not per share) — the
+  // storefront never fires a pixel Purchase for team orders, and the eventId
+  // matches the standard-checkout convention so nothing can double-count.
+  try {
+    await sendServerEvent({
+      eventName: "Purchase",
+      eventId: `shop_purchase_${order.id}`,
+      eventTime: Math.floor(Date.now() / 1000),
+      email: order.email,
+      phone: order.phone || undefined,
+      firstName: order.firstName,
+      lastName: order.lastName,
+      customData: {
+        value: toDollars(order.totalCents),
+        currency: order.currency || "NZD",
+        content_type: "product",
+        content_ids: item ? [String(item.productId ?? item.title)] : [],
+        content_name: `${brand?.storeName || "Store"} Team Order`,
+        num_items: shares.length,
+      },
+    });
+  } catch (e) {
+    console.error("[Shop] team Purchase CAPI failed:", e);
+  }
+
+  console.log(`[Shop] Team order ${order.orderNumber || order.id} fully paid — flipped to paid (${shares.length} shares)`);
+}
+
+// ─── Player Pay / upload plumbing ───────────────────────────────────────────
+
+/** Lazy Supabase client for the PUBLIC `shop-images` bucket (sponsor logos).
+ *  Separate from the private clubos-uploads object store — these URLs go
+ *  straight into print-spec emails so they must be publicly fetchable. */
+let shopStorageClient: SupabaseClient | null = null;
+function getShopStorageClient(): SupabaseClient {
+  if (!shopStorageClient) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set for shop logo uploads");
+    shopStorageClient = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  }
+  return shopStorageClient;
+}
+
+/** Simple in-memory per-IP rolling-hour limiter for public logo uploads. */
+const logoUploadHits = new Map<string, number[]>();
+const LOGO_UPLOADS_PER_HOUR = 20;
+
+/** In-memory remind throttle: max 1 reminder per share per 10 minutes. */
+const shareRemindLast = new Map<number, number>();
+const REMIND_COOLDOWN_MS = 10 * 60 * 1000;
+
+async function loadTeamOrderByToken(brand: ShopBrand, token: string): Promise<ShopOrder | null> {
+  if (!UUID_RX.test(token)) return null;
+  const [order] = await db.select().from(shopOrders).where(and(
+    eq(shopOrders.orderToken, token),
+    eq(shopOrders.organizationId, brand.orgId),
+    eq(shopOrders.paymentMode, "player_pay"),
+  ));
+  return order || null;
+}
+
+async function loadShareByToken(brand: ShopBrand, token: string): Promise<{ share: ShopOrderShare; order: ShopOrder } | null> {
+  if (!UUID_RX.test(token)) return null;
+  const [share] = await db.select().from(shopOrderShares).where(eq(shopOrderShares.shareToken, token));
+  if (!share) return null;
+  const [order] = await db.select().from(shopOrders).where(and(
+    eq(shopOrders.id, share.orderId),
+    eq(shopOrders.organizationId, brand.orgId),
+  ));
+  if (!order) return null;
+  return { share, order };
 }
 
 // ─── Route registration ─────────────────────────────────────────────────────
@@ -552,6 +854,16 @@ export function registerShopRoutes(app: Express) {
 
       const cart = await priceCart(brand, req.body?.items, req.body?.discountCode, req.body?.shippingOptionId);
 
+      // Kit customisation + per-shirt personalisation. Personalisation is
+      // included in the price ($0 — NO price impact); it's a print spec, not a
+      // priced add-on. rawItems and cart.lines are index-aligned (priceCart
+      // maps items 1:1 in order).
+      const rawItems: any[] = Array.isArray(req.body?.items) ? req.body.items : [];
+      const itemExtras = cart.lines.map((l, idx) => ({
+        customisation: parseKitCustomisation(rawItems[idx]?.customisation),
+        units: parseUnits(rawItems[idx]?.units, l.qty),
+      }));
+
       // Address — required only when the chosen option ships.
       const addr = req.body?.shippingAddress || {};
       const addressLine1 = String(addr.line1 || "").trim() || null;
@@ -615,7 +927,7 @@ export function registerShopRoutes(app: Express) {
 
       const orderNumber = await assignShopOrderNumber(order.id, brand.orgId, brand.orderPrefix);
 
-      await db.insert(shopOrderItems).values(cart.lines.map((l) => ({
+      await db.insert(shopOrderItems).values(cart.lines.map((l, idx) => ({
         orderId: order.id,
         productId: l.product.id,
         variantId: l.variant.id,
@@ -627,6 +939,8 @@ export function registerShopRoutes(app: Express) {
         qty: l.qty,
         lineCents: l.lineCents,
         costUsdSnapshot: l.product.costUsd, // reference only — never calculated with
+        customisation: itemExtras[idx].customisation,
+        units: itemExtras[idx].units,
       })));
 
       // Embedded PaymentElement flow — our own on-brand card form, no hosted
@@ -680,7 +994,7 @@ export function registerShopRoutes(app: Express) {
       ));
       if (!order) return res.status(404).json({ message: "Order not found" });
 
-      const simplified = order.status === "pending" ? "pending"
+      const simplified = (order.status === "pending" || order.status === "awaiting_players") ? "pending"
         : (order.status === "cancelled" || order.status === "refunded") ? "failed"
         : "paid";
 
@@ -735,6 +1049,535 @@ export function registerShopRoutes(app: Express) {
       res.json({ ok: true });
     } catch (e: any) {
       handleShopError(res, e, "confirm");
+    }
+  });
+
+  // ── Public: sponsor logo upload (kit customisation) ───────────────────────
+  // Multipart field `file`, ≤5MB, image-only. sharp validates + normalises
+  // (rotate, ≤1200px, webp q85) → PUBLIC Supabase bucket `shop-images` at
+  // {brand}/custom/{uuid}.webp. The returned URL is the ONLY logoUrl shape
+  // checkout accepts (prefix-checked), so arbitrary URLs can't enter specs.
+  const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+  app.post(
+    "/api/public/shop/:brand/upload-logo",
+    (req: Request, res: Response, next: NextFunction) => {
+      logoUpload.single("file")(req, res, (err: any) => {
+        if (err) {
+          const msg = err?.code === "LIMIT_FILE_SIZE" ? "Logo too big — max 5MB" : err?.message || "Upload rejected";
+          return res.status(400).json({ message: msg });
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response) => {
+      try {
+        const brand = shopBrand(String(req.params.brand));
+        if (!brand) return res.status(404).json({ message: "Store not found" });
+
+        const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim() || "unknown";
+        const now = Date.now();
+        const hits = (logoUploadHits.get(ip) || []).filter((t) => now - t < 60 * 60 * 1000);
+        if (hits.length >= LOGO_UPLOADS_PER_HOUR) {
+          return res.status(429).json({ message: "Too many uploads — try again in a bit." });
+        }
+        hits.push(now);
+        logoUploadHits.set(ip, hits);
+
+        const file = (req as any).file;
+        if (!file) throw new ShopError("No file uploaded.");
+        const sharp = (await import("sharp")).default;
+        let meta: import("sharp").Metadata;
+        try {
+          meta = await sharp(file.buffer, { failOn: "error", animated: false, limitInputPixels: 50_000_000 }).metadata();
+        } catch {
+          throw new ShopError("That file isn't a valid image.");
+        }
+        if (!meta.format || !["jpeg", "jpg", "png", "webp", "avif", "gif"].includes(meta.format)) {
+          throw new ShopError("Upload a JPG, PNG or WebP image.");
+        }
+        const buf = await sharp(file.buffer)
+          .rotate()
+          .resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
+          .webp({ quality: 85, effort: 4 })
+          .toBuffer();
+
+        const path = `${brand.brandKey}/custom/${randomUUID()}.webp`;
+        const { error } = await getShopStorageClient().storage
+          .from(SHOP_LOGO_BUCKET)
+          .upload(path, buf, { contentType: "image/webp", cacheControl: "public, max-age=31536000", upsert: false });
+        if (error) throw new Error(`Supabase logo upload failed: ${error.message}`);
+
+        res.json({ url: `${shopLogoUrlPrefix()}${path}` });
+      } catch (e: any) {
+        handleShopError(res, e, "upload logo");
+      }
+    },
+  );
+
+  // ── Public: Player Pay — team checkout (coach sets up, players pay) ───────
+  // No money moves here: the order is created as awaiting_players and each
+  // player gets a personal pay link. Discounts are deliberately OMITTED for
+  // team orders (v1). Personalisation stays $0 — included in the unit price.
+  app.post("/api/public/shop/:brand/team-checkout", async (req, res) => {
+    try {
+      const brand = shopBrand(String(req.params.brand));
+      if (!brand) return res.status(404).json({ message: "Store not found" });
+
+      const coach = req.body?.coach || {};
+      const firstName = sanitizeText(coach.firstName, 40);
+      const lastName = sanitizeText(coach.lastName, 40);
+      const email = String(coach.email || "").trim();
+      const phone = String(coach.phone || "").trim();
+      if (!firstName || !lastName) throw new ShopError("Please add your first and last name.");
+      if (!EMAIL_RX.test(email)) throw new ShopError("Please add a valid email address.");
+      if (!phone) throw new ShopError("Please add your phone number."); // phone is mandatory
+
+      const teamName = sanitizeText(req.body?.teamName, 40);
+      if (!teamName) throw new ShopError("Please add your team name.");
+
+      const rawPlayers: any[] = Array.isArray(req.body?.players) ? req.body.players : [];
+      if (rawPlayers.length < 2) throw new ShopError("Player Pay needs at least 2 players.");
+      if (rawPlayers.length > 30) throw new ShopError("Player Pay supports up to 30 players per order.");
+      const players = rawPlayers.map((p, i) => {
+        const name = sanitizeText(p?.name, 30);
+        if (!name) throw new ShopError(`Player ${i + 1} needs a name.`);
+        const number = String(p?.number ?? "").trim();
+        if (number && !SHIRT_NUMBER_RX.test(number)) throw new ShopError(`${name}'s shirt number must be 1–2 digits.`);
+        const size = sanitizeText(p?.size, 20);
+        if (!size) throw new ShopError(`${name} needs a size.`);
+        const playerEmail = String(p?.email || "").trim();
+        if (!EMAIL_RX.test(playerEmail)) throw new ShopError(`${name} needs a valid email address.`);
+        const playerPhone = String(p?.phone || "").trim() || null;
+        return { name, number: number || null, size, email: playerEmail, phone: playerPhone };
+      });
+
+      const productId = parseInt(String(req.body?.productId));
+      const colourId = parseInt(String(req.body?.colourId));
+      if (!Number.isFinite(productId) || !Number.isFinite(colourId)) throw new ShopError("Pick a kit and colour.");
+      const [product] = await db.select().from(shopProducts).where(and(
+        eq(shopProducts.id, productId),
+        eq(shopProducts.organizationId, brand.orgId),
+        eq(shopProducts.status, "active"),
+      ));
+      if (!product) throw new ShopError("That kit is no longer available.");
+      const [colour] = await db.select().from(shopProductColours).where(and(
+        eq(shopProductColours.id, colourId),
+        eq(shopProductColours.productId, product.id),
+        eq(shopProductColours.active, true),
+      ));
+      if (!colour) throw new ShopError(`That colour is no longer available for ${product.title}.`);
+
+      // Aggregate stock check per size across the whole roster.
+      const variants = await db.select().from(shopVariants).where(and(
+        eq(shopVariants.colourId, colour.id),
+        eq(shopVariants.active, true),
+      ));
+      const sizeCounts = new Map<string, number>();
+      for (const p of players) sizeCounts.set(p.size, (sizeCounts.get(p.size) || 0) + 1);
+      for (const [size, count] of Array.from(sizeCounts.entries())) {
+        const variant = variants.find((v) => v.size === size);
+        if (!variant) throw new ShopError(`Size ${size} isn't available for ${product.title}.`);
+        if (count > variant.stock) {
+          throw new ShopError(`${product.title} (${colour.name} · ${size}) doesn't have enough stock for your roster.`, 409);
+        }
+      }
+
+      const customisation = parseKitCustomisation(req.body?.customisation);
+
+      // Shipping — same lookup as priceCart. NOTE: no discount codes on team
+      // orders (v1 — deliberately omitted).
+      const shipId = parseInt(String(req.body?.shippingOptionId));
+      if (!Number.isFinite(shipId)) throw new ShopError("Pick a delivery option.");
+      const [shipping] = await db.select().from(shopShippingOptions).where(and(
+        eq(shopShippingOptions.id, shipId),
+        eq(shopShippingOptions.organizationId, brand.orgId),
+        eq(shopShippingOptions.active, true),
+      ));
+      if (!shipping) throw new ShopError("That delivery option isn't available.");
+
+      const addr = req.body?.shippingAddress || {};
+      const addressLine1 = String(addr.line1 || "").trim() || null;
+      const addressLine2 = String(addr.line2 || "").trim() || null;
+      const suburb = String(addr.suburb || "").trim() || null;
+      const city = String(addr.city || "").trim() || null;
+      const postcode = String(addr.postcode || "").trim() || null;
+      if (shipping.requiresAddress && (!addressLine1 || !city || !postcode)) {
+        throw new ShopError("Please add the delivery address (street, city and postcode).");
+      }
+
+      // Totals: roster × unit price + shipping (GST-inclusive, as elsewhere).
+      const unitCents = product.priceCents;
+      const subtotalCents = unitCents * players.length;
+      const totalCents = subtotalCents + shipping.priceCents;
+      const gstCents = gstContent(totalCents);
+
+      // Share split: unit price + an even shipping split, remainder cents on
+      // the LAST share — the shares MUST sum exactly to totalCents.
+      const shipSplit = Math.floor(shipping.priceCents / players.length);
+      const shipRemainder = shipping.priceCents - shipSplit * players.length;
+      const shareAmounts = players.map((_, i) =>
+        unitCents + shipSplit + (i === players.length - 1 ? shipRemainder : 0));
+      // (n × unit) + (n × split) + remainder === subtotal + shipping === total
+      if (shareAmounts.reduce((s, a) => s + a, 0) !== totalCents) {
+        throw new Error("Share split doesn't sum to the order total"); // invariant — never user-visible
+      }
+      // Stripe won't process a near-zero charge — each share is its own PI.
+      if (shareAmounts.some((a) => a < 50)) {
+        throw new ShopError("Each player's share is too small to process online — get in touch and we'll sort it.");
+      }
+
+      // Contact upsert — the coach, same pattern as the standard checkout.
+      let contact = await storage.findContactByEmail(email);
+      if (!contact) {
+        contact = await storage.createContact({
+          type: "guardian", firstName, lastName, email, phone,
+        } as any);
+      } else {
+        contact = (await storage.updateContact(contact.id, { firstName, lastName, phone } as any)) || contact;
+      }
+
+      const utm = req.body?.utm || {};
+      const [order] = await db.insert(shopOrders).values({
+        organizationId: brand.orgId,
+        status: "awaiting_players",
+        paymentMode: "player_pay",
+        teamName,
+        firstName, lastName, email, phone,
+        shippingOptionId: shipping.id,
+        shippingLabel: shipping.label,
+        shippingCents: shipping.priceCents,
+        addressLine1: shipping.requiresAddress ? addressLine1 : null,
+        addressLine2: shipping.requiresAddress ? addressLine2 : null,
+        suburb: shipping.requiresAddress ? suburb : null,
+        city: shipping.requiresAddress ? city : null,
+        postcode: shipping.requiresAddress ? postcode : null,
+        subtotalCents,
+        discountCents: 0,
+        discountCode: null,
+        gstCents,
+        totalCents,
+        currency: brand.currency,
+        contactId: contact.id,
+        source: "online",
+        utmSource: utm.source || req.body?.utmSource || null,
+        utmMedium: utm.medium || req.body?.utmMedium || null,
+        utmCampaign: utm.campaign || req.body?.utmCampaign || null,
+        utmContent: utm.content || req.body?.utmContent || null,
+        utmTerm: utm.term || req.body?.utmTerm || null,
+        fbclid: utm.fbclid || req.body?.fbclid || null,
+        gclid: utm.gclid || req.body?.gclid || null,
+        visitorId: req.body?.visitorId || null,
+        notes: String(req.body?.notes || "").trim() || null,
+      }).returning();
+
+      const orderNumber = await assignShopOrderNumber(order.id, brand.orgId, brand.orderPrefix);
+
+      // ONE line item spanning the roster: qty = player count, per-shirt
+      // names/numbers in units, sponsor slots in customisation. variantId is
+      // null (sizes vary) — team stock decrements by roster size counts at
+      // the all-paid finalize instead.
+      const images = await db.select().from(shopProductImages)
+        .where(eq(shopProductImages.productId, product.id))
+        .orderBy(asc(shopProductImages.sortOrder), asc(shopProductImages.id));
+      const image = images.find((im) => im.colourId === colour.id) || images.find((im) => im.colourId == null) || null;
+      await db.insert(shopOrderItems).values({
+        orderId: order.id,
+        productId: product.id,
+        variantId: null,
+        title: product.title,
+        colourName: colour.name,
+        size: null,
+        imageUrl: image?.url || null,
+        unitCents,
+        qty: players.length,
+        lineCents: subtotalCents,
+        costUsdSnapshot: product.costUsd, // reference only — never calculated with
+        customisation,
+        units: players.map((p) => ({
+          ...(p.name ? { name: p.name } : {}),
+          ...(p.number ? { number: p.number } : {}),
+        })),
+      });
+
+      const shares = await db.insert(shopOrderShares).values(players.map((p, i) => ({
+        orderId: order.id,
+        playerName: p.name,
+        playerEmail: p.email,
+        playerPhone: p.phone,
+        size: p.size,
+        shirtName: p.name,
+        shirtNumber: p.number,
+        amountCents: shareAmounts[i],
+      }))).returning();
+
+      // Emails — best-effort; the order + pay links exist regardless.
+      const coachUrl = `${brand.storefrontBase}/team/${order.orderToken}`;
+      for (const s of shares) {
+        try {
+          await sendShopShareInvite({
+            to: s.playerEmail,
+            coachFirstName: firstName,
+            teamName,
+            kitTitle: product.title,
+            colourName: colour.name,
+            playerName: s.playerName,
+            shirtNumber: s.shirtNumber,
+            size: s.size,
+            amountCents: s.amountCents,
+            payUrl: `${brand.storefrontBase}/pay/${s.shareToken}`,
+          });
+        } catch (e) {
+          console.error(`[Shop] share invite email failed (${s.playerEmail}):`, e);
+        }
+      }
+      try {
+        await sendShopTeamSetupSummary({
+          to: email,
+          coachFirstName: firstName,
+          teamName,
+          orderNumber,
+          kitTitle: product.title,
+          colourName: colour.name,
+          players: shares.map((s) => ({ name: s.playerName, number: s.shirtNumber, size: s.size, amountCents: s.amountCents })),
+          totalCents,
+          coachUrl,
+        });
+      } catch (e) {
+        console.error("[Shop] team setup summary email failed:", e);
+      }
+
+      res.json({
+        orderId: order.id,
+        orderToken: order.orderToken,
+        orderNumber,
+        coachUrl,
+        totalDollars: toDollars(totalCents),
+        shares: shares.map((s) => ({
+          playerName: s.playerName,
+          size: s.size,
+          amountDollars: toDollars(s.amountCents),
+          status: s.status,
+          payUrl: `${brand.storefrontBase}/pay/${s.shareToken}`,
+          shareToken: s.shareToken,
+        })),
+      });
+    } catch (e: any) {
+      handleShopError(res, e, "team checkout");
+    }
+  });
+
+  // ── Public: Player Pay — coach/team status by order token ─────────────────
+  app.get("/api/public/shop/:brand/team/:orderToken", async (req, res) => {
+    try {
+      const brand = shopBrand(String(req.params.brand));
+      if (!brand) return res.status(404).json({ message: "Store not found" });
+      const order = await loadTeamOrderByToken(brand, String(req.params.orderToken || ""));
+      if (!order) return res.status(404).json({ message: "Order not found" }); // generic on bad token
+
+      const [item] = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
+      const shares = await db.select().from(shopOrderShares)
+        .where(eq(shopOrderShares.orderId, order.id))
+        .orderBy(asc(shopOrderShares.id));
+      const paidCount = shares.filter((s) => s.status === "paid").length;
+
+      res.json({
+        orderNumber: order.orderNumber || `#${order.id}`,
+        teamName: order.teamName,
+        coachFirstName: order.firstName,
+        product: {
+          title: item?.title || "Team kit",
+          colourName: item?.colourName || null,
+          image: absUrl(brand, item?.imageUrl),
+        },
+        customisation: item?.customisation || null,
+        shippingLabel: order.shippingLabel,
+        totalDollars: toDollars(order.totalCents),
+        paidCount,
+        playerCount: shares.length,
+        allPaid: shares.length > 0 && paidCount === shares.length,
+        players: shares.map((s) => ({
+          name: s.playerName,
+          number: s.shirtNumber,
+          size: s.size,
+          amountDollars: toDollars(s.amountCents),
+          status: s.status,
+          payUrl: `${brand.storefrontBase}/pay/${s.shareToken}`,
+          paidAt: s.paidAt,
+        })),
+      });
+    } catch (e: any) {
+      handleShopError(res, e, "team status");
+    }
+  });
+
+  // ── Public: Player Pay — coach re-sends a player's invite ─────────────────
+  app.post("/api/public/shop/:brand/team/:orderToken/remind", async (req, res) => {
+    try {
+      const brand = shopBrand(String(req.params.brand));
+      if (!brand) return res.status(404).json({ message: "Store not found" });
+      const order = await loadTeamOrderByToken(brand, String(req.params.orderToken || ""));
+      if (!order) return res.status(404).json({ message: "Order not found" });
+      if (order.status !== "awaiting_players") throw new ShopError("This order is no longer collecting payments.");
+
+      const shareToken = String(req.body?.shareToken || "");
+      if (!UUID_RX.test(shareToken)) return res.status(404).json({ message: "Player not found" });
+      const [share] = await db.select().from(shopOrderShares).where(and(
+        eq(shopOrderShares.shareToken, shareToken),
+        eq(shopOrderShares.orderId, order.id),
+      ));
+      if (!share) return res.status(404).json({ message: "Player not found" });
+      if (share.status === "paid") throw new ShopError(`${share.playerName} has already paid.`);
+
+      const last = shareRemindLast.get(share.id) || 0;
+      if (Date.now() - last < REMIND_COOLDOWN_MS) {
+        throw new ShopError("A reminder was sent to that player in the last few minutes — give them a moment.", 429);
+      }
+
+      const [item] = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
+      await sendShopShareInvite({
+        to: share.playerEmail,
+        coachFirstName: order.firstName,
+        teamName: order.teamName || "your team",
+        kitTitle: item?.title || "Team kit",
+        colourName: item?.colourName,
+        playerName: share.playerName,
+        shirtNumber: share.shirtNumber,
+        size: share.size,
+        amountCents: share.amountCents,
+        payUrl: `${brand.storefrontBase}/pay/${share.shareToken}`,
+      });
+      shareRemindLast.set(share.id, Date.now());
+      res.json({ ok: true });
+    } catch (e: any) {
+      handleShopError(res, e, "team remind");
+    }
+  });
+
+  // ── Public: Player Pay — a player's share by share token ──────────────────
+  app.get("/api/public/shop/:brand/share/:shareToken", async (req, res) => {
+    try {
+      const brand = shopBrand(String(req.params.brand));
+      if (!brand) return res.status(404).json({ message: "Store not found" });
+      const found = await loadShareByToken(brand, String(req.params.shareToken || ""));
+      if (!found) return res.status(404).json({ message: "Not found" }); // generic on bad token
+      const { share, order } = found;
+
+      const [item] = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
+      res.json({
+        orderNumber: order.orderNumber || `#${order.id}`,
+        teamName: order.teamName,
+        coachFirstName: order.firstName,
+        player: { name: share.playerName, number: share.shirtNumber, size: share.size },
+        product: {
+          title: item?.title || "Team kit",
+          colourName: item?.colourName || null,
+          image: absUrl(brand, item?.imageUrl),
+        },
+        amountDollars: toDollars(share.amountCents),
+        status: share.status,
+      });
+    } catch (e: any) {
+      handleShopError(res, e, "share status");
+    }
+  });
+
+  // ── Public: Player Pay — share PaymentIntent (embedded PaymentElement) ────
+  app.post("/api/public/shop/:brand/share/:shareToken/intent", async (req, res) => {
+    try {
+      const brand = shopBrand(String(req.params.brand));
+      if (!brand) return res.status(404).json({ message: "Store not found" });
+      const found = await loadShareByToken(brand, String(req.params.shareToken || ""));
+      if (!found) return res.status(404).json({ message: "Not found" });
+      const { share, order } = found;
+
+      if (share.status !== "pending") throw new ShopError("This share has already been paid.", 409);
+      if (order.status !== "awaiting_players") throw new ShopError("This order is no longer collecting payments.", 409);
+
+      const publishableKey = process.env.VITE_STRIPE_PUBLISHABLE_KEY || process.env.STRIPE_PUBLISHABLE_KEY || "";
+
+      // Reuse an in-flight PI for this share instead of minting a fresh one on
+      // every page load — one player, one live PaymentIntent.
+      if (share.stripePaymentIntentId) {
+        try {
+          const existing = await retrievePaymentIntent(share.stripePaymentIntentId);
+          if (existing.status === "succeeded") {
+            await finalizeShopSharePaid(share.id, existing.id);
+            throw new ShopError("This share has already been paid.", 409);
+          }
+          const reusable = ["requires_payment_method", "requires_confirmation", "requires_action", "processing"];
+          if (reusable.includes(existing.status) && existing.amount === share.amountCents) {
+            return res.json({
+              clientSecret: existing.client_secret,
+              publishableKey,
+              amountDollars: toDollars(share.amountCents),
+            });
+          }
+        } catch (e: any) {
+          if (e instanceof ShopError) throw e;
+          // stale/canceled PI — fall through and mint a new one
+        }
+      }
+
+      // First creation uses a stable key (double-clicks collapse into one PI);
+      // replacements after a stale PI get a fresh key so Stripe doesn't hand
+      // back the unusable one.
+      const idempotencyKey = share.stripePaymentIntentId
+        ? `shop_share_${share.id}_${Date.now()}`
+        : `shop_share_${share.id}`;
+      const intent = await stripe.paymentIntents.create(
+        {
+          amount: share.amountCents,
+          currency: brand.currency.toLowerCase(),
+          receipt_email: share.playerEmail,
+          automatic_payment_methods: { enabled: true },
+          description: `${brand.storeName} — ${order.teamName || "Team"} kit share (${share.playerName})`,
+          metadata: {
+            registrationType: "shop_share",
+            shopShareId: String(share.id),
+            shopOrderId: String(order.id),
+            orgId: String(brand.orgId),
+            brand: brand.brandKey,
+          },
+        },
+        { idempotencyKey },
+      );
+
+      await db.update(shopOrderShares)
+        .set({ stripePaymentIntentId: intent.id })
+        .where(eq(shopOrderShares.id, share.id));
+
+      res.json({
+        clientSecret: intent.client_secret,
+        publishableKey,
+        amountDollars: toDollars(share.amountCents),
+      });
+    } catch (e: any) {
+      handleShopError(res, e, "share intent");
+    }
+  });
+
+  // ── Public: Player Pay — client confirm fallback (mirrors the webhook) ────
+  app.post("/api/public/shop/:brand/share/:shareToken/confirm", async (req, res) => {
+    try {
+      const brand = shopBrand(String(req.params.brand));
+      if (!brand) return res.status(404).json({ message: "Store not found" });
+      const found = await loadShareByToken(brand, String(req.params.shareToken || ""));
+      if (!found) return res.status(404).json({ message: "Not found" });
+      const { share } = found;
+
+      if (share.status === "paid") return res.json({ ok: true, alreadyConfirmed: true });
+      if (!share.stripePaymentIntentId) return res.status(400).json({ message: "No payment intent" });
+
+      const pi = await retrievePaymentIntent(share.stripePaymentIntentId);
+      if (pi.status !== "succeeded") return res.status(400).json({ message: "Payment not completed" });
+      if (pi.metadata?.shopShareId && parseInt(pi.metadata.shopShareId) !== share.id) {
+        return res.status(403).json({ message: "Payment mismatch" });
+      }
+
+      await finalizeShopSharePaid(share.id, pi.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      handleShopError(res, e, "share confirm");
     }
   });
 
@@ -1000,13 +1843,22 @@ export function registerShopRoutes(app: Express) {
         .orderBy(desc(shopOrders.createdAt))
         .limit(300);
       const ids = orders.map((o) => o.id);
-      const items = ids.length > 0
-        ? await db.select().from(shopOrderItems).where(inArray(shopOrderItems.orderId, ids))
-        : [];
-      res.json(orders.map((o) => ({
-        ...o,
-        itemsCount: items.filter((i) => i.orderId === o.id).reduce((s, i) => s + i.qty, 0),
-      })));
+      const [items, shares] = ids.length > 0
+        ? await Promise.all([
+            db.select().from(shopOrderItems).where(inArray(shopOrderItems.orderId, ids)),
+            db.select({ orderId: shopOrderShares.orderId, status: shopOrderShares.status })
+              .from(shopOrderShares).where(inArray(shopOrderShares.orderId, ids)),
+          ])
+        : [[], []] as [ShopOrderItem[], { orderId: number; status: string }[]];
+      res.json(orders.map((o) => {
+        const orderShares = shares.filter((s) => s.orderId === o.id);
+        return {
+          ...o,
+          itemsCount: items.filter((i) => i.orderId === o.id).reduce((s, i) => s + i.qty, 0),
+          playerCount: orderShares.length,
+          paidCount: orderShares.filter((s) => s.status === "paid").length,
+        };
+      }));
     } catch (e: any) {
       handleShopError(res, e, "admin orders list");
     }
@@ -1016,8 +1868,20 @@ export function registerShopRoutes(app: Express) {
     try {
       const [order] = await db.select().from(shopOrders).where(eq(shopOrders.id, parseInt(String(req.params.id))));
       if (!order) return res.status(404).json({ message: "Order not found" });
-      const items = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
-      res.json({ ...order, items });
+      const brand = shopBrandByOrgId(order.organizationId);
+      const [items, shares] = await Promise.all([
+        db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id)),
+        db.select().from(shopOrderShares).where(eq(shopOrderShares.orderId, order.id))
+          .orderBy(asc(shopOrderShares.id)),
+      ]);
+      res.json({
+        ...order,
+        items,
+        shares: shares.map((s) => ({
+          ...s,
+          payUrl: brand ? `${brand.storefrontBase}/pay/${s.shareToken}` : null,
+        })),
+      });
     } catch (e: any) {
       handleShopError(res, e, "admin order detail");
     }
@@ -1061,14 +1925,16 @@ export function registerShopRoutes(app: Express) {
     try {
       const [order] = await db.select().from(shopOrders).where(eq(shopOrders.id, parseInt(String(req.params.id))));
       if (!order) return res.status(404).json({ message: "Order not found" });
-      if (order.status === "pending") return res.status(400).json({ message: "Order isn't paid yet" });
+      if (order.status === "pending" || order.status === "awaiting_players") {
+        return res.status(400).json({ message: "Order isn't paid yet" });
+      }
       const items = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
       const requiresAddress = !!order.addressLine1;
       const ok = await sendShopOrderConfirmation({
         to: order.email,
         firstName: order.firstName,
         orderNumber: order.orderNumber || `#${order.id}`,
-        lines: items.map((i) => ({ title: i.title, colourName: i.colourName, size: i.size, qty: i.qty, lineCents: i.lineCents })),
+        lines: items.map((i) => ({ title: i.title, colourName: i.colourName, size: i.size, qty: i.qty, lineCents: i.lineCents, units: i.units || undefined })),
         subtotalCents: order.subtotalCents,
         discountCents: order.discountCents,
         discountCode: order.discountCode,

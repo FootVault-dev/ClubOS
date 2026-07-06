@@ -35,7 +35,7 @@ import sharp from "sharp";
 import { detectDnsProvider, getCnameHost, getApexDomain } from "./dns/detectProvider";
 import { isGoDaddyConfigured, checkConnection as checkGoDaddyConnection, setCnameRecord as setGoDaddyCname, ownsDomain as goDaddyOwnsDomain, getRecords as getGoDaddyRecords, setForwarding as setGoDaddyForwarding, getForwarding as getGoDaddyForwarding } from "./dns/godaddyClient";
 import { mountMcpServer } from "./mcp";
-import { registerShopRoutes, finalizeShopOrderPaid } from "./shop-routes";
+import { registerShopRoutes, finalizeShopOrderPaid, finalizeShopSharePaid } from "./shop-routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -11916,7 +11916,17 @@ export async function registerRoutes(
         // (atomic pending→paid gate), so webhook retries and the client
         // confirm fallback can't double-fire stock/emails/Purchase.
         const shopOrderId = parseInt(pi.metadata?.shopOrderId);
-        if (shopOrderId) {
+        const shopShareId = parseInt(pi.metadata?.shopShareId);
+        if (shopShareId) {
+          // Player Pay share (shopOrderId is also in the metadata, so check
+          // the share FIRST) — finalize is idempotent; the last share paid
+          // flips the whole order awaiting_players → paid.
+          try {
+            await finalizeShopSharePaid(shopShareId, pi.id);
+          } catch (e) {
+            console.error("[Stripe Webhook] Shop share handler failed:", e);
+          }
+        } else if (shopOrderId) {
           try {
             await finalizeShopOrderPaid(shopOrderId, pi.id);
           } catch (e) {
