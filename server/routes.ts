@@ -12663,12 +12663,12 @@ export async function registerRoutes(
     };
   }
 
-  const declInviteHtml = (p: { name: string; club: string; title: string; link: string; fromName: string }) => `
+  const declInviteHtml = (p: { name: string; club: string; title: string; link: string; fromName: string; group?: string }) => `
     <div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
       <div style="height:6px;background:linear-gradient(90deg,#937224,#C59949,#E4C56A)"></div>
       <div style="padding:28px 24px">
         <p style="font-size:15px">Kia ora ${p.name},</p>
-        <p style="font-size:15px;line-height:1.6">${p.fromName} needs your electronic signature to confirm, for OFC club licensing, that <strong>${p.club}</strong> has paid all contractual obligations owed to you under your contract.</p>
+        <p style="font-size:15px;line-height:1.6">${p.fromName} needs your electronic signature to confirm, ${p.group === "staff" ? "for OFC club licensing" : "for the club's financial records"}, that <strong>${p.club}</strong> has paid all contractual obligations owed to you under your contract.</p>
         <p style="font-size:17px;font-weight:700;margin:16px 0">${p.title}</p>
         <p style="margin:26px 0"><a href="${p.link}" style="background:#C59949;color:#111;font-weight:700;text-decoration:none;padding:13px 26px;border-radius:10px;display:inline-block">Review &amp; sign</a></p>
         <p style="font-size:12px;color:#888;line-height:1.6">Or paste this link into your browser:<br>${p.link}</p>
@@ -12694,7 +12694,7 @@ export async function registerRoutes(
           to: s.email,
           from: fromForOrg(orgId, fromName),
           subject: `Please confirm — ${d.title}`,
-          html: declInviteHtml({ name: s.name, club: d.clubName, title: d.title, link: `${base}/declaration/${s.token}`, fromName }),
+          html: declInviteHtml({ name: s.name, club: d.clubName, title: d.title, link: `${base}/declaration/${s.token}`, fromName, group: s.groupKind }),
         });
         sent += 1;
       } catch { /* keep going */ }

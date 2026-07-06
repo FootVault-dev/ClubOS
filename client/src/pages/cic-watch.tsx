@@ -21,6 +21,13 @@ type Stats = { totalViewers: number; newLast24h: number; newLast7d: number; with
 const panel = "rounded-xl border border-white/5 bg-white/[0.02]";
 const fmtDur = (s: number) => (s < 0 ? "live" : `${Math.floor(s / 60)}m`);
 const fmtDate = (s: string) => new Date(s).toLocaleDateString("en-NZ", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+// ISO 3166 2-letter code → flag emoji + full English country name (Intl.DisplayNames).
+const regionNames = typeof Intl !== "undefined" && "DisplayNames" in Intl ? new Intl.DisplayNames(["en"], { type: "region" }) : null;
+const countryFlag = (code: string) => (/^[A-Za-z]{2}$/.test(code || "") ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : "🌐");
+const countryName = (code: string) => {
+  if (!/^[A-Za-z]{2}$/.test(code || "")) return "Unknown";
+  try { return regionNames?.of(code.toUpperCase()) || code.toUpperCase(); } catch { return code.toUpperCase(); }
+};
 
 export default function CicWatch() {
   const [view, setView] = useState<View>("pitches");
@@ -314,7 +321,10 @@ function ViewersView() {
           <div className="space-y-2">
             {(stats?.viewersByCountry ?? []).slice(0, 10).map((c) => (
               <div key={c.country} className="flex items-center gap-3">
-                <span className="w-8 text-xs font-bold text-white/70">{c.country}</span>
+                <span className="w-40 shrink-0 flex items-center gap-2 text-xs font-semibold text-white/70" title={countryName(c.country)}>
+                  <span className="text-base leading-none">{countryFlag(c.country)}</span>
+                  <span className="truncate">{countryName(c.country)}</span>
+                </span>
                 <div className="flex-1 h-2 rounded-full bg-white/5 overflow-hidden"><div className="h-full bg-amber-500/70 rounded-full" style={{ width: `${(c.n / maxCountry) * 100}%` }} /></div>
                 <span className="w-10 text-right text-xs text-white/50 tabular-nums">{c.n}</span>
               </div>
@@ -345,7 +355,7 @@ function ViewersView() {
                 <td className="px-4 py-2.5 text-sm text-white/80 font-medium">{v.name || "—"}</td>
                 <td className="px-4 py-2.5 text-sm text-white/60">{v.email}</td>
                 <td className="px-4 py-2.5 text-sm text-white/50">{v.phone ? `${v.dial_code ?? ""} ${v.phone}` : "—"}</td>
-                <td className="px-4 py-2.5 text-sm text-white/50">{v.geo_country || "—"}</td>
+                <td className="px-4 py-2.5 text-sm text-white/50 whitespace-nowrap">{v.geo_country ? `${countryFlag(v.geo_country)} ${countryName(v.geo_country)}` : "—"}</td>
                 <td className="px-4 py-2.5 text-sm text-white/40">{fmtDate(v.created_at)}</td>
                 <td className="px-4 py-2.5 text-sm text-white/40 tabular-nums">{v.sessions}</td>
               </tr>
