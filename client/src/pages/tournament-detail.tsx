@@ -634,6 +634,7 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
       return { n: affected.length, from, to };
     },
     onSuccess: ({ n, from, to }) => {
+      rememberField(to); // save the destination pitch/venue for future reuse
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId, "games"] });
       toast({ title: `Moved ${n} game${n === 1 ? "" : "s"}`, description: `${from || "—"} → ${to || "—"}` });
       setReassignFrom(""); setReassignTo("");
@@ -661,6 +662,26 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
     queryFn: () => fetch(`/api/admin/tournament/tournaments/${tournamentId}/teams`).then(r => r.json()),
   });
   const sortedTeams = useMemo(() => [...teams].sort((a, b) => a.name.localeCompare(b.name)), [teams]);
+
+  // Pitch suggestions = common defaults + any custom pitch already used on a game
+  // in THIS tournament + custom names this admin has saved before (localStorage).
+  // So a custom pitch/venue typed once is reusable everywhere, and next time.
+  const CUSTOM_FIELDS_KEY = "cic:customPitches";
+  const [savedFields, setSavedFields] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(CUSTOM_FIELDS_KEY) || "[]"); } catch { return []; }
+  });
+  const rememberField = (v: string) => {
+    const f = (v || "").trim();
+    if (!f || FIELDS.includes(f) || savedFields.includes(f)) return;
+    const next = [...savedFields, f];
+    setSavedFields(next);
+    try { localStorage.setItem(CUSTOM_FIELDS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  };
+  const fieldSuggestions = useMemo(() => {
+    const set = new Set<string>([...FIELDS, ...savedFields]);
+    for (const g of games) if (g.field && g.field.trim()) set.add(g.field.trim());
+    return [...set];
+  }, [games, savedFields]);
 
   // Belt-and-braces: re-flow the bracket from current pool standings + results.
   // (This also runs automatically on every score save server-side.)
@@ -695,6 +716,7 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
 
   const saveEditing = () => {
     if (editingGameId) {
+      rememberField(editField); // save any custom pitch/venue name for future reuse
       updateGameMut.mutate({
         id: editingGameId,
         data: {
@@ -1005,7 +1027,7 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
 
       {/* One shared list of common pitches — powers every "pitch" input below. */}
       <datalist id="cic-field-options">
-        {FIELDS.map(f => <option key={f} value={f} />)}
+        {fieldSuggestions.map(f => <option key={f} value={f} />)}
       </datalist>
 
       {/* Bulk pitch move — a flooded/changed pitch: move every game on it at once. */}
