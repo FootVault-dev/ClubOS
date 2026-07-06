@@ -18,7 +18,8 @@ export type WorkspaceType =
   | "tournament"
   | "gymnastics"
   | "group"
-  | "prints";
+  | "prints"
+  | "sandbox";
 
 export interface TabDef {
   slug: string;
@@ -38,6 +39,7 @@ export const WORKSPACE_TYPE_BY_SLUG: Record<string, WorkspaceType> = {
   "united-gymnastics": "gymnastics",
   "united-sports-group": "group",
   "united-prints": "prints",
+  "sandbox": "sandbox",
 };
 
 export function workspaceTypeFor(orgSlug: string | undefined | null): WorkspaceType {
@@ -51,7 +53,13 @@ const campsTabs: TabDef[] = [
   { slug: "academy", title: "Academy", url: "/admin/academy" },
   { slug: "registrations", title: "Registrations", url: "/admin/registrations" },
   { slug: "contacts", title: "Contacts", url: "/admin/contacts" },
+  { slug: "volunteers", title: "Volunteers", url: "/admin/volunteers" },
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },
+  // CUFC newsletter mailer (Play Predictor entrants + guardian contacts) —
+  // distinct from the camps-segment "mailer" wizard above.
+  { slug: "cufc-mailer", title: "Mailer", url: "/admin/cufc-mailer" },
+  // Play Predictor — first-team score predictions, leaderboards + prizes.
+  { slug: "predictor", title: "Play Predictor", url: "/admin/predictor" },
   { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
@@ -106,11 +114,13 @@ const tournamentTabs: TabDef[] = [
   { slug: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge" },
   { slug: "food-truck", title: "Food Truck", url: "/admin/food-truck" },
   { slug: "vendors", title: "Vendors", url: "/admin/vendors" },
+  { slug: "volunteers", title: "Volunteers", url: "/admin/volunteers" },
   { slug: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations" },
   { slug: "cic-livechat", title: "Live Chat", url: "/admin/cic-livechat" },
   { slug: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer" },
   { slug: "cic-push", title: "Notifications", url: "/admin/cic-push" },
   { slug: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents" },
+  { slug: "cic-watch", title: "Watch", url: "/admin/cic-watch" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
@@ -138,6 +148,7 @@ const groupTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
   { slug: "calendar", title: "Calendar", url: "/admin/calendar" },
   { slug: "projects", title: "Projects", url: "/admin/projects" },
+  { slug: "content", title: "Content", url: "/admin/content" },
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
   { slug: "proposals", title: "Proposals", url: "/admin/proposals" },
   { slug: "grants", title: "Grants", url: "/admin/grants" },
@@ -168,6 +179,14 @@ const printsTabs: TabDef[] = [
   { slug: "settings", title: "Settings", url: "/admin/settings", secondary: true },
 ];
 
+// Sandbox — private super-admin experimentation workspace (Daniel only). New
+// features get trialled here before they touch a real workspace. First project:
+// the Club Dossier. Keep this tab set minimal; add tabs as experiments land.
+const sandboxTabs: TabDef[] = [
+  { slug: "club-dossier", title: "Club Dossier", url: "/admin/club-dossier" },
+  { slug: "team", title: "Team", url: "/admin/team", secondary: true },
+];
+
 export const TABS_BY_WORKSPACE_TYPE: Record<WorkspaceType, TabDef[]> = {
   camps: campsTabs,
   venue: venueTabs,
@@ -176,6 +195,7 @@ export const TABS_BY_WORKSPACE_TYPE: Record<WorkspaceType, TabDef[]> = {
   gymnastics: gymnasticsTabs,
   group: groupTabs,
   prints: printsTabs,
+  sandbox: sandboxTabs,
 };
 
 // SIU shares the "camps" workspace type with CUFC, but has its own club-building
@@ -209,6 +229,8 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
   "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.
   "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.
+  "cic-watch", // OTT streaming platform control (watch.cicyouth.com) — launched dark to Daniel. Remove to open to Isaac/managers.
+  "club-dossier", // Sandbox — first-party people intelligence (PII across all programs). Daniel only.
 ]);
 
 /**

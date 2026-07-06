@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -3167,6 +3167,85 @@ export const insertCicVendorBookingSchema = createInsertSchema(cicVendorBookings
 export type InsertCicVendorBooking = z.infer<typeof insertCicVendorBookingSchema>;
 export type CicVendorBooking = typeof cicVendorBookings.$inferSelect;
 
+// ---- Volunteers (reusable across workspaces) ----
+// A full volunteer signup + rostering pipeline. Org-scoped, so the SAME module
+// serves the Christchurch International Cup, Christchurch United (academy hours),
+// South Island United, and any future event workspace — each org sees only its
+// own volunteers. Three tables:
+//   volunteers          — the people (signups come in via the public form)
+//   volunteerTaskTypes  — the allocatable jobs (Car park, Boots, Music, …)
+//   volunteerAssignments— one row per (volunteer, day) with the task + hours
+// status: 'new' (needs review) | 'reviewing' | 'approved' | 'active' | 'declined' | 'inactive'
+export const volunteers = pgTable("volunteers", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  dateOfBirth: date("date_of_birth"), // YYYY-MM-DD — safeguarding + age
+  location: text("location"),         // suburb/city, optional
+  status: text("status").notNull().default("new"),
+  // Academy volunteer-hours use case (players who must do e.g. 20 hrs/year).
+  isAcademyPlayer: boolean("is_academy_player").notNull().default(false),
+  academyAgeGroup: text("academy_age_group"),   // e.g. "U14"
+  hoursTarget: doublePrecision("hours_target"),  // e.g. 20 — null = no target
+  availability: text("availability").array().notNull().default(sql`ARRAY[]::text[]`), // days/general availability they noted
+  interests: text("interests").array().notNull().default(sql`ARRAY[]::text[]`),       // task areas they're keen on
+  emergencyContact: text("emergency_contact"),
+  tshirtSize: text("tshirt_size"),
+  notes: text("notes"),               // volunteer-supplied
+  reviewNotes: text("review_notes"),  // internal staff notes
+  sourceUrl: text("source_url"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("volunteers_org_idx").on(t.organizationId, t.createdAt),
+}));
+
+export const insertVolunteerSchema = createInsertSchema(volunteers).omit({ id: true, createdAt: true });
+export type InsertVolunteer = z.infer<typeof insertVolunteerSchema>;
+export type Volunteer = typeof volunteers.$inferSelect;
+
+// The jobs a volunteer can be allocated on a day. Seeded with sensible defaults
+// per org on first use (Car park, Boots, Music, Gate & welcome, …) but fully
+// editable — add/rename/recolour/retire per workspace.
+export const volunteerTaskTypes = pgTable("volunteer_task_types", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  color: text("color").notNull().default("#60a5fa"),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgNameUnq: uniqueIndex("volunteer_task_types_org_name_unq").on(t.organizationId, t.name),
+}));
+
+export const insertVolunteerTaskTypeSchema = createInsertSchema(volunteerTaskTypes).omit({ id: true, createdAt: true });
+export type InsertVolunteerTaskType = z.infer<typeof insertVolunteerTaskTypeSchema>;
+export type VolunteerTaskType = typeof volunteerTaskTypes.$inferSelect;
+
+// One row per (volunteer, day). taskTypeId null = rostered, task TBD. hours
+// drives the volunteer-hours ledger; completed = the hours actually count.
+export const volunteerAssignments = pgTable("volunteer_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  volunteerId: integer("volunteer_id").notNull().references(() => volunteers.id, { onDelete: "cascade" }),
+  taskTypeId: integer("task_type_id").references(() => volunteerTaskTypes.id, { onDelete: "set null" }),
+  assignmentDate: date("assignment_date").notNull(), // YYYY-MM-DD
+  hours: doublePrecision("hours").notNull().default(6),
+  completed: boolean("completed").notNull().default(false), // hours actually served
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgDateIdx: index("volunteer_assignments_org_date_idx").on(t.organizationId, t.assignmentDate),
+  volDateUnq: uniqueIndex("volunteer_assignments_vol_date_unq").on(t.volunteerId, t.assignmentDate),
+}));
+
+export const insertVolunteerAssignmentSchema = createInsertSchema(volunteerAssignments).omit({ id: true, createdAt: true });
+export type InsertVolunteerAssignment = z.infer<typeof insertVolunteerAssignmentSchema>;
+export type VolunteerAssignment = typeof volunteerAssignments.$inferSelect;
+
 // ---- E-Sign (DocuSign replacement) ----
 // Org-wide electronic signature module. Send any PDF for signature, track
 // status, generate a signed PDF + completion certificate, full audit trail.
@@ -3589,3 +3668,181 @@ export const proposalEvents = pgTable("proposal_events", {
 export const insertProposalEventSchema = createInsertSchema(proposalEvents).omit({ id: true, occurredAt: true });
 export type InsertProposalEvent = z.infer<typeof insertProposalEventSchema>;
 export type ProposalEvent = typeof proposalEvents.$inferSelect;
+
+// ── Content Calendar / Media Production (group / USG workspace) ───────────────
+// The media & marketing team's Monday.com-style home. Each content_item runs a
+// production pipeline (idea → scripting → to_shoot → editing → review →
+// scheduled → published) and carries a PLANNED date + a PUBLISHED date (the
+// planned-vs-delivered scoreboard), brand tags, format/channels, and the three
+// named production roles Daniel asked for (photographer / videographer / editor)
+// plus an accountable owner. content_sessions are the production activities on
+// the calendar (meetings, planning, scripting, storyboarding, brainstorming,
+// shoots, edit blocks). content_tasks are the granular "divvy up the work"
+// checklist under an item, each with a production role + assignee.
+export const contentItems = pgTable("content_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  brief: text("brief"),                          // what it's about / the concept
+  // reel | short | long_video | photo | carousel | story | graphic | blog | email | podcast | other
+  format: text("format").notNull().default("reel"),
+  // instagram | tiktok | youtube | facebook | linkedin | x | website | email | other
+  channels: text("channels").array().notNull().default(sql`ARRAY[]::text[]`),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  // idea | scripting | to_shoot | editing | review | scheduled | published | cancelled
+  status: text("status").notNull().default("idea"),
+  priority: text("priority").notNull().default("medium"),   // low | medium | high | urgent
+  plannedDate: date("planned_date"),             // when it's PLANNED to go out (calendar anchor)
+  publishedDate: date("published_date"),         // when it ACTUALLY went out (delivered)
+  ownerId: integer("owner_id").references(() => users.id, { onDelete: "set null" }),
+  photographerId: integer("photographer_id").references(() => users.id, { onDelete: "set null" }),
+  videographerId: integer("videographer_id").references(() => users.id, { onDelete: "set null" }),
+  editorId: integer("editor_id").references(() => users.id, { onDelete: "set null" }),
+  campaign: text("campaign"),                    // content pillar / campaign label (free text)
+  assetUrl: text("asset_url"),                   // link to raw/edited assets (Drive/Frame.io)
+  finalUrl: text("final_url"),                   // link to the published post
+  sessionId: integer("session_id").references((): any => contentSessions.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertContentItemSchema = createInsertSchema(contentItems).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertContentItem = z.infer<typeof insertContentItemSchema>;
+export type ContentItem = typeof contentItems.$inferSelect;
+
+export const contentSessions = pgTable("content_sessions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  // meeting | planning | scripting | storyboard | brainstorm | shoot | edit | review | other
+  sessionType: text("session_type").notNull().default("meeting"),
+  startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+  endAt: timestamp("end_at", { withTimezone: true }),
+  allDay: boolean("all_day").notNull().default(false),
+  location: text("location"),
+  brandTags: text("brand_tags").array().notNull().default(sql`ARRAY[]::text[]`),
+  attendeeIds: integer("attendee_ids").array().notNull().default(sql`ARRAY[]::integer[]`),
+  leadId: integer("lead_id").references(() => users.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertContentSessionSchema = createInsertSchema(contentSessions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertContentSession = z.infer<typeof insertContentSessionSchema>;
+export type ContentSession = typeof contentSessions.$inferSelect;
+
+export const contentTasks = pgTable("content_tasks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  contentItemId: integer("content_item_id").notNull().references(() => contentItems.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  // photography | videography | editing | scripting | design | publishing | other
+  role: text("role").notNull().default("other"),
+  assigneeId: integer("assignee_id").references(() => users.id, { onDelete: "set null" }),
+  dueDate: date("due_date"),
+  done: boolean("done").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertContentTaskSchema = createInsertSchema(contentTasks).omit({ id: true, createdAt: true });
+export type InsertContentTask = z.infer<typeof insertContentTaskSchema>;
+export type ContentTask = typeof contentTasks.$inferSelect;
+
+// ── Play Predictor (CUFC first-team score predictions) ───────────────────────
+// Fans predict the Christchurch United first team's score + goalscorers from
+// the CUFC website, earn points (shared/predictor-scoring.ts) and climb
+// per-game + season leaderboards for prizes. Every entrant is captured as a
+// CUFC (org 1) marketing contact — the CUFC Mailer audience reads this table.
+
+// One row per first-team game. Kickoff gates predictions; entering the final
+// result (scores + actual goalscorers) flips status to 'final' and triggers
+// points recomputation for every prediction on the fixture.
+export const predictorFixtures = pgTable("predictor_fixtures", {
+  id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").notNull().default(1),
+  externalId: text("external_id"),                 // optional id from an external fixtures feed
+  opponent: text("opponent").notNull(),
+  homeAway: text("home_away").notNull().default("H"), // 'H' | 'A'
+  kickoffAt: timestamp("kickoff_at", { withTimezone: true }).notNull(),
+  venue: text("venue"),
+  status: text("status").notNull().default("scheduled"), // 'scheduled' | 'final'
+  cufcScore: integer("cufc_score"),
+  opponentScore: integer("opponent_score"),
+  goalscorers: jsonb("goalscorers").$type<string[] | null>(), // actual scorers (array of names)
+  prize: text("prize"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  orgExternalUnq: uniqueIndex("predictor_fixtures_org_external_unq")
+    .on(t.organizationId, t.externalId)
+    .where(sql`${t.externalId} IS NOT NULL`),
+}));
+
+// Fan contact capture — unique per (org, lower(email)); re-predicting updates
+// name/phone in place so the newest details win.
+export const predictorEntrants = pgTable("predictor_entrants", {
+  id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").notNull().default(1),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  marketingConsent: boolean("marketing_consent").notNull().default(true),
+  source: text("source"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  orgEmailUnq: uniqueIndex("predictor_entrants_org_email_unq")
+    .on(t.organizationId, sql`lower(${t.email})`),
+}));
+
+// One prediction per entrant per fixture — revisable until kickoff.
+// points_awarded is written when the fixture result is entered (and rewritten
+// if the result is corrected).
+export const predictorPredictions = pgTable("predictor_predictions", {
+  id: serial("id").primaryKey(),
+  fixtureId: integer("fixture_id").notNull().references(() => predictorFixtures.id),
+  entrantId: integer("entrant_id").notNull().references(() => predictorEntrants.id),
+  cufcScore: integer("cufc_score").notNull(),
+  opponentScore: integer("opponent_score").notNull(),
+  goalscorers: text("goalscorers").array().notNull().default(sql`'{}'::text[]`), // picks (max 3 distinct)
+  pointsAwarded: integer("points_awarded"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  fixtureEntrantUnq: unique("predictor_predictions_fixture_entrant_unq").on(t.fixtureId, t.entrantId),
+}));
+
+// First-team player list behind the goalscorer picker on the public form.
+export const predictorSquad = pgTable("predictor_squad", {
+  id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").notNull().default(1),
+  name: text("name").notNull(),
+  position: text("position"),
+  active: boolean("active").notNull().default(true),
+  sort: integer("sort").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const insertPredictorFixtureSchema = createInsertSchema(predictorFixtures).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPredictorFixture = z.infer<typeof insertPredictorFixtureSchema>;
+export type PredictorFixture = typeof predictorFixtures.$inferSelect;
+
+export const insertPredictorEntrantSchema = createInsertSchema(predictorEntrants).omit({ id: true, createdAt: true });
+export type InsertPredictorEntrant = z.infer<typeof insertPredictorEntrantSchema>;
+export type PredictorEntrant = typeof predictorEntrants.$inferSelect;
+
+export const insertPredictorPredictionSchema = createInsertSchema(predictorPredictions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPredictorPrediction = z.infer<typeof insertPredictorPredictionSchema>;
+export type PredictorPrediction = typeof predictorPredictions.$inferSelect;
+
+export const insertPredictorSquadSchema = createInsertSchema(predictorSquad).omit({ id: true, createdAt: true });
+export type InsertPredictorSquad = z.infer<typeof insertPredictorSquadSchema>;
+export type PredictorSquadPlayer = typeof predictorSquad.$inferSelect;

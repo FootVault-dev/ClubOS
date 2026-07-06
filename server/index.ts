@@ -72,6 +72,10 @@ app.use((req, res, next) => {
   await migrateScheduleData().catch((e) => console.error("Schedule migration error:", e));
   await registerRoutes(httpServer, app);
 
+  // Sandbox workspace — Club Dossier (isolated module; super_admin-gated).
+  const { registerClubDossierRoutes } = await import("./club-dossier-routes");
+  registerClubDossierRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).

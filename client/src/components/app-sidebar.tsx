@@ -37,6 +37,7 @@ import {
   Tag,
   Globe,
   Handshake,
+  HeartHandshake,
   Landmark,
   GraduationCap,
   Printer,
@@ -57,7 +58,11 @@ import {
   BellRing,
   CalendarCheck,
   Waves,
+  Clapperboard,
   MessageCircle,
+  Radio,
+  FlaskConical,
+  Fingerprint,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -87,7 +92,12 @@ const campsNav = [
   // workspace's All Programs / Term Dates pattern.
   { tab: "registrations", title: "Registrations", url: "/admin/registrations", icon: ClipboardCheck },
   { tab: "contacts", title: "Contacts", url: "/admin/contacts", icon: Users },
+  { tab: "volunteers", title: "Volunteers", url: "/admin/volunteers", icon: HeartHandshake },
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
+  // CUFC newsletter mailer (tabs.ts slug "cufc-mailer") — titled "Newsletters"
+  // here so it doesn't collide with the camps "Mailer" item (nav keys by title).
+  { tab: "cufc-mailer", title: "Newsletters", url: "/admin/cufc-mailer", icon: Send },
+  { tab: "predictor", title: "Play Predictor", url: "/admin/predictor", icon: Trophy },
   { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
@@ -161,11 +171,13 @@ const tournamentNav = [
   { tab: "skills-challenge", title: "Skills Challenge", url: "/admin/skills-challenge", icon: Zap },
   { tab: "food-truck", title: "Food Truck", url: "/admin/food-truck", icon: Truck },
   { tab: "vendors", title: "Vendors", url: "/admin/vendors", icon: UtensilsCrossed },
+  { tab: "volunteers", title: "Volunteers", url: "/admin/volunteers", icon: HeartHandshake },
   { tab: "cic-registrations", title: "Registrations", url: "/admin/cic-registrations", icon: Inbox },
   { tab: "cic-livechat", title: "Live Chat", url: "/admin/cic-livechat", icon: MessageCircle },
   { tab: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer", icon: Mail },
   { tab: "cic-push", title: "Notifications", url: "/admin/cic-push", icon: BellRing },
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
+  { tab: "cic-watch", title: "Watch", url: "/admin/cic-watch", icon: Radio },
 ];
 
 const tournamentSecondary = [
@@ -203,6 +215,7 @@ const groupNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "calendar", title: "Calendar", url: "/admin/calendar", icon: Calendar },
   { tab: "projects", title: "Projects", url: "/admin/projects", icon: ClipboardCheck },
+  { tab: "content", title: "Content", url: "/admin/content", icon: Clapperboard },
   { tab: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship", icon: Handshake },
   { tab: "proposals", title: "Proposals", url: "/admin/proposals", icon: Send },
   { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
@@ -237,6 +250,15 @@ const printsSecondary = [
   { tab: "team", title: "Team", url: "/admin/team", icon: Users },
   { tab: "domains", title: "Domains", url: "/admin/domains", icon: Globe },
   { tab: "settings", title: "Settings", url: "/admin/settings", icon: Settings },
+];
+
+// Sandbox — private super-admin experimentation workspace (Daniel only).
+const sandboxNav = [
+  { tab: "club-dossier", title: "Club Dossier", url: "/admin/club-dossier", icon: Fingerprint },
+];
+
+const sandboxSecondary = [
+  { tab: "team", title: "Team", url: "/admin/team", icon: Users },
 ];
 
 function PreviewPublicSiteLink({ orgId, orgSlug }: { orgId: number; orgSlug: string }) {
@@ -396,6 +418,10 @@ function isPrintsWorkspace(slug: string | undefined) {
   return slug === "united-prints";
 }
 
+function isSandboxWorkspace(slug: string | undefined) {
+  return slug === "sandbox";
+}
+
 function getWorkspaceLabel(slug: string | undefined) {
   if (isVenueWorkspace(slug)) return "Venue";
   if (isLeagueWorkspace(slug)) return "Leagues";
@@ -403,6 +429,7 @@ function getWorkspaceLabel(slug: string | undefined) {
   if (isGymnasticsWorkspace(slug)) return "Gymnastics";
   if (isGroupWorkspace(slug)) return "Group";
   if (isPrintsWorkspace(slug)) return "Print Studio";
+  if (isSandboxWorkspace(slug)) return "Sandbox";
   return "Management";
 }
 
@@ -413,6 +440,7 @@ function getWorkspaceInitials(slug: string | undefined) {
   if (isGymnasticsWorkspace(slug)) return "UG";
   if (isGroupWorkspace(slug)) return "SG";
   if (isPrintsWorkspace(slug)) return "UP";
+  if (isSandboxWorkspace(slug)) return "SB";
   return "CU";
 }
 
@@ -428,10 +456,11 @@ export function AppSidebar() {
   const isGymnastics = isGymnasticsWorkspace(currentOrg?.slug);
   const isGroup = isGroupWorkspace(currentOrg?.slug);
   const isPrints = isPrintsWorkspace(currentOrg?.slug);
+  const isSandbox = isSandboxWorkspace(currentOrg?.slug);
   const isSiu = currentOrg?.slug === "south-island-united";
   const tournamentMainNav = cicView === "7s" ? tournament7sNav : tournamentNav;
-  const allMainNav = isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : isSiu ? siuNav : campsNav;
-  const allSecondaryNav = isPrints ? printsSecondary : isGroup ? groupSecondary : isGymnastics ? gymnasticsSecondary : isTournament ? tournamentSecondary : isLeague ? leagueSecondary : isVenue ? venueSecondary : campsSecondary;
+  const allMainNav = isSandbox ? sandboxNav : isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : isSiu ? siuNav : campsNav;
+  const allSecondaryNav = isSandbox ? sandboxSecondary : isPrints ? printsSecondary : isGroup ? groupSecondary : isGymnastics ? gymnasticsSecondary : isTournament ? tournamentSecondary : isLeague ? leagueSecondary : isVenue ? venueSecondary : campsSecondary;
 
   // Filter nav by the user's tab whitelist for this workspace.
   // canAccessTab handles the bypass cases (super_admin, admin/manager role,

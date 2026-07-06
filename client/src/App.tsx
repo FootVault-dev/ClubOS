@@ -19,6 +19,8 @@ import AdminRegistrations from "@/pages/admin-registrations";
 import AdminContacts from "@/pages/admin-contacts";
 import AdminContactDetail from "@/pages/admin-contact-detail";
 import AdminMailer from "@/pages/admin-mailer";
+import CufcMailer from "@/pages/cufc-mailer";
+import Predictor from "@/pages/predictor";
 import FootballInstitute from "@/pages/football-institute";
 import AdminSettings from "@/pages/admin-settings";
 import AdminEditPage from "@/pages/admin-edit-page";
@@ -58,6 +60,7 @@ import AdminEvents from "@/pages/admin-events";
 import AdminMembership from "@/pages/admin-membership";
 import AdminDeclarations from "@/pages/admin-declarations";
 import GroupProjects from "@/pages/group-projects";
+import GroupContent from "@/pages/group-content";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
@@ -90,6 +93,7 @@ import CicLiveChat from "@/pages/cic-livechat";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
+import CicWatch from "@/pages/cic-watch";
 import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
 import CugcFreeSessions from "@/pages/cugc-free-sessions";
@@ -108,6 +112,7 @@ import TournamentTeamDetail from "@/pages/tournament-team-detail";
 import TournamentSkillsChallenge from "@/pages/tournament-skills-challenge";
 import TournamentFoodTruck from "@/pages/tournament-food-truck";
 import TournamentVendors from "@/pages/tournament-vendors";
+import Volunteers from "@/pages/volunteers";
 import ESign from "@/pages/esign";
 import SignPage from "@/pages/sign";
 import SignDeclaration from "@/pages/sign-declaration";
@@ -135,6 +140,7 @@ import PrintConfigure from "@/pages/print-configure";
 import PrintCheckout from "@/pages/print-checkout";
 import PrintOrderStatus from "@/pages/print-order-status";
 import PrintUpload from "@/pages/print-upload";
+import ClubDossier from "@/pages/club-dossier";
 import { Search, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -175,6 +181,18 @@ function AdminRouter() {
   const isGymnastics = currentOrg?.slug === "united-gymnastics";
   const isGroup = currentOrg?.slug === "united-sports-group";
   const isPrints = currentOrg?.slug === "united-prints";
+  const isSandbox = currentOrg?.slug === "sandbox";
+
+  if (isSandbox) {
+    return (
+      <Switch>
+        <Route path="/admin"><Redirect to="/admin/club-dossier" /></Route>
+        <Route path="/admin/club-dossier" component={ClubDossier} />
+        <Route path="/admin/team" component={AdminTeam} />
+        <Route component={NotFound} />
+      </Switch>
+    );
+  }
 
   if (isPrints) {
     return (
@@ -209,6 +227,7 @@ function AdminRouter() {
         <Route path="/admin" component={GroupDashboard} />
         <Route path="/admin/calendar" component={GroupCalendar} />
         <Route path="/admin/projects" component={GroupProjects} />
+        <Route path="/admin/content" component={GroupContent} />
         <Route path="/admin/sponsorship" component={GroupSponsorship} />
         <Route path="/admin/proposals" component={GroupProposals} />
         <Route path="/admin/grants" component={GroupGrants} />
@@ -269,12 +288,14 @@ function AdminRouter() {
         <Route path="/admin/skills-challenge" component={TournamentSkillsChallenge} />
         <Route path="/admin/food-truck" component={TournamentFoodTruck} />
         <Route path="/admin/vendors" component={TournamentVendors} />
+        <Route path="/admin/volunteers" component={Volunteers} />
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
         <Route path="/admin/cic-registrations" component={CicInbox} />
         <Route path="/admin/cic-livechat" component={CicLiveChat} />
         <Route path="/admin/cic-mailer" component={CicMailer} />
         <Route path="/admin/cic-push" component={CicPush} />
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
+        <Route path="/admin/cic-watch" component={CicWatch} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -358,6 +379,8 @@ function AdminRouter() {
       <Route path="/admin/contacts/parent/:id" component={AdminContactDetail} />
       <Route path="/admin/contacts/player/:id" component={AdminContactDetail} />
       <Route path="/admin/mailer" component={AdminMailer} />
+      <Route path="/admin/cufc-mailer" component={CufcMailer} />
+      <Route path="/admin/predictor" component={Predictor} />
       <Route path="/admin/football-institute" component={FootballInstitute} />
       <Route path="/admin/analytics" component={CampAnalytics} />
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />

@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents } from "@shared/schema";
+import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -11,13 +11,14 @@ import { fromForOrg } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
+import * as watch from "./watch-supabase";
 import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCicVolunteerNotification } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -28,6 +29,7 @@ import { buildCICSchedule } from "./tournament-schedule";
 import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
+import { scorePrediction } from "@shared/predictor-scoring";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
 import multer from "multer";
@@ -7839,6 +7841,236 @@ export async function registerRoutes(
     } catch (error: any) { res.status(400).json({ message: error.message }); }
   });
 
+  // ============ CONTENT CALENDAR / MEDIA PRODUCTION (group / USG) ============
+  // The media & marketing team's Monday.com-style home. content_items run a
+  // production pipeline (idea → … → published) and carry a planned + a published
+  // date (planned-vs-delivered). content_sessions are the calendar activities
+  // (meetings, planning, scripting, storyboards, brainstorms, shoots, edit days).
+  // content_tasks are the divvy-up checklist under an item. All gated on the
+  // "content" tab so a media-team member can be granted just this and nothing else.
+
+  const CONTENT_STATUSES_SRV = new Set(["idea","scripting","to_shoot","editing","review","scheduled","published","cancelled"]);
+  const todayISO = () => new Date().toISOString().slice(0, 10);
+
+  // Whitelist + coerce the mutable content_item fields (manual, avoids drizzle-zod Date pitfalls).
+  const pickContentItemFields = (b: any) => {
+    const out: any = {};
+    const strs = ["title","brief","format","status","priority","campaign","assetUrl","finalUrl","notes"];
+    for (const f of strs) if (b[f] !== undefined) out[f] = (b[f] === null || b[f] === "") ? (f === "title" ? "Untitled" : null) : String(b[f]);
+    if (out.status && !CONTENT_STATUSES_SRV.has(out.status)) delete out.status;
+    if (b.channels !== undefined)  out.channels  = Array.isArray(b.channels)  ? b.channels.map(String)  : [];
+    if (b.brandTags !== undefined) out.brandTags = Array.isArray(b.brandTags) ? b.brandTags.map(String) : [];
+    for (const d of ["plannedDate","publishedDate"]) if (b[d] !== undefined) out[d] = (b[d] === null || b[d] === "") ? null : String(b[d]).slice(0, 10);
+    for (const n of ["ownerId","photographerId","videographerId","editorId","sessionId"]) if (b[n] !== undefined) out[n] = (b[n] === null || b[n] === "") ? null : Number(b[n]);
+    if (b.sortOrder !== undefined) out.sortOrder = Math.round(Number(b.sortOrder)) || 0;
+    if (b.archived !== undefined) out.archived = !!b.archived;
+    return out;
+  };
+
+  // GET items (+ nested tasks) for a workspace.
+  app.get("/api/admin/content/items", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(contentItems)
+        .where(and(eq(contentItems.organizationId, orgId), eq(contentItems.archived, false)))
+        .orderBy(asc(contentItems.sortOrder), desc(contentItems.id));
+      const ids = rows.map(r => r.id);
+      const tasks = ids.length
+        ? await db.select().from(contentTasks).where(inArray(contentTasks.contentItemId, ids)).orderBy(asc(contentTasks.sortOrder), asc(contentTasks.id))
+        : [];
+      const byItem: Record<number, any[]> = {};
+      for (const t of tasks) (byItem[t.contentItemId] ||= []).push(t);
+      res.json(rows.map(r => ({ ...r, tasks: byItem[r.id] || [] })));
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/content/items", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const fields = pickContentItemFields(req.body);
+      // If it's created already published without a published date, stamp today.
+      if (fields.status === "published" && !fields.publishedDate) fields.publishedDate = todayISO();
+      const [row] = await db.insert(contentItems).values({
+        organizationId: orgId,
+        title: fields.title || "Untitled",
+        ...fields,
+        createdBy: req.session.userId!,
+        updatedAt: new Date(),
+      }).returning();
+      res.status(201).json({ ...row, tasks: [] });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/content/items/:id", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(contentItems).where(eq(contentItems.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const fields = pickContentItemFields(req.body);
+      // Auto-stamp delivered date the first time it hits "published".
+      if (fields.status === "published" && !existing.publishedDate && fields.publishedDate === undefined) fields.publishedDate = todayISO();
+      const [row] = await db.update(contentItems).set({ ...fields, updatedAt: new Date() }).where(eq(contentItems.id, id)).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/content/items/:id", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(contentItems).where(eq(contentItems.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(contentItems).where(eq(contentItems.id, id));  // tasks cascade
+      res.json({ ok: true });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // ── content_sessions (production activities on the calendar) ────────────────
+  const pickContentSessionFields = (b: any) => {
+    const out: any = {};
+    const strs = ["title","sessionType","location","notes"];
+    for (const f of strs) if (b[f] !== undefined) out[f] = (b[f] === null || b[f] === "") ? (f === "title" ? "Untitled session" : null) : String(b[f]);
+    if (b.startAt !== undefined) out.startAt = b.startAt ? new Date(b.startAt) : undefined;
+    if (b.endAt !== undefined) out.endAt = b.endAt ? new Date(b.endAt) : null;
+    if (b.allDay !== undefined) out.allDay = !!b.allDay;
+    if (b.brandTags !== undefined) out.brandTags = Array.isArray(b.brandTags) ? b.brandTags.map(String) : [];
+    if (b.attendeeIds !== undefined) out.attendeeIds = Array.isArray(b.attendeeIds) ? b.attendeeIds.map((x: any) => Number(x)).filter((n: number) => !isNaN(n)) : [];
+    if (b.leadId !== undefined) out.leadId = (b.leadId === null || b.leadId === "") ? null : Number(b.leadId);
+    if (b.archived !== undefined) out.archived = !!b.archived;
+    return out;
+  };
+
+  app.get("/api/admin/content/sessions", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(contentSessions)
+        .where(and(eq(contentSessions.organizationId, orgId), eq(contentSessions.archived, false)))
+        .orderBy(asc(contentSessions.startAt));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/content/sessions", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const fields = pickContentSessionFields(req.body);
+      if (!fields.startAt) return res.status(400).json({ message: "startAt required" });
+      const [row] = await db.insert(contentSessions).values({
+        organizationId: orgId,
+        title: fields.title || "Untitled session",
+        ...fields,
+        createdBy: req.session.userId!,
+        updatedAt: new Date(),
+      }).returning();
+      res.status(201).json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/content/sessions/:id", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(contentSessions).where(eq(contentSessions.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const fields = pickContentSessionFields(req.body);
+      if (fields.startAt === undefined) delete fields.startAt;
+      const [row] = await db.update(contentSessions).set({ ...fields, updatedAt: new Date() }).where(eq(contentSessions.id, id)).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/content/sessions/:id", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(contentSessions).where(eq(contentSessions.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(contentSessions).where(eq(contentSessions.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // ── content_tasks (divvy-up checklist under a content item) ──────────────────
+  app.post("/api/admin/content/items/:id/tasks", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const itemId = parseInt(req.params.id);
+      const [item] = await db.select().from(contentItems).where(eq(contentItems.id, itemId)).limit(1);
+      if (!item) return res.status(404).json({ message: "Content item not found" });
+      if (!(await checkUserOrg(req.session.userId!, item.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const title = String(req.body?.title || "").trim();
+      if (!title) return res.status(400).json({ message: "title required" });
+      const existing = await db.select().from(contentTasks).where(eq(contentTasks.contentItemId, itemId));
+      const sortOrder = existing.length ? Math.max(...existing.map(t => t.sortOrder)) + 1 : 0;
+      const [row] = await db.insert(contentTasks).values({
+        organizationId: item.organizationId,
+        contentItemId: itemId,
+        title,
+        role: typeof req.body?.role === "string" ? req.body.role : "other",
+        assigneeId: req.body?.assigneeId ? Number(req.body.assigneeId) : null,
+        dueDate: req.body?.dueDate ? String(req.body.dueDate).slice(0, 10) : null,
+        done: !!req.body?.done,
+        sortOrder,
+      }).returning();
+      res.status(201).json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/content/tasks/:id", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(contentTasks).where(eq(contentTasks.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const patch: any = {};
+      if (typeof req.body.title === "string" && req.body.title.trim()) patch.title = req.body.title.trim();
+      if (typeof req.body.role === "string") patch.role = req.body.role;
+      if (req.body.assigneeId !== undefined) patch.assigneeId = (req.body.assigneeId === null || req.body.assigneeId === "") ? null : Number(req.body.assigneeId);
+      if (req.body.dueDate !== undefined) patch.dueDate = (req.body.dueDate === null || req.body.dueDate === "") ? null : String(req.body.dueDate).slice(0, 10);
+      if (req.body.done !== undefined) patch.done = !!req.body.done;
+      if (typeof req.body.sortOrder === "number") patch.sortOrder = req.body.sortOrder;
+      const [row] = await db.update(contentTasks).set(patch).where(eq(contentTasks.id, id)).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/content/tasks/:id", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(contentTasks).where(eq(contentTasks.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(contentTasks).where(eq(contentTasks.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Team list for owner/photographer/videographer/editor/assignee dropdowns —
+  // workspace-scoped, gated on the content tab (a media-team member granted only
+  // "content" can still populate the pickers).
+  app.get("/api/admin/content/team", requireAuth, requireTab("content"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.execute(sql`
+        SELECT u.id, u.first_name, u.last_name, u.email
+        FROM users u
+        JOIN user_organizations uo ON uo.user_id = u.id
+        WHERE uo.organization_id = ${orgId} AND u.active = true
+        ORDER BY u.first_name, u.last_name`);
+      res.json(rows.rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
   // ── Playbooks (task templates + backward planning) ─────────────────────────
   // A Playbook is a reusable checklist for a recurring event. Applying it to an
   // anchor date generates real tasks whose due dates = anchor + offsetDays
@@ -10310,6 +10542,556 @@ export async function registerRoutes(
 
   // ───────────────────────── END CIC SKILLS CHALLENGE ─────────────────────────
 
+  // ───────────────────────────── PLAY PREDICTOR ───────────────────────────────
+  // Fans predict the Christchurch United first team's score + goalscorers from
+  // the CUFC website (cross-origin), earn points (shared/predictor-scoring.ts)
+  // and climb per-game + season leaderboards for prizes. Every entrant lands in
+  // predictor_entrants under the CUFC org — the audience the CUFC Mailer sends
+  // to. Admins run it from the ClubOS "Play Predictor" tab: fixtures + prizes,
+  // squad list (the goalscorer picker), results (which recompute points), the
+  // entrant database and unmasked leaderboards.
+  // Public output rule: names are masked to "First L." — email/phone never leave
+  // the admin API.
+
+  const PREDICTOR_ORG_SLUG = "christchurch-united";
+  const PREDICTOR_SCORE_MAX = 20;
+  const PREDICTOR_MAX_SCORER_PICKS = 3;
+  // Keep a just-kicked-off game on the public list (predictions closed) so the
+  // page doesn't go blank at kickoff.
+  const PREDICTOR_KICKOFF_GRACE_MS = 3 * 60 * 60 * 1000;
+
+  let predictorOrgIdCache: number | null = null;
+  async function predictorOrgId(): Promise<number> {
+    if (predictorOrgIdCache) return predictorOrgIdCache;
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, PREDICTOR_ORG_SLUG));
+    if (!org) throw new Error("Christchurch United organization not found");
+    predictorOrgIdCache = org.id;
+    return org.id;
+  }
+
+  // The prediction form lives on the new CUFC website (cross-origin to this API).
+  const PREDICTOR_SITE_ORIGINS = ["https://cufc.co.nz", "https://www.cufc.co.nz"];
+  const setPredictorCors = (req: any, res: any) => {
+    const origin = req.headers.origin || "";
+    if (PREDICTOR_SITE_ORIGINS.includes(origin) || /\.vercel\.app$/.test(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+    }
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  };
+  app.options("/api/public/predictor/predict", (req, res) => { setPredictorCors(req, res); res.sendStatus(204); });
+
+  function predictorMaskName(fullName: string): string {
+    const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "Fan";
+    if (parts.length === 1) return parts[0];
+    return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
+  }
+
+  function predictorParseScore(v: unknown): number | null {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0 || n > PREDICTOR_SCORE_MAX) return null;
+    return n;
+  }
+
+  // Normalise + dedupe the entrant's goalscorer picks (case-insensitive).
+  function predictorNormalizeScorers(input: unknown): string[] | { error: string } {
+    if (input == null) return [];
+    if (!Array.isArray(input)) return { error: "goalscorers must be a list of names" };
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of input) {
+      const name = String(raw ?? "").trim().replace(/\s+/g, " ");
+      if (!name) continue;
+      if (name.length > 80) return { error: "Goalscorer names must be under 80 characters" };
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+    }
+    if (out.length > PREDICTOR_MAX_SCORER_PICKS) return { error: `Pick up to ${PREDICTOR_MAX_SCORER_PICKS} goalscorers` };
+    return out;
+  }
+
+  // Standard competition ranking — equal points share a rank (same approach as
+  // skillsLeaderboards above). Rows must arrive sorted by points desc.
+  function predictorRank<T extends { points: number }>(rows: T[]): (T & { rank: number })[] {
+    let lastPoints: number | null = null;
+    let lastRank = 0;
+    return rows.map((r, i) => {
+      const rank = r.points === lastPoints ? lastRank : i + 1;
+      lastPoints = r.points;
+      lastRank = rank;
+      return { ...r, rank };
+    });
+  }
+
+  // Season board — sum of points_awarded across every final fixture.
+  async function predictorSeasonBoard(orgId: number, opts: { masked: boolean }) {
+    const rows = await db.select({
+      entrantId: predictorPredictions.entrantId,
+      fullName: predictorEntrants.fullName,
+      email: predictorEntrants.email,
+      points: sql<number>`coalesce(sum(${predictorPredictions.pointsAwarded}), 0)`,
+      games: sql<number>`count(*)`,
+    })
+      .from(predictorPredictions)
+      .innerJoin(predictorEntrants, eq(predictorPredictions.entrantId, predictorEntrants.id))
+      .innerJoin(predictorFixtures, eq(predictorPredictions.fixtureId, predictorFixtures.id))
+      .where(and(
+        eq(predictorFixtures.organizationId, orgId),
+        eq(predictorFixtures.status, "final"),
+        sql`${predictorPredictions.pointsAwarded} IS NOT NULL`,
+      ))
+      .groupBy(predictorPredictions.entrantId, predictorEntrants.fullName, predictorEntrants.email);
+    const sorted = rows
+      .map((r) => ({ ...r, points: Number(r.points), games: Number(r.games) }))
+      .sort((a, b) => b.points - a.points || a.fullName.localeCompare(b.fullName));
+    return predictorRank(sorted).map((r) => opts.masked
+      ? { rank: r.rank, name: predictorMaskName(r.fullName), points: r.points, games: r.games }
+      : { rank: r.rank, entrantId: r.entrantId, name: r.fullName, email: r.email, points: r.points, games: r.games });
+  }
+
+  // Per-fixture board — only exists once the fixture is final (no leaking other
+  // fans' picks while predictions are open).
+  async function predictorFixtureBoard(fixture: typeof predictorFixtures.$inferSelect, opts: { masked: boolean }) {
+    if (fixture.status !== "final") return null;
+    const rows = await db.select({
+      entrantId: predictorPredictions.entrantId,
+      fullName: predictorEntrants.fullName,
+      email: predictorEntrants.email,
+      pointsAwarded: predictorPredictions.pointsAwarded,
+      cufcScore: predictorPredictions.cufcScore,
+      opponentScore: predictorPredictions.opponentScore,
+      goalscorers: predictorPredictions.goalscorers,
+    })
+      .from(predictorPredictions)
+      .innerJoin(predictorEntrants, eq(predictorPredictions.entrantId, predictorEntrants.id))
+      .where(eq(predictorPredictions.fixtureId, fixture.id));
+    const sorted = rows
+      .map((r) => ({ ...r, points: r.pointsAwarded ?? 0 }))
+      .sort((a, b) => b.points - a.points || a.fullName.localeCompare(b.fullName));
+    return predictorRank(sorted).map((r) => ({
+      rank: r.rank,
+      name: opts.masked ? predictorMaskName(r.fullName) : r.fullName,
+      ...(opts.masked ? {} : { entrantId: r.entrantId, email: r.email }),
+      points: r.points,
+      predicted: `${r.cufcScore}-${r.opponentScore}`,
+      goalscorers: r.goalscorers || [],
+    }));
+  }
+
+  function serializePredictorFixturePublic(f: typeof predictorFixtures.$inferSelect) {
+    return {
+      id: f.id,
+      opponent: f.opponent,
+      homeAway: f.homeAway,
+      kickoffAt: f.kickoffAt,
+      venue: f.venue,
+      status: f.status,
+      prize: f.prize,
+      cufcScore: f.cufcScore,
+      opponentScore: f.opponentScore,
+      goalscorers: (f.goalscorers as string[] | null) ?? [],
+    };
+  }
+
+  // -- Public: fixtures + squad (the prediction form), predict, leaderboards --
+
+  app.get("/api/public/predictor/fixtures", async (req, res) => {
+    setPredictorCors(req, res);
+    try {
+      const orgId = await predictorOrgId();
+      const fixtures = await db.select().from(predictorFixtures)
+        .where(eq(predictorFixtures.organizationId, orgId))
+        .orderBy(asc(predictorFixtures.kickoffAt));
+      const now = Date.now();
+      const upcoming = fixtures
+        .filter((f) => f.status === "scheduled" && f.kickoffAt.getTime() > now - PREDICTOR_KICKOFF_GRACE_MS)
+        .map((f) => ({ ...serializePredictorFixturePublic(f), predictionsOpen: f.kickoffAt.getTime() > now }));
+      const results = fixtures
+        .filter((f) => f.status === "final")
+        .sort((a, b) => b.kickoffAt.getTime() - a.kickoffAt.getTime())
+        .slice(0, 10)
+        .map(serializePredictorFixturePublic);
+      const squad = (await db.select().from(predictorSquad)
+        .where(and(eq(predictorSquad.organizationId, orgId), eq(predictorSquad.active, true)))
+        .orderBy(asc(predictorSquad.sort), asc(predictorSquad.name)))
+        .map((p) => ({ id: p.id, name: p.name, position: p.position }));
+      res.json({ upcoming, results, squad });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/public/predictor/predict", async (req, res) => {
+    setPredictorCors(req, res);
+    try {
+      const fullName = String(req.body?.fullName || "").trim();
+      const email = String(req.body?.email || "").trim();
+      const phone = String(req.body?.phone || "").trim();
+      const fixtureId = parseInt(String(req.body?.fixtureId ?? ""));
+      if (!fullName || fullName.length > 120) return res.status(400).json({ message: "Please add your name." });
+      if (!/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Please add a valid email." });
+      if (!phone) return res.status(400).json({ message: "Please add a phone number." });
+      if (!fixtureId) return res.status(400).json({ message: "fixtureId is required" });
+      const cufcScore = predictorParseScore(req.body?.cufcScore);
+      const opponentScore = predictorParseScore(req.body?.opponentScore);
+      if (cufcScore == null || opponentScore == null) {
+        return res.status(400).json({ message: `Scores must be whole numbers between 0 and ${PREDICTOR_SCORE_MAX}.` });
+      }
+      const scorers = predictorNormalizeScorers(req.body?.goalscorers);
+      if (!Array.isArray(scorers)) return res.status(400).json({ message: scorers.error });
+
+      const orgId = await predictorOrgId();
+      const [fixture] = await db.select().from(predictorFixtures)
+        .where(and(eq(predictorFixtures.id, fixtureId), eq(predictorFixtures.organizationId, orgId)));
+      if (!fixture) return res.status(404).json({ message: "Fixture not found" });
+      if (fixture.status !== "scheduled" || fixture.kickoffAt.getTime() <= Date.now()) {
+        return res.status(400).json({ message: "Predictions closed — kickoff!" });
+      }
+
+      // Upsert the entrant on (org, lower(email)) — the newest details win.
+      const [existingEntrant] = await db.select().from(predictorEntrants).where(and(
+        eq(predictorEntrants.organizationId, orgId),
+        sql`lower(${predictorEntrants.email}) = ${email.toLowerCase()}`,
+      ));
+      let entrantId: number;
+      if (existingEntrant) {
+        entrantId = existingEntrant.id;
+        await db.update(predictorEntrants).set({ fullName, phone }).where(eq(predictorEntrants.id, existingEntrant.id));
+      } else {
+        const [row] = await db.insert(predictorEntrants).values({
+          organizationId: orgId, fullName, email, phone,
+          source: String(req.body?.source || "cufc.co.nz").slice(0, 200),
+        }).returning();
+        entrantId = row.id;
+      }
+
+      // Upsert the prediction — fans can revise right up to kickoff.
+      const [existingPrediction] = await db.select().from(predictorPredictions).where(and(
+        eq(predictorPredictions.fixtureId, fixture.id),
+        eq(predictorPredictions.entrantId, entrantId),
+      ));
+      if (existingPrediction) {
+        await db.update(predictorPredictions)
+          .set({ cufcScore, opponentScore, goalscorers: scorers, updatedAt: new Date() })
+          .where(eq(predictorPredictions.id, existingPrediction.id));
+      } else {
+        await db.insert(predictorPredictions).values({
+          fixtureId: fixture.id, entrantId, cufcScore, opponentScore, goalscorers: scorers,
+        });
+      }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[Predictor predict] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  app.get("/api/public/predictor/leaderboard", async (req, res) => {
+    setPredictorCors(req, res);
+    try {
+      const orgId = await predictorOrgId();
+      let fixtureMeta: ReturnType<typeof serializePredictorFixturePublic> | null = null;
+      let fixtureBoard: Awaited<ReturnType<typeof predictorFixtureBoard>> = null;
+      const fixtureId = req.query.fixtureId ? parseInt(String(req.query.fixtureId)) : null;
+      if (fixtureId) {
+        const [fixture] = await db.select().from(predictorFixtures)
+          .where(and(eq(predictorFixtures.id, fixtureId), eq(predictorFixtures.organizationId, orgId)));
+        if (!fixture) return res.status(404).json({ message: "Fixture not found" });
+        fixtureMeta = serializePredictorFixturePublic(fixture);
+        fixtureBoard = await predictorFixtureBoard(fixture, { masked: true });
+      }
+      const season = await predictorSeasonBoard(orgId, { masked: true });
+      res.json({ fixture: fixtureMeta, fixtureBoard, season });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── CUFC website contact → inbox + email info@cufc.co.nz ────────────────────
+  // Posted cross-origin from the new cufc.co.nz website — same shape as the CIC
+  // and CUGC contact endpoints. Messages land in inbox_messages under org 1.
+  app.options("/api/public/cufc/contact", (req, res) => { setPredictorCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cufc/contact", async (req, res) => {
+    setPredictorCors(req, res);
+    try {
+      const name = String(req.body.name || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const subject = String(req.body.subject || "").trim();
+      const message = String(req.body.message || "").trim();
+      if (!name || !/.+@.+\..+/.test(email) || !message) return res.status(400).json({ message: "Please add your name, a valid email and a message." });
+
+      const orgId = await predictorOrgId();
+      await db.insert(inboxMessages).values({
+        organizationId: orgId, channel: "web_form",
+        name, email, phone: phone || null, subject: subject || null, body: message,
+        sourceUrl: String(req.body.sourceUrl || "cufc.co.nz"), status: "new",
+      });
+      try {
+        await sendCufcContactNotification({ to: "info@cufc.co.nz", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
+      } catch (e) { console.error("[CUFC contact] email failed:", e); }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[CUFC contact] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // -- Web admin (ClubOS "Play Predictor" tab — session + tab permission) --
+
+  app.get("/api/admin/predictor/fixtures", requireAuth, requireTab("predictor"), async (_req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const fixtures = await db.select().from(predictorFixtures)
+        .where(eq(predictorFixtures.organizationId, orgId))
+        .orderBy(desc(predictorFixtures.kickoffAt));
+      const counts = await db.select({ fixtureId: predictorPredictions.fixtureId, count: sql<number>`count(*)` })
+        .from(predictorPredictions)
+        .groupBy(predictorPredictions.fixtureId);
+      const countByFixture = new Map(counts.map((c) => [c.fixtureId, Number(c.count)]));
+      res.json(fixtures.map((f) => ({ ...f, predictionCount: countByFixture.get(f.id) || 0 })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/predictor/fixtures", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const opponent = String(req.body?.opponent || "").trim();
+      if (!opponent) return res.status(400).json({ message: "Opponent is required" });
+      const kickoffAt = new Date(String(req.body?.kickoffAt || ""));
+      if (isNaN(kickoffAt.getTime())) return res.status(400).json({ message: "A valid kickoff date/time is required" });
+      const [row] = await db.insert(predictorFixtures).values({
+        organizationId: orgId,
+        externalId: String(req.body?.externalId || "").trim() || null,
+        opponent,
+        homeAway: req.body?.homeAway === "A" ? "A" : "H",
+        kickoffAt,
+        venue: String(req.body?.venue || "").trim() || null,
+        prize: String(req.body?.prize || "").trim() || null,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.patch("/api/admin/predictor/fixtures/:id", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const updates: Record<string, any> = {};
+      if ("opponent" in req.body) {
+        const v = String(req.body.opponent ?? "").trim();
+        if (!v) return res.status(400).json({ message: "Opponent is required" });
+        updates.opponent = v;
+      }
+      if ("homeAway" in req.body) updates.homeAway = req.body.homeAway === "A" ? "A" : "H";
+      if ("kickoffAt" in req.body) {
+        const d = new Date(String(req.body.kickoffAt || ""));
+        if (isNaN(d.getTime())) return res.status(400).json({ message: "A valid kickoff date/time is required" });
+        updates.kickoffAt = d;
+      }
+      if ("venue" in req.body) updates.venue = String(req.body.venue ?? "").trim() || null;
+      if ("prize" in req.body) updates.prize = String(req.body.prize ?? "").trim() || null;
+      if ("externalId" in req.body) updates.externalId = String(req.body.externalId ?? "").trim() || null;
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
+      updates.updatedAt = new Date();
+      const [row] = await db.update(predictorFixtures).set(updates)
+        .where(and(eq(predictorFixtures.id, parseInt(String(req.params.id))), eq(predictorFixtures.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Fixture not found" });
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/predictor/fixtures/:id", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const id = parseInt(String(req.params.id));
+      const [fixture] = await db.select().from(predictorFixtures)
+        .where(and(eq(predictorFixtures.id, id), eq(predictorFixtures.organizationId, orgId)));
+      if (!fixture) return res.status(404).json({ message: "Fixture not found" });
+      // No cascade on the FK — clear the fixture's predictions first.
+      await db.delete(predictorPredictions).where(eq(predictorPredictions.fixtureId, fixture.id));
+      await db.delete(predictorFixtures).where(eq(predictorFixtures.id, fixture.id));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Enter (or correct) the final result — flips the fixture to 'final' and
+  // recomputes points_awarded for every prediction via shared/predictor-scoring.
+  app.post("/api/admin/predictor/fixtures/:id/result", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const id = parseInt(String(req.params.id));
+      const [fixture] = await db.select().from(predictorFixtures)
+        .where(and(eq(predictorFixtures.id, id), eq(predictorFixtures.organizationId, orgId)));
+      if (!fixture) return res.status(404).json({ message: "Fixture not found" });
+      const cufcScore = predictorParseScore(req.body?.cufcScore);
+      const opponentScore = predictorParseScore(req.body?.opponentScore);
+      if (cufcScore == null || opponentScore == null) {
+        return res.status(400).json({ message: `Scores must be whole numbers between 0 and ${PREDICTOR_SCORE_MAX}.` });
+      }
+      // Actual scorers — duplicates allowed (braces), no pick cap here.
+      const goalscorers = (Array.isArray(req.body?.goalscorers) ? req.body.goalscorers : [])
+        .map((s: any) => String(s ?? "").trim().replace(/\s+/g, " "))
+        .filter(Boolean);
+      await db.update(predictorFixtures)
+        .set({ status: "final", cufcScore, opponentScore, goalscorers, updatedAt: new Date() })
+        .where(eq(predictorFixtures.id, fixture.id));
+      const predictions = await db.select().from(predictorPredictions).where(eq(predictorPredictions.fixtureId, fixture.id));
+      const actual = { cufcScore, opponentScore, goalscorers };
+      for (const p of predictions) {
+        const points = scorePrediction({ cufcScore: p.cufcScore, opponentScore: p.opponentScore, goalscorers: p.goalscorers || [] }, actual);
+        await db.update(predictorPredictions).set({ pointsAwarded: points, updatedAt: new Date() }).where(eq(predictorPredictions.id, p.id));
+      }
+      res.json({ ok: true, scored: predictions.length });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Per-fixture predictions (unmasked) — the admin detail view.
+  app.get("/api/admin/predictor/fixtures/:id/predictions", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const id = parseInt(String(req.params.id));
+      const [fixture] = await db.select().from(predictorFixtures)
+        .where(and(eq(predictorFixtures.id, id), eq(predictorFixtures.organizationId, orgId)));
+      if (!fixture) return res.status(404).json({ message: "Fixture not found" });
+      const rows = await db.select({
+        id: predictorPredictions.id,
+        entrantId: predictorPredictions.entrantId,
+        fullName: predictorEntrants.fullName,
+        email: predictorEntrants.email,
+        phone: predictorEntrants.phone,
+        cufcScore: predictorPredictions.cufcScore,
+        opponentScore: predictorPredictions.opponentScore,
+        goalscorers: predictorPredictions.goalscorers,
+        pointsAwarded: predictorPredictions.pointsAwarded,
+        createdAt: predictorPredictions.createdAt,
+        updatedAt: predictorPredictions.updatedAt,
+      })
+        .from(predictorPredictions)
+        .innerJoin(predictorEntrants, eq(predictorPredictions.entrantId, predictorEntrants.id))
+        .where(eq(predictorPredictions.fixtureId, fixture.id))
+        .orderBy(desc(predictorPredictions.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Squad CRUD — the first-team list behind the goalscorer picker.
+  app.get("/api/admin/predictor/squad", requireAuth, requireTab("predictor"), async (_req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const rows = await db.select().from(predictorSquad)
+        .where(eq(predictorSquad.organizationId, orgId))
+        .orderBy(asc(predictorSquad.sort), asc(predictorSquad.name));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/predictor/squad", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const name = String(req.body?.name || "").trim();
+      if (!name || name.length > 80) return res.status(400).json({ message: "Player name is required (max 80 characters)" });
+      const sort = Number.isInteger(Number(req.body?.sort)) ? Number(req.body.sort) : 0;
+      const [row] = await db.insert(predictorSquad).values({
+        organizationId: orgId, name,
+        position: String(req.body?.position || "").trim() || null,
+        sort,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.patch("/api/admin/predictor/squad/:id", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const updates: Record<string, any> = {};
+      if ("name" in req.body) {
+        const v = String(req.body.name ?? "").trim();
+        if (!v || v.length > 80) return res.status(400).json({ message: "Player name is required (max 80 characters)" });
+        updates.name = v;
+      }
+      if ("position" in req.body) updates.position = String(req.body.position ?? "").trim() || null;
+      if ("active" in req.body) updates.active = !!req.body.active;
+      if ("sort" in req.body) updates.sort = Number.isInteger(Number(req.body.sort)) ? Number(req.body.sort) : 0;
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
+      const [row] = await db.update(predictorSquad).set(updates)
+        .where(and(eq(predictorSquad.id, parseInt(String(req.params.id))), eq(predictorSquad.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Player not found" });
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/predictor/squad/:id", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const [row] = await db.delete(predictorSquad)
+        .where(and(eq(predictorSquad.id, parseInt(String(req.params.id))), eq(predictorSquad.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Player not found" });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Entrant database — full unmasked details + prediction counts + total points.
+  async function predictorEntrantRows(orgId: number) {
+    const entrants = await db.select().from(predictorEntrants)
+      .where(eq(predictorEntrants.organizationId, orgId))
+      .orderBy(desc(predictorEntrants.createdAt));
+    const aggregates = await db.select({
+      entrantId: predictorPredictions.entrantId,
+      predictionCount: sql<number>`count(*)`,
+      totalPoints: sql<number>`coalesce(sum(${predictorPredictions.pointsAwarded}), 0)`,
+    })
+      .from(predictorPredictions)
+      .groupBy(predictorPredictions.entrantId);
+    const byEntrant = new Map(aggregates.map((a) => [a.entrantId, a]));
+    return entrants.map((e) => ({
+      ...e,
+      predictionCount: Number(byEntrant.get(e.id)?.predictionCount || 0),
+      totalPoints: Number(byEntrant.get(e.id)?.totalPoints || 0),
+    }));
+  }
+
+  app.get("/api/admin/predictor/entrants", requireAuth, requireTab("predictor"), async (_req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      res.json(await predictorEntrantRows(orgId));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/predictor/entrants.csv", requireAuth, requireTab("predictor"), async (_req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const rows = await predictorEntrantRows(orgId);
+      const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const header = ["Name", "Email", "Phone", "Marketing consent", "Source", "Predictions", "Points", "Joined"];
+      const csv = [
+        header.map(esc).join(","),
+        ...rows.map((r) => [
+          r.fullName, r.email, r.phone, r.marketingConsent ? "yes" : "no", r.source || "",
+          r.predictionCount, r.totalPoints, r.createdAt ? new Date(r.createdAt).toISOString() : "",
+        ].map(esc).join(",")),
+      ].join("\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="predictor-entrants.csv"`);
+      res.send(csv);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Unmasked leaderboards (season + optional per-fixture) for the admin tab.
+  app.get("/api/admin/predictor/leaderboard", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      let fixtureBoard: Awaited<ReturnType<typeof predictorFixtureBoard>> = null;
+      const fixtureId = req.query.fixtureId ? parseInt(String(req.query.fixtureId)) : null;
+      if (fixtureId) {
+        const [fixture] = await db.select().from(predictorFixtures)
+          .where(and(eq(predictorFixtures.id, fixtureId), eq(predictorFixtures.organizationId, orgId)));
+        if (!fixture) return res.status(404).json({ message: "Fixture not found" });
+        fixtureBoard = await predictorFixtureBoard(fixture, { masked: false });
+      }
+      const season = await predictorSeasonBoard(orgId, { masked: false });
+      res.json({ fixtureBoard, season });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─────────────────────────── END PLAY PREDICTOR ─────────────────────────────
+
   // ─────────────────────────── FOOTBALL INSTITUTE ─────────────────────────────
   // Enrolment applications for the Football Institute (Christchurch United ×
   // Ao Tawhiti Unlimited Discovery). The public marketing site (a separate
@@ -10827,6 +11609,292 @@ export async function registerRoutes(
     }
   });
   // ───────────────────────────── END CIC VENDORS ─────────────────────────────
+
+  // ─────────────────────────────────── VOLUNTEERS ────────────────────────────
+  // A full volunteer signup + rostering pipeline. Org-scoped via the current
+  // workspace (x-workspace-slug) so the SAME module serves the CIC tournament,
+  // the CUFC academy (volunteer-hours tracking), SIU, and any future event
+  // workspace. Signups arrive via the public /volunteer form; staff review,
+  // then allocate each volunteer a task per day and log hours. Gated on the
+  // "volunteers" tab.
+  const VOL_STATUSES = ["new", "reviewing", "approved", "active", "declined", "inactive"] as const;
+  const volClean = (v: any, max: number) => (v == null ? null : (String(v).trim().slice(0, max) || null));
+  const volStrArray = (v: any, max = 40): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, max) : [];
+
+  // Default allocatable jobs, seeded once per org (Daniel's examples first).
+  const DEFAULT_VOLUNTEER_TASKS: { name: string; color: string }[] = [
+    { name: "Car Park", color: "#60a5fa" },
+    { name: "Boots", color: "#f59e0b" },
+    { name: "Music", color: "#a78bfa" },
+    { name: "Gate & Welcome", color: "#34d399" },
+    { name: "Set-up", color: "#22d3ee" },
+    { name: "Pack-down", color: "#f472b6" },
+    { name: "Marshalling", color: "#fb7185" },
+    { name: "First Aid", color: "#ef4444" },
+    { name: "Merchandise", color: "#c084fc" },
+    { name: "General", color: "#94a3b8" },
+  ];
+
+  async function volunteerOrgId(req: Request): Promise<number | null> {
+    const org = await workspaceOrg(req);
+    return org?.id ?? null;
+  }
+
+  // Seed the default task types for an org the first time the module is opened
+  // there, so every workspace gets a working roster out of the box.
+  async function ensureDefaultTaskTypes(orgId: number): Promise<void> {
+    const existing = await db.select({ id: volunteerTaskTypes.id }).from(volunteerTaskTypes)
+      .where(eq(volunteerTaskTypes.organizationId, orgId)).limit(1);
+    if (existing.length) return;
+    await db.insert(volunteerTaskTypes).values(
+      DEFAULT_VOLUNTEER_TASKS.map((t, i) => ({ organizationId: orgId, name: t.name, color: t.color, sortOrder: i })),
+    ).onConflictDoNothing();
+  }
+
+  function serializeVolunteer(v: typeof volunteers.$inferSelect) {
+    return {
+      id: v.id, firstName: v.firstName, lastName: v.lastName, email: v.email, phone: v.phone,
+      dateOfBirth: v.dateOfBirth, location: v.location, status: v.status,
+      isAcademyPlayer: v.isAcademyPlayer, academyAgeGroup: v.academyAgeGroup, hoursTarget: v.hoursTarget,
+      availability: v.availability, interests: v.interests, emergencyContact: v.emergencyContact,
+      tshirtSize: v.tshirtSize, notes: v.notes, reviewNotes: v.reviewNotes, sourceUrl: v.sourceUrl,
+      createdAt: v.createdAt,
+    };
+  }
+  const serializeTaskType = (t: typeof volunteerTaskTypes.$inferSelect) =>
+    ({ id: t.id, name: t.name, color: t.color, active: t.active, sortOrder: t.sortOrder });
+  const serializeAssignment = (a: typeof volunteerAssignments.$inferSelect) =>
+    ({ id: a.id, volunteerId: a.volunteerId, taskTypeId: a.taskTypeId, assignmentDate: a.assignmentDate, hours: a.hours, completed: a.completed, notes: a.notes });
+
+  // ---- Task types ----
+  app.get("/api/admin/volunteers/task-types", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      await ensureDefaultTaskTypes(orgId);
+      const rows = await db.select().from(volunteerTaskTypes)
+        .where(eq(volunteerTaskTypes.organizationId, orgId))
+        .orderBy(volunteerTaskTypes.sortOrder, volunteerTaskTypes.name);
+      res.json(rows.map(serializeTaskType));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/volunteers/task-types", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const name = String(req.body?.name ?? "").trim();
+      if (!name || name.length > 40) return res.status(400).json({ message: "Task name required (max 40 characters)" });
+      const color = /^#[0-9a-fA-F]{6}$/.test(String(req.body?.color)) ? String(req.body.color) : "#60a5fa";
+      const [{ maxOrder } = { maxOrder: 0 }] = await db.select({ maxOrder: sql<number>`coalesce(max(${volunteerTaskTypes.sortOrder}), 0)` })
+        .from(volunteerTaskTypes).where(eq(volunteerTaskTypes.organizationId, orgId));
+      const [row] = await db.insert(volunteerTaskTypes)
+        .values({ organizationId: orgId, name, color, sortOrder: Number(maxOrder) + 1 })
+        .onConflictDoNothing().returning();
+      if (!row) return res.status(409).json({ message: "A task with that name already exists" });
+      res.json(serializeTaskType(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.patch("/api/admin/volunteers/task-types/:id", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const b = req.body ?? {};
+      const updates: Record<string, any> = {};
+      if ("name" in b) { const v = String(b.name ?? "").trim(); if (!v || v.length > 40) return res.status(400).json({ message: "Task name required (max 40 characters)" }); updates.name = v; }
+      if ("color" in b && /^#[0-9a-fA-F]{6}$/.test(String(b.color))) updates.color = String(b.color);
+      if ("active" in b) updates.active = !!b.active;
+      if ("sortOrder" in b && Number.isFinite(Number(b.sortOrder))) updates.sortOrder = Number(b.sortOrder);
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
+      const [row] = await db.update(volunteerTaskTypes).set(updates)
+        .where(and(eq(volunteerTaskTypes.id, parseInt(String(req.params.id))), eq(volunteerTaskTypes.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Task not found" });
+      res.json(serializeTaskType(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/volunteers/task-types/:id", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const [row] = await db.delete(volunteerTaskTypes)
+        .where(and(eq(volunteerTaskTypes.id, parseInt(String(req.params.id))), eq(volunteerTaskTypes.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Task not found" });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ---- Volunteers ----
+  app.get("/api/admin/volunteers", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const rows = await db.select().from(volunteers)
+        .where(eq(volunteers.organizationId, orgId))
+        .orderBy(desc(volunteers.createdAt));
+      res.json(rows.map(serializeVolunteer));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/volunteers", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const b = req.body ?? {};
+      const firstName = String(b.firstName ?? "").trim();
+      const email = String(b.email ?? "").trim();
+      if (!firstName || firstName.length > 80) return res.status(400).json({ message: "First name required (max 80 characters)" });
+      if (!/.+@.+\..+/.test(email)) return res.status(400).json({ message: "A valid email is required" });
+      const status = (VOL_STATUSES as readonly string[]).includes(String(b.status)) ? String(b.status) : "approved";
+      const dob = /^\d{4}-\d{2}-\d{2}$/.test(String(b.dateOfBirth)) ? String(b.dateOfBirth) : null;
+      const hoursTarget = b.hoursTarget == null || b.hoursTarget === "" ? null : Math.max(0, Number(b.hoursTarget)) || null;
+      const [row] = await db.insert(volunteers).values({
+        organizationId: orgId, firstName, lastName: volClean(b.lastName, 80), email,
+        phone: volClean(b.phone, 40), dateOfBirth: dob, location: volClean(b.location, 120),
+        status, isAcademyPlayer: !!b.isAcademyPlayer, academyAgeGroup: volClean(b.academyAgeGroup, 12),
+        hoursTarget, availability: volStrArray(b.availability), interests: volStrArray(b.interests),
+        emergencyContact: volClean(b.emergencyContact, 160), tshirtSize: volClean(b.tshirtSize, 12),
+        notes: volClean(b.notes, 600), reviewNotes: volClean(b.reviewNotes, 600),
+        sourceUrl: volClean(b.sourceUrl, 200),
+      }).returning();
+      res.json(serializeVolunteer(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.patch("/api/admin/volunteers/:id", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const b = req.body ?? {};
+      const updates: Record<string, any> = {};
+      if ("firstName" in b) { const v = String(b.firstName ?? "").trim(); if (!v || v.length > 80) return res.status(400).json({ message: "First name required (max 80 characters)" }); updates.firstName = v; }
+      if ("lastName" in b) updates.lastName = volClean(b.lastName, 80);
+      if ("email" in b) { const v = String(b.email ?? "").trim(); if (!/.+@.+\..+/.test(v)) return res.status(400).json({ message: "A valid email is required" }); updates.email = v; }
+      if ("phone" in b) updates.phone = volClean(b.phone, 40);
+      if ("dateOfBirth" in b) updates.dateOfBirth = /^\d{4}-\d{2}-\d{2}$/.test(String(b.dateOfBirth)) ? String(b.dateOfBirth) : null;
+      if ("location" in b) updates.location = volClean(b.location, 120);
+      if ("status" in b && (VOL_STATUSES as readonly string[]).includes(String(b.status))) updates.status = String(b.status);
+      if ("isAcademyPlayer" in b) updates.isAcademyPlayer = !!b.isAcademyPlayer;
+      if ("academyAgeGroup" in b) updates.academyAgeGroup = volClean(b.academyAgeGroup, 12);
+      if ("hoursTarget" in b) updates.hoursTarget = b.hoursTarget == null || b.hoursTarget === "" ? null : (Math.max(0, Number(b.hoursTarget)) || null);
+      if ("availability" in b) updates.availability = volStrArray(b.availability);
+      if ("interests" in b) updates.interests = volStrArray(b.interests);
+      if ("emergencyContact" in b) updates.emergencyContact = volClean(b.emergencyContact, 160);
+      if ("tshirtSize" in b) updates.tshirtSize = volClean(b.tshirtSize, 12);
+      if ("notes" in b) updates.notes = volClean(b.notes, 600);
+      if ("reviewNotes" in b) updates.reviewNotes = volClean(b.reviewNotes, 600);
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
+      const [row] = await db.update(volunteers).set(updates)
+        .where(and(eq(volunteers.id, parseInt(String(req.params.id))), eq(volunteers.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Volunteer not found" });
+      res.json(serializeVolunteer(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/volunteers/:id", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const [row] = await db.delete(volunteers)
+        .where(and(eq(volunteers.id, parseInt(String(req.params.id))), eq(volunteers.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Volunteer not found" });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ---- Assignments (volunteer × day roster) ----
+  app.get("/api/admin/volunteers/assignments", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const rows = await db.select().from(volunteerAssignments)
+        .where(eq(volunteerAssignments.organizationId, orgId))
+        .orderBy(volunteerAssignments.assignmentDate);
+      res.json(rows.map(serializeAssignment));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Upsert per (volunteer, day): posting the same cell again updates the task/
+  // hours rather than erroring, so the matrix can toggle + re-assign freely.
+  app.post("/api/admin/volunteers/assignments", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const b = req.body ?? {};
+      const assignmentDate = String(b.assignmentDate ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(assignmentDate)) return res.status(400).json({ message: "assignmentDate must be YYYY-MM-DD" });
+      const volunteerId = parseInt(String(b.volunteerId));
+      if (!Number.isFinite(volunteerId)) return res.status(400).json({ message: "volunteerId required" });
+      const [vol] = await db.select().from(volunteers).where(and(eq(volunteers.id, volunteerId), eq(volunteers.organizationId, orgId)));
+      if (!vol) return res.status(404).json({ message: "Volunteer not found" });
+      let taskTypeId: number | null = b.taskTypeId == null || b.taskTypeId === "" ? null : parseInt(String(b.taskTypeId));
+      if (taskTypeId != null) {
+        const [t] = await db.select().from(volunteerTaskTypes).where(and(eq(volunteerTaskTypes.id, taskTypeId), eq(volunteerTaskTypes.organizationId, orgId)));
+        if (!t) taskTypeId = null;
+      }
+      const hours = b.hours == null || b.hours === "" ? 6 : Math.max(0, Math.min(24, Number(b.hours) || 0));
+      const [existing] = await db.select().from(volunteerAssignments).where(and(
+        eq(volunteerAssignments.organizationId, orgId),
+        eq(volunteerAssignments.volunteerId, volunteerId),
+        eq(volunteerAssignments.assignmentDate, assignmentDate),
+      ));
+      if (existing) {
+        const [row] = await db.update(volunteerAssignments)
+          .set({ taskTypeId, hours, notes: volClean(b.notes, 200) })
+          .where(eq(volunteerAssignments.id, existing.id)).returning();
+        return res.json(serializeAssignment(row));
+      }
+      const [row] = await db.insert(volunteerAssignments)
+        .values({ organizationId: orgId, volunteerId, taskTypeId, assignmentDate, hours, notes: volClean(b.notes, 200) })
+        .returning();
+      res.json(serializeAssignment(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.patch("/api/admin/volunteers/assignments/:id", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const b = req.body ?? {};
+      const updates: Record<string, any> = {};
+      if ("taskTypeId" in b) {
+        let tid: number | null = b.taskTypeId == null || b.taskTypeId === "" ? null : parseInt(String(b.taskTypeId));
+        if (tid != null) {
+          const [t] = await db.select().from(volunteerTaskTypes).where(and(eq(volunteerTaskTypes.id, tid), eq(volunteerTaskTypes.organizationId, orgId)));
+          if (!t) tid = null;
+        }
+        updates.taskTypeId = tid;
+      }
+      if ("hours" in b) updates.hours = Math.max(0, Math.min(24, Number(b.hours) || 0));
+      if ("completed" in b) updates.completed = !!b.completed;
+      if ("notes" in b) updates.notes = volClean(b.notes, 200);
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
+      const [row] = await db.update(volunteerAssignments).set(updates)
+        .where(and(eq(volunteerAssignments.id, parseInt(String(req.params.id))), eq(volunteerAssignments.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Assignment not found" });
+      res.json(serializeAssignment(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/volunteers/assignments/:id", requireAuth, requireTab("volunteers"), async (req, res) => {
+    try {
+      const orgId = await volunteerOrgId(req);
+      if (!orgId) return res.status(400).json({ message: "Workspace not resolved" });
+      const [row] = await db.delete(volunteerAssignments)
+        .where(and(eq(volunteerAssignments.id, parseInt(String(req.params.id))), eq(volunteerAssignments.organizationId, orgId)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Assignment not found" });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  // ───────────────────────────── END VOLUNTEERS ──────────────────────────────
 
   // ─────────────────────────────────── E-SIGN ───────────────────────────────────
   // DocuSign replacement. Admin sends any PDF for electronic signature; signers
@@ -16166,6 +17234,49 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
+  // ── CIC "Become a Volunteer" → CIC Volunteers tab + email info@cicyouth.com ──
+  // Posted cross-origin from cicyouth.com/volunteer. Lands as a 'new' volunteer
+  // in the CIC org, ready for staff to review + allocate in
+  // ClubOS → Tournaments → CIC → Volunteers. Phone required (safeguarding + we
+  // ring volunteers to confirm). DOB captured for under-18 safeguarding.
+  app.options("/api/public/cic/volunteer", (req, res) => { setCicCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cic/volunteer", async (req, res) => {
+    setCicCors(req, res);
+    try {
+      const firstName = String(req.body.firstName || "").trim();
+      const lastName = String(req.body.lastName || "").trim();
+      const email = String(req.body.email || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const dob = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.dateOfBirth || "")) ? String(req.body.dateOfBirth) : null;
+      const location = String(req.body.location || "").trim();
+      const availability = Array.isArray(req.body.availability) ? req.body.availability.map((x: any) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, 40) : [];
+      const interests = Array.isArray(req.body.interests) ? req.body.interests.map((x: any) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, 40) : [];
+      const isAcademyPlayer = !!req.body.isAcademyPlayer;
+      const academyAgeGroup = String(req.body.academyAgeGroup || "").trim().slice(0, 12) || null;
+      const notes = String(req.body.notes || "").trim().slice(0, 600) || null;
+      if (!firstName || !/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Please add your name and a valid email." });
+      if (!phone) return res.status(400).json({ message: "Please add a phone number." });
+
+      const orgId = await skillsOrgId(); // CIC org
+      await db.insert(volunteers).values({
+        organizationId: orgId, firstName, lastName: lastName || null, email,
+        phone: phone || null, dateOfBirth: dob, location: location || null, status: "new",
+        isAcademyPlayer, academyAgeGroup, hoursTarget: isAcademyPlayer ? 20 : null,
+        availability, interests, notes,
+        sourceUrl: String(req.body.sourceUrl || "cicyouth.com/volunteer").slice(0, 200),
+      });
+      try {
+        await sendCicVolunteerNotification({
+          to: "info@cicyouth.com", firstName, lastName: lastName || undefined, email,
+          phone: phone || undefined, dateOfBirth: dob || undefined, location: location || undefined,
+          availability, interests, isAcademyPlayer, academyAgeGroup: academyAgeGroup || undefined,
+          notes: notes || undefined, sourceUrl: String(req.body.sourceUrl || ""),
+        });
+      } catch (e) { console.error("[CIC volunteer] email failed:", e); }
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[CIC volunteer] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
   // ── Live Chat ─────────────────────────────────────────────────────────────
   // Powers the reusable Intercom-style chat widget on the brand marketing sites.
   // A conversation is a threaded exchange (visitor ↔ staff), scoped to an org via
@@ -16182,6 +17293,14 @@ export async function registerRoutes(
       notifyEmail: "info@cicyouth.com",
       accent: "#c9a43e",
       siteUrl: "https://cicyouth.com",
+    },
+    cufc: {
+      orgSlug: "christchurch-united",
+      brandName: "Christchurch United FC",
+      fromEmail: "noreply@cufc.co.nz",
+      notifyEmail: "info@cufc.co.nz",
+      accent: "#263996",
+      siteUrl: "https://cufc.co.nz",
     },
     // Add more brands here to reuse the widget (mfl, cugc, usg…). Each needs a
     // matching org slug + a from/notify email on a verified sending domain.
@@ -16200,6 +17319,7 @@ export async function registerRoutes(
     "https://minifootball.co.nz", "https://www.minifootball.co.nz",
     "https://cugc.co.nz", "https://www.cugc.co.nz",
     "https://usg.co.nz", "https://www.usg.co.nz",
+    "https://cufc.co.nz", "https://www.cufc.co.nz",
   ];
   const setChatCors = (req: any, res: any) => {
     const origin = req.headers.origin || "";
@@ -16502,6 +17622,252 @@ export async function registerRoutes(
       console.error("[CIC mailer send] error:", e);
       res.status(400).json({ message: e.message });
     }
+  });
+
+  // ── CUFC Mailer / CRM ───────────────────────────────────────────────────────
+  // The Christchurch United newsletter sender (CUFC workspace → Mailer tab,
+  // slug "cufc-mailer"). Audience = Play Predictor entrants (marketing consent)
+  // + the guardian contact database, deduped by email, minus the org-1
+  // suppression list. Same engine as the MFL/CIC mailers (emailCampaigns +
+  // runBroadcastQueue + signed unsubscribe tokens).
+
+  app.get("/api/admin/cufc/mailer/contacts", requireAuth, requireTab("cufc-mailer"), async (_req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const recipients = await resolveCufcAudience(orgId);
+      const unsub = await getUnsubscribedEmails(orgId);
+      const list = recipients.map((r) => ({ ...r, unsubscribed: unsub.has(r.email) }));
+      res.json({ contacts: list, total: list.length, unsubscribedCount: list.filter((c) => c.unsubscribed).length });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Recent broadcasts (history) — CUFC campaigns only.
+  app.get("/api/admin/cufc/mailer/campaigns", requireAuth, requireTab("cufc-mailer"), async (_req, res) => {
+    try {
+      const all = await storage.getEmailCampaigns();
+      res.json(all.filter((c) => String(c.segmentType || "").startsWith("cufc")));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Live recipient count for the chosen audience (excludes unsubscribed).
+  app.post("/api/admin/cufc/mailer/preview", requireAuth, requireTab("cufc-mailer"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const unsub = await getUnsubscribedEmails(orgId);
+      if (req.body.audience === "custom") {
+        const emails = parseCustomEmails(req.body.customEmails);
+        return res.json({ count: emails.filter((e) => !unsub.has(e)).length });
+      }
+      const recipients = await resolveCufcAudience(orgId);
+      res.json({ count: recipients.filter((r) => !unsub.has(r.email)).length });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send a single test (to the admin's own address) — safe preview, no DB blast.
+  app.post("/api/admin/cufc/mailer/test-send", requireAuth, requireTab("cufc-mailer"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const { to, subject, body, replyTo } = req.body || {};
+      const dest = String(to || "").trim();
+      if (!dest || !String(subject || "").trim() || !String(body || "").trim()) {
+        return res.status(400).json({ message: "to, subject and body are required" });
+      }
+      const ok = await sendCufcBroadcastEmail({
+        to: dest, subject: `[TEST] ${String(subject).trim()}`, bodyHtml: String(body),
+        replyTo: replyTo || undefined, unsubscribeUrl: cufcUnsubUrl(orgId, dest),
+      });
+      res.json({ ok });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send the broadcast to the resolved audience (batched, CUFC-branded, logged).
+  app.post("/api/admin/cufc/mailer/send", requireAuth, requireTab("cufc-mailer"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const { subject, body, audience, replyTo } = req.body || {};
+      const subj = String(subject || "").trim();
+      if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
+      if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
+      const aud = audience === "custom" ? "custom" as const : "all" as const;
+
+      let all: { email: string }[];
+      if (aud === "custom") {
+        const emails = parseCustomEmails(req.body?.customEmails);
+        if (emails.length > 500) return res.status(400).json({ message: "Custom sends are capped at 500 addresses" });
+        all = emails.map((email) => ({ email }));
+      } else {
+        all = await resolveCufcAudience(orgId);
+      }
+      const unsub = await getUnsubscribedEmails(orgId);
+      const recipients = all.filter((r) => !unsub.has(r.email));
+      if (recipients.length === 0) return res.status(400).json({ message: "No recipients in this audience" });
+
+      const [campaign] = await db.insert(emailCampaigns).values({
+        subject: subj, body: String(body),
+        fromEmail: fromForOrg(orgId),
+        replyTo: replyTo || "info@cufc.co.nz",
+        segmentType: `cufc_${aud}`,
+        segmentConfig: JSON.stringify({ orgId, audience: aud, ...(aud === "custom" ? { customEmails: recipients.map((r) => r.email) } : {}) }),
+        recipientCount: recipients.length, status: "sending",
+      }).returning();
+
+      // Queue runs after the response — a big audience takes minutes at
+      // Resend's rate limit, far longer than a request should hang.
+      void runBroadcastQueue(campaign.id, recipients.map((r) => r.email), (email) =>
+        sendCufcBroadcastEmail({
+          to: email, subject: subj, bodyHtml: String(body),
+          replyTo: replyTo || undefined, unsubscribeUrl: cufcUnsubUrl(orgId, email),
+        }),
+      ).catch((e) => console.error("[CUFC mailer queue] error:", e));
+
+      res.json({ queued: true, recipientCount: recipients.length });
+    } catch (e: any) {
+      console.error("[CUFC mailer send] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // ── CIC Watch — OTT streaming platform management ───────────────────────────
+  // Runs the whole watch.cicyouth.com platform from ClubOS: live pitches,
+  // recordings, and the viewer database + analytics. Data lives in the usg-meet
+  // Supabase project + Cloudflare Stream (see server/watch-supabase.ts).
+  const WATCH_CF_CUSTOMER = process.env.CLOUDFLARE_STREAM_CUSTOMER || "customer-cmfpri2ovjthkmgr";
+
+  app.get("/api/admin/cic/watch/channels", requireAuth, requireTab("cic-watch"), async (_req, res) => {
+    try { res.json({ channels: await watch.listChannels() }); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/cic/watch/channels", requireAuth, requireTab("cic-watch"), async (req, res) => {
+    try {
+      const action = String(req.body?.action || "");
+      if (action === "status") {
+        if (!req.body.id) return res.status(400).json({ message: "id required" });
+        await watch.setChannelStatus(String(req.body.id), req.body.status === "live" ? "live" : "offline");
+        return res.json({ ok: true });
+      }
+      if (action === "upsert") {
+        const c = req.body.channel;
+        if (!c?.key || !c?.name) return res.status(400).json({ message: "key and name required" });
+        await watch.upsertChannel(c);
+        return res.json({ ok: true });
+      }
+      if (action === "delete") {
+        if (!req.body.id) return res.status(400).json({ message: "id required" });
+        await watch.deleteChannel(String(req.body.id));
+        return res.json({ ok: true });
+      }
+      if (action === "create-live-input") {
+        const id = String(req.body.id || "");
+        const requireSigned = !!req.body.requireSigned;
+        let key = String(req.body.key || ""), name = String(req.body.name || ""), fieldLabel = String(req.body.fieldLabel || "");
+        if (id) {
+          const ch = await watch.getChannel(id);
+          if (!ch) return res.status(404).json({ message: "channel not found" });
+          key = ch.key; name = ch.name; fieldLabel = ch.field_label || ch.name;
+        }
+        if (!key || !name) return res.status(400).json({ message: "key and name required" });
+        const input = await watch.createLiveInput(`CIC Watch — ${name}`, requireSigned);
+        await watch.upsertChannel({ key, name, field_label: fieldLabel || name, cloudflare_uid: input.uid, require_signed: requireSigned, status: "offline", sort_order: typeof req.body.sortOrder === "number" ? req.body.sortOrder : 0 });
+        return res.json({ ok: true, input });
+      }
+      if (action === "reveal-creds") {
+        const ch = req.body.id ? await watch.getChannel(String(req.body.id)) : null;
+        if (!ch?.cloudflare_uid) return res.status(404).json({ message: "no Cloudflare input for this pitch yet" });
+        return res.json({ ok: true, creds: await watch.getInputCreds(ch.cloudflare_uid) });
+      }
+      return res.status(400).json({ message: "unknown action" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/cic/watch/recordings", requireAuth, requireTab("cic-watch"), async (_req, res) => {
+    try { res.json({ recordings: await watch.listRecordings(), customer: WATCH_CF_CUSTOMER }); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/cic/watch/recordings", requireAuth, requireTab("cic-watch"), async (req, res) => {
+    try {
+      const uid = String(req.body?.videoUid || "");
+      const action = String(req.body?.action || "");
+      if (!uid) return res.status(400).json({ message: "videoUid required" });
+      if (action === "rename") { await watch.updateVideo(uid, { name: String(req.body.name || "") }); return res.json({ ok: true }); }
+      if (action === "thumbnail") { await watch.updateVideo(uid, { thumbnailTimestampPct: Number(req.body.pct) || 0 }); return res.json({ ok: true }); }
+      if (action === "delete") { await watch.deleteVideo(uid); return res.json({ ok: true }); }
+      return res.status(400).json({ message: "unknown action" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/cic/watch/viewers", requireAuth, requireTab("cic-watch"), async (_req, res) => {
+    try {
+      const [stats, recent] = await Promise.all([watch.adminStats(), watch.recentViewers(250)]);
+      res.json({ stats, recent });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/cic/watch/viewers/export", requireAuth, requireTab("cic-watch"), async (_req, res) => {
+    try {
+      const viewers = await watch.allViewers();
+      const header = ["Email", "Name", "Dial code", "Phone", "Phone country", "Watching from", "Signed up", "Last seen", "Sessions", "Source"];
+      const rows = viewers.map((v) => [v.email, v.name || "", v.dial_code || "", v.phone || "", v.phone_country || "", v.geo_country || "", v.created_at, v.last_seen_at, String(v.sessions), v.signup_source || ""]);
+      const csv = [header, ...rows].map((r) => r.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="cic-watch-viewers.csv"`);
+      res.send(csv);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/cic/watch/push-to-mailer", requireAuth, requireTab("cic-watch"), async (_req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const viewers = await watch.allViewers();
+      const existing = await db.select({ email: cic7sRegistrations.email }).from(cic7sRegistrations).where(eq(cic7sRegistrations.organizationId, orgId));
+      const have = new Set(existing.map((r) => (r.email || "").toLowerCase()));
+      const toAdd = viewers.filter((v) => v.email && !have.has(v.email.toLowerCase()));
+      if (toAdd.length) {
+        const values = toAdd.map((v) => {
+          const [first, ...rest] = (v.name || "").trim().split(/\s+/);
+          return {
+            organizationId: orgId,
+            firstName: first || v.email.split("@")[0],
+            lastName: rest.join(" ") || null,
+            email: v.email,
+            location: v.geo_country || null,
+            phone: v.phone ? `${v.dial_code || ""}${v.phone}` : null,
+            category: "Watch viewer",
+            sourceUrl: "cic-watch",
+            status: "new",
+          };
+        });
+        // chunk to keep the insert statement a sane size
+        for (let i = 0; i < values.length; i += 500) {
+          await db.insert(cic7sRegistrations).values(values.slice(i, i + 500));
+        }
+      }
+      res.json({ ok: true, added: toAdd.length, alreadyInMailer: viewers.length - toAdd.length, total: viewers.length });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Broadcast scoreboard overlay — teams / score / clock shown on the live stream,
+  // controlled from anywhere by tournament managers + volunteers.
+  app.get("/api/admin/cic/watch/overlay", requireAuth, requireTab("cic-watch"), async (req, res) => {
+    try {
+      const ch = String(req.query.channel || "");
+      if (!ch) return res.status(400).json({ message: "channel required" });
+      res.json({ overlay: await watch.getOverlay(ch) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/cic/watch/overlay", requireAuth, requireTab("cic-watch"), async (req, res) => {
+    try {
+      const channelId = String(req.body?.channelId || "");
+      if (!channelId) return res.status(400).json({ message: "channelId required" });
+      if (String(req.body?.action) === "clock") {
+        await watch.clockOp(channelId, String(req.body.op), req.body.minutes != null ? Number(req.body.minutes) : undefined);
+      } else {
+        await watch.saveOverlay(channelId, req.body.overlay || {});
+      }
+      res.json({ ok: true, overlay: await watch.getOverlay(channelId) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // ── CIC Youth app push notifications ────────────────────────────────────────
@@ -17182,16 +18548,21 @@ export async function registerRoutes(
       const email = String(req.query.e || "").trim().toLowerCase();
       const token = String(req.query.t || "");
       // Brand the page by org — CIC (Youth + 7's) links land on the CIC page,
-      // everything else keeps the MFL page.
+      // CUFC (Play Predictor / newsletters) on the CUFC page, everything else
+      // keeps the MFL page.
       const cicId = await skillsOrgId().catch(() => null);
+      const cufcId = await predictorOrgId().catch(() => null);
       const isCic = !!orgId && orgId === cicId;
-      const page = isCic ? cicUnsubPage : mflUnsubPage;
+      const isCufc = !!orgId && orgId === cufcId;
+      const page = isCic ? cicUnsubPage : isCufc ? cufcUnsubPage : mflUnsubPage;
       if (!orgId || !email || mflUnsubToken(orgId, email) !== token) {
         return res.status(400).send(page("This unsubscribe link is invalid or has expired. Reply to any email and we'll remove you."));
       }
-      await db.insert(emailUnsubscribes).values({ organizationId: orgId, email, source: isCic ? "cic_broadcast" : "league_broadcast" }).onConflictDoNothing();
+      await db.insert(emailUnsubscribes).values({ organizationId: orgId, email, source: isCic ? "cic_broadcast" : isCufc ? "cufc_broadcast" : "league_broadcast" }).onConflictDoNothing();
       res.send(page(isCic
         ? "You've been unsubscribed. You won't receive any more Christchurch International Cup newsletters. You'll still get essential emails about teams you've entered."
+        : isCufc
+        ? "You've been unsubscribed. You won't receive any more Christchurch United newsletters. You'll still get essential emails about anything you've registered for."
         : "You've been unsubscribed. You won't receive any more Mini Football Leagues newsletters. You'll still get essential emails about teams you've registered."));
     } catch (e: any) {
       res.status(500).send(mflUnsubPage("Something went wrong. Reply to any email and we'll remove you manually."));
@@ -19081,6 +20452,58 @@ function cicUnsubPage(message: string): string {
   <body style="margin:0;background:#0b0b08;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
     <div style="max-width:480px;margin:0 auto;padding:64px 24px;text-align:center;">
       <p style="color:#c9a43e;margin:0 0 14px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch International Cup</p>
+      <p style="font-size:16px;line-height:1.6;color:#e6e6e6;">${message}</p>
+    </div>
+  </body></html>`;
+}
+
+// ── CUFC Mailer helpers ───────────────────────────────────────────────────────
+// The Christchurch United (org 1) equivalent of the MFL/CIC helpers above. Same
+// signed per-org+email unsubscribe tokens; CUFC-branded link host + landing page.
+
+function cufcUnsubUrl(orgId: number, email: string): string {
+  return `https://join.cufc.co.nz/api/public/unsubscribe?o=${orgId}&e=${encodeURIComponent(email)}&t=${mflUnsubToken(orgId, email)}`;
+}
+
+type CufcContact = { name: string; email: string; phone: string; role: string; source: string };
+
+// Build the CUFC newsletter audience, deduped by email:
+//   - Play Predictor entrants with marketing consent (predictor_entrants, org 1)
+//   - the guardian contact database — the same list the camps mailer's "all"
+//     segment uses (the contacts table has no org column; it IS the CUFC CRM)
+// The suppression list (getUnsubscribedEmails) is applied by the callers.
+async function resolveCufcAudience(orgId: number): Promise<CufcContact[]> {
+  const byEmail = new Map<string, CufcContact>();
+  const add = (c: CufcContact) => {
+    const email = c.email.trim().toLowerCase();
+    if (!email || byEmail.has(email)) return;
+    byEmail.set(email, { ...c, email });
+  };
+
+  const entrants = await db.select().from(predictorEntrants).where(and(
+    eq(predictorEntrants.organizationId, orgId),
+    eq(predictorEntrants.marketingConsent, true),
+  ));
+  for (const e of entrants) {
+    add({ name: e.fullName || "", email: e.email || "", phone: e.phone || "", role: "Play Predictor", source: e.source || "" });
+  }
+
+  const guardians = await db.select().from(contacts).where(and(
+    eq(contacts.type, "guardian"),
+    sql`${contacts.email} IS NOT NULL AND ${contacts.email} != ''`,
+  ));
+  for (const c of guardians) {
+    add({ name: `${c.firstName || ""} ${c.lastName || ""}`.trim(), email: c.email || "", phone: c.phone || "", role: "Contact", source: "" });
+  }
+
+  return Array.from(byEmail.values());
+}
+
+function cufcUnsubPage(message: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Christchurch United FC</title></head>
+  <body style="margin:0;background:#030711;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <div style="max-width:480px;margin:0 auto;padding:64px 24px;text-align:center;">
+      <p style="color:#7d95ff;margin:0 0 14px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United FC</p>
       <p style="font-size:16px;line-height:1.6;color:#e6e6e6;">${message}</p>
     </div>
   </body></html>`;

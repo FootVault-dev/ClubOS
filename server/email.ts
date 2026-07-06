@@ -334,6 +334,94 @@ export async function sendCicBroadcastEmail(params: {
   });
 }
 
+// ── CUFC (Christchurch United) branded email helpers ──────────────────────────
+// The first-team brand — navy + blue on dark, from the verified cufc.co.nz
+// sending domain (matches fromForOrg(1)).
+const CUFC_FROM = "Christchurch United <noreply@cufc.co.nz>";
+const CUFC_REPLY_TO = "info@cufc.co.nz";
+
+/**
+ * CUFC website contact notification → info@cufc.co.nz. Same shape as the CIC
+ * and CUGC contact notifications; the enquiry is also saved to inbox_messages.
+ */
+export async function sendCufcContactNotification(params: {
+  to: string; name: string; email: string; phone?: string; subject?: string; message: string; sourceUrl?: string;
+}): Promise<boolean> {
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:120px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const rows = [
+    row("From", params.name || "—"),
+    row("Email", params.email || "—"),
+    ...(params.phone ? [row("Phone", params.phone)] : []),
+    ...(params.subject ? [row("Subject", params.subject)] : []),
+  ].join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#030711;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#7d95ff;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United FC</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">New Website Enquiry</h1>
+      </div>
+      <div style="background:#0c1226;border:1px solid #1d2a55;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:18px 0 0;white-space:pre-wrap;">${(params.message || "").replace(/</g, "&lt;")}</p>
+        ${params.sourceUrl ? `<p style="color:#7d8ba8;font-size:11px;margin:16px 0 0;">via ${params.sourceUrl}</p>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Football Club · Christchurch, New Zealand
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: params.email || CUFC_REPLY_TO,
+    subject: `New website enquiry${params.name ? ` from ${params.name}` : ""} — cufc.co.nz`,
+    html,
+  });
+}
+
+/**
+ * CUFC broadcast / newsletter — wraps the composer's rich HTML in the navy
+ * Christchurch United shell with the subject as the heading and a
+ * per-recipient signed unsubscribe link. Sent one-per-recipient (the mailer
+ * route batches through runBroadcastQueue).
+ */
+export async function sendCufcBroadcastEmail(params: {
+  to: string;
+  subject: string;
+  bodyHtml: string;
+  replyTo?: string;
+  unsubscribeUrl: string;
+}): Promise<boolean> {
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#030711;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#7d95ff;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United FC</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">${params.subject}</h1>
+      </div>
+      <div style="background:#0c1226;border:1px solid #1d2a55;border-radius:18px;padding:26px;color:#e6e6e6;font-size:14px;line-height:1.65;">
+        ${params.bodyHtml}
+        <p style="color:#5a6480;font-size:11px;line-height:1.6;margin:20px 0 0;border-top:1px solid #1d2a55;padding-top:14px;">
+          You're receiving this because you're part of the Christchurch United community.
+          <a href="${params.unsubscribeUrl}" style="color:#8a94b8;text-decoration:underline;">Unsubscribe</a>
+        </p>
+      </div>
+      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Football Club · Christchurch, New Zealand
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: params.replyTo || CUFC_REPLY_TO,
+    subject: params.subject,
+    html,
+  });
+}
+
 /** Registration confirmation — adapts to pay-in-full / deposit+weekly / deposit+balance. */
 export async function sendLeagueConfirmationEmail(params: {
   registrationId: number;
@@ -687,6 +775,56 @@ export async function sendCicInterestNotification(params: {
     from: "Christchurch International Cup <noreply@cicyouth.com>",
     replyTo: params.email || "info@cicyouth.com",
     subject: `New interest registration${name ? ` from ${name}` : ""} — ${params.ageGroups.join(", ") || "CIC"}`,
+    html,
+  });
+}
+
+/** A new volunteer signed up via the cicyouth.com /volunteer form. Notifies staff
+ *  so they can review + allocate them in ClubOS → CIC → Volunteers. CIC-branded. */
+export async function sendCicVolunteerNotification(params: {
+  to: string; firstName: string; lastName?: string; email: string; phone?: string;
+  dateOfBirth?: string; location?: string; availability?: string[]; interests?: string[];
+  isAcademyPlayer?: boolean; academyAgeGroup?: string; notes?: string; sourceUrl?: string;
+}): Promise<boolean> {
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 0;color:#9aa0a6;font-size:13px;width:130px;vertical-align:top;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+  const name = `${params.firstName}${params.lastName ? " " + params.lastName : ""}`.trim();
+  const chip = (t: string) =>
+    `<span style="display:inline-block;background:#2c2d23;color:#e9e4cf;font-weight:600;font-size:12px;padding:4px 10px;border-radius:999px;margin:0 6px 6px 0;">${t}</span>`;
+  const rows = [
+    row("Volunteer", name || "—"),
+    row("Email", params.email || "—"),
+    ...(params.phone ? [row("Phone", params.phone)] : []),
+    ...(params.dateOfBirth ? [row("Date of birth", params.dateOfBirth)] : []),
+    ...(params.location ? [row("City", params.location)] : []),
+    ...(params.isAcademyPlayer ? [row("Academy player", `Yes${params.academyAgeGroup ? ` · ${params.academyAgeGroup}` : ""} — needs volunteer hours`)] : []),
+    ...(params.notes ? [row("Note", params.notes)] : []),
+  ].join("");
+  const avail = (params.availability || []).map(chip).join("");
+  const interests = (params.interests || []).map(chip).join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#c9a43e;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch International Cup</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">New Volunteer Signup</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <table style="width:100%;border-collapse:collapse;">${rows}</table>
+        ${avail ? `<p style="color:#9aa0a6;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin:18px 0 10px;">Availability</p><div>${avail}</div>` : ""}
+        ${interests ? `<p style="color:#9aa0a6;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin:18px 0 10px;">Keen to help with</p><div>${interests}</div>` : ""}
+        ${params.sourceUrl ? `<p style="color:#5a5a5a;font-size:11px;margin:18px 0 0;">via ${params.sourceUrl}</p>` : ""}
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Football Club<br/>Review + allocate in ClubOS → Tournaments → CIC → Volunteers.
+      </p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch International Cup <noreply@cicyouth.com>",
+    replyTo: params.email || "info@cicyouth.com",
+    subject: `New CIC volunteer${name ? ` — ${name}` : ""}${params.isAcademyPlayer ? " (academy)" : ""}`,
     html,
   });
 }
