@@ -14,22 +14,45 @@ declare module "express-session" {
 }
 
 export function setupAuth(app: any) {
+  const isProd = process.env.NODE_ENV === "production";
+
+  // Trust Fly's TLS-terminating proxy (one hop). Required so that (a) `secure`
+  // cookies are actually set — express-session reads X-Forwarded-Proto via
+  // req.secure — and (b) per-IP security (rate limiting / brute-force) keys on
+  // the real client IP from X-Forwarded-For, not the shared proxy IP.
+  app.set("trust proxy", 1);
+
+  // Refuse to boot in production on the known default secret: with it, anyone
+  // who knows the string can forge a valid session cookie for any user. Set a
+  // strong unique value as a Fly secret first:
+  //   fly secrets set SESSION_SECRET=<64+ random chars>
+  const secret = process.env.SESSION_SECRET;
+  if (isProd && (!secret || secret === "cufc-dev-secret")) {
+    throw new Error(
+      "SESSION_SECRET must be set to a strong, unique value in production " +
+        "(fly secrets set SESSION_SECRET=<64+ random chars>). Refusing to boot " +
+        "with the known default — session cookies would be forgeable.",
+    );
+  }
+
   app.use(
     session({
       store: new PgSession({
         conString: process.env.DATABASE_URL,
         createTableIfMissing: true,
       }),
-      secret: process.env.SESSION_SECRET || "cufc-dev-secret",
+      secret: secret || "cufc-dev-secret", // fallback only reachable outside production (guarded above)
       resave: false,
       saveUninitialized: false,
       cookie: {
-        maxAge: 30 * 24 * 60 * 60 * 1000,
+        maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days (was 30)
         httpOnly: true,
-        secure: false,
+        // "auto" → Secure over HTTPS (production, via trust proxy) but not on
+        // plain-http local dev, so login keeps working in both environments.
+        secure: "auto",
         sameSite: "lax",
       },
-    })
+    }),
   );
 }
 

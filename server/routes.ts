@@ -692,7 +692,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "At least one workspace membership is required" });
       }
       const validRoles = ["super_admin", "admin", "team_member", "manager", "coach", "finance", "marketing", "registrar"];
-      const finalGlobalRole = globalRole || "admin";
+      const finalGlobalRole = globalRole || "team_member"; // least-privilege default (was "admin")
       if (!validRoles.includes(finalGlobalRole)) {
         return res.status(400).json({ message: `Invalid global role: ${finalGlobalRole}` });
       }
@@ -713,7 +713,7 @@ export async function registerRoutes(
         active: true,
       });
       for (const m of memberships) {
-        await storage.addUserToOrganization(user.id, m.orgId, m.role, m.tabs ?? null);
+        await storage.addUserToOrganization(user.id, m.orgId, m.role, defaultTabsForRole(m.role, m.tabs));
       }
 
       // Optional welcome email — fire-and-forget
@@ -742,7 +742,7 @@ export async function registerRoutes(
       if (tabs !== undefined && tabs !== null && !Array.isArray(tabs)) {
         return res.status(400).json({ message: "tabs must be null or array of strings" });
       }
-      const created = await storage.addUserToOrganization(userId, orgId, role, tabs ?? null);
+      const created = await storage.addUserToOrganization(userId, orgId, role, defaultTabsForRole(role, tabs));
       res.json(created);
     } catch (error: any) {
       // duplicate membership
@@ -930,6 +930,39 @@ export async function registerRoutes(
     if (!slug) return null;
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug));
     return org ? { id: org.id, slug: org.slug } : null;
+  }
+
+  // --- Phase 1 access-control helpers ------------------------------------
+  // True if the session user may act on records belonging to `programId`'s org
+  // (super_admin bypasses; otherwise they must be a member of that org).
+  // Used to close IDOR on registration-by-id routes: non-members get a 404
+  // (existence hidden), never a 403 that would confirm the record exists.
+  async function userCanAccessProgramOrg(
+    req: Request,
+    programId: number | null | undefined,
+  ): Promise<boolean> {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return false;
+    const user = await storage.getUser(userId);
+    if (user?.role === "super_admin") return true;
+    if (!programId) return false;
+    const program = await storage.getProgram(programId);
+    const orgId = program?.organizationId;
+    if (!orgId) return false; // program not org-scoped → deny to non-super-admins
+    return checkUserOrg(userId, orgId);
+  }
+
+  // Least-privilege default for a new membership's tab whitelist. Admins and
+  // managers legitimately get full access (null = all tabs), but every other
+  // role starts with NO tabs until explicitly granted. An explicit tabs value
+  // (array, or null to mean "full access") from the caller always wins.
+  function defaultTabsForRole(
+    role: string,
+    tabs: string[] | null | undefined,
+  ): string[] | null {
+    if (tabs !== undefined) return tabs;
+    if (role === "admin" || role === "manager") return null;
+    return [];
   }
 
   app.get("/api/admin/stats", requireAuth, async (req, res) => {
@@ -1825,6 +1858,9 @@ export async function registerRoutes(
     try {
       const reg = await storage.getRegistration(parseInt(req.params.id));
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      if (!(await userCanAccessProgramOrg(req, reg.programId))) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
       const items = await storage.getRegistrationItems(reg.id);
       const contact = await storage.getContact(reg.contactId);
       const program = await storage.getProgram(reg.programId);
@@ -1839,6 +1875,9 @@ export async function registerRoutes(
       const regId = parseInt(req.params.id);
       const reg = await storage.getRegistration(regId);
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      if (!(await userCanAccessProgramOrg(req, reg.programId))) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
       await storage.deleteRegistration(regId);
       res.json({ ok: true });
     } catch (error: any) {
@@ -1851,6 +1890,9 @@ export async function registerRoutes(
       const regId = parseInt(req.params.id);
       const reg = await storage.getRegistration(regId);
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      if (!(await userCanAccessProgramOrg(req, reg.programId))) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
 
       if (reg.status === "refunded") {
         return res.status(400).json({ message: "Registration is already fully refunded" });
@@ -2002,6 +2044,9 @@ export async function registerRoutes(
       const regId = parseInt(req.params.id);
       const reg = await storage.getRegistration(regId);
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      if (!(await userCanAccessProgramOrg(req, reg.programId))) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
       if (!reg.stripeRefundId) return res.status(400).json({ message: "No refund to refresh" });
 
       const refund = await retrieveRefund(reg.stripeRefundId);
@@ -2018,6 +2063,9 @@ export async function registerRoutes(
       const regId = parseInt(req.params.id);
       const reg = await storage.getRegistration(regId);
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      if (!(await userCanAccessProgramOrg(req, reg.programId))) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
 
       const { items } = req.body;
       if (!items || !Array.isArray(items)) {
@@ -2223,7 +2271,7 @@ export async function registerRoutes(
   });
 
 
-  app.get("/api/admin/contacts", requireAuth, async (_req, res) => {
+  app.get("/api/admin/contacts", requireAuth, requireTab("contacts"), async (_req, res) => {
     try {
       const allContacts = await storage.getContacts();
       const allChildren = await storage.getAllChildren();
@@ -2264,7 +2312,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/contacts/parent/:id", requireAuth, async (req, res) => {
+  app.get("/api/admin/contacts/parent/:id", requireAuth, requireTab("contacts"), async (req, res) => {
     try {
       const contact = await storage.getContact(parseInt(req.params.id));
       if (!contact) return res.status(404).json({ message: "Contact not found" });
@@ -2281,7 +2329,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/contacts/player/:id", requireAuth, async (req, res) => {
+  app.get("/api/admin/contacts/player/:id", requireAuth, requireTab("contacts"), async (req, res) => {
     try {
       const child = await storage.getChild(parseInt(req.params.id));
       if (!child) return res.status(404).json({ message: "Player not found" });
