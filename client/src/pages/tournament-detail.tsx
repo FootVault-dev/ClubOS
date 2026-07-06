@@ -17,7 +17,9 @@ const YELLOW_SUSPENSION_THRESHOLD = 2;
 
 type Tab = "format" | "schedule" | "groups" | "teams" | "awards";
 
-const FIELDS = ["S1", "S2", "J1", "J2", "J3", "J4", "Mini 1", "Mini 2"];
+// Common pitches (suggestions only) — admins can type ANY value (S3, S4, a
+// different venue, etc.) so a flooded/late-changed pitch can be set on the day.
+const FIELDS = ["S1", "S2", "S3", "S4", "J1", "J2", "J3", "J4", "Mini 1", "Mini 2"];
 
 function FormatTab({ tournament }: { tournament: Tournament }) {
   return (
@@ -619,6 +621,26 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
     },
   });
 
+  // Bulk pitch move — e.g. a pitch floods: move EVERY game on one field to another
+  // in one click (no per-game back-and-forth). Admins can also just type a new
+  // "to" pitch (any venue). "from" blank = games with no pitch set.
+  const [reassignFrom, setReassignFrom] = useState("");
+  const [reassignTo, setReassignTo] = useState("");
+  const bulkReassignMut = useMutation({
+    mutationFn: async () => {
+      const from = reassignFrom.trim(), to = reassignTo.trim();
+      const affected = games.filter(g => (g.field || "") === from);
+      for (const g of affected) await apiRequest("PATCH", `/api/admin/tournament/games/${g.id}`, { field: to || null });
+      return { n: affected.length, from, to };
+    },
+    onSuccess: ({ n, from, to }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId, "games"] });
+      toast({ title: `Moved ${n} game${n === 1 ? "" : "s"}`, description: `${from || "—"} → ${to || "—"}` });
+      setReassignFrom(""); setReassignTo("");
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   // Tournament-level live-stream URL — the default "Watch" destination for the
   // whole age group. Admins mark individual games "Go Live" (below); the app
   // shows a LIVE badge + a Watch button that opens this URL.
@@ -677,7 +699,7 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
         id: editingGameId,
         data: {
           startTime: editTime || null,
-          field: editField === "none" ? null : (editField || null),
+          field: editField.trim() || null,
           gameDate: editDate || null,
         },
       });
@@ -784,17 +806,17 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                 </td>
                 <td className="px-2 py-2.5 text-center">
                   {isEditing ? (
-                    <Select value={editField} onValueChange={setEditField}>
-                      <SelectTrigger className="w-16 h-7 text-xs premium-input text-white" data-testid={`select-field-${game.id}`}>
-                        <SelectValue placeholder="—" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">—</SelectItem>
-                        {FIELDS.map(f => (
-                          <SelectItem key={f} value={f}>{f}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <>
+                      {/* Free-text pitch: pick a common one or type any value (S3, S4, new venue…) */}
+                      <input
+                        list="cic-field-options"
+                        value={editField}
+                        onChange={e => setEditField(e.target.value)}
+                        placeholder="Pitch"
+                        className="w-24 h-7 text-xs premium-input text-white px-2 rounded-md text-center"
+                        data-testid={`input-field-${game.id}`}
+                      />
+                    </>
                   ) : (
                     <span className={`text-xs font-medium ${game.field ? "text-blue-400/70" : "text-white/15"}`} data-testid={`text-field-${game.id}`}>
                       {game.field || "—"}
@@ -978,6 +1000,42 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
         </button>
         <span className="w-full text-[10px] text-white/30 sm:w-auto sm:ml-1">
           Then hit <span className="text-red-300/80">Go Live</span> on whichever game is on camera.
+        </span>
+      </div>
+
+      {/* One shared list of common pitches — powers every "pitch" input below. */}
+      <datalist id="cic-field-options">
+        {FIELDS.map(f => <option key={f} value={f} />)}
+      </datalist>
+
+      {/* Bulk pitch move — a flooded/changed pitch: move every game on it at once. */}
+      <div className="rounded-xl border border-blue-500/15 bg-blue-500/[0.03] px-4 py-3 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 text-xs font-semibold text-blue-300/90">
+          <MapPin className="w-3.5 h-3.5" /> Move pitch
+        </div>
+        <input
+          list="cic-field-options" value={reassignFrom} onChange={e => setReassignFrom(e.target.value)}
+          placeholder="From (e.g. S1)" className="w-32 h-8 text-xs premium-input text-white px-2 rounded-md"
+          data-testid="input-reassign-from"
+        />
+        <span className="text-white/30 text-xs">→</span>
+        <input
+          list="cic-field-options" value={reassignTo} onChange={e => setReassignTo(e.target.value)}
+          placeholder="To (e.g. S3, or new venue)" className="w-44 h-8 text-xs premium-input text-white px-2 rounded-md"
+          data-testid="input-reassign-to"
+        />
+        <button
+          onClick={() => bulkReassignMut.mutate()}
+          disabled={bulkReassignMut.isPending || !reassignTo.trim()}
+          className="text-xs px-3 py-1.5 rounded-md bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 disabled:opacity-40 font-medium"
+          data-testid="button-reassign-pitch"
+        >
+          {bulkReassignMut.isPending
+            ? "Moving…"
+            : `Move all ${reassignFrom.trim() ? `"${reassignFrom.trim()}"` : "unassigned"} games`}
+        </button>
+        <span className="w-full text-[10px] text-white/30 sm:w-auto sm:ml-1">
+          Pitch flooded or changed? Move every game on one pitch to another instantly.
         </span>
       </div>
 
