@@ -2,15 +2,15 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { ShieldCheck, X, Mail, Phone, Image as ImageIcon, Ban, RotateCcw, Download } from "lucide-react";
+import { ShieldCheck, X, Mail, Phone, Image as ImageIcon, Ban, RotateCcw, Download, FileText, Check } from "lucide-react";
 
 // CIC club logo licence consents — the proof records from
 // cicyouth.com/club-logo-agreement (each participating club's signed permission
 // to use their crest on the CIC website + app).
 type Consent = {
-  id: number; clubName: string; repName: string; repRole: string | null;
+  id: number; clubId: number | null; clubName: string; repName: string; repRole: string | null;
   repEmail: string; repPhone: string | null; licenceVersion: string;
-  signatureName: string; logoUrl: string | null; sourceUrl: string | null;
+  signatureName: string; logoUrl: string | null; documentHash: string | null; sourceUrl: string | null;
   ipAddress: string | null; status: string; createdAt: string;
 };
 
@@ -47,7 +47,12 @@ export default function CicLogoConsents() {
           <p className="text-sm text-white/40 mt-1">Signed permissions to use each club's crest on the CIC website &amp; app — from cicyouth.com/club-logo-agreement</p>
         </div>
         {rows.length > 0 && (
-          <button onClick={exportCsv} className="flex items-center gap-2 text-xs font-semibold px-3.5 py-2 rounded-lg bg-white/10 text-white hover:bg-white/15"><Download className="w-3.5 h-3.5" /> Export CSV</button>
+          <div className="flex items-center gap-2">
+            <a href="/api/admin/cic/logo-consents/all.pdf" target="_blank" rel="noreferrer" className="flex items-center gap-2 text-xs font-semibold px-3.5 py-2 rounded-lg bg-amber-500/15 text-amber-200 hover:bg-amber-500/25" title="Merged PDF of every signed licence — the evidence pack for Apple App Store / Google Play review">
+              <FileText className="w-3.5 h-3.5" /> Proof pack (PDF)
+            </a>
+            <button onClick={exportCsv} className="flex items-center gap-2 text-xs font-semibold px-3.5 py-2 rounded-lg bg-white/10 text-white hover:bg-white/15"><Download className="w-3.5 h-3.5" /> Export CSV</button>
+          </div>
         )}
       </div>
 
@@ -86,7 +91,9 @@ export default function CicLogoConsents() {
                 <div className="flex items-center gap-2 mt-1.5">
                   <span className={`text-[10px] px-2 py-0.5 rounded-full capitalize ${r.status === "agreed" ? "bg-green-500/15 text-green-300" : "bg-white/[0.06] text-white/40"}`}>{r.status}</span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/50">Licence v{r.licenceVersion}</span>
-                  {r.logoUrl && <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300">Logo uploaded</span>}
+                  {r.logoUrl && r.clubId && r.status === "agreed"
+                    ? <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-300"><Check className="w-2.5 h-2.5" /> Live on app</span>
+                    : r.logoUrl && <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300">Logo uploaded</span>}
                 </div>
               </div>
             </button>
@@ -140,6 +147,9 @@ function ConsentModal({ c, onClose }: { c: Consent; onClose: () => void }) {
           </p>
         </div>
         <div className="p-4 border-t border-white/5 flex flex-wrap items-center gap-2">
+          <a href={`/api/admin/cic/logo-consents/${c.id}/document.pdf`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-amber-500/15 text-amber-200 hover:bg-amber-500/25" title="The signed licence — proof for App Store / Play review">
+            <FileText className="w-3.5 h-3.5" /> Download signed licence (PDF)
+          </a>
           {c.status === "agreed" ? (
             <button onClick={() => setStatus.mutate("withdrawn")} disabled={setStatus.isPending} className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg text-red-300 hover:bg-red-500/10 ml-auto"><Ban className="w-3.5 h-3.5" /> Mark withdrawn</button>
           ) : (

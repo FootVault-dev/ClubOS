@@ -18196,8 +18196,10 @@ export async function registerRoutes(
       // Build the signed proof PDF now (crest buffer still in hand) and email a
       // copy to the rep + info@cicyouth.com. Never let email/PDF break the submit.
       try {
-        const crestPng = req.file ? new Uint8Array(await sharp(req.file.buffer).resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true }).png().toBuffer()).valueOf() : null;
-        const pdfBytes = await buildConsentPdf(row, crestPng as Uint8Array | null);
+        const crestPng: Uint8Array | null = req.file
+          ? new Uint8Array(await sharp(req.file.buffer).resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true }).png().toBuffer())
+          : null;
+        const pdfBytes = await buildConsentPdf(row, crestPng);
         const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
         const filename = `CIC-Logo-Licence-${consentSlug(clubName)}.pdf`;
         await sendClubLogoLicenceCopy({
@@ -18230,7 +18232,7 @@ export async function registerRoutes(
       const status = String(req.body.status || "");
       if (!["agreed", "withdrawn"].includes(status)) return res.status(400).json({ message: "invalid status" });
       const orgId = await skillsOrgId();
-      await db.update(clubLogoConsents).set({ status }).where(and(eq(clubLogoConsents.id, parseInt(req.params.id)), eq(clubLogoConsents.organizationId, orgId)));
+      await db.update(clubLogoConsents).set({ status }).where(and(eq(clubLogoConsents.id, parseInt(String(req.params.id))), eq(clubLogoConsents.organizationId, orgId)));
       res.json({ ok: true });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
@@ -18264,7 +18266,7 @@ export async function registerRoutes(
     try {
       const orgId = await skillsOrgId();
       const [c] = await db.select().from(clubLogoConsents)
-        .where(and(eq(clubLogoConsents.id, parseInt(req.params.id)), eq(clubLogoConsents.organizationId, orgId)));
+        .where(and(eq(clubLogoConsents.id, parseInt(String(req.params.id))), eq(clubLogoConsents.organizationId, orgId)));
       if (!c) return res.status(404).json({ message: "Not found" });
       const pdf = await buildConsentPdf(c);
       res.setHeader("Content-Type", "application/pdf");

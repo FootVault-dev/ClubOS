@@ -155,11 +155,11 @@ export async function buildLogoLicencePdf(input: LogoLicencePdfInput): Promise<U
   y -= 30;
   const cert = (label: string, value: string) => {
     page.drawText(label, { x: M + 14, y, size: 8.5, font: font, color: MUTE });
-    for (const [i, line] of wrap(value, font, 8.5, CONTENT_W - 170).entries()) {
-      page.drawText(line, { x: M + 150, y: y - i * 11, size: 8.5, font: i === 0 ? bold : font, color: INK });
+    const lines = wrap(value, font, 8.5, CONTENT_W - 170);
+    for (let i = 0; i < lines.length; i++) {
+      page.drawText(lines[i], { x: M + 150, y: y - i * 11, size: 8.5, font: i === 0 ? bold : font, color: INK });
     }
-    const lines = wrap(value, font, 8.5, CONTENT_W - 170).length;
-    y -= Math.max(15, lines * 11 + 4);
+    y -= Math.max(15, lines.length * 11 + 4);
   };
   cert("Signed at", nzDate(input.agreedAt) + `  (${input.agreedAt.toISOString()} UTC)`);
   cert("Licence version", `v${input.licenceVersion}`);

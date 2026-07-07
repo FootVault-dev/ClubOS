@@ -943,6 +943,40 @@ export async function sendClubLogoConsentNotification(params: {
     replyTo: params.repEmail,
     subject: `Club logo licence signed — ${params.clubName}`,
     html,
+    attachments: params.pdfBase64
+      ? [{ filename: params.filename || `CIC-Logo-Licence-${params.clubName}.pdf`, content: params.pdfBase64, contentType: "application/pdf" }]
+      : undefined,
+  });
+}
+
+// The club rep's OWN copy of what they signed — a friendly confirmation with the
+// signed licence PDF attached (their proof, and good faith).
+export async function sendClubLogoLicenceCopy(params: {
+  to: string; clubName: string; repName: string; repRole?: string;
+  licenceVersion: string; agreedAt: string; pdfBase64: string; filename: string;
+}): Promise<boolean> {
+  const firstName = params.repName.split(" ")[0] || params.repName;
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#c9a43e;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch International Cup</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">Thanks, ${firstName} — you're all set</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <p style="color:#e6e6e6;font-size:15px;line-height:1.65;margin:0 0 14px;">Thank you for granting the Christchurch International Cup permission to feature <strong style="color:#ffffff;">${params.clubName}</strong>. Your crest can now appear across the CIC website and app — and, over time, our wider print, signage and merchandise.</p>
+        <p style="color:#9aa0a6;font-size:14px;line-height:1.65;margin:0 0 6px;">Your signed copy of the licence (v${params.licenceVersion}) is attached to this email for your records.</p>
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">Questions? Just reply, or email info@cicyouth.com.</p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch International Cup <noreply@cicyouth.com>",
+    replyTo: "info@cicyouth.com",
+    subject: `Your signed logo licence — ${params.clubName}`,
+    html,
+    attachments: [{ filename: params.filename, content: params.pdfBase64, contentType: "application/pdf" }],
   });
 }
 
