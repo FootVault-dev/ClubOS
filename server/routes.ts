@@ -18097,21 +18097,50 @@ export async function registerRoutes(
   }
   const consentSlug = (s: string) => s.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "club";
 
-  // Public: the participating-club roster + the current licence text (single
-  // source of truth). Powers the club picker AND the live "wall of crests".
+  // Normalise a club name so the draw's messy variants collapse to ONE club:
+  // "Cashmere Technical" == "Cashmere Technical FC"; the four "Christchurch United
+  // FC (Blue/White/2)" → one club. Strips trailing org-type / colour / age-group /
+  // number tokens only (never interior words like "United"), so distinct clubs stay
+  // distinct. Used for both the picker roster AND the auto-populate fan-out.
+  const CLUB_TRAIL_STOP = new Set(["fc","afc","jfc","club","football","association","academy","blue","white","red","black","green","gold","maroon","navy","yellow","orange","purple","boys","girls","i","ii","iii","iv","v"]);
+  const normClub = (s: string): string => {
+    const toks = String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+    while (toks.length > 1 && (CLUB_TRAIL_STOP.has(toks[toks.length - 1]) || /^u?\d+$/.test(toks[toks.length - 1]))) toks.pop();
+    return toks.join(" ") || String(s || "").toLowerCase().trim();
+  };
+
+  // Public: the participating-club roster (deduped from the live CIC draw) + the
+  // current licence text (single source of truth). Powers the club picker so any
+  // rep can type and find their club exactly as it is in the tournament.
   app.options("/api/public/cic/clubs", (req, res) => { setCicCors(req, res); res.sendStatus(204); });
   app.get("/api/public/cic/clubs", async (req, res) => {
     setCicCors(req, res);
     try {
       const orgId = await skillsOrgId();
-      const clubs = await storage.getClubs(orgId);
-      res.json({
-        licence: CURRENT_LOGO_LICENCE,
-        clubs: clubs
-          .filter((c) => c.active !== false)
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map((c) => ({ id: c.id, name: c.name, shortName: c.shortName ?? null, logoUrl: c.logoUrl ?? null })),
-      });
+      // Every club that actually appears in a CIC 2026 tournament team.
+      const drawRows = (await db.execute(sql`
+        SELECT DISTINCT cl.id, cl.name, cl.logo_url
+        FROM tournament_teams tt
+        JOIN tournaments tr ON tr.id = tt.tournament_id
+        JOIN clubs cl ON cl.id = tt.club_id
+        WHERE tr.organization_id = ${orgId}
+      `)).rows as { id: number; name: string; logo_url: string | null }[];
+      // Collapse duplicate club rows to one clean entry per real club.
+      const groups = new Map<string, { id: number; name: string; logoUrl: string | null }[]>();
+      for (const r of drawRows) {
+        const k = normClub(r.name);
+        const g = groups.get(k) || [];
+        g.push({ id: r.id, name: r.name, logoUrl: r.logo_url });
+        groups.set(k, g);
+      }
+      type Variant = { id: number; name: string; logoUrl: string | null };
+      const clubs = Array.from(groups.values()).map((variants: Variant[]) => {
+        // Representative = prefer a variant that already has a logo, then the
+        // shortest (cleanest) name — usually the canonical "Cashmere Technical".
+        variants.sort((a, b) => (Number(!!b.logoUrl) - Number(!!a.logoUrl)) || (a.name.length - b.name.length));
+        return { id: variants[0].id, name: variants[0].name, logoUrl: variants.find((v) => v.logoUrl)?.logoUrl ?? null };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+      res.json({ licence: CURRENT_LOGO_LICENCE, clubs });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -18134,11 +18163,12 @@ export async function registerRoutes(
       const orgId = await skillsOrgId(); // CIC org
 
       // Resolve which club this consent is for: prefer the picked clubId, else an
-      // exact name/short-name match. A resolved club is what lets us auto-populate.
+      // exact then normalized name match. A resolved club is what lets us auto-populate.
       const orgClubs = await storage.getClubs(orgId);
-      let matchedClub =
+      const matchedClub =
         (!isNaN(clubIdRaw) ? orgClubs.find((c) => c.id === clubIdRaw) : undefined) ||
-        orgClubs.find((c) => c.name.toLowerCase() === clubName.toLowerCase() || (c.shortName || "").toLowerCase() === clubName.toLowerCase());
+        orgClubs.find((c) => c.name.toLowerCase() === clubName.toLowerCase() || (c.shortName || "").toLowerCase() === clubName.toLowerCase()) ||
+        orgClubs.find((c) => normClub(c.name) === normClub(clubName));
 
       // Optional logo upload → object storage (same pipeline as club logos).
       let logoUrl: string | null = null;
@@ -18184,13 +18214,20 @@ export async function registerRoutes(
         createdAt: agreedAt,
       }).returning();
 
-      // AUTO-POPULATE: put the crest on the matched club → the public tournament
-      // API cascades club.logoUrl to every one of their teams, so it appears on
-      // the app + website with no manual step. Only when a new crest was uploaded.
+      // AUTO-POPULATE: the draw has duplicate club rows per real club, so set the
+      // crest on EVERY matching variant that doesn't already have a logo. The public
+      // tournament API cascades club.logoUrl → all their teams, so it appears on the
+      // app + website with no manual step. Never overwrite an existing (curated) logo.
       let autoApplied = false;
-      if (matchedClub && logoUrl) {
-        try { await storage.updateClub(matchedClub.id, { logoUrl } as any); autoApplied = true; }
-        catch (e) { console.error("[CIC logo consent] auto-populate failed:", e); }
+      if (matchedClub) {
+        try {
+          if (logoUrl) {
+            const key = normClub(matchedClub.name);
+            const targets = orgClubs.filter((c) => normClub(c.name) === key && !c.logoUrl);
+            for (const c of targets) await storage.updateClub(c.id, { logoUrl } as any);
+          }
+          autoApplied = !!(logoUrl || matchedClub.logoUrl);
+        } catch (e) { console.error("[CIC logo consent] auto-populate failed:", e); }
       }
 
       // Build the signed proof PDF now (crest buffer still in hand) and email a
