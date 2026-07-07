@@ -18,7 +18,7 @@ import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPasswor
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCicVolunteerNotification } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -37,6 +37,9 @@ import sharp from "sharp";
 import { detectDnsProvider, getCnameHost, getApexDomain } from "./dns/detectProvider";
 import { isGoDaddyConfigured, checkConnection as checkGoDaddyConnection, setCnameRecord as setGoDaddyCname, ownsDomain as goDaddyOwnsDomain, getRecords as getGoDaddyRecords, setForwarding as setGoDaddyForwarding, getForwarding as getGoDaddyForwarding } from "./dns/godaddyClient";
 import { mountMcpServer } from "./mcp";
+import { CURRENT_LOGO_LICENCE, canonicalConsentText } from "./logo-licence";
+import { buildLogoLicencePdf } from "./logo-licence-pdf";
+import { PDFDocument as PdfLibDocument } from "pdf-lib";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -18059,9 +18062,59 @@ export async function registerRoutes(
   });
 
   // ── CIC club logo licence consent (cicyouth.com/club-logo-agreement) ──
-  // A participating club's rep signs, granting CIC use of their crest on the
-  // website + app. Optional logo upload. Stored as the auditable proof record +
-  // emailed to info@cicyouth.com. Viewable in Tournaments → CIC → Logo Consents.
+  // A participating club's rep picks their club + signs, granting us a broad,
+  // perpetual, non-exclusive licence to use their crest across app/website/print/
+  // signage/merch (see server/logo-licence.ts). On submit we (1) store the signed
+  // proof record + a SHA-256 fingerprint, (2) AUTO-POPULATE the crest onto the
+  // matched club → cascades to all their teams on the app + website, and (3) email
+  // a signed-PDF copy to the rep and to info@cicyouth.com. The PDF is the evidence
+  // we hold rights to each third-party crest for Apple App Store / Play review.
+
+  // Helper: fetch a stored crest (public object path) and convert to PNG bytes so
+  // it can be embedded in the proof PDF. Best-effort — never blocks PDF output.
+  async function crestPngForConsent(logoUrl: string | null): Promise<Uint8Array | null> {
+    if (!logoUrl) return null;
+    try {
+      const base = process.env.APP_URL || "https://app.usg.co.nz";
+      const url = /^https?:\/\//.test(logoUrl) ? logoUrl : `${base}${logoUrl.startsWith("/") ? "" : "/"}${logoUrl}`;
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      const buf = Buffer.from(await r.arrayBuffer());
+      return new Uint8Array(await sharp(buf).png().toBuffer());
+    } catch { return null; }
+  }
+  // Helper: build the signed-licence proof PDF for a stored consent row.
+  async function buildConsentPdf(c: typeof clubLogoConsents.$inferSelect, crestPng?: Uint8Array | null): Promise<Uint8Array> {
+    const png = crestPng !== undefined ? crestPng : await crestPngForConsent(c.logoUrl);
+    return buildLogoLicencePdf({
+      licence: CURRENT_LOGO_LICENCE,
+      consentId: c.id, clubName: c.clubName, repName: c.repName, repRole: c.repRole,
+      repEmail: c.repEmail, repPhone: c.repPhone, signatureName: c.signatureName,
+      licenceVersion: c.licenceVersion, agreedAt: c.createdAt, ipAddress: c.ipAddress,
+      userAgent: c.userAgent, documentHash: c.documentHash || "(not recorded)",
+      logoPngBytes: png,
+    });
+  }
+  const consentSlug = (s: string) => s.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "club";
+
+  // Public: the participating-club roster + the current licence text (single
+  // source of truth). Powers the club picker AND the live "wall of crests".
+  app.options("/api/public/cic/clubs", (req, res) => { setCicCors(req, res); res.sendStatus(204); });
+  app.get("/api/public/cic/clubs", async (req, res) => {
+    setCicCors(req, res);
+    try {
+      const orgId = await skillsOrgId();
+      const clubs = await storage.getClubs(orgId);
+      res.json({
+        licence: CURRENT_LOGO_LICENCE,
+        clubs: clubs
+          .filter((c) => c.active !== false)
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((c) => ({ id: c.id, name: c.name, shortName: c.shortName ?? null, logoUrl: c.logoUrl ?? null })),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   app.options("/api/public/cic/logo-consent", (req, res) => { setCicCors(req, res); res.sendStatus(204); });
   app.post("/api/public/cic/logo-consent", clubLogoUpload.single("logo"), async (req, res) => {
     setCicCors(req, res);
@@ -18071,12 +18124,21 @@ export async function registerRoutes(
       const repRole = String(req.body.repRole || "").trim();
       const repEmail = String(req.body.repEmail || "").trim();
       const repPhone = String(req.body.repPhone || "").trim();
-      const licenceVersion = String(req.body.licenceVersion || "1.0").trim();
+      const clubIdRaw = parseInt(String(req.body.clubId || ""), 10);
       const agreed = String(req.body.agreed || "") === "true";
+      // Version is always the server's current licence — the client can't downgrade it.
+      const licenceVersion = CURRENT_LOGO_LICENCE.version;
       if (!clubName || !repName || !/.+@.+\..+/.test(repEmail) || !agreed) {
         return res.status(400).json({ message: "Please add your club, name, a valid email, and confirm the agreement." });
       }
       const orgId = await skillsOrgId(); // CIC org
+
+      // Resolve which club this consent is for: prefer the picked clubId, else an
+      // exact name/short-name match. A resolved club is what lets us auto-populate.
+      const orgClubs = await storage.getClubs(orgId);
+      let matchedClub =
+        (!isNaN(clubIdRaw) ? orgClubs.find((c) => c.id === clubIdRaw) : undefined) ||
+        orgClubs.find((c) => c.name.toLowerCase() === clubName.toLowerCase() || (c.shortName || "").toLowerCase() === clubName.toLowerCase());
 
       // Optional logo upload → object storage (same pipeline as club logos).
       let logoUrl: string | null = null;
@@ -18102,25 +18164,54 @@ export async function registerRoutes(
         }
       }
 
+      // Freeze the moment of signing → the same timestamp is hashed AND stored, so
+      // the proof PDF regenerates identically forever.
+      const agreedAt = new Date();
+      const documentHash = crypto
+        .createHash("sha256")
+        .update(canonicalConsentText({ licenceVersion, clubName, repName, repRole: repRole || null, repEmail, agreedAtIso: agreedAt.toISOString() }))
+        .digest("hex");
+
       const [row] = await db.insert(clubLogoConsents).values({
         organizationId: orgId,
+        clubId: matchedClub?.id ?? null,
         clubName, repName, repRole: repRole || null, repEmail, repPhone: repPhone || null,
-        licenceVersion, signatureName: repName, logoUrl,
+        licenceVersion, signatureName: repName, logoUrl, documentHash,
         sourceUrl: String(req.body.sourceUrl || "cicyouth.com/club-logo-agreement"),
         ipAddress: ((req.headers["x-forwarded-for"] as string) || req.ip || "").split(",")[0].trim() || null,
         userAgent: String(req.headers["user-agent"] || "").slice(0, 300) || null,
         status: "agreed",
+        createdAt: agreedAt,
       }).returning();
 
+      // AUTO-POPULATE: put the crest on the matched club → the public tournament
+      // API cascades club.logoUrl to every one of their teams, so it appears on
+      // the app + website with no manual step. Only when a new crest was uploaded.
+      let autoApplied = false;
+      if (matchedClub && logoUrl) {
+        try { await storage.updateClub(matchedClub.id, { logoUrl } as any); autoApplied = true; }
+        catch (e) { console.error("[CIC logo consent] auto-populate failed:", e); }
+      }
+
+      // Build the signed proof PDF now (crest buffer still in hand) and email a
+      // copy to the rep + info@cicyouth.com. Never let email/PDF break the submit.
       try {
+        const crestPng = req.file ? new Uint8Array(await sharp(req.file.buffer).resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true }).png().toBuffer()).valueOf() : null;
+        const pdfBytes = await buildConsentPdf(row, crestPng as Uint8Array | null);
+        const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
+        const filename = `CIC-Logo-Licence-${consentSlug(clubName)}.pdf`;
+        await sendClubLogoLicenceCopy({
+          to: repEmail, clubName, repName, repRole: repRole || undefined, licenceVersion,
+          agreedAt: agreedAt.toISOString(), pdfBase64, filename,
+        });
         await sendClubLogoConsentNotification({
           to: "info@cicyouth.com", clubName, repName, repRole: repRole || undefined, repEmail,
           repPhone: repPhone || undefined, licenceVersion, logoUploaded: !!logoUrl,
-          agreedAt: new Date().toISOString(),
+          agreedAt: agreedAt.toISOString(), pdfBase64, filename,
         });
-      } catch (e) { console.error("[CIC logo consent] email failed:", e); }
+      } catch (e) { console.error("[CIC logo consent] proof email failed:", e); }
 
-      res.json({ ok: true, id: row.id });
+      res.json({ ok: true, id: row.id, autoApplied });
     } catch (e: any) { console.error("[CIC logo consent] error:", e); res.status(400).json({ message: e.message }); }
   });
 
@@ -18142,6 +18233,44 @@ export async function registerRoutes(
       await db.update(clubLogoConsents).set({ status }).where(and(eq(clubLogoConsents.id, parseInt(req.params.id)), eq(clubLogoConsents.organizationId, orgId)));
       res.json({ ok: true });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Admin: download ALL signed licences as a single merged PDF (the evidence pack
+  // to hand an App Store / Play reviewer). Registered before :id to avoid capture.
+  app.get("/api/admin/cic/logo-consents/all.pdf", requireAuth, async (_req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const rows = await db.select().from(clubLogoConsents)
+        .where(and(eq(clubLogoConsents.organizationId, orgId), eq(clubLogoConsents.status, "agreed")))
+        .orderBy(clubLogoConsents.clubName);
+      if (rows.length === 0) return res.status(404).json({ message: "No signed consents yet." });
+      const merged = await PdfLibDocument.create();
+      for (const c of rows) {
+        // Skip crest embedding in the bulk pack for speed — the text is the proof.
+        const bytes = await buildConsentPdf(c, null);
+        const src = await PdfLibDocument.load(bytes);
+        const pages = await merged.copyPages(src, src.getPageIndices());
+        pages.forEach((p) => merged.addPage(p));
+      }
+      const out = await merged.save();
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="CIC-Logo-Licences-all.pdf"`);
+      res.send(Buffer.from(out));
+    } catch (e: any) { console.error("[CIC logo consent] all.pdf error:", e); res.status(500).json({ message: e.message }); }
+  });
+
+  // Admin: download a single signed licence proof PDF.
+  app.get("/api/admin/cic/logo-consents/:id/document.pdf", requireAuth, async (req, res) => {
+    try {
+      const orgId = await skillsOrgId();
+      const [c] = await db.select().from(clubLogoConsents)
+        .where(and(eq(clubLogoConsents.id, parseInt(req.params.id)), eq(clubLogoConsents.organizationId, orgId)));
+      if (!c) return res.status(404).json({ message: "Not found" });
+      const pdf = await buildConsentPdf(c);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="CIC-Logo-Licence-${consentSlug(c.clubName)}.pdf"`);
+      res.send(Buffer.from(pdf));
+    } catch (e: any) { console.error("[CIC logo consent] document.pdf error:", e); res.status(500).json({ message: e.message }); }
   });
 
   // ── CUGC (Christchurch United Gymnastics Club) website contact → CUGC inbox ──

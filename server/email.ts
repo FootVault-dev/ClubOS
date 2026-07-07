@@ -908,6 +908,7 @@ export async function sendChatReplyNotification(params: {
 export async function sendClubLogoConsentNotification(params: {
   to: string; clubName: string; repName: string; repRole?: string; repEmail: string;
   repPhone?: string; licenceVersion: string; logoUploaded?: boolean; agreedAt: string;
+  pdfBase64?: string; filename?: string;
 }): Promise<boolean> {
   const row = (label: string, value: string) =>
     `<tr><td style="padding:6px 0;color:#9aa0a6;font-size:13px;width:130px;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;

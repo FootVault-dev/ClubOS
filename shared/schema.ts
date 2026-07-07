@@ -1125,6 +1125,7 @@ export const clubLogoConsents = pgTable("club_logo_consents", {
   licenceVersion: text("licence_version").notNull(),
   signatureName: text("signature_name").notNull(), // typed-name e-signature
   logoUrl: text("logo_url"),                        // optional uploaded logo
+  documentHash: text("document_hash"),              // SHA-256 of exact signed licence text (proof fingerprint)
   sourceUrl: text("source_url"),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
