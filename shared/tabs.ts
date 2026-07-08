@@ -63,6 +63,8 @@ const campsTabs: TabDef[] = [
   { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
+  // Marketing Suite — email/SMS marketing, launched dark (SUPER_ADMIN_ONLY_TABS below).
+  { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -81,6 +83,7 @@ const venueTabs: TabDef[] = [
   { slug: "addons", title: "Add-ons", url: "/admin/addons" },
   { slug: "people", title: "People & Access", url: "/admin/people" },
   { slug: "payments", title: "Payments", url: "/admin/payments" },
+  { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -100,6 +103,7 @@ const leagueTabs: TabDef[] = [
   { slug: "loyalty", title: "Loyalty", url: "/admin/loyalty" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "business-plan", title: "Business Plan", url: "/admin/business-plan" },
+  { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -123,6 +127,7 @@ const tournamentTabs: TabDef[] = [
   { slug: "cic-watch", title: "Watch", url: "/admin/cic-watch" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
+  { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -137,6 +142,7 @@ const gymnasticsTabs: TabDef[] = [
   { slug: "cugc-free-sessions", title: "Free Sessions", url: "/admin/cugc-free-sessions" },
   { slug: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics" },
   { slug: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox" },
+  { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -154,6 +160,7 @@ const groupTabs: TabDef[] = [
   { slug: "grants", title: "Grants", url: "/admin/grants" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
   { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
+  { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -171,6 +178,7 @@ const printsTabs: TabDef[] = [
   { slug: "analytics", title: "Analytics", url: "/admin/print-analytics" },
   { slug: "landing", title: "Landing Pages", url: "/admin/print-landing" },
   { slug: "email", title: "Email Sender", url: "/admin/print-email" },
+  { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "integrations", title: "Integrations", url: "/admin/integrations", secondary: true },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
@@ -231,6 +239,7 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.
   "cic-watch", // OTT streaming platform control (watch.cicyouth.com) — launched dark to Daniel. Remove to open to Isaac/managers.
   "club-dossier", // Sandbox — first-party people intelligence (PII across all programs). Daniel only.
+  "marketing", // Marketing Suite v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
 ]);
 
 /**
