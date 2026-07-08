@@ -17,6 +17,7 @@ import { requireAuth, requireTab } from "../auth";
 import {
   organizations, mktLists, mktListMembers, mktSegments, mktCampaigns, mktProfiles,
   mktConsent, mktSuppressions, mktEvents, mktMetrics, mktEmailMessages, mktEmailLinkClicks, mktConversions,
+  mktTemplates,
 } from "@shared/schema";
 import { registerMarketingWebhook } from "./webhook";
 import { registerMarketingPublicRoutes } from "./public-routes";
@@ -486,6 +487,133 @@ export function registerMarketingRoutes(app: Express): void {
         revenuePerRecipient: deliveredN ? revenue / deliveredN : 0,
         topCampaigns,
       });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ═══════════════════════════ Templates (Phase D) ═══════════════════════════
+  //
+  // Reusable email designs + per-brand synced header/footer blocks, all in the
+  // existing mkt_templates table (no schema change). Conventions:
+  //   • block_tree holds the full builder result { doc, html, text } — the Tiptap
+  //     doc is the source of truth, html is the render snapshot (never authored raw).
+  //   • kind = 'template' (a saved design) | 'synced_block' (a workspace-wide
+  //     reusable block, edited once, injected everywhere).
+  //   • Synced blocks use RESERVED names per workspace: "__synced_header__" and
+  //     "__synced_footer__" — that name convention IS the registry (no new column).
+  // All routes are ...gate (requireAuth + requireTab("marketing")) and scoped to
+  // the X-Workspace-Slug workspace, mirroring the Phase B patterns above.
+
+  const SYNCED_NAME: Record<string, string> = {
+    header: "__synced_header__",
+    footer: "__synced_footer__",
+  };
+
+  // List templates (optionally filter by ?kind= and ?channel=).
+  app.get("/api/admin/marketing/templates", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const kind = typeof req.query.kind === "string" ? req.query.kind : null;
+      const channel = typeof req.query.channel === "string" ? req.query.channel : null;
+      const rows = await db.select().from(mktTemplates).where(and(
+        eq(mktTemplates.workspaceId, org.id),
+        kind ? eq(mktTemplates.kind, kind) : sql`true`,
+        channel ? eq(mktTemplates.channel, channel) : sql`true`,
+      )).orderBy(desc(mktTemplates.updatedAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Create a template.
+  app.post("/api/admin/marketing/templates", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const name = String(req.body?.name || "").trim();
+      if (!name) return res.status(400).json({ message: "Name required" });
+      const [row] = await db.insert(mktTemplates).values({
+        workspaceId: org.id,
+        name,
+        channel: req.body?.channel === "sms" ? "sms" : "email",
+        kind: req.body?.kind === "synced_block" ? "synced_block" : "template",
+        subject: req.body?.subject ?? null,
+        blockTree: req.body?.blockTree ?? null,
+        createdBy: (req.session as any)?.userId ?? null,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Update a template (name / subject / blockTree).
+  app.patch("/api/admin/marketing/templates/:id", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const id = num(req.params.id);
+      if (id == null) return res.status(400).json({ message: "Bad id" });
+      const patch: Record<string, unknown> = { updatedAt: new Date() };
+      if (typeof req.body?.name === "string") patch.name = req.body.name.trim();
+      if ("subject" in (req.body ?? {})) patch.subject = req.body.subject ?? null;
+      if ("blockTree" in (req.body ?? {})) patch.blockTree = req.body.blockTree ?? null;
+      const [row] = await db.update(mktTemplates).set(patch)
+        .where(and(eq(mktTemplates.id, id), eq(mktTemplates.workspaceId, org.id))).returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Delete a template.
+  app.delete("/api/admin/marketing/templates/:id", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const id = num(req.params.id);
+      if (id == null) return res.status(400).json({ message: "Bad id" });
+      await db.delete(mktTemplates).where(and(eq(mktTemplates.id, id), eq(mktTemplates.workspaceId, org.id)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Get this workspace's synced header + footer blocks (by reserved name).
+  app.get("/api/admin/marketing/synced-blocks", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const rows = await db.select().from(mktTemplates).where(and(
+        eq(mktTemplates.workspaceId, org.id),
+        eq(mktTemplates.kind, "synced_block"),
+        inArray(mktTemplates.name, [SYNCED_NAME.header, SYNCED_NAME.footer]),
+      ));
+      res.json({
+        header: rows.find((r) => r.name === SYNCED_NAME.header) ?? null,
+        footer: rows.find((r) => r.name === SYNCED_NAME.footer) ?? null,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Upsert the synced header or footer (slot = header|footer) for this workspace.
+  app.put("/api/admin/marketing/synced-blocks/:slot", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const name = SYNCED_NAME[String(req.params.slot)];
+      if (!name) return res.status(400).json({ message: "slot must be header or footer" });
+      const [existing] = await db.select({ id: mktTemplates.id }).from(mktTemplates).where(and(
+        eq(mktTemplates.workspaceId, org.id), eq(mktTemplates.name, name), eq(mktTemplates.kind, "synced_block"),
+      )).limit(1);
+      let row;
+      if (existing) {
+        [row] = await db.update(mktTemplates).set({
+          blockTree: req.body?.blockTree ?? null, subject: req.body?.subject ?? null, updatedAt: new Date(),
+        }).where(eq(mktTemplates.id, existing.id)).returning();
+      } else {
+        [row] = await db.insert(mktTemplates).values({
+          workspaceId: org.id, name, kind: "synced_block", channel: "email",
+          subject: req.body?.subject ?? null, blockTree: req.body?.blockTree ?? null,
+          createdBy: (req.session as any)?.userId ?? null,
+        }).returning();
+      }
+      res.json(row);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 }
