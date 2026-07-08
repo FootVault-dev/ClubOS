@@ -100,15 +100,95 @@ npx tsx --env-file=.env server/marketing/ingest.ts --workspace 5
 Or call it in code: `import { runMarketingIngest } from "./marketing/ingest";`
 → `await runMarketingIngest({ dryRun: true })`.
 
-## What Phase B builds next
+## Phase B — send engine + event pipeline (SHIPPED)
 
-- **`resend-client.ts`** — one shared Resend client (idempotency keys, rate limit,
-  RFC 8058 `List-Unsubscribe` + `List-Unsubscribe-Post`, plaintext part).
-- **graphile-worker** bootstrap + durable campaign send jobs (survive deploy/crash).
-- **`POST /api/webhooks/resend`** — Svix HMAC verify, idempotent on `svix-id`,
-  forward-only status, machine/bot tagging, auto-suppress on bounce/complaint →
-  writes `mkt_email_events` / `mkt_suppressions`.
-- One-click unsubscribe handler + hosted preference centre (per-brand).
-- Campaign CRUD + send/schedule under `/api/admin/marketing/*` with
-  `requireTab("marketing")` and a real `organizationId` — replacing the four
-  copy-paste mailers.
+Phase B turns the foundation into a working, durable, compliant send engine and
+the honest analytics warehouse. New deps (pinned, no `^`): **`graphile-worker`
+0.17.3** (durable Postgres job runner) + **`svix` 1.96.1** (webhook verification).
+
+### Architecture
+
+```
+  ┌── admin API (requireTab("marketing"), workspace-scoped) ──────────────┐
+  │  routes.ts  → lists / segments / campaigns / profiles / dashboard     │
+  │  send-now / schedule ─┐                       ▲ analytics             │
+  └───────────────────────┼───────────────────────┼──────────────────────┘
+                           │ enqueue               │ read
+                           ▼                       │
+  worker.ts (graphile-worker, survives deploy/crash)
+   campaign:send ─► resolveAudience ─► filterSendable (THE gate) ─► snapshot
+      mkt_email_messages (queued) ─► fan out campaign:send_batch (50) ─► sendMarketingEmail
+      ─► campaign:finalize (roll up counts → status 'sent')
+                           │ POST api.resend.com/emails
+                           ▼                        Resend  ──Svix──►  webhook.ts
+   resend-client.ts (idempotency-key, ~2/s token bucket, 429 back-off,       │
+     RFC 8058 List-Unsubscribe headers, from ALWAYS via fromForOrg)          ▼
+                                            POST /api/webhooks/resend (Svix HMAC verify)
+                                              ─► mkt_email_events (idempotent on svix_id)
+                                              ─► forward-only status + machine/bot tagging
+                                              ─► complaint/hard-bounce → suppress() global
+  public-routes.ts (no auth, opaque HMAC tokens):
+    GET  /api/public/marketing/unsubscribe            branded confirm page
+    POST /api/public/marketing/unsubscribe            confirm
+    POST /api/public/marketing/unsubscribe/oneclick   RFC 8058 (instant, 200, no gate)
+    GET/POST /api/public/marketing/preferences        per-brand + category opt-down + pause 30d
+
+  events.ts  trackEvent() → mkt_metrics/mkt_profiles/mkt_events (deduped)
+             attributeConversion() → 3-day last-touch NON-bot click → mkt_conversions
+```
+
+### The suppression gate (never bypassed)
+
+`suppression.ts → filterSendable(profileIds, {workspaceId, channel, isMarketing, category?, listId?})`
+is the ONE gate. **Every** send path (campaign orchestrator, test send, future
+flows/SMS) resolves recipients through it. A recipient is sendable only if it has
+the channel identifier AND consent (marketing ⇒ `sub_state='subscribed'` AND
+`legal_basis='express'`; operational ⇒ basis ∈ {express,inferred} and not
+unsubscribed) AND is NOT in `mkt_suppressions` at any applicable scope
+(global / brand / category / list), ignoring expired suppressions (pause-30d).
+`suppress()` is the write side used by the webhook + unsub handlers (inserts the
+row + downgrades consent to `opted_out`).
+
+### New env vars
+
+| Var | Purpose | If missing |
+|---|---|---|
+| `RESEND_WEBHOOK_SECRET` | Svix `whsec_…` signing secret for `POST /api/webhooks/resend` | **prod: endpoint rejects (500).** dev: accepts unverified with a warning |
+| `MARKETING_TOKEN_SECRET` | HMAC secret for opaque unsub/preference tokens | falls back to `SESSION_SECRET` → `STRIPE_WEBHOOK_SECRET` → dev default (mirrors `mflUnsubToken`) |
+| `MARKETING_PUBLIC_BASE_URL` | Public base for links in emails (default `https://app.usg.co.nz`) | default used |
+| `MARKETING_SEND_RATE_PER_SEC` | Resend token-bucket rate (default `2`) | default used |
+| `MARKETING_WORKER_CONCURRENCY` | graphile-worker concurrency (default `3`) | default used |
+| `MARKETING_WORKER_DISABLED=1` | Kill switch — don't start the worker | worker starts |
+
+`RESEND_API_KEY` (already in `.env`) is reused for sending.
+
+### Deploy-day: register the Resend webhook
+
+1. Apply migrations **before** deploy (never `db:push`):
+   `psql "$DATABASE_URL" -f migrations/2026-07-09_marketing_suite.sql` (Phase A, if
+   not already applied) then `-f migrations/2026-07-09_marketing_suite_phase_b.sql`.
+2. In the Resend dashboard → **Webhooks → Add Endpoint**:
+   `https://app.usg.co.nz/api/webhooks/resend`, subscribe to the email events
+   (`email.sent/delivered/delivery_delayed/bounced/complained/opened/clicked/failed/suppressed`).
+3. Copy the endpoint's **Signing Secret** (`whsec_…`) into `.env` as
+   `RESEND_WEBHOOK_SECRET`, and enable **open + click tracking** on the sending domains.
+
+### Worker notes
+
+- **graphile-worker creates and migrates its OWN `graphile_worker` schema on
+  start** (additive; not in our migration files). This happens the first time the
+  server boots with the worker enabled — expect a one-off schema install.
+- The worker starts from `server/index.ts` via `startMarketingWorker()`. It
+  **self-guards**: no `DATABASE_URL` or `MARKETING_WORKER_DISABLED=1` → it no-ops,
+  and any start error is caught so server boot never fails (only sends won't fire).
+- Scheduled sends enqueue `campaign:send` with `runAt = scheduled_at` +
+  `jobKey`; **cancel** just flips the campaign status and the orchestrator bails
+  when the job fires. The orchestrator is **idempotent** (the
+  `(campaign_id, profile_id)` unique index + `ON CONFLICT DO NOTHING`) so a crash
+  mid-send resumes cleanly instead of double-mailing.
+
+### Schema appends this phase (additive only)
+
+- `mkt_email_messages` unique index `(campaign_id, profile_id)` — orchestrator idempotency.
+- `mkt_campaigns.body_html` — compiled send-ready HTML (Phase D's serializer fills it from `block_tree`).
+- `mkt_suppressions.expires_at` — powers the preference-centre "pause 30 days".

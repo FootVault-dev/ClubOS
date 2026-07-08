@@ -3992,6 +3992,10 @@ export const mktSuppressions = pgTable("mkt_suppressions", {
   listId: integer("list_id"),
   reason: mktSuppressionReasonEnum("reason").notNull().default("manual"),
   source: text("source"),
+  // Phase B: a NULL expiry = permanent. A future expiry powers "pause 30 days"
+  // (preference centre) — the send gate ignores suppressions whose expires_at has
+  // passed, so the profile silently resumes without a cron un-suppress.
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   // NULLS NOT DISTINCT so an email-only global suppression can't be inserted twice
@@ -4113,6 +4117,10 @@ export const mktCampaigns = pgTable("mkt_campaigns", {
   fromEmail: text("from_email"),
   replyTo: text("reply_to"),
   templateId: integer("template_id").references(() => mktTemplates.id, { onDelete: "set null" }),
+  // Phase B: the compiled, ready-to-send email HTML. The Tiptap block tree lives on
+  // the linked template (block_tree); Phase D's serializer populates this. Until then
+  // the send engine reads body_html directly, so the pipeline is end-to-end today.
+  bodyHtml: text("body_html"),
   // {include:[…], exclude:[…]} of list/segment refs.
   audience: jsonb("audience").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   smartSend: boolean("smart_send").notNull().default(true),
@@ -4228,6 +4236,11 @@ export const mktEmailMessages = pgTable("mkt_email_messages", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   resendIdUnq: uniqueIndex("mkt_email_messages_resend_id_unq").on(t.resendEmailId).where(sql`${t.resendEmailId} IS NOT NULL`),
+  // Phase B: idempotency for the campaign orchestrator — a re-run of `campaign:send`
+  // re-inserts the same (campaign_id, profile_id) rows with ON CONFLICT DO NOTHING,
+  // so nobody is double-mailed. NULLS DISTINCT (default) means flow messages
+  // (campaign_id NULL) never collide, so this never blocks the flow send path.
+  campaignProfileUnq: uniqueIndex("mkt_email_messages_campaign_profile_unq").on(t.campaignId, t.profileId),
   campaignIdx: index("mkt_email_messages_campaign_idx").on(t.campaignId),
   flowIdx: index("mkt_email_messages_flow_idx").on(t.flowId),
   profileIdx: index("mkt_email_messages_profile_idx").on(t.profileId),
