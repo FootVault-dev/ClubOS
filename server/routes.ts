@@ -17344,7 +17344,10 @@ export async function registerRoutes(
   // Public endpoints are CORS-open to the brand sites; admin endpoints are session-
   // gated. Reusable across brands by adding a CHAT_BRANDS entry + pointing that
   // brand's widget at /api/public/chat/* (see LiveChatWidget in the brand site).
-  type ChatBrand = { orgSlug: string; brandName: string; fromEmail: string; notifyEmail: string; accent: string; siteUrl: string };
+  // adminPath = the ClubOS admin tab this brand's chats are managed in
+  // (app.usg.co.nz/admin/{adminPath}). Each brand's Live Chat tab is org-scoped,
+  // so a workspace only ever sees its own brand's conversations.
+  type ChatBrand = { orgSlug: string; brandName: string; fromEmail: string; notifyEmail: string; accent: string; siteUrl: string; adminPath: string };
   const CHAT_BRANDS: Record<string, ChatBrand> = {
     cicyouth: {
       orgSlug: "christchurch-international-cup",
@@ -17353,6 +17356,7 @@ export async function registerRoutes(
       notifyEmail: "info@cicyouth.com",
       accent: "#c9a43e",
       siteUrl: "https://cicyouth.com",
+      adminPath: "cic-livechat",
     },
     cufc: {
       orgSlug: "christchurch-united",
@@ -17361,9 +17365,37 @@ export async function registerRoutes(
       notifyEmail: "info@cufc.co.nz",
       accent: "#263996",
       siteUrl: "https://cufc.co.nz",
+      adminPath: "cufc-livechat",
     },
-    // Add more brands here to reuse the widget (mfl, cugc, usg…). Each needs a
-    // matching org slug + a from/notify email on a verified sending domain.
+    mfl: {
+      orgSlug: "mini-football-leagues",
+      brandName: "Mini Football Leagues",
+      fromEmail: "noreply@minifootball.co.nz",
+      notifyEmail: "info@minifootball.co.nz",
+      accent: "#d1b96e",
+      siteUrl: "https://minifootball.co.nz",
+      adminPath: "mfl-livechat",
+    },
+    cugc: {
+      orgSlug: "united-gymnastics",
+      brandName: "Christchurch United Gymnastics",
+      fromEmail: "noreply@cugc.co.nz",
+      notifyEmail: "info@cugc.co.nz",
+      accent: "#d9b10f",
+      siteUrl: "https://cugc.co.nz",
+      adminPath: "cugc-livechat",
+    },
+    unitedprints: {
+      orgSlug: "united-prints",
+      brandName: "United Print",
+      fromEmail: "noreply@cufc.co.nz",       // cufc.co.nz is the verified sending domain
+      notifyEmail: "info@cufc.co.nz",         // TODO: switch to a UP inbox when unitedprints.co.nz sending is verified
+      accent: "#043bcb",
+      siteUrl: "https://unitedprints.co.nz",
+      adminPath: "print-livechat",
+    },
+    // Add more brands here to reuse the widget. Each needs a matching org slug +
+    // a from/notify email on a verified sending domain + an admin tab (adminPath).
   };
   const chatOrgCache: Record<string, number> = {};
   async function chatOrgId(slug: string): Promise<number> {
@@ -17380,6 +17412,7 @@ export async function registerRoutes(
     "https://cugc.co.nz", "https://www.cugc.co.nz",
     "https://usg.co.nz", "https://www.usg.co.nz",
     "https://cufc.co.nz", "https://www.cufc.co.nz",
+    "https://unitedprints.co.nz", "https://www.unitedprints.co.nz",
   ];
   const setChatCors = (req: any, res: any) => {
     const origin = req.headers.origin || "";
@@ -17422,7 +17455,7 @@ export async function registerRoutes(
           to: brand.notifyEmail, brandName: brand.brandName, fromEmail: brand.fromEmail, accent: brand.accent,
           visitorName: name, visitorEmail: email, visitorPhone: phone || undefined,
           message, sourceUrl: String(req.body.sourceUrl || ""),
-          adminUrl: "https://app.usg.co.nz/admin/cic-livechat",
+          adminUrl: `https://app.usg.co.nz/admin/${brand.adminPath}`,
         });
       } catch (e) { console.error("[chat start] email failed:", e); }
       res.json({ ok: true, token });
@@ -17472,7 +17505,7 @@ export async function registerRoutes(
           await sendChatNewConversationNotification({
             to: brand.notifyEmail, brandName: brand.brandName, fromEmail: brand.fromEmail, accent: brand.accent,
             visitorName: conv.visitorName || undefined, visitorEmail: conv.visitorEmail || undefined, visitorPhone: conv.visitorPhone || undefined,
-            message: body, sourceUrl: conv.sourceUrl || undefined, adminUrl: "https://app.usg.co.nz/admin/cic-livechat",
+            message: body, sourceUrl: conv.sourceUrl || undefined, adminUrl: `https://app.usg.co.nz/admin/${brand.adminPath}`,
           });
         } catch (e) { console.error("[chat message] email failed:", e); }
       }
@@ -17570,6 +17603,99 @@ export async function registerRoutes(
       res.json({ ok: true });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
+
+  // ── Live Chat admin — reusable per-brand (MFL / CUGC / United Print / …) ──────
+  // Same four endpoints as the CIC block above, but org-scoped to the given brand
+  // so each workspace's Live Chat tab ONLY ever sees its own brand's chats. Mount
+  // one per brand: registerBrandChatAdmin("mfl", () => MFL_ORG_ID, "MFL Team").
+  function registerBrandChatAdmin(prefix: string, getOrgId: () => Promise<number>, teamLabel: string) {
+    const base = `/api/admin/${prefix}/chat/conversations`;
+    // List
+    app.get(base, requireAuth, async (_req, res) => {
+      try {
+        const orgId = await getOrgId();
+        const convs = await db.select().from(chatConversations)
+          .where(eq(chatConversations.organizationId, orgId))
+          .orderBy(desc(chatConversations.lastMessageAt)).limit(300);
+        const ids = convs.map((c) => c.id);
+        const previews: Record<number, { body: string; sender: string }> = {};
+        if (ids.length) {
+          const lastIds = await db.select({ cid: chatMessages.conversationId, mid: sql<number>`max(${chatMessages.id})` })
+            .from(chatMessages).where(inArray(chatMessages.conversationId, ids)).groupBy(chatMessages.conversationId);
+          const midList = lastIds.map((l) => Number(l.mid));
+          if (midList.length) {
+            const lastMsgs = await db.select().from(chatMessages).where(inArray(chatMessages.id, midList));
+            lastMsgs.forEach((m) => { previews[m.conversationId] = { body: m.body, sender: m.sender }; });
+          }
+        }
+        res.json(convs.map((c) => ({
+          id: c.id, visitorName: c.visitorName, visitorEmail: c.visitorEmail, visitorPhone: c.visitorPhone,
+          status: c.status, agentUnread: c.agentUnread, sourceUrl: c.sourceUrl,
+          lastMessageAt: c.lastMessageAt, createdAt: c.createdAt,
+          preview: previews[c.id]?.body || "", previewSender: previews[c.id]?.sender || "",
+        })));
+      } catch (e: any) { res.status(500).json({ message: e.message }); }
+    });
+    // Open thread + clear staff unread
+    app.get(`${base}/:id`, requireAuth, async (req, res) => {
+      try {
+        const orgId = await getOrgId();
+        const id = parseInt(req.params.id);
+        const [conv] = await db.select().from(chatConversations)
+          .where(and(eq(chatConversations.id, id), eq(chatConversations.organizationId, orgId))).limit(1);
+        if (!conv) return res.status(404).json({ message: "not found" });
+        const msgs = await db.select().from(chatMessages).where(eq(chatMessages.conversationId, id)).orderBy(asc(chatMessages.id));
+        if (conv.agentUnread > 0) await db.update(chatConversations).set({ agentUnread: 0 }).where(eq(chatConversations.id, id));
+        res.json({ conversation: { ...conv, agentUnread: 0 }, messages: msgs });
+      } catch (e: any) { res.status(500).json({ message: e.message }); }
+    });
+    // Staff reply (+ re-engagement email if the visitor is away)
+    app.post(`${base}/:id/reply`, requireAuth, async (req, res) => {
+      try {
+        const orgId = await getOrgId();
+        const id = parseInt(req.params.id);
+        const body = String(req.body.body || "").trim();
+        if (!body) return res.status(400).json({ message: "empty reply" });
+        const [conv] = await db.select().from(chatConversations)
+          .where(and(eq(chatConversations.id, id), eq(chatConversations.organizationId, orgId))).limit(1);
+        if (!conv) return res.status(404).json({ message: "not found" });
+        const user = req.session.userId ? await storage.getUser(req.session.userId) : null;
+        const authorName = user?.firstName || teamLabel;
+        const now = new Date();
+        const [msg] = await db.insert(chatMessages).values({
+          conversationId: id, sender: "agent", authorName, authorUserId: user?.id ?? null, body,
+        }).returning();
+        await db.update(chatConversations).set({
+          visitorUnread: (conv.visitorUnread || 0) + 1, agentUnread: 0, status: "open", lastAgentAt: now, lastMessageAt: now,
+        }).where(eq(chatConversations.id, id));
+        const awayMs = now.getTime() - (conv.lastVisitorAt ? new Date(conv.lastVisitorAt).getTime() : 0);
+        if (conv.visitorEmail && conv.visitorUnread === 0 && awayMs > 120_000) {
+          const brand = CHAT_BRANDS[conv.brandKey || ""] || CHAT_BRANDS.cicyouth;
+          try {
+            await sendChatReplyNotification({
+              to: conv.visitorEmail, brandName: brand.brandName, fromEmail: brand.fromEmail, replyTo: brand.notifyEmail, accent: brand.accent,
+              visitorName: conv.visitorName || undefined, agentName: authorName, message: body, chatUrl: `${brand.siteUrl}/#chat`,
+            });
+          } catch (e) { console.error(`[${prefix} chat reply] visitor email failed:`, e); }
+        }
+        res.json({ ok: true, message: msg });
+      } catch (e: any) { res.status(400).json({ message: e.message }); }
+    });
+    // Open / close
+    app.post(`${base}/:id/status`, requireAuth, async (req, res) => {
+      try {
+        const status = String(req.body.status || "");
+        if (!["open", "closed"].includes(status)) return res.status(400).json({ message: "invalid status" });
+        const orgId = await getOrgId();
+        await db.update(chatConversations).set({ status })
+          .where(and(eq(chatConversations.id, parseInt(req.params.id)), eq(chatConversations.organizationId, orgId)));
+        res.json({ ok: true });
+      } catch (e: any) { res.status(400).json({ message: e.message }); }
+    });
+  }
+  registerBrandChatAdmin("mfl", async () => MFL_ORG_ID, "MFL Team");
+  registerBrandChatAdmin("cugc", async () => cugcOrgId(), "CUGC Team");
+  registerBrandChatAdmin("print", async () => chatOrgId("united-prints"), "United Print");
 
   // ── CIC Mailer / CRM ────────────────────────────────────────────────────────
   // The CIC contact database + broadcast sender, shared by the CIC Youth and

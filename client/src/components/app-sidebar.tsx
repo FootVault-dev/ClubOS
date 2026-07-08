@@ -149,6 +149,7 @@ const leagueNav = [
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
   { tab: "inbox", title: "Inbox", url: "/admin/inbox", icon: Inbox },
+  { tab: "mfl-livechat", title: "Live Chat", url: "/admin/mfl-livechat", icon: MessageCircle },
   { tab: "rewards", title: "Rewards", url: "/admin/rewards", icon: Award },
   { tab: "loyalty", title: "Loyalty", url: "/admin/loyalty", icon: Crown },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
@@ -208,6 +209,7 @@ const gymnasticsNav = [
   { tab: "cugc-free-sessions", title: "Free Sessions", url: "/admin/cugc-free-sessions", icon: CalendarCheck },
   { tab: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics", icon: BarChart3 },
   { tab: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox", icon: Inbox },
+  { tab: "cugc-livechat", title: "Live Chat", url: "/admin/cugc-livechat", icon: MessageCircle },
 ];
 
 const gymnasticsSecondary = [
@@ -244,6 +246,7 @@ const printsNav = [
   { tab: "orders", title: "Orders", url: "/admin/print-orders", icon: ShoppingCart },
   { tab: "materials", title: "Materials", url: "/admin/print-materials", icon: FileText },
   { tab: "crm", title: "CRM", url: "/admin/print-crm", icon: Users },
+  { tab: "print-livechat", title: "Live Chat", url: "/admin/print-livechat", icon: MessageCircle },
   { tab: "projects", title: "Projects", url: "/admin/print-projects", icon: FolderKanban },
   { tab: "analytics", title: "Analytics", url: "/admin/print-analytics", icon: BarChart3 },
   { tab: "landing", title: "Landing Pages", url: "/admin/print-landing", icon: FileText },

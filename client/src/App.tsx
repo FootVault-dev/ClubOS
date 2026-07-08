@@ -90,6 +90,9 @@ import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
 import CicInbox from "@/pages/cic-inbox";
 import CicLiveChat from "@/pages/cic-livechat";
+import MflLiveChat from "@/pages/mfl-livechat";
+import CugcLiveChat from "@/pages/cugc-livechat";
+import PrintLiveChat from "@/pages/print-livechat";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
@@ -298,6 +301,9 @@ function AdminRouter() {
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
         <Route path="/admin/cic-registrations" component={CicInbox} />
         <Route path="/admin/cic-livechat" component={CicLiveChat} />
+        <Route path="/admin/mfl-livechat" component={MflLiveChat} />
+        <Route path="/admin/cugc-livechat" component={CugcLiveChat} />
+        <Route path="/admin/print-livechat" component={PrintLiveChat} />
         <Route path="/admin/cic-mailer" component={CicMailer} />
         <Route path="/admin/cic-push" component={CicPush} />
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
