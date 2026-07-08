@@ -141,6 +141,7 @@ import PrintCheckout from "@/pages/print-checkout";
 import PrintOrderStatus from "@/pages/print-order-status";
 import PrintUpload from "@/pages/print-upload";
 import ClubDossier from "@/pages/club-dossier";
+import Feedback from "@/pages/feedback";
 import { Search, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -175,6 +176,11 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function AdminRouter() {
   const { currentOrg } = useWorkspace();
+  const [location] = useLocation();
+  // Feedback (bug reports / feature requests) is a UNIVERSAL tab — any staff
+  // member, in whatever workspace they have, can reach it. Handle it before the
+  // per-workspace switches so it works everywhere from one place.
+  if (location.startsWith("/admin/feedback")) return <Feedback />;
   const isVenue = currentOrg?.slug === "united-sports-centre";
   const isLeague = currentOrg?.slug === "mini-football-leagues";
   const isTournament = currentOrg?.slug === "christchurch-international-cup";

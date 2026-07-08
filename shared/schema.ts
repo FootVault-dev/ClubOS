@@ -3779,6 +3779,32 @@ export const insertContentTaskSchema = createInsertSchema(contentTasks).omit({ i
 export type InsertContentTask = z.infer<typeof insertContentTaskSchema>;
 export type ContentTask = typeof contentTasks.$inferSelect;
 
+// ── Feature Requests / Bug Reports (staff feedback board) ────────────────────
+// One shared, club-wide backlog where any staff member reports a bug or asks
+// for a feature/improvement, instead of scattered WhatsApp messages. Daniel +
+// workspace managers triage it (status / priority / notes). NOT org-scoped —
+// deliberately a single clean list. See migrations/2026-07-09_feature_requests.sql.
+export const featureRequests = pgTable("feature_requests", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  type: text("type").notNull().default("bug"),          // bug | feature | improvement
+  title: text("title").notNull(),
+  description: text("description"),
+  area: text("area"),                                   // which app/brand/system (free tag)
+  pageUrl: text("page_url"),                            // link to where they saw it
+  status: text("status").notNull().default("new"),      // new | planned | in_progress | done | declined
+  priority: text("priority").notNull().default("normal"), // low | normal | high | urgent
+  adminNotes: text("admin_notes"),                      // triage notes (managers only)
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  resolvedBy: integer("resolved_by").references(() => users.id, { onDelete: "set null" }),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const insertFeatureRequestSchema = createInsertSchema(featureRequests).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFeatureRequest = z.infer<typeof insertFeatureRequestSchema>;
+export type FeatureRequest = typeof featureRequests.$inferSelect;
+
 // ── Play Predictor (CUFC first-team score predictions) ───────────────────────
 // Fans predict the Christchurch United first team's score + goalscorers from
 // the CUFC website, earn points (shared/predictor-scoring.ts) and climb

@@ -63,7 +63,14 @@ import {
   Radio,
   FlaskConical,
   Fingerprint,
+  MessageSquarePlus,
 } from "lucide-react";
+
+// Universal "Feedback" tab — shown in EVERY workspace's System section so any
+// staff member can report a bug / request a feature from wherever they are.
+// Access is gated server-side by requireAuth (not a per-workspace tab grant),
+// so it's appended directly to secondaryNav below, bypassing the tab whitelist.
+const feedbackSecondary = { tab: "feedback", title: "Feedback", url: "/admin/feedback", icon: MessageSquarePlus };
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -472,7 +479,9 @@ export function AppSidebar() {
     tabSlug: item.tab,
   });
   const mainNav = allMainNav.filter(navFilter);
-  const secondaryNav = allSecondaryNav.filter(navFilter);
+  // Feedback is universal — always show it (no tab-whitelist filtering), for
+  // every staff member in every workspace.
+  const secondaryNav = [...allSecondaryNav.filter(navFilter), feedbackSecondary];
 
   const logoutMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/auth/logout"),

@@ -76,6 +76,11 @@ app.use((req, res, next) => {
   const { registerClubDossierRoutes } = await import("./club-dossier-routes");
   registerClubDossierRoutes(app);
 
+  // Staff feedback board — Feature Requests / Bug Reports (any logged-in staff
+  // can submit; managers triage). Universal tab, gated by requireAuth only.
+  const { registerFeedbackRoutes } = await import("./feedback-routes");
+  registerFeedbackRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).
