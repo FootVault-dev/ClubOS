@@ -4,14 +4,49 @@ CUFC's academy programmes move off **Friendly Manager** onto ClubOS: parents
 register and pay on our own domain, with our own embedded checkout, and the
 registration appears in ClubOS the instant it's created.
 
-**Status: BUILT on branch `feat/academy-registrations`. Migration NOT applied.
-NOT deployed. Nothing can take a payment yet — by design.**
+**Status (2026-07-10):**
+- ✅ Migration **APPLIED to prod** (18 objects verified).
+- ✅ Programmes **seeded in prod** with real fees. Five sell; two are closed.
+- ✅ `cufc.co.nz` shows the real prices + a Goalkeeper landing page.
+- ❌ **ClubOS code NOT deployed** — Fly's builder is failing (`deadline_exceeded`
+  on depot, `unauthorized` on the legacy builder). `/api/public/academy/*` is 404
+  in prod. Retry: `./deploy.sh --no-cache` from `feat/proposals-tracker-search`.
+- ✅ Because `VITE_USE_CLUBOS_REGISTRATION` is **off**, the live site's Register
+  buttons still point at Friendly Manager. Nothing links to a dead endpoint.
+- ❗ **No payment has ever been taken through this code.** Put a real card through
+  a $1 option and refund it before the flag is flipped.
 
 ---
 
 ## The one thing to understand first
 
-**No programme can charge anybody until a human types the 2026 fee schedule in.**
+**A programme can only charge once a human has typed a real fee in.** That has now
+been done for five of the seven, each from a source recorded in
+`script/seed-cufc-academy.ts`:
+
+| Programme | Fee (per term) | Sells? |
+|---|---|---|
+| FUNiño U4–U8 (`u4-u8`) | **$160** | 🟢 |
+| Pre-Academy (`pre-academy-u9-u12`) | **$405** (U9–U10) · **$540** (U11–U12) | 🟢 |
+| Academy (`academy-u13-u17`) | **$805** (U13–U15) · **$882** (U17) | 🟢 |
+| Technification (`technification`) | **$150** | 🟢 |
+| Morning Programme | **$125** | 🟢 |
+| **Goalkeeper** | no trustworthy source | 🔴 waitlist |
+| **High Performance** | two club pages contradict each other | 🔴 waitlist |
+
+Goalkeeper: the only figure anywhere ("$125, 10 Sessions") sits under a
+*"Technification Program – Term 1"* heading, and the live Friendly Manager form
+prices Technification at $150. It is not a goalkeeper fee.
+High Performance: its own page says $600/term; the Academy page prices U17 at
+$882/term.
+
+**⚠ NOT COLLECTED AT CHECKOUT:** the Affiliation Fee ($58.08–$64.16 by grade), MF
+levies, and the compulsory uniform (~$260 for High Performance). The club's own
+pages list these separately, marked "TBC". **If the club expects them alongside
+the term fee, the checkout is under-collecting.** Raise with Ryan before the first
+Academy or Pre-Academy registration lands.
+
+**The gate still holds for anything unpriced:**
 
 A programme sells only when **all three** are true:
 
@@ -133,6 +168,20 @@ discounting an add-on. Those programmes sell by the term only.
 
 **Money rounds the discount, never the total**, so `subtotal − discount === total`
 exactly. Fuzzed over 1,800 price points in `script/test-academy.ts`.
+
+**Pro-rata is live.** Joining five weeks into a ten-week term buys five sessions —
+`termProgress()` in `shared/academy.ts`. The old `quoteProgram()` counted weeks to
+the term's end date and added one, returning six: the parent paid for a session
+that had already happened. It also derived "today" from `toISOString()`, which in
+New Zealand (UTC+12/13) reports **yesterday** from midday onward. Both fixed; every
+NZ date now comes from `nzTodayIso()`. One function, `academyQuoteFor()`, produces
+both the quoted price and the charged price, so they cannot drift apart.
+
+Term 3 2026 runs **20 Jul → 25 Sep**, so until 20 July everyone pays the full fee.
+
+**The full-year plan is only offered in Term 1.** The policy grants the 5% for "all
+four terms paid in one single payment at the start of the season"; a parent joining
+in Term 3 would otherwise have bought two terms that already finished.
 
 **Capacity counts pending registrations, but only for 30 minutes.** A seat held
 mid-checkout is not a free seat — but an abandoned checkout is. `pending` rows are
