@@ -3548,6 +3548,11 @@ export const esignSigners = pgTable("esign_signers", {
   ip: text("ip"),
   userAgent: text("user_agent"),
   declineReason: text("decline_reason"),
+  // Native docs: which signer fills the details schedule (name/DOB/bank/IRD…).
+  // Deliberately SEPARATE from signingOrder so the Club can sign FIRST while the
+  // counterparty still supplies their own details. Backfilled true for every
+  // signingOrder=0 row, so pre-existing documents behave exactly as before.
+  isFormSigner: boolean("is_form_signer").notNull().default(false),
   formData: jsonb("form_data").$type<Record<string, any> | null>(), // native docs: signer-filled details (incl. guardian block for under-18s)
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
