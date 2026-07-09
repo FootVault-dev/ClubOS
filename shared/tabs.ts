@@ -132,6 +132,9 @@ const tournamentTabs: TabDef[] = [
   { slug: "cic-push", title: "Notifications", url: "/admin/cic-push" },
   { slug: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents" },
   { slug: "cic-watch", title: "Watch", url: "/admin/cic-watch" },
+  // Content Marketplace — live sales + engagement analytics for the CIC photo
+  // store (content.cicyouth.com). Read-only dashboard; data in usg-meet.
+  { slug: "cic-content-marketplace", title: "Content Marketplace", url: "/admin/cic-content-marketplace" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
   { slug: "store", title: "Store", url: "/admin/store" },
