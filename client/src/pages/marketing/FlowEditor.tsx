@@ -327,8 +327,8 @@ function StepCard({ step, index, total, flowId, counts, onType, onConfig, onRemo
   return (
     <Card>
       <CardContent className="p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
             <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[11px] font-semibold text-muted-foreground">{index + 1}</div>
             <Icon className={`w-4 h-4 ${M.color}`} />
             <Select value={step.type} onValueChange={(v) => onType(v as FlowStepType)}>
@@ -338,7 +338,7 @@ function StepCard({ step, index, total, flowId, counts, onType, onConfig, onRemo
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0 ml-auto">
             {counts && (counts.sent + counts.skipped + counts.failed > 0) && (
               <span className="text-[11px] text-muted-foreground mr-1">{counts.sent} sent · {counts.skipped} skipped{counts.failed ? ` · ${counts.failed} failed` : ""}</span>
             )}

@@ -64,7 +64,7 @@ export default function FlowsView() {
         />
       ) : (
         <div className="rounded-xl border overflow-x-auto">
-          <Table>
+          <Table className="min-w-[680px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Flow</TableHead>

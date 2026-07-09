@@ -375,9 +375,9 @@ export default function CampaignWizard() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <Label>Content</Label>
-            <button onClick={() => setSimpleMode((s) => !s)} className="text-xs text-primary hover:underline flex items-center gap-1" data-testid="mkt-wizard-toggle-editor">
+            <button onClick={() => setSimpleMode((s) => !s)} className="text-xs text-primary hover:underline flex items-center gap-1 shrink-0" data-testid="mkt-wizard-toggle-editor">
               <Code2 className="w-3.5 h-3.5" /> {simpleMode ? "Try the rich editor (beta)" : "Switch to plain HTML"}
             </button>
           </div>
