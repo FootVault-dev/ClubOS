@@ -45,3 +45,5 @@
 <!-- completed tasks move here with a one-line note from the agent -->
 
 - [ ] Fix EVERY finding listed in NEEDS_REVIEW.md (do not deploy, do not touch the attribution path) — verify: re-run the named checks + npm run build green
+
+- [ ] Fix EVERY finding listed in NEEDS_REVIEW.md (do not deploy, do not touch the attribution path) — verify: re-run the named checks + npm run build green
