@@ -49,7 +49,10 @@ production database, Stripe, or Fly, and you must not try. `node_modules` is a s
 
 ## Tasks
 
-- [ ] **T1 — `shared/accounting-codes.ts`: the code tree as typed data**
+- [x] **T1 — `shared/accounting-codes.ts`: the code tree as typed data** — done. 805 rows ported
+verbatim with `provenance`; `expenseCodeFor()` returns null for 13/14/15 and unknown codes,
+correctly mirrors 01→31.. 12→42; 43/44/21-23 confirmed unmirrored. 14/14 tests pass
+(`npx tsx script/test-accounting-codes.ts`).
 Port `outputs/budget-automation/coding-tree/code-tree.json` + `mirror-rules.json` into typed
 constants. Include `provenance` on every node.
 
@@ -63,7 +66,10 @@ constants. Include `provenance` on every node.
 > This is the single highest-value test in the whole build. A naive `+30` posts donations into
 > the First Team's cost centre.
 
-- [ ] **T2 — `shared/accounting.ts`: the mapping engine (pure, no DB, no network)**
+- [x] **T2 — `shared/accounting.ts`: the mapping engine (pure, no DB, no network)** — done.
+`resolve(input, rules)` — added `program_type` as a 4th specificity tier column not in
+02-architecture.md's original sketch (needed for the "programme type" tier the task requires;
+T3 must mirror it). 14/14 tests pass (`npx tsx script/test-accounting.ts`), tsc still at 533.
 `resolve({ orgId, programId, optionId, paymentMethod, occurredAt })
   → { code, xeroAccountCode, tracking1, tracking2, taxType, ruleVersion }`
 

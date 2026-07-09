@@ -149,4 +149,24 @@ The Fly app `clubos` serves **every** branch that gets deployed to it, so deploy
 2. `deploy.sh` now prints the current git branch in its banner — LOOK at it before shipping.
 3. **`/t.js` is a permanent post-deploy smoke check.** After every deploy: `curl -sI https://app.usg.co.nz/t.js` must show `content-type: application/javascript` (NOT `text/html`), and `/l/<realkey>` must 302. A `text/html` `/t.js` means attribution regressed out again → reship from the correct branch (`--no-cache` if the build is stale). Full checklist lives in `deploy.sh`'s header + `ATTRIBUTION-QA.md`.
 
+## Budget automation loop (loop/budget-automation) — learnings
+
+- **T1 shipped** `shared/accounting-codes.ts` — 805-row `ACCT_CODE_TREE` ported verbatim from
+  `outputs/budget-automation/coding-tree/{code-tree,mirror-rules}.json`, `provenance` on every
+  node, `expenseCodeFor(code)` returns null (never a guessed `+30`) for 13/14/15 and unknowns.
+  Test: `script/test-accounting-codes.ts`.
+- **T2 shipped** `shared/accounting.ts` — the pure mapping engine, `resolve(input, rules)`.
+  Resolves most-specific-first: option → programme → programme type → org default; effective-
+  dated (string-compares ISO `YYYY-MM-DD`, never reads the clock); throws `AcctMappingError`
+  (naming the programme id) when nothing matches, and also throws on a genuine tie between
+  equally-specific rules rather than guessing. **Added `programType` to `AcctMappingRule`** —
+  02-architecture.md's `acct_mapping_rules` column sketch (`organization_id, program_id,
+  program_option_id, payment_method, effective_from, effective_to, code, xero_account_code,
+  tracking_1, tracking_2, tax_type, version`) has no column for the "programme type" tier the
+  PLAN.md task explicitly requires, so a `program_type text` column was added to the rule shape
+  here — **T3's migration must mirror it** (`programs.type` is the `program_type` pg enum:
+  holiday_camp/academy/trials/event/open_training/league_team, see `shared/schema.ts:9`).
+  Test: `script/test-accounting.ts` (14 assertions, covers effective-dating, all 4 specificity
+  tiers, payment-method tie-breaking, and the unmapped/ambiguous throw paths).
+
 Merge conflict note: merging attribution forward collides (union, keep BOTH sides) in `App.tsx`, `server/routes.ts` (import lists), `shared/schema.ts` (import line + additive tables), `server/storage.ts` (imports + IStorage methods + `DatabaseStorage` methods — the attribution short-link methods go INSIDE the class, `studioSectionLabel` stays a top-level fn AFTER the class close), `server/email.ts` (imports), `app-sidebar.tsx` (lucide icons). Tsc is NOT clean on this repo (~500 pre-existing drizzle-zod `.omit()` + `req.params` errors); gate on `npm run build` (esbuild) + the `script/test-attribution*.ts` suites, and diff tsc error COUNT vs the pre-merge commit to prove zero new error types (see T21 verification trick).
