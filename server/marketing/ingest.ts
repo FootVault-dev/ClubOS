@@ -193,22 +193,39 @@ async function processCandidate(
     return;
   }
 
+  // ── Shared-phone guard ──
+  // (workspace_id, phone_e164) is unique: one profile OWNS a number (SMS identity
+  // must be unambiguous). But real families share phones (two parents, one mobile) —
+  // the research flagged this exact trap. First profile ingested keeps phone_e164;
+  // later profiles carry the number in props.shared_phone instead (nothing lost).
+  let phoneForRow = e164;
+  if (phoneForRow) {
+    const [phoneOwner] = await db
+      .select({ id: mktProfiles.id })
+      .from(mktProfiles)
+      .where(and(eq(mktProfiles.workspaceId, cand.workspaceId), eq(mktProfiles.phoneE164, phoneForRow)))
+      .limit(1);
+    if (phoneOwner && (!existing || phoneOwner.id !== existing.id)) phoneForRow = null;
+  }
+
   let profileId: number;
   if (existing) {
-    const props = mergeProps(existing.props as Record<string, unknown> | null, cand.source, phoneRaw, !!e164);
+    const props = mergeProps(existing.props as Record<string, unknown> | null, cand.source, phoneRaw, !!(existing.phoneE164 ?? phoneForRow));
+    if (e164 && !phoneForRow && !existing.phoneE164 && !props.shared_phone) props.shared_phone = e164;
     await db.update(mktProfiles).set({
       firstName: existing.firstName ?? cand.firstName,   // never overwrite a non-null with null
       lastName: existing.lastName ?? cand.lastName,
-      phoneE164: existing.phoneE164 ?? e164,
+      phoneE164: existing.phoneE164 ?? phoneForRow,
       props,
       updatedAt: new Date(),
     }).where(eq(mktProfiles.id, existing.id));
     profileId = existing.id;
     counts.updated++; result.profilesTotal.updated++;
   } else {
-    const props = mergeProps(null, cand.source, phoneRaw, !!e164);
+    const props = mergeProps(null, cand.source, phoneRaw, !!phoneForRow);
+    if (e164 && !phoneForRow) props.shared_phone = e164;
     const [row] = await db.insert(mktProfiles).values({
-      workspaceId: cand.workspaceId, email, phoneE164: e164,
+      workspaceId: cand.workspaceId, email, phoneE164: phoneForRow,
       firstName: cand.firstName, lastName: cand.lastName, props,
     }).returning({ id: mktProfiles.id });
     profileId = row.id;
@@ -226,7 +243,8 @@ async function processCandidate(
   if (emailVerdict !== "skipped") result.consentSeeded.emailRows++;
 
   // ── SMS consent seeding: never/inferred for every phone (NO express SMS exists) ──
-  if (e164) {
+  // Only for profiles that OWN a phone — a shared_phone profile can't receive SMS.
+  if (phoneForRow || existing?.phoneE164) {
     const smsVerdict = await seedConsent(profileId, "sms", "never", "inferred", `clubos:ingest:${cand.source}`, false);
     if (smsVerdict !== "skipped") result.consentSeeded.smsRows++;
   }
@@ -246,6 +264,16 @@ function mergeProps(
   return p;
 }
 
+// Transient-network detector: the Supabase pooler drops long sequential runs with
+// read ETIMEDOUT / connection-terminated errors. Everything here is idempotent, so
+// the safe response is: brief pause, retry the same candidate.
+function isTransientDbError(e: unknown): boolean {
+  const msg = e instanceof Error ? `${(e as NodeJS.ErrnoException).code ?? ""} ${e.message}` : String(e);
+  return /ETIMEDOUT|ECONNRESET|EPIPE|Connection terminated|timeout expired|ENOTFOUND|EAI_AGAIN/i.test(msg);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function runSource(
   name: string,
   candidates: Candidate[],
@@ -254,7 +282,24 @@ async function runSource(
   seen: Set<string>,
 ): Promise<void> {
   const counts = emptyCounts();
-  for (const c of candidates) await processCandidate(c, counts, result, opts, seen);
+  for (const c of candidates) {
+    let attempt = 0;
+    for (;;) {
+      try {
+        await processCandidate(c, counts, result, opts, seen);
+        break;
+      } catch (e) {
+        if (isTransientDbError(e) && attempt < 5) {
+          attempt++;
+          const backoffMs = 1000 * 2 ** attempt;
+          console.warn(`  [${name}] transient DB error (attempt ${attempt}/5), retrying in ${backoffMs / 1000}s…`);
+          await sleep(backoffMs);
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
   result.sources[name] = counts;
 }
 
@@ -484,21 +529,37 @@ async function importSuppressions(
     const scope: "global" | "brand" = orgId == null ? "global" : "brand";
     const brandKey = orgId == null ? null : (BRAND_KEY_BY_ORG[orgId] ?? String(orgId));
 
-    const inserted = await db.insert(mktSuppressions).values({
-      email, channel: "email", scope, brandKey, reason: "unsub_prefs",
-      source: u.source ? `clubos:email_unsubscribes:${u.source}` : "clubos:email_unsubscribes",
-    }).onConflictDoNothing().returning({ id: mktSuppressions.id });
-    if (inserted.length) result.suppressions.created++;
+    // Same transient-network retry as runSource — these writes are idempotent too.
+    let attempt = 0;
+    for (;;) {
+      try {
+        const inserted = await db.insert(mktSuppressions).values({
+          email, channel: "email", scope, brandKey, reason: "unsub_prefs",
+          source: u.source ? `clubos:email_unsubscribes:${u.source}` : "clubos:email_unsubscribes",
+        }).onConflictDoNothing().returning({ id: mktSuppressions.id });
+        if (inserted.length) result.suppressions.created++;
 
-    // Downgrade the matching profile(s)' email consent to opted-out (always wins).
-    const conds = [sql`lower(${mktProfiles.email}) = ${email}`];
-    if (scope === "brand") conds.push(eq(mktProfiles.workspaceId, orgId as number));
-    if (opts.workspaceId != null) conds.push(eq(mktProfiles.workspaceId, opts.workspaceId));
-    const targets = await db.select({ id: mktProfiles.id }).from(mktProfiles).where(and(...conds));
+        // Downgrade the matching profile(s)' email consent to opted-out (always wins).
+        const conds = [sql`lower(${mktProfiles.email}) = ${email}`];
+        if (scope === "brand") conds.push(eq(mktProfiles.workspaceId, orgId as number));
+        if (opts.workspaceId != null) conds.push(eq(mktProfiles.workspaceId, opts.workspaceId));
+        const targets = await db.select({ id: mktProfiles.id }).from(mktProfiles).where(and(...conds));
 
-    for (const t of targets) {
-      const verdict = await seedConsent(t.id, "email", "unsubscribed", "opted_out", "clubos:email_unsubscribes", false);
-      if (verdict !== "skipped") result.suppressions.consentDowngraded++;
+        for (const t of targets) {
+          const verdict = await seedConsent(t.id, "email", "unsubscribed", "opted_out", "clubos:email_unsubscribes", false);
+          if (verdict !== "skipped") result.suppressions.consentDowngraded++;
+        }
+        break;
+      } catch (e) {
+        if (isTransientDbError(e) && attempt < 5) {
+          attempt++;
+          const backoffMs = 1000 * 2 ** attempt;
+          console.warn(`  [suppressions] transient DB error (attempt ${attempt}/5), retrying in ${backoffMs / 1000}s…`);
+          await sleep(backoffMs);
+          continue;
+        }
+        throw e;
+      }
     }
   }
 }
