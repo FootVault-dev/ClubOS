@@ -11,3 +11,10 @@ const pool = new Pool({
 });
 
 export const db = drizzle(pool, { schema });
+
+// Raw node-postgres pool — needed by callers that execute pre-built
+// `{ text, params }` queries (standard $1,$2,... positional placeholders)
+// rather than drizzle's query builder. drizzle-orm 0.39's `sql.raw()` takes
+// no params argument, so a parameterised raw query has to go through the
+// pool directly. See shared/behavior-rollups.ts / server/behavior-rollup-cron.ts.
+export { pool };
