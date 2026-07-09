@@ -113,6 +113,49 @@ through Friendly Manager.
 
 ---
 
+## The $1 end-to-end test (do this before any ad spend)
+
+**Code: `TECHTEST1`** — fixed $149.00 off, scoped to Technification only
+(`applies_to='specific'`, `camp_ids=[5]`), **max 1 use**. $150.00 − $149.00 = **$1.00**.
+It cannot discount any other programme.
+
+1. Go to **https://cufc.co.nz/programmes/technification** → *Register for Term 3*.
+   (Only Technification points at ClubOS. Everything else still goes to Friendly
+   Manager — `VITE_CLUBOS_REGISTRATION_SLUGS` in `apps/cufc-website/src/site.ts`.)
+2. You land on `join.cufc.co.nz/academy/technification?source=cufc-website`.
+3. Fill the wizard with real data. On the consents step, enter **TECHTEST1** → *Apply*.
+   It should say "$149.00 off. You'll pay $1.00."
+4. Pay with a real card. **$1.00 NZD, live Stripe.**
+
+### What to check afterwards
+
+| Where | What must be true |
+|---|---|
+| ClubOS → CUFC → Registrations | The registration is there, status **confirmed** |
+| ClubOS → Contacts | ONE guardian, ONE player, linked — not duplicates |
+| The player's contact | country of birth, nationality, ethnicity/iwi all populated (the NZF audit fields) |
+| The registration row | `discount_code = TECHTEST1`, `total_cents = 100`, `policy_version = 2026-01-01` |
+| Your inbox | CUFC-branded confirmation email |
+| Meta Events Manager | **ViewContent** on the programme page, **Purchase** value 1.00 NZD — **exactly one**, not two (the browser pixel and the server CAPI share the id `purchase_<registrationId>`, so Meta must dedupe them) |
+| Stripe | one $1.00 charge. **Refund it.** |
+
+### Then reset the code
+
+`TECHTEST1` is single-use. To test again:
+`UPDATE discounts SET times_used = 0 WHERE code = 'TECHTEST1';`
+
+**Delete or disable it before the first ad runs** — a live code that takes $150 to
+$1 is exactly the kind of thing that leaks.
+
+### Only then
+
+Turn on the ads. The pixel now fires **ViewContent** on the programme page and
+**Purchase** on payment, both deduped, so a campaign can optimise on real
+registrations rather than clicks. Roll the next programme onto ClubOS by adding its
+slug to `VITE_CLUBOS_REGISTRATION_SLUGS` — but put a card through that one first too.
+
+---
+
 ## The Mainland Football audit
 
 Josh McGeer (Mainland Football) confirmed the club can switch systems internally,
