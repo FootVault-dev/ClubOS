@@ -21,8 +21,10 @@
 6. **Never invent an account code, a price, or a GST treatment.** If unknown, throw or leave null.
 7. **Never UPDATE a posting.** Corrections are reversing entries.
 8. **Every NZ date comes from `nzTodayIso()`** (`shared/academy.ts`). Never `toISOString()`.
-9. If a task needs a human decision (a fee, a GST rate, an account code) — **stop, write it into
-   `BLOCKED.md`, move to the next task.** Do not guess to keep moving.
+9. If a task needs a human decision (a fee, a GST rate, an account code) — **do not guess.**
+   Append the question to `OPEN-QUESTIONS.md` and carry on with the next task.
+   Reserve `BLOCKED.md` for a **true hard stop** where no further task can proceed —
+   writing it halts the whole loop for human review.
 
 ## Definition of done, per task
 
@@ -47,7 +49,7 @@ production database, Stripe, or Fly, and you must not try. `node_modules` is a s
 
 ## Tasks
 
-### - [ ] T1 — `shared/accounting-codes.ts`: the code tree as typed data
+- [ ] **T1 — `shared/accounting-codes.ts`: the code tree as typed data**
 Port `outputs/budget-automation/coding-tree/code-tree.json` + `mirror-rules.json` into typed
 constants. Include `provenance` on every node.
 
@@ -61,7 +63,7 @@ constants. Include `provenance` on every node.
 > This is the single highest-value test in the whole build. A naive `+30` posts donations into
 > the First Team's cost centre.
 
-### - [ ] T2 — `shared/accounting.ts`: the mapping engine (pure, no DB, no network)
+- [ ] **T2 — `shared/accounting.ts`: the mapping engine (pure, no DB, no network)**
 `resolve({ orgId, programId, optionId, paymentMethod, occurredAt })
   → { code, xeroAccountCode, tracking1, tracking2, taxType, ruleVersion }`
 
@@ -74,7 +76,7 @@ constants. Include `provenance` on every node.
 - An unmapped programme throws, and the error names the programme.
 - Option-level rule beats programme-level rule.
 
-### - [ ] T3 — migration `migrations/2026-07-10_accounting_subledger.sql` (WRITE ONLY, DO NOT APPLY)
+- [ ] **T3 — migration `migrations/2026-07-10_accounting_subledger.sql` (WRITE ONLY, DO NOT APPLY)**
 Tables per `02-architecture.md`: `acct_codes`, `acct_mapping_rules`, `acct_postings`,
 `acct_deferred_schedule`, `acct_xero_sync`, `acct_reconciliation_runs`.
 
@@ -86,7 +88,7 @@ Tables per `02-architecture.md`: `acct_codes`, `acct_mapping_rules`, `acct_posti
 - Mirror into `shared/schema.ts`.
 - Header comment: *"Run on Supabase prod BEFORE the Fly deploy. DO NOT db:push."*
 
-### - [ ] T4 — `server/accounting/post.ts`: the posting emitter (DRY-RUN default)
+- [ ] **T4 — `server/accounting/post.ts`: the posting emitter (DRY-RUN default)**
 `emitPosting(source, sourceId, idempotencyKey, gross, fee, net, occurredAt)`.
 
 - Behind `ACCOUNTING_SUBLEDGER=1`. **Default off** — a fresh deploy changes nothing.
@@ -95,7 +97,7 @@ Tables per `02-architecture.md`: `acct_codes`, `acct_mapping_rules`, `acct_posti
 
 **Must assert:** calling `emitPosting` twice with the same key writes exactly one row.
 
-### - [ ] T5 — hook the four confirm functions
+- [ ] **T5 — hook the four confirm functions**
 `handlePaymentSuccess`, `confirmAndEmailVenueBookings`, `handlePrintPaymentSuccess`,
 `finalizeMembershipPayment` (`server/routes.ts`).
 
@@ -104,13 +106,13 @@ Tables per `02-architecture.md`: `acct_codes`, `acct_mapping_rules`, `acct_posti
   continue. The reconciliation job will catch the gap.
 - `shop_orders` is out of scope — it lives on the unmerged `feat/mfl-shop` branch. Note it.
 
-### - [ ] T6 — Stripe fee capture
+- [ ] **T6 — Stripe fee capture**
 The gross/net split needs the Stripe **balance transaction**, not the PaymentIntent.
 Fetch it (`stripe.balanceTransactions.retrieve`) to get `fee` and `net`.
 
 **Must assert:** `gross_cents - fee_cents === net_cents` on every posting, fuzzed.
 
-### - [ ] T7 — `server/accounting/reconcile.ts`: the drift job
+- [ ] **T7 — `server/accounting/reconcile.ts`: the drift job**
 Nightly. Compares, for a date range:
 - ClubOS `acct_postings` gross ↔ Stripe balance transactions gross.
 - Writes `acct_reconciliation_runs` with `drift_cents` and a jsonb of offending ids.
@@ -118,7 +120,7 @@ Nightly. Compares, for a date range:
 
 **Must assert:** an injected missing posting produces non-zero drift and names the payment intent.
 
-### - [ ] T8 — deferred revenue schedule
+- [ ] **T8 — deferred revenue schedule**
 A term fee taken on 19 July for a term ending 24 September is not July's income.
 
 - `buildSchedule(posting, term)` → rows in `acct_deferred_schedule`, one per calendar month.
@@ -128,7 +130,7 @@ A term fee taken on 19 July for a term ending 24 September is not July's income.
 
 **Must assert:** fuzzed across 1,000 amounts × term lengths, `sum(schedule) === total`, exactly.
 
-### - [ ] T9 — the two-parameter report endpoint
+- [ ] **T9 — the two-parameter report endpoint**
 `GET /api/admin/accounting/coverage?from=&to=` (super-admin).
 
 Returns, per income code: `dollars_cents`, `count`, `count_source`, `complete: bool`.
@@ -138,7 +140,7 @@ Backed by `outputs/budget-automation/chart/coverage.csv`'s logic, computed live.
 > unavailable (Academy today), it returns `complete: false` and says why. **A missing count must
 > never render as zero.**
 
-### - [ ] T10 — seed the codes + MFL mapping rules (script, not applied)
+- [ ] **T10 — seed the codes + MFL mapping rules (script, not applied)**
 `script/seed-accounting.ts`, dry-run by default (`--apply` to write).
 
 - Seeds `acct_codes` from `code-tree.json`, carrying `provenance`.

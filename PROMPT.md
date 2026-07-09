@@ -20,8 +20,14 @@ Read at the start of EVERY run:
 4. **Tick it** `- [x]` in `PLAN.md` with a one-line note.
 5. **Record learnings** — append gotchas and conventions to `AGENTS.md`.
 6. **Commit.** The harness relies on one commit per iteration.
-7. **If blocked** — append the exact question to `BLOCKED.md`, naming who must answer it
-   (Daniel / Slava / Victor / Ryan), then move to the next task. Do not guess.
+7. **If a task needs a human decision** (a real fee, a GST treatment, a Xero account code) —
+   **do not guess.** Append the exact question to `OPEN-QUESTIONS.md`, naming who must answer it
+   (Daniel / Slava / Victor / Ryan), and carry on with the next task.
+
+   ⚠️ **Writing `BLOCKED.md` halts the entire loop.** Reserve it for a true hard stop where no
+   further task can proceed at all. A single unanswerable question is not a hard stop — most of
+   this backlog is designed to be completed *without* any of those answers (unknown codes make
+   `resolve()` throw; the seed leaves them null; that is the correct behaviour, not a blocker).
 
 ## Hard rules
 
