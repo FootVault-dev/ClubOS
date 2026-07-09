@@ -1,24 +1,35 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// EmailBuilder — the premium block email builder (Phase D).
+// EmailBuilder — the premium drag-and-drop block email builder (Phase D).
 //
 // This file is the CONTRACT between the Marketing tab pages (Phase C) and the
 // editor. Phase C React.lazy()-imports this path; the exported
 // EmailBuilderProps / EmailBuilderResult / default export are the agreed surface
 // and MUST stay compatible with the original stub.
 //
-// The heavy @react-email/editor bundle (~836KB gzip) lives in
+// The engine is GrapesJS + grapesjs-mjml (a true section/row/column drag canvas
+// that compiles to Outlook-hardened MJML→HTML) — it lives in
 // ./email-editor-surface and is itself React.lazy()-loaded here, so this wrapper
-// (toolbar, size guard, merge-tag helper, preview, error boundary) renders
-// instantly and the editor chunk streams in behind a spinner.
+// (action bar, size guard, merge-tag helper, error boundary, mobile fallback)
+// renders instantly and the heavy editor chunk streams in behind a spinner.
+//
+// GrapesJS owns the canvas, the device (mobile/desktop) preview, and the code
+// view in its own toolbar — so this wrapper no longer renders a separate preview
+// iframe. It keeps: the Gmail size guard on save, the merge-tag affordance, the
+// error boundary, and a graceful plain-HTML fallback on phones (the 3-pane
+// builder is unusable below ~768px).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import React, { Component, Suspense, useCallback, useRef, useState } from "react";
+import React, { Component, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { getBrandMeta } from "./brand-themes";
 import type { EmailEditorSurfaceHandle } from "./email-editor-surface";
 
-/** What the builder hands back on save: the Tiptap JSON doc (source of truth,
- *  persisted to mkt_templates.block_tree / campaign drafts) plus the compiled
- *  email-safe HTML + plaintext (persisted to mkt_campaigns.body_html for sending). */
+/** What the builder hands back on save: the doc (source of truth, persisted to
+ *  mkt_templates.block_tree / campaign drafts) plus the compiled email-safe HTML
+ *  + plaintext (persisted to mkt_campaigns.body_html for sending).
+ *
+ *  With the GrapesJS engine `doc` is `{ engine:'grapesjs-mjml', version, mjml,
+ *  project }`; on the mobile plain-HTML fallback it is `{ engine:'html', html }`.
+ *  Typed `unknown` so the store stays engine-agnostic. */
 export interface EmailBuilderResult {
   doc: unknown;
   html: string;
@@ -29,7 +40,7 @@ export interface EmailBuilderProps {
   workspaceId: number;
   /** brand key from shared/org-domains.ts — drives the per-brand editor theme */
   brandKey: string;
-  /** existing Tiptap JSON doc when editing a draft/template; null for blank */
+  /** existing doc when editing a draft/template; null for blank */
   initialDoc?: unknown | null;
   /** called with doc + compiled html/text whenever the user saves */
   onSave: (result: EmailBuilderResult) => void | Promise<void>;
@@ -45,6 +56,7 @@ const MERGE_TAGS: { label: string; tag: string }[] = [
   { label: "First name", tag: "{{first_name}}" },
   { label: "Last name", tag: "{{last_name}}" },
   { label: "Email", tag: "{{email}}" },
+  { label: "Unsubscribe URL", tag: "{{unsubscribe_url}}" },
 ];
 
 function byteLength(s: string): number {
@@ -56,6 +68,30 @@ function byteLength(s: string): number {
 }
 function kb(bytes: number): string {
   return `${(bytes / 1024).toFixed(0)}KB`;
+}
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** True below ~768px, where the 3-pane builder is too cramped to use. */
+function useIsNarrow(maxWidth = 767): boolean {
+  const query = `(max-width: ${maxWidth}px)`;
+  const [narrow, setNarrow] = useState<boolean>(
+    () => typeof window !== "undefined" && window.matchMedia(query).matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(query);
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [query]);
+  return narrow;
 }
 
 // Lazy boundary for the heavy editor package.
@@ -101,7 +137,7 @@ class SurfaceErrorBoundary extends Component<
 
 function LoadingSurface() {
   return (
-    <div className="flex items-center justify-center rounded-lg border border-dashed p-12 text-sm text-muted-foreground">
+    <div className="mkt-grapes-holder flex items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
       Loading the email builder…
     </div>
   );
@@ -114,13 +150,18 @@ export default function EmailBuilder({
   onDirty,
 }: EmailBuilderProps) {
   const surfaceRef = useRef<EmailEditorSurfaceHandle | null>(null);
-  const [mode, setMode] = useState<"edit" | "preview">("edit");
-  const [device, setDevice] = useState<"mobile" | "desktop">("desktop");
-  const [previewHtml, setPreviewHtml] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sizeNote, setSizeNote] = useState<string | null>(null);
   const [surfaceKey, setSurfaceKey] = useState(0);
+  const isNarrow = useIsNarrow();
+
+  // Mobile plain-HTML fallback state (seeded from a legacy html-shaped doc).
+  const seededHtml =
+    initialDoc && typeof initialDoc === "object" && typeof (initialDoc as { html?: unknown }).html === "string"
+      ? ((initialDoc as { html: string }).html)
+      : "";
+  const [mobileHtml, setMobileHtml] = useState<string>(seededHtml);
 
   const brand = getBrandMeta(brandKey);
 
@@ -128,16 +169,9 @@ export default function EmailBuilder({
     surfaceRef.current?.insertText(tag);
   }, []);
 
-  const handleSave = useCallback(async () => {
-    const surface = surfaceRef.current;
-    if (!surface?.isReady()) {
-      setError("The editor is still loading — try again in a moment.");
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      const result = await surface.getResult();
+  // Shared guard + persist for BOTH desktop and mobile save paths.
+  const commit = useCallback(
+    async (result: EmailBuilderResult): Promise<void> => {
       const bytes = byteLength(result.html);
       if (bytes >= BLOCK_BYTES) {
         setError(
@@ -152,83 +186,69 @@ export default function EmailBuilder({
           : null,
       );
       await onSave(result);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't save the email.");
-    } finally {
-      setSaving(false);
-    }
-  }, [onSave]);
+    },
+    [onSave],
+  );
 
-  const handlePreview = useCallback(async () => {
+  const handleSaveDesktop = useCallback(async () => {
     const surface = surfaceRef.current;
     if (!surface?.isReady()) {
       setError("The editor is still loading — try again in a moment.");
       return;
     }
+    setSaving(true);
     setError(null);
     try {
       const result = await surface.getResult();
-      setPreviewHtml(result.html);
-      setMode("preview");
+      await commit(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't render the preview.");
+      setError(e instanceof Error ? e.message : "Couldn't save the email.");
+    } finally {
+      setSaving(false);
     }
-  }, []);
+  }, [commit]);
 
-  const previewWidth = device === "mobile" ? 390 : 640;
+  const handleSaveMobile = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await commit({
+        doc: { engine: "html", html: mobileHtml },
+        html: mobileHtml,
+        text: stripHtml(mobileHtml),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save the email.");
+    } finally {
+      setSaving(false);
+    }
+  }, [commit, mobileHtml]);
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Toolbar */}
+      {/* Action bar */}
       <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-2">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setMode("edit")}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              mode === "edit" ? "bg-background shadow-sm" : "text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={handlePreview}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              mode === "preview" ? "bg-background shadow-sm" : "text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            Preview
-          </button>
-        </div>
-
-        {mode === "preview" && (
-          <div className="flex items-center gap-1 border-l pl-2">
-            <button
-              type="button"
-              onClick={() => setDevice("mobile")}
-              className={`rounded-md px-2.5 py-1.5 text-xs font-medium ${
-                device === "mobile" ? "bg-background shadow-sm" : "text-muted-foreground hover:bg-muted"
-              }`}
-            >
-              Mobile
-            </button>
-            <button
-              type="button"
-              onClick={() => setDevice("desktop")}
-              className={`rounded-md px-2.5 py-1.5 text-xs font-medium ${
-                device === "desktop" ? "bg-background shadow-sm" : "text-muted-foreground hover:bg-muted"
-              }`}
-            >
-              Desktop
-            </button>
+        {!isNarrow && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-xs text-muted-foreground">Personalise:</span>
+            {MERGE_TAGS.map((m) => (
+              <button
+                key={m.tag}
+                type="button"
+                onClick={() => insertTag(m.tag)}
+                className="rounded-full border px-2.5 py-1 font-mono text-[11px] hover:bg-muted"
+                title={`Insert ${m.tag} — swapped for each recipient's ${m.label.toLowerCase()} at send`}
+              >
+                {m.tag}
+              </button>
+            ))}
           </div>
         )}
 
         <div className="ml-auto flex items-center gap-2">
           <span
             className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex"
-            title={`This editor is themed for ${brand.name}`}
+            title={`This builder is themed for ${brand.name}`}
           >
             <span
               className="inline-block h-2.5 w-2.5 rounded-full"
@@ -238,7 +258,7 @@ export default function EmailBuilder({
           </span>
           <button
             type="button"
-            onClick={handleSave}
+            onClick={isNarrow ? handleSaveMobile : handleSaveDesktop}
             disabled={saving}
             className="rounded-md bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
@@ -246,27 +266,6 @@ export default function EmailBuilder({
           </button>
         </div>
       </div>
-
-      {/* Merge-tag helper (only while editing) */}
-      {mode === "edit" && (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Personalise:</span>
-          {MERGE_TAGS.map((m) => (
-            <button
-              key={m.tag}
-              type="button"
-              onClick={() => insertTag(m.tag)}
-              className="rounded-full border px-2.5 py-1 font-mono text-[11px] hover:bg-muted"
-              title={`Insert ${m.tag} — swapped for each recipient's ${m.label.toLowerCase()} at send`}
-            >
-              {m.tag}
-            </button>
-          ))}
-          <span className="text-muted-foreground">
-            Tags are filled in per recipient when the email sends.
-          </span>
-        </div>
-      )}
 
       {/* Messages */}
       {error && (
@@ -280,16 +279,44 @@ export default function EmailBuilder({
         </div>
       )}
 
-      {/* Image note */}
-      {mode === "edit" && (
-        <p className="text-[11px] text-muted-foreground">
-          Images are embedded inline for now (a hosted image CDN is a fast-follow). Keep uploads
-          small — large images push the email toward Gmail's clip limit.
-        </p>
-      )}
-
-      {/* Editor (kept mounted) + preview overlay */}
-      <div className={mode === "preview" ? "hidden" : "block"}>
+      {isNarrow ? (
+        /* ── Mobile / narrow fallback ──────────────────────────────────────── */
+        <div className="flex flex-col gap-3">
+          <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm">
+            <p className="font-medium">The visual builder is designed for a larger screen.</p>
+            <p className="mt-1 text-muted-foreground">
+              Open this on a laptop to drag-and-drop your design. On a phone you can still edit the
+              raw HTML below and preview it — merge tags like{" "}
+              <code className="font-mono text-[11px]">{"{{first_name}}"}</code> and{" "}
+              <code className="font-mono text-[11px]">{"{{unsubscribe_url}}"}</code> work here too.
+            </p>
+          </div>
+          <textarea
+            value={mobileHtml}
+            onChange={(e) => {
+              setMobileHtml(e.target.value);
+              onDirty?.();
+            }}
+            rows={12}
+            placeholder="<p>Write or paste your email HTML here…</p>"
+            className="w-full rounded-lg border bg-background p-3 font-mono text-xs"
+          />
+          <div className="rounded-lg border bg-neutral-100 p-3 dark:bg-neutral-900">
+            <p className="mb-2 text-[11px] font-medium text-muted-foreground">Preview</p>
+            <iframe
+              title="Email preview"
+              sandbox=""
+              srcDoc={
+                mobileHtml ||
+                "<p style='font-family:sans-serif;padding:24px;color:#888'>Nothing to preview yet.</p>"
+              }
+              className="w-full rounded-md border-0 bg-white"
+              style={{ height: 420, boxShadow: "0 4px 24px rgba(0,0,0,0.12)" }}
+            />
+          </div>
+        </div>
+      ) : (
+        /* ── Desktop 3-pane builder ────────────────────────────────────────── */
         <SurfaceErrorBoundary onRetry={() => setSurfaceKey((k) => k + 1)}>
           <Suspense fallback={<LoadingSurface />}>
             <LazySurface
@@ -301,25 +328,6 @@ export default function EmailBuilder({
             />
           </Suspense>
         </SurfaceErrorBoundary>
-      </div>
-
-      {mode === "preview" && (
-        <div className="flex justify-center overflow-auto rounded-lg border bg-neutral-100 p-4 dark:bg-neutral-900">
-          <iframe
-            title="Email preview"
-            sandbox=""
-            srcDoc={previewHtml || "<p style='font-family:sans-serif;padding:24px;color:#888'>Nothing to preview yet.</p>"}
-            style={{
-              width: previewWidth,
-              maxWidth: "100%",
-              height: 720,
-              border: "0",
-              background: "#fff",
-              borderRadius: 8,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.12)",
-            }}
-          />
-        </div>
       )}
     </div>
   );

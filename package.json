@@ -71,6 +71,8 @@
     "express-session": "^1.19.0",
     "framer-motion": "^11.13.1",
     "google-auth-library": "^10.6.2",
+    "grapesjs": "0.23.2",
+    "grapesjs-mjml": "1.0.8",
     "graphile-worker": "0.17.3",
     "hls.js": "^1.6.16",
     "ical-generator": "^10.2.0",
