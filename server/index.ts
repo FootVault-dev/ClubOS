@@ -91,6 +91,12 @@ app.use(attributionCookieMiddleware);
   const { registerFeedbackRoutes } = await import("./feedback-routes");
   registerFeedbackRoutes(app);
 
+  // Hiring — job postings + applications. Admin side is gated by
+  // requireTab("hiring") to the USG workspace; the public apply endpoints are
+  // CORS-allow-listed to our own brand sites and carry no session.
+  const { registerHiringRoutes } = await import("./hiring-routes");
+  registerHiringRoutes(app);
+
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
   // gated by requireTab("cic-content-marketplace") to the CIC workspace.

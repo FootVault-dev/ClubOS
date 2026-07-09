@@ -62,6 +62,7 @@ import AdminMembership from "@/pages/admin-membership";
 import AdminDeclarations from "@/pages/admin-declarations";
 import GroupProjects from "@/pages/group-projects";
 import GroupContent from "@/pages/group-content";
+import GroupHiring from "@/pages/group-hiring";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
@@ -255,6 +256,7 @@ function AdminRouter() {
         <Route path="/admin/calendar" component={GroupCalendar} />
         <Route path="/admin/projects" component={GroupProjects} />
         <Route path="/admin/content" component={GroupContent} />
+        <Route path="/admin/hiring" component={GroupHiring} />
         <Route path="/admin/sponsorship" component={GroupSponsorship} />
         <Route path="/admin/proposals" component={GroupProposals} />
         <Route path="/admin/grants" component={GroupGrants} />

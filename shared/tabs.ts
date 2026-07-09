@@ -173,6 +173,7 @@ const groupTabs: TabDef[] = [
   { slug: "calendar", title: "Calendar", url: "/admin/calendar" },
   { slug: "projects", title: "Projects", url: "/admin/projects" },
   { slug: "content", title: "Content", url: "/admin/content" },
+  { slug: "hiring", title: "Hiring", url: "/admin/hiring" },
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
   { slug: "proposals", title: "Proposals", url: "/admin/proposals" },
   { slug: "grants", title: "Grants", url: "/admin/grants" },
