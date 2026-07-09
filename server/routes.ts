@@ -55,6 +55,9 @@ import {
   checkEligibility as checkAcademyEligibility,
   fullYearAvailable as academyFullYearAvailable,
   validateAcademyRegistration,
+  nzTodayIso,
+  termProgress as academyTermProgress,
+  prorateTermPriceCents as academyProrate,
   POLICY_VERSION as ACADEMY_POLICY_VERSION,
   NZF_ETHNICITIES as NZF_ETHNICITY_OPTIONS,
 } from "@shared/academy";
@@ -1855,10 +1858,63 @@ export async function registerRoutes(
   // the paying parent (AGENTS.md hard rule 4).
   // ══════════════════════════════════════════════════════════════════════════
 
+  /** The term a programme is bound to, or null. */
+  async function academyTermFor(program: any): Promise<any | null> {
+    if (!program.termId) return null;
+    const [t] = await db.select().from(terms).where(eq(terms.id, program.termId));
+    return t ?? null;
+  }
+
+  const ACADEMY_DEFAULT_SESSIONS = 10;   // NZ school term
+
+  /**
+   * The single place an academy price is computed. Both the public quote and the
+   * real charge go through it, so the number a parent is shown is the number
+   * they pay — by construction, not by two implementations agreeing.
+   *
+   * Pro-rata: joining five weeks into a ten-week term buys five sessions.
+   * Returns null when the term has ended (nothing left to sell).
+   */
+  function academyQuoteFor(
+    program: any,
+    term: any | null,
+    section: "core" | "additional",
+    termPriceCents: number,
+    plan: "term" | "year",
+  ) {
+    if (plan === "year") {
+      // Buying the season, not a slice of the current term — no pro-rata.
+      return { ...quoteAcademyFees({ termPriceCents, plan, section }), sessionsRemaining: null, totalSessions: null, termStatus: null };
+    }
+
+    const totalSessions = program.sessionCount ?? ACADEMY_DEFAULT_SESSIONS;
+    const prorated = program.pricingModel === "term_prorated" && term
+      ? academyTermProgress(nzTodayIso(), term.startDate, term.endDate, totalSessions)
+      : null;
+
+    if (prorated?.status === "ended") return null;
+
+    const payable = prorated
+      ? academyProrate(termPriceCents, prorated.sessionsRemaining, prorated.totalSessions)
+      : termPriceCents;
+
+    return {
+      ...quoteAcademyFees({ termPriceCents, plan, section, proratedTermPriceCents: payable }),
+      sessionsRemaining: prorated?.sessionsRemaining ?? totalSessions,
+      totalSessions,
+      termStatus: prorated?.status ?? null,
+    };
+  }
+
   /** Shape a programme for the public list/detail views. Never leaks internals. */
-  function publicAcademyProgramme(p: any, options: any[], spotsRemaining: number | null) {
+  function publicAcademyProgramme(p: any, options: any[], spotsRemaining: number | null, term: any | null) {
     const section: "core" | "additional" = p.academySection === "additional" ? "additional" : "core";
     const sellable = options.filter((o) => o.isActive && (o.fullPriceCents ?? 0) > 0);
+    // A term that has finished cannot be sold, however open the admin left it.
+    const termEnded =
+      term && p.pricingModel === "term_prorated"
+        ? academyTermProgress(nzTodayIso(), term.startDate, term.endDate, p.sessionCount ?? ACADEMY_DEFAULT_SESSIONS)?.status === "ended"
+        : false;
     return {
       id: p.id,
       name: p.name,
@@ -1875,8 +1931,8 @@ export async function registerRoutes(
       isFull: typeof spotsRemaining === "number" && spotsRemaining <= 0,
       // The gate. `registrationOpen` is an explicit admin decision; a priced
       // option is proof somebody entered the fee schedule.
-      registrationOpen: Boolean(p.registrationOpen) && sellable.length > 0,
-      allowFullYear: academyFullYearAvailable(section),
+      registrationOpen: Boolean(p.registrationOpen) && sellable.length > 0 && !termEnded,
+      allowFullYear: academyFullYearAvailable(section, term?.termNumber ?? null),
       options: sellable.map((o) => ({
         id: o.id,
         name: o.name,
@@ -1941,10 +1997,19 @@ export async function registerRoutes(
         (p: any) => p.type === "academy" && p.isActive && p.organizationId === org.id,
       );
 
+      // Load every bound term in ONE query — a term drives both the pro-rata and
+      // whether the full-year plan may be offered.
+      const termIds = Array.from(new Set(academy.map((p: any) => p.termId).filter(Boolean))) as number[];
+      const termRows = termIds.length
+        ? await db.select().from(terms).where(inArray(terms.id, termIds))
+        : [];
+      const termById = new Map(termRows.map((t: any) => [t.id, t]));
+
       const out = [];
       for (const p of academy) {
         const options = await storage.getProgramOptions(p.id, { activeOnly: true });
-        out.push(publicAcademyProgramme(p, options, await academySpotsRemaining(p)));
+        const term = p.termId ? termById.get(p.termId) ?? null : null;
+        out.push(publicAcademyProgramme(p, options, await academySpotsRemaining(p), term));
       }
       // Core pathway first, then add-ons; youngest first inside each.
       out.sort((a, b) =>
@@ -1965,26 +2030,20 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Programme not found" });
       }
       const options = await storage.getProgramOptions(program.id, { activeOnly: true });
-      const shaped = publicAcademyProgramme(program, options, await academySpotsRemaining(program));
-
-      let term: any = null;
-      if (program.termId) {
-        const [t] = await db.select().from(terms).where(eq(terms.id, program.termId));
-        term = t ?? null;
-      }
+      const term = await academyTermFor(program);
+      const shaped = publicAcademyProgramme(program, options, await academySpotsRemaining(program), term);
 
       // Quote every sellable option under every plan the policy permits, so the
-      // page can render real prices without ever computing money itself.
+      // page can render real prices without ever computing money itself. Term
+      // quotes are pro-rated for a mid-term join by the SAME function that
+      // charges the card.
       const quotes: any[] = [];
       for (const o of shaped.options) {
         for (const plan of ["term", "year"] as const) {
           if (plan === "year" && !shaped.allowFullYear) continue;
           try {
-            // The quote already carries `plan` — don't restate it.
-            quotes.push({
-              optionId: o.id,
-              ...quoteAcademyFees({ termPriceCents: o.termPriceCents, plan, section: shaped.section }),
-            });
+            const q = academyQuoteFor(program, term, shaped.section, o.termPriceCents, plan);
+            if (q) quotes.push({ optionId: o.id, ...q });   // null = term has ended
           } catch {
             /* an unsellable combination simply isn't offered */
           }
@@ -2050,14 +2109,19 @@ export async function registerRoutes(
             : null;
       if (!option) return res.status(400).json({ message: "Choose which programme option you're registering for." });
 
-      if (plan === "year" && !academyFullYearAvailable(section)) {
+      const term = await academyTermFor(program);
+      if (plan === "year" && !academyFullYearAvailable(section, term?.termNumber ?? null)) {
         return res.status(400).json({
-          message: "Full-year payment isn't available for this programme — it's charged per term.",
+          message:
+            section === "additional"
+              ? "Full-year payment isn't available for this programme — it's charged per term."
+              : "The season is already under way, so this programme is charged per term.",
         });
       }
 
       // ── 3. Age grade ───────────────────────────────────────────────────────
-      const seasonYear: number = program.seasonYear ?? new Date().getFullYear();
+      // NZ year, not UTC — on 1 January the two disagree and every child is misgraded.
+      const seasonYear: number = program.seasonYear ?? Number(nzTodayIso().slice(0, 4));
       const eligibility = checkAcademyEligibility(
         String(child.dateOfBirth),
         seasonYear,
@@ -2073,7 +2137,16 @@ export async function registerRoutes(
       }
 
       // ── 5. Price. Server-side, from the DB, never from the request body. ────
-      const quote = quoteAcademyFees({ termPriceCents: option.fullPriceCents, plan, section });
+      // Pro-rated for a mid-term join by the SAME function that quoted the page,
+      // so the number shown and the number charged cannot drift apart.
+      const quote = academyQuoteFor(program, term, section, option.fullPriceCents, plan);
+      if (!quote) {
+        return res.status(409).json({
+          code: "term_ended",
+          waitlist: true,
+          message: "This term has finished. Join the list and we'll tell you when the next one opens.",
+        });
+      }
       if (quote.totalCents <= 0) return res.status(409).json({ code: "not_open", waitlist: true, message: "Registrations for this programme aren't open yet." });
 
       // ── 6. Guardian: find, don't duplicate. Enrich, never overwrite. ────────

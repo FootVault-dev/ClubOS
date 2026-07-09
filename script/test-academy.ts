@@ -15,6 +15,10 @@ import {
   fullYearAvailable,
   quoteAcademy,
   validateAcademyRegistration,
+  nzTodayIso,
+  daysBetween,
+  termProgress,
+  prorateTermPriceCents,
   type AcademyRegistrationInput,
 } from "../shared/academy";
 
@@ -93,9 +97,152 @@ ok("Maori without macron is NOT silently accepted", () => assert.equal(isNzfEthn
 ok("junk ethnicity rejected", () => assert.equal(isNzfEthnicity("Klingon"), false));
 ok("non-string rejected", () => assert.equal(isNzfEthnicity(42), false));
 
-// ── fullYearAvailable — the policy exclusion ───────────────────────────────
-ok("core programmes may pay for the year", () => assert.equal(fullYearAvailable("core"), true));
-ok("additional programmes may NOT", () => assert.equal(fullYearAvailable("additional"), false));
+// ── fullYearAvailable — the policy exclusions ──────────────────────────────
+ok("core, unbound term → year plan offered", () => assert.equal(fullYearAvailable("core"), true));
+ok("core, Term 1 → year plan offered", () => assert.equal(fullYearAvailable("core", 1), true));
+ok("core, Term 3 → year plan REFUSED (season already half gone)", () => {
+  assert.equal(fullYearAvailable("core", 3), false);
+});
+ok("additional programmes may NEVER pay for the year", () => {
+  assert.equal(fullYearAvailable("additional"), false);
+  assert.equal(fullYearAvailable("additional", 1), false);
+});
+
+// ── nzTodayIso — the timezone trap ─────────────────────────────────────────
+ok("nzTodayIso returns YYYY-MM-DD", () => assert.match(nzTodayIso(), /^\d{4}-\d{2}-\d{2}$/));
+ok("12:30 UTC on 8 Jul is already 9 Jul in NZ — the whole point", () => {
+  // NZST is UTC+12, so anything from 12:00 UTC onward is tomorrow in NZ.
+  // toISOString() still says the 8th. That gap is the bug.
+  const d = new Date("2026-07-08T12:30:00Z");
+  assert.equal(nzTodayIso(d), "2026-07-09");
+  assert.equal(d.toISOString().slice(0, 10), "2026-07-08"); // what we must never use
+});
+ok("11:00 UTC on 8 Jul is still the 8th in NZ (23:00 local)", () => {
+  assert.equal(nzTodayIso(new Date("2026-07-08T11:00:00Z")), "2026-07-08");
+});
+ok("00:30 UTC is already the same NZ day", () => {
+  assert.equal(nzTodayIso(new Date("2026-07-09T00:30:00Z")), "2026-07-09");
+});
+ok("mid-winter (NZST, UTC+12) boundary", () => {
+  assert.equal(nzTodayIso(new Date("2026-07-08T12:00:00Z")), "2026-07-09");
+});
+ok("mid-summer (NZDT, UTC+13) boundary", () => {
+  assert.equal(nzTodayIso(new Date("2026-01-08T11:00:00Z")), "2026-01-09");
+});
+
+// ── daysBetween ────────────────────────────────────────────────────────────
+ok("daysBetween counts calendar days", () => assert.equal(daysBetween("2026-07-20", "2026-07-27"), 7));
+ok("daysBetween is signed", () => assert.equal(daysBetween("2026-07-27", "2026-07-20"), -7));
+ok("daysBetween same day = 0", () => assert.equal(daysBetween("2026-07-20", "2026-07-20"), 0));
+ok("daysBetween crosses a DST change without drift", () => {
+  // NZ leaves daylight time 5 Apr 2026. UTC-anchored arithmetic must not care.
+  assert.equal(daysBetween("2026-04-01", "2026-04-10"), 9);
+});
+ok("daysBetween rejects junk", () => assert.equal(daysBetween("nope", "2026-07-20"), null));
+
+// ── termProgress — Daniel's rule, verbatim ─────────────────────────────────
+// "If they join 5 weeks into the term and it's a 10-week term, then they only
+//  pay for the 5 weeks."
+const T_START = "2026-07-20";  // Term 3 2026
+const T_END = "2026-09-25";
+
+ok("join exactly 5 weeks in → 5 of 10 sessions remain", () => {
+  const p = termProgress("2026-08-24", T_START, T_END, 10)!;  // start + 35 days
+  assert.equal(p.weeksElapsed, 5);
+  assert.equal(p.sessionsRemaining, 5);
+  assert.equal(p.status, "running");
+});
+ok("day one of the term → all 10 sessions", () => {
+  const p = termProgress(T_START, T_START, T_END, 10)!;
+  assert.equal(p.sessionsRemaining, 10);
+  assert.equal(p.weeksElapsed, 0);
+});
+ok("before the term starts → full price, nothing missed", () => {
+  const p = termProgress("2026-07-01", T_START, T_END, 10)!;
+  assert.equal(p.status, "before");
+  assert.equal(p.sessionsRemaining, 10);
+});
+ok("six days in is still week 1 → 10 sessions", () => {
+  assert.equal(termProgress("2026-07-26", T_START, T_END, 10)!.sessionsRemaining, 10);
+});
+ok("seven days in is week 2 → 9 sessions", () => {
+  assert.equal(termProgress("2026-07-27", T_START, T_END, 10)!.sessionsRemaining, 9);
+});
+ok("after the term ends → 0 sessions, status ended", () => {
+  const p = termProgress("2026-09-26", T_START, T_END, 10)!;
+  assert.equal(p.status, "ended");
+  assert.equal(p.sessionsRemaining, 0);
+});
+ok("last day of term is still sellable (1 session)", () => {
+  const p = termProgress(T_END, T_START, T_END, 10)!;
+  assert.equal(p.status, "running");
+  assert.ok(p.sessionsRemaining >= 1, `got ${p.sessionsRemaining}`);
+});
+ok("sessions never exceed the total, however late", () => {
+  for (let d = 0; d <= 80; d++) {
+    const day = new Date(Date.UTC(2026, 6, 20 + d)).toISOString().slice(0, 10);
+    const p = termProgress(day, T_START, T_END, 10);
+    if (!p) continue;
+    assert.ok(p.sessionsRemaining >= 0 && p.sessionsRemaining <= 10, `${day} → ${p.sessionsRemaining}`);
+  }
+});
+ok("termProgress rejects a zero session count", () => assert.equal(termProgress(T_START, T_START, T_END, 0), null));
+
+// ── prorateTermPriceCents ──────────────────────────────────────────────────
+ok("5 of 10 sessions halves a $160 term", () => {
+  assert.equal(prorateTermPriceCents(16_000, 5, 10), 8_000);
+});
+ok("full term is never discounted", () => assert.equal(prorateTermPriceCents(16_000, 10, 10), 16_000));
+ok("more remaining than total is capped at full", () => assert.equal(prorateTermPriceCents(16_000, 12, 10), 16_000));
+ok("no sessions left = nothing to sell", () => assert.equal(prorateTermPriceCents(16_000, 0, 10), 0));
+ok("technification: 3 of 10 sessions of $150", () => {
+  assert.equal(prorateTermPriceCents(15_000, 3, 10), 4_500);
+});
+ok("pro-rata rounds to whole cents", () => {
+  const p = prorateTermPriceCents(40_500, 7, 10);   // $405 × 0.7
+  assert.equal(p, 28_350);
+  assert.ok(Number.isInteger(p));
+});
+ok("odd ratios stay integral", () => {
+  for (let s = 1; s <= 10; s++) {
+    const p = prorateTermPriceCents(80_500, s, 10);  // Academy U13–U15 $805
+    assert.ok(Number.isInteger(p) && p > 0 && p <= 80_500, `s=${s} → ${p}`);
+  }
+});
+
+// ── quoteAcademy + pro-rata together (the real path) ───────────────────────
+ok("FUNiño joining 5 weeks into a 10-week term pays $80.00", () => {
+  const p = termProgress("2026-08-24", T_START, T_END, 10)!;
+  const prorated = prorateTermPriceCents(16_000, p.sessionsRemaining, p.totalSessions);
+  const q = quoteAcademy({ termPriceCents: 16_000, plan: "term", section: "core", proratedTermPriceCents: prorated });
+  assert.equal(q.totalCents, 8_000);
+  assert.equal(q.subtotalCents, 16_000);
+  assert.equal(q.discountCents, 8_000);
+  assert.equal(q.subtotalCents - q.discountCents, q.totalCents);
+});
+ok("Technification joining 5 weeks in pays $75.00", () => {
+  const p = termProgress("2026-08-24", T_START, T_END, 10)!;
+  const prorated = prorateTermPriceCents(15_000, p.sessionsRemaining, p.totalSessions);
+  const q = quoteAcademy({ termPriceCents: 15_000, plan: "term", section: "additional", proratedTermPriceCents: prorated });
+  assert.equal(q.totalCents, 7_500);
+});
+ok("joining before the term starts pays full price", () => {
+  const p = termProgress("2026-07-01", T_START, T_END, 10)!;
+  const prorated = prorateTermPriceCents(16_000, p.sessionsRemaining, p.totalSessions);
+  const q = quoteAcademy({ termPriceCents: 16_000, plan: "term", section: "core", proratedTermPriceCents: prorated });
+  assert.equal(q.totalCents, 16_000);
+  assert.equal(q.discountCents, 0);
+});
+ok("the invariant holds across every join week", () => {
+  for (let week = 0; week < 10; week++) {
+    const day = new Date(Date.UTC(2026, 6, 20 + week * 7)).toISOString().slice(0, 10);
+    const p = termProgress(day, T_START, T_END, 10)!;
+    const prorated = prorateTermPriceCents(80_500, p.sessionsRemaining, p.totalSessions);
+    const q = quoteAcademy({ termPriceCents: 80_500, plan: "term", section: "core", proratedTermPriceCents: prorated });
+    assert.equal(q.subtotalCents - q.discountCents, q.totalCents, `week ${week}`);
+    assert.equal(p.sessionsRemaining, 10 - week, `week ${week} sessions`);
+  }
+});
 
 // ── quoteAcademy — money ────────────────────────────────────────────────────
 ok("single term at full price", () => {

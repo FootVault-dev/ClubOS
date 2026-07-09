@@ -88,6 +88,10 @@ interface Quote {
   totalCents: number;
   termsCovered: number;
   reason: string;
+  /** Pro-rata, present on 'term' quotes when the programme is bound to a term. */
+  sessionsRemaining?: number | null;
+  totalSessions?: number | null;
+  termStatus?: "before" | "running" | "ended" | null;
 }
 
 interface TermInfo {
@@ -605,6 +609,7 @@ export default function AcademyRegisterPage() {
         // The server tags every 409 with a `code` — never sniff the message.
         // (A programme can fill between loading this page and submitting it.)
         if (res.status === 409 && (data.code === "full" || data.full)) { setBlocked("full"); return; }
+        // "term_ended" and "not_open" both mean: no payment, capture the family.
         if (res.status === 409) { setBlocked("closed"); return; }
         throw new Error(data.message || (Array.isArray(data.errors) && data.errors[0]) || "Something went wrong — please try again.");
       }
@@ -1152,9 +1157,20 @@ function ChooseStep({
                     {q && (
                       <div className="mt-1">
                         <span className="font-mono text-[15px]" style={{ color: isSelected ? BRAND.goldBright : BRAND.white }}>{money(q.totalCents)}</span>
+                        {/* Mid-term join: strike the full term fee so the parent can
+                            see they are only paying for the sessions that are left.
+                            An unexplained lower price reads as an error. */}
+                        {p === "term" && q.discountCents > 0 && (
+                          <span className="ml-2 font-mono text-[12px] line-through" style={{ color: BRAND.mute }}>{money(q.subtotalCents)}</span>
+                        )}
                         {p === "year" && q.discountCents > 0 && (
                           <span className="ml-2 text-[12px] font-semibold" style={{ color: BRAND.goldBright }}>save {money(q.discountCents)} (5%)</span>
                         )}
+                      </div>
+                    )}
+                    {p === "term" && q?.sessionsRemaining != null && q.totalSessions != null && q.sessionsRemaining < q.totalSessions && (
+                      <div className="mt-1.5 text-[12px] leading-snug" style={{ color: BRAND.goldBright }}>
+                        {q.sessionsRemaining} of {q.totalSessions} sessions left — you only pay for what's left
                       </div>
                     )}
                   </button>

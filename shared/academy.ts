@@ -127,6 +127,101 @@ export function checkEligibility(
   return { eligible: true, grade, reason: `U${grade} in ${seasonYear}` };
 }
 
+// ── Pro-rata: join late, pay for what's left ────────────────────────────────
+
+/** Today's date in New Zealand, as `YYYY-MM-DD`.
+ *
+ *  NEVER use `new Date().toISOString().slice(0,10)` for an NZ date. NZ is UTC+12
+ *  (+13 in daylight time), so from midday local onwards the UTC date is still
+ *  YESTERDAY. A pro-rata computed from it hands the parent an extra session's
+ *  discount for half of every day, and misgrades children born on 1 January.
+ *  `en-CA` formats as YYYY-MM-DD. */
+export function nzTodayIso(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Pacific/Auckland",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
+/** Whole days from `a` to `b`, both `YYYY-MM-DD`. Anchored at UTC midnight so
+ *  the arithmetic is timezone-free — these are calendar dates, not instants. */
+export function daysBetween(aIso: string, bIso: string): number | null {
+  const p = (s: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim());
+    return m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+  };
+  const a = p(aIso);
+  const b = p(bIso);
+  if (a === null || b === null) return null;
+  return Math.round((b - a) / 86_400_000);
+}
+
+export interface TermProgress {
+  /** Sessions the parent is actually buying. */
+  sessionsRemaining: number;
+  totalSessions: number;
+  /** 0 = term hasn't started, so nothing has been missed. */
+  weeksElapsed: number;
+  status: "before" | "running" | "ended";
+}
+
+/**
+ * How much of a term is left, in sessions.
+ *
+ * Daniel's rule, verbatim: "If they join 5 weeks into the term and it's a
+ * 10-week term, then they only pay for the 5 weeks."
+ *
+ * So a child joining on the first day of week 6 has 5 weeks elapsed and 5
+ * sessions remaining. Before the term starts, nothing is missed → full price.
+ * After it ends, nothing is left → the term can't be sold.
+ *
+ * The old `quoteProgram()` counted weeks *to the end date* and added one, which
+ * returns 6 in that example — the parent pays for a session that has already
+ * happened.
+ */
+export function termProgress(
+  todayIso: string,
+  termStartIso: string,
+  termEndIso: string,
+  totalSessions: number,
+): TermProgress | null {
+  if (!Number.isInteger(totalSessions) || totalSessions <= 0) return null;
+  const sinceStart = daysBetween(termStartIso, todayIso);
+  const untilEnd = daysBetween(todayIso, termEndIso);
+  if (sinceStart === null || untilEnd === null) return null;
+
+  if (sinceStart < 0) {
+    return { sessionsRemaining: totalSessions, totalSessions, weeksElapsed: 0, status: "before" };
+  }
+  if (untilEnd < 0) {
+    return { sessionsRemaining: 0, totalSessions, weeksElapsed: totalSessions, status: "ended" };
+  }
+  const weeksElapsed = Math.min(totalSessions, Math.floor(sinceStart / 7));
+  return {
+    sessionsRemaining: Math.max(0, totalSessions - weeksElapsed),
+    totalSessions,
+    weeksElapsed,
+    status: "running",
+  };
+}
+
+/** Pro-rated price for a part-term join. Rounds the price the parent PAYS, and
+ *  `quoteAcademy` derives the discount from it, so the two always reconcile. */
+export function prorateTermPriceCents(
+  termPriceCents: number,
+  sessionsRemaining: number,
+  totalSessions: number,
+): number {
+  if (!Number.isInteger(termPriceCents) || termPriceCents <= 0) {
+    throw new Error("termPriceCents must be a positive integer number of cents");
+  }
+  if (sessionsRemaining >= totalSessions) return termPriceCents;
+  if (sessionsRemaining <= 0) return 0;
+  return Math.round((termPriceCents * sessionsRemaining) / totalSessions);
+}
+
 // ── Fees ────────────────────────────────────────────────────────────────────
 
 export interface AcademyQuoteInput {
@@ -148,11 +243,25 @@ export interface AcademyQuote {
   reason: string;
 }
 
-/** The full-year 5% is a discount on TRAINING fees. Technification, Goalkeeper
- *  and the Morning Programme ('additional') are excluded by the policy, so they
- *  can only ever be bought a term at a time. */
-export function fullYearAvailable(section: AcademySection): boolean {
-  return section === "core";
+/**
+ * Can this programme be bought for the whole year?
+ *
+ * Two gates, both straight from the Membership & Payment Policy 2026:
+ *
+ *  1. The 5% is a discount on TRAINING fees. Technification, Goalkeeper and the
+ *     Morning Programme ('additional') are excluded, so they sell by the term only.
+ *  2. "...the full amount for all four terms ... is paid in one single payment at
+ *     the START OF THE SEASON." A parent joining in Term 3 who bought "the full
+ *     year" would be paying for two terms that have already finished. So the
+ *     full-year plan is only offered while the bound term is Term 1.
+ *
+ *  Pass `termNumber = null` (no term bound) to keep the year plan available — an
+ *  unbound programme has no season to be late for.
+ */
+export function fullYearAvailable(section: AcademySection, termNumber?: number | null): boolean {
+  if (section !== "core") return false;
+  if (termNumber === null || termNumber === undefined) return true;
+  return termNumber === 1;
 }
 
 /** Money math. Integer cents throughout; the only rounding is the discount, and

@@ -5,39 +5,51 @@
 //
 // Run AFTER migrations/2026-07-09_academy_registrations.sql.
 //
-// ─── WHY EVERY PROGRAMME LANDS SWITCHED OFF ─────────────────────────────────
-// The club's Membership & Payment Policy 2026 says: "Fees published in the
-// official printed fee schedule held at the CUFC office shall prevail over all
-// other communications." That schedule is NOT in this repo, and the three
-// sources that do exist disagree with each other:
+// ─── PRICES: WHERE EACH NUMBER COMES FROM ───────────────────────────────────
+// Daniel authorised launching with the club's published fees (2026-07-09). Every
+// price below is quoted from a source, never inferred. `null` = no trustworthy
+// source, so that programme ships CLOSED with a waitlist rather than a guess.
 //
-//     Programme        old cufc.co.nz    new site copy   internal model
-//     FUNiño U4–U8     $160/term         $160/term       $160/term
-//     Pre-Ac U9–U10    $405/term         "from $400"     ~$400
-//     Pre-Ac U11–U12   $540/term         "from $400"     $450–500
-//     Academy U13–U17  $805/term         "from $700"     $700–800
-//     Technification   $150/term         $150/term       —
-//     Goalkeeper       $125/10 sessions  not listed      —
+//   FUNiño U4–U8          $160/term   LIVE Friendly Manager form 6 ("U4–U8 Fun
+//                                     Football 2026") + old site + new site copy
+//                                     + context/business-info.md. Four sources.
+//   Technification U9–U12 $150/term   LIVE Friendly Manager form 9
+//                                     ("Technification U9–U12 2026, Term 3").
+//   Pre-Academy U9–U10    $405/term   old site /u9-u12-academy-program:
+//                                     "U9-U10: $1620 per year or $405 per term"
+//   Pre-Academy U11–U12   $540/term   same page: "$2160 per year or $540 per term"
+//   Academy U13–U15       $805/term   old site /u13-u20-academy-program, under a
+//                                     "U13-U15" heading: "$3220/yr or $805/term"
+//   Academy U17           $882/term   same page, under an "U17" heading:
+//                                     "$3528 per year or $882 per term"
+//                                     (there is no U16 — the club runs 2×U13,
+//                                      U14, U15, U17)
+//   Morning U13–U20       $125/term   old site /morning-programme
 //
-// So this script writes ZERO prices. Each programme is created with
-// `isActive = false`, `registrationOpen = false`, and its options priced at 0
-// and marked inactive. The public API refuses to sell a programme unless it is
-// active AND registration_open AND has an active option with a positive price —
-// so no parent can be charged a number nobody confirmed.
+//   Goalkeeper            NO PRICE.   The "$125 (10 Sessions)" line on
+//                                     /goalkeeper-programs sits under a heading
+//                                     reading "Technification Program – Term 1",
+//                                     and the live FM form prices Technification
+//                                     at $150. That $125 is not a goalkeeper fee.
+//   High Performance      NO PRICE.   /u17u20-high-performance-academy says
+//                                     "$600 per term"; /u13-u20-academy-program
+//                                     says U17 is "$882 per term". Two club pages
+//                                     contradict each other.
 //
-// To go live: /admin/academy → open a programme → enter the real fee on each
-// option, activate the options, then tick the programme active + registrations
-// open. Only the GM (Ryan Edwards) may approve fees per the policy.
+// ⚠ NOT COLLECTED AT CHECKOUT, and not invented here: the Affiliation Fee
+//   ($58.08–$64.16 depending on grade), MF levies, and the compulsory uniform
+//   (~$260 for High Performance). The old site lists these as separate line
+//   items marked "TBC" on the academy pages. If the club expects them with the
+//   term fee, the checkout currently UNDER-COLLECTS. Raise with Ryan before the
+//   first Academy/Pre-Academy registration.
 //
-// Structure comes from evidenced sources, not invention:
-//   • programme names + age bands → apps/cufc-website/src/site.ts (NAV, PROGRAMMES)
-//   • the core/additional split   → server/seed.ts's existing classifier
-//     (technification% / gk-% / %goalkeeper% / %technification% ⇒ 'additional')
-//   • the price BANDS inside each programme (why options exist at all) →
-//     outputs/cufc-tilda-archive/pages/*.md, which price U9–U10 apart from
-//     U11–U12, and show two Academy tiers.
-//   • Goalkeeper day/times → news-archive.json (U9–U12 Mon 5:45–6:30pm,
-//     U13–U20 Tue 5:45–6:30pm)
+// The 5% full-year discount is a 2026 policy addition — the old site's yearly
+// figures are exactly 4× the term fee with no discount ($405×4 = $1,620). Our
+// year price is 4× term − 5%, per the current published policy.
+//
+// A programme still only sells when: is_active AND registration_open AND it has
+// an active option with full_price_cents > 0. Re-run this script any time; it is
+// idempotent on slug and never touches a programme that already exists.
 
 import { Pool } from "pg";
 
@@ -45,7 +57,7 @@ const COMMIT = process.argv.includes("--commit");
 const ORG_SLUG = "christchurch-united";
 const SEASON = 2026;
 
-type OptionSeed = { name: string; scheduleText: string | null };
+type OptionSeed = { name: string; scheduleText: string | null; termPriceCents: number | null };
 type ProgrammeSeed = {
   slug: string;
   name: string;
@@ -53,9 +65,12 @@ type ProgrammeSeed = {
   ageMin: number;
   ageMax: number;
   descriptionShort: string;
-  /** Priced bands. Real fees are entered by a human in /admin/academy. */
+  /** Priced bands. A null price means no trustworthy source exists. */
   options: OptionSeed[];
-  allowFullYear: boolean; // informational; the API derives this from `section`
+  allowFullYear: boolean; // informational; the API derives this from `section` + term
+  /** false = ships CLOSED with a waitlist because no fee could be sourced.
+   *  Forced false anyway if any option lacks a price. */
+  open: boolean;
 };
 
 const PROGRAMMES: ProgrammeSeed[] = [
@@ -67,8 +82,9 @@ const PROGRAMMES: ProgrammeSeed[] = [
     ageMin: 4,
     ageMax: 8,
     descriptionShort: "Where it starts. Small-sided games, lots of touches, every child on the ball.",
-    options: [{ name: "U4–U8", scheduleText: null }],
+    options: [{ name: "U4–U8", scheduleText: "Weekdays + Saturday · unlimited sessions", termPriceCents: 16_000 }],
     allowFullYear: true,
+    open: true,
   },
   {
     slug: "pre-academy-u9-u12",
@@ -77,12 +93,12 @@ const PROGRAMMES: ProgrammeSeed[] = [
     ageMin: 9,
     ageMax: 12,
     descriptionShort: "Three trainings a week plus a Saturday game. 7-a-side at U9–U10, 9-a-side at U11–U12.",
-    // Two bands because the old site priced them apart ($405 vs $540 per term).
     options: [
-      { name: "U9–U10", scheduleText: "3 trainings/week · 60 min · 7-a-side" },
-      { name: "U11–U12", scheduleText: "3 trainings/week · 75 min · 9-a-side" },
+      { name: "U9–U10", scheduleText: "Tue + Thu 5:45–6:45pm · Saturday game", termPriceCents: 40_500 },
+      { name: "U11–U12", scheduleText: "Tue + Thu 5:45–7:00pm · Saturday game", termPriceCents: 54_000 },
     ],
     allowFullYear: true,
+    open: true,
   },
   {
     slug: "academy-u13-u17",
@@ -91,14 +107,14 @@ const PROGRAMMES: ProgrammeSeed[] = [
     ageMin: 13,
     ageMax: 17,
     descriptionShort: "Four trainings a week, 11-a-side, competitive league football.",
-    // The old site showed two Academy fee tiers ($805 and $882 per term). Which
-    // ages fall in which tier is NOT documented anywhere — confirm with the
-    // office before pricing these.
+    // The club runs 2×U13, U14, U15 and U17 teams — there is no U16 grade, which
+    // is why the fee table splits U13–U15 from U17 with nothing in between.
     options: [
-      { name: "Academy — tier 1 ⚑ confirm which ages", scheduleText: "4 trainings/week · 90 min · 11-a-side" },
-      { name: "Academy — tier 2 ⚑ confirm which ages", scheduleText: "4 trainings/week · 90 min · 11-a-side" },
+      { name: "U13–U15", scheduleText: "Mon, Tue, Thu 4:00–5:30pm", termPriceCents: 80_500 },
+      { name: "U17", scheduleText: "Mon, Tue, Thu 4:00–5:30pm", termPriceCents: 88_200 },
     ],
     allowFullYear: true,
+    open: true,
   },
   {
     slug: "high-performance-u17-u20",
@@ -107,8 +123,12 @@ const PROGRAMMES: ProgrammeSeed[] = [
     ageMin: 17,
     ageMax: 20,
     descriptionShort: "Five trainings a week. The last step before the first team.",
-    options: [{ name: "U17–U20", scheduleText: "5 trainings/week · 90 min · 11-a-side" }],
+    // ⚑ CLOSED. /u17u20-high-performance-academy says $600/term; the Academy page
+    //   prices U17 at $882/term. Two club pages contradict each other, and this
+    //   programme also carries a $260 uniform fee we do not collect. Ryan decides.
+    options: [{ name: "U17–U20", scheduleText: "5 trainings/week · 90 min · 11-a-side", termPriceCents: null }],
     allowFullYear: true,
+    open: false,
   },
 
   // ── Additional programmes (no full-year discount — policy excludes them) ───
@@ -120,10 +140,11 @@ const PROGRAMMES: ProgrammeSeed[] = [
     ageMax: 12,
     descriptionShort: "Monday technical training. An add-on to the pathway — all clubs welcome.",
     options: [
-      { name: "U9–U10", scheduleText: "Mondays" },
-      { name: "U11–U12", scheduleText: "Mondays" },
+      { name: "U9–U10", scheduleText: "Mondays", termPriceCents: 15_000 },
+      { name: "U11–U12", scheduleText: "Mondays", termPriceCents: 15_000 },
     ],
     allowFullYear: false,
+    open: true,
   },
   {
     slug: "gk-programme",
@@ -132,11 +153,15 @@ const PROGRAMMES: ProgrammeSeed[] = [
     ageMin: 9,
     ageMax: 20,
     descriptionShort: "Specialist goalkeeping coaching, split by age.",
+    // ⚑ CLOSED. The only figure anywhere ("$125, 10 Sessions") sits under a
+    //   "Technification Program – Term 1" heading on the goalkeeper page, and the
+    //   live FM form prices Technification at $150. It is not a goalkeeper fee.
     options: [
-      { name: "U9–U12", scheduleText: "Mondays 5:45–6:30pm" },
-      { name: "U13–U20", scheduleText: "Tuesdays 5:45–6:30pm" },
+      { name: "U9–U12", scheduleText: "Mondays 5:45–6:30pm", termPriceCents: null },
+      { name: "U13–U20", scheduleText: "Tuesdays 5:45–6:30pm", termPriceCents: null },
     ],
     allowFullYear: false,
+    open: false,
   },
   {
     slug: "morning-programme-u13-u20",
@@ -145,8 +170,9 @@ const PROGRAMMES: ProgrammeSeed[] = [
     ageMin: 13,
     ageMax: 20,
     descriptionShort: "Extra morning sessions for academy players.",
-    options: [{ name: "U13–U20", scheduleText: null }],
+    options: [{ name: "U13–U20", scheduleText: "Mornings", termPriceCents: 12_500 }],
     allowFullYear: false,
+    open: true,
   },
 ];
 
@@ -188,9 +214,19 @@ async function main() {
       continue;
     }
 
-    console.log(`+ ${p.slug.padEnd(28)} ${p.name}  [${p.section}]  U${p.ageMin}–U${p.ageMax}`);
+    // Belt and braces: a programme can never be opened without a real price, no
+    // matter what the table above says. The API enforces the same rule.
+    const priced = p.options.every((o) => typeof o.termPriceCents === "number" && o.termPriceCents > 0);
+    const willOpen = p.open && priced;
+    if (p.open && !priced) {
+      console.log(`! ${p.slug.padEnd(28)} marked open but an option has no price — forcing CLOSED`);
+    }
+
+    const state = willOpen ? "OPEN, live" : "CLOSED, waitlist";
+    console.log(`+ ${p.slug.padEnd(28)} ${p.name}  [${p.section}]  U${p.ageMin}–U${p.ageMax}  → ${state}`);
     for (const o of p.options) {
-      console.log(`    · option: ${o.name}${o.scheduleText ? ` (${o.scheduleText})` : ""} — price $0.00, INACTIVE`);
+      const price = o.termPriceCents === null ? "no price — needs Ryan" : `$${(o.termPriceCents / 100).toFixed(2)}/term`;
+      console.log(`    · ${o.name.padEnd(12)} ${price}${o.scheduleText ? `  (${o.scheduleText})` : ""}`);
     }
 
     if (!COMMIT) continue;
@@ -200,30 +236,38 @@ async function main() {
          (organization_id, name, slug, type, academy_section, season_year,
           description_short, age_min, age_max, schedule_type, term_id,
           session_count, pricing_model, is_active, registration_open)
-       VALUES ($1,$2,$3,'academy',$4,$5,$6,$7,$8,'term',$9,10,'term_prorated',false,false)
+       VALUES ($1,$2,$3,'academy',$4,$5,$6,$7,$8,'term',$9,10,'term_prorated',true,$10)
        RETURNING id`,
-      [orgId, p.name, p.slug, p.section, SEASON, p.descriptionShort, p.ageMin, p.ageMax, termId],
+      [orgId, p.name, p.slug, p.section, SEASON, p.descriptionShort, p.ageMin, p.ageMax, termId, willOpen],
     );
     const programId: number = prog.rows[0].id;
 
     let order = 0;
     for (const o of p.options) {
+      // An unpriced option is stored inactive at $0 so the admin has a row to
+      // fill in, and the public API's `full_price_cents > 0` gate keeps it unsellable.
       await pool.query(
         `INSERT INTO program_options
            (program_id, name, schedule_text, full_price_cents, pricing_model,
             session_count, allow_pay_weekly, display_order, is_active)
-         VALUES ($1,$2,$3,0,'term_prorated',10,false,$4,false)`,
-        [programId, o.name, o.scheduleText, order++],
+         VALUES ($1,$2,$3,$4,'term_prorated',10,false,$5,$6)`,
+        [programId, o.name, o.scheduleText, o.termPriceCents ?? 0, order++, o.termPriceCents !== null],
       );
     }
   }
 
   console.log("\n" + "─".repeat(72));
   if (COMMIT) {
-    console.log("Seeded. Every programme is INACTIVE with registrations CLOSED and $0 options.");
-    console.log("Nothing can take a payment until a human enters the real fee schedule.");
-    console.log("\nNext: /admin/academy → set each option's price → activate options →");
-    console.log("      tick the programme active + registrations open.");
+    console.log("Seeded.");
+    console.log("  OPEN now:   FUNiño $160 · Pre-Academy $405/$540 · Academy $805/$882 ·");
+    console.log("              Technification $150 · Morning $125   (all per term, pro-rated");
+    console.log("              if the term has already started)");
+    console.log("  CLOSED:     Goalkeeper, High Performance — no trustworthy fee exists.");
+    console.log("              Both take waitlist signups. Add a price in /admin/academy,");
+    console.log("              activate the option, tick 'Registrations open'.");
+    console.log("");
+    console.log("  ⚠ Affiliation fees, MF levies and uniform are NOT collected at checkout.");
+    console.log("    If the club expects them with the term fee, we are under-collecting.");
   } else {
     console.log("Dry run complete. Re-run with --commit to write.");
   }
