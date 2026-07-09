@@ -7,9 +7,6 @@
 
 ## Phase 1 — Behavioral Depth (the overnight target)
 
-
-- [ ] **T9. `behavior` tab registration.** Add `behavior` to `shared/tabs.ts`, the `Activity`/`MousePointerClick` (pick a lucide icon) import + every nav array in `client/src/components/app-sidebar.tsx` (right after `attribution`), the route in `client/src/App.tsx`. verify: `npm run build` green + grep confirms the route count matches attribution's.
-
 - [ ] **T10. `client/src/pages/behavior.tsx` — page table + per-page detail.** Read-only over T8. Site selector → page table → click a page → detail: scroll-depth funnel bars, section-timing bars, top-clicked-elements list, hour-of-day heat strip. Redeclare response shapes locally (client can't import server types). react-query keys carry every control; explicit `queryFn`. verify: `npm run build` green.
 
 - [ ] **T11. Journey flow (Sankey) in behavior.tsx.** Render `journey_edges_daily` as a page→page flow (a lightweight inline SVG Sankey or a stacked bar of top transitions — no new heavy dep). verify: `npm run build` green.
@@ -26,6 +23,8 @@
 - [ ] **T15. 30-day replay retention cron.** verify: `npm run build` green.
 
 ## Done
+
+- [x] **T9. `behavior` tab registration.** Added `{ slug: "behavior", ... }` to all 7 `shared/tabs.ts` arrays (campsTabs/venueTabs/leagueTabs/tournamentTabs/gymnasticsTabs/groupTabs/printsTabs — right after `attribution`; sandboxTabs correctly excluded, it has no attribution tab either). Added the `Activity` lucide icon import + a matching nav entry to all 7 `client/src/components/app-sidebar.tsx` nav arrays (`siuNav` inherits automatically via its `...campsNav` spread — verified no duplicate). Added `import BehaviorPage from "@/pages/behavior"` + a `/admin/behavior` route right after all 7 `/admin/attribution` routes in `client/src/App.tsx`. Created a minimal `client/src/pages/behavior.tsx` placeholder (dark-theme, matches `prints-integrations.tsx`'s "coming soon" card convention) so the route resolves — T10 replaces it with the real page table + detail view. verify: `npm run build` green; grep confirms 7 `/admin/behavior` routes, 7 `slug:"behavior"`/`tab:"behavior"` entries — exact parity with attribution's 7.
 
 - [x] **T1. `shared/behavior.ts` — pure event-shaping module.** Built `shapeBehaviorEvent`/`shapeBehaviorEvents` (whitelist, css_path sanitising, offset clamp, scroll-band bucketing, viewport coercion, site normalising, FNV-1a text hash instead of raw text, `detectBot` reuse). `script/test-behavior.ts`: 77 assertions green. `npm run build` green. NOTE for T2: added a `textHash` field not listed in AGENTS §3 — the migration needs a `text_hash text` column too (see AGENTS Lessons learned).
 
