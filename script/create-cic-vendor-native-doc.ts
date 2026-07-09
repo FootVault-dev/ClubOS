@@ -141,19 +141,22 @@ async function main() {
     );
     const docId = dres.rows[0].id as number;
 
-    // Signers: order 0 = recipient (Vendor, signs first), order 1 = Club counter-sign.
-    const tokens: Record<number, string> = {};
+    // Signers. `settings.clubSignsFirst` puts the CLUB at order 0, so the
+    // recipient opens a document we have already signed. The recipient is always
+    // the form signer — it is their details the agreement records, either way.
+    const clubFirst = tplSettings.clubSignsFirst === true;
+    const tokens: Record<string, string> = {};
     const signers = [
-      { name, email, order: 0 },
-      { name: counterName, email: counterEmail, order: 1 },
+      { key: "recipient", name, email, order: clubFirst ? 1 : 0, isFormSigner: true },
+      { key: "club", name: counterName, email: counterEmail, order: clubFirst ? 0 : 1, isFormSigner: false },
     ];
     for (const s of signers) {
       const token = crypto.randomBytes(24).toString("hex");
-      tokens[s.order] = token;
+      tokens[s.key] = token;
       await client.query(
-        `INSERT INTO esign_signers (document_id, organization_id, name, email, signing_order, status, token)
-         VALUES ($1, $2, $3, $4, $5, 'pending', $6)`,
-        [docId, orgId, s.name, s.email, s.order, token],
+        `INSERT INTO esign_signers (document_id, organization_id, name, email, signing_order, status, token, is_form_signer)
+         VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)`,
+        [docId, orgId, s.name, s.email, s.order, token, s.isFormSigner],
       );
     }
 
@@ -195,19 +198,28 @@ async function main() {
     }
     await client.query("COMMIT");
 
-    const signUrl = `${APP_BASE}/sign/${tokens[0]}`;
+    // The invite always goes to whoever signs FIRST. When the Club signs first,
+    // the server hands the envelope to the recipient automatically once we sign.
+    const firstKey = clubFirst ? "club" : "recipient";
+    const firstName = clubFirst ? counterName : name;
+    const firstEmail = clubFirst ? counterEmail : email;
+    const signUrl = `${APP_BASE}/sign/${tokens[firstKey]}`;
     console.log(`\n${doSend ? "SENT" : "DRAFT"}: native e-Sign doc #${docId} — "${title}"`);
-    console.log(`  Recipient (signs first): ${name} <${email}>`);
-    console.log(`  Counter-sign (Club):     ${counterName} <${counterEmail}>`);
-    console.log(`  Recipient sign URL:      ${signUrl}`);
+    console.log(`  Order:                   ${clubFirst ? "CLUB signs first, then recipient" : "recipient signs first, then Club"}`);
+    console.log(`  Recipient (fills form):  ${name} <${email}>`);
+    console.log(`  Club:                    ${counterName} <${counterEmail}>`);
+    console.log(`  Recipient sign URL:      ${APP_BASE}/sign/${tokens.recipient}`);
+    console.log(`  Club sign URL:           ${APP_BASE}/sign/${tokens.club}`);
+    console.log(`  Signs first:             ${firstName} <${firstEmail}>`);
     console.log(`  doc_hash: ${docHash}`);
 
     if (doSend) {
       const from = fromForOrg(orgId, orgName); // Christchurch International Cup <noreply@cicyouth.com>
-      await sendViaResend(from, email, `Please sign: ${title}`, inviteHtml({
-        signerName: name, title, message, link: signUrl, fromName: orgName,
+      await sendViaResend(from, firstEmail, `Please sign: ${title}`, inviteHtml({
+        signerName: firstName, title, message, link: signUrl, fromName: orgName,
       }));
-      console.log(`  ✉️  Invite emailed from ${from} → ${email}`);
+      console.log(`  ✉️  Invite emailed from ${from} → ${firstEmail}`);
+      if (clubFirst) console.log(`      ${name} is emailed automatically once the Club signs.`);
     } else {
       console.log(`  (not sent — press Send in the CIC e-Sign tab, or re-run with --send)`);
     }

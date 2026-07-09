@@ -28,6 +28,9 @@ export interface NativePayload {
   role: "primary" | "counter";
   myFormData: Record<string, any> | null;
   primaryDetails: { name: string; email: string; formData: Record<string, any> | null; signatureImage: string | null; signedAt: string | null } | null;
+  // Present only when the Club signed first AND has actually signed — lets the
+  // counterparty see our signature already on the page before they add theirs.
+  counterDetails?: { name: string; signatureImage: string | null; signedAt: string | null } | null;
 }
 export interface NativeSignData {
   documentStatus: string; title: string; message: string | null; orgName: string;
@@ -397,7 +400,20 @@ export function NativeSign({ token, data }: { token: string; data: NativeSignDat
                 <div className="text-[10.5px] font-bold uppercase tracking-[0.18em]" style={{ color: B.goldDeep }}>
                   {isPrimary ? (n.settings?.counterSignerRole || "The League") : (n.settings?.primarySignerRole || "The Referee")}
                 </div>
-                {isPrimary ? (
+                {isPrimary && n.counterDetails?.signedAt ? (
+                  // The Club signed first. Show it — that's the point of the order.
+                  <div className="mt-2 flex items-end justify-between gap-4">
+                    <div>
+                      <div className="text-[15px] font-bold">{n.counterDetails.name}</div>
+                      <div className="text-[12px] mt-0.5" style={{ color: "#8d8774" }}>
+                        Already signed {new Date(n.counterDetails.signedAt).toLocaleString("en-NZ", { dateStyle: "long", timeStyle: "short" })} — your signature completes this agreement.
+                      </div>
+                    </div>
+                    {n.counterDetails.signatureImage && (
+                      <img src={n.counterDetails.signatureImage} alt="signature" className="h-12 object-contain" />
+                    )}
+                  </div>
+                ) : isPrimary ? (
                   <p className="text-[13px] mt-2" style={{ color: "#8d8774" }}>
                     Counter-signed by {B.orgLabel} after you sign — you'll be emailed the completed agreement.
                   </p>

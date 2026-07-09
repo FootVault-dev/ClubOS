@@ -82,7 +82,12 @@ T3 must mirror it). 14/14 tests pass (`npx tsx script/test-accounting.ts`), tsc 
 - An unmapped programme throws, and the error names the programme.
 - Option-level rule beats programme-level rule.
 
-- [ ] **T3 — migration `migrations/2026-07-10_accounting_subledger.sql` (WRITE ONLY, DO NOT APPLY)**
+- [x] **T3 — migration `migrations/2026-07-10_accounting_subledger.sql` (WRITE ONLY, DO NOT APPLY)** — done
+(built across prior iteration commits, finalized this run). All 6 tables written + mirrored 1:1
+in `shared/schema.ts`; verified via a clean `git archive` export (isolated from unrelated
+uncommitted changes sitting in this worktree) that the only tsc delta vs the 533 baseline is 6
+instances of the pre-existing repo-wide drizzle-zod `boolean not assignable to never` quirk
+(143 other instances already in baseline) — not a real regression. See AGENTS.md note.
 Tables per `02-architecture.md`: `acct_codes`, `acct_mapping_rules`, `acct_postings`,
 `acct_deferred_schedule`, `acct_xero_sync`, `acct_reconciliation_runs`.
 
