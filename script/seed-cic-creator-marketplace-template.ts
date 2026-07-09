@@ -25,8 +25,17 @@
 //   The TEMPLATE is seeded to the CIC workspace (org 5) so it lives in the CIC
 //   e-Sign tab and sends from cicyouth.com, and it carries CIC branding.
 //
-// PRICES ARE NOT WIRED IN THIS FILE. The fee and the share % are sender-set
-// variables, typed at send time. Nobody's pay is hard-coded in the repo.
+// PAY IS NOT WIRED IN THIS FILE. The share % is a sender-set variable, chosen
+// at send time. Nobody's pay is hard-coded in the repo.
+//
+// There is deliberately NO event fee: the revenue share is the creator's ONLY
+// payment for this work (Daniel's call, 2026-07-10). Their weekly fee under the
+// Existing Agreement continues untouched — that, not this, is their floor.
+//
+// CAUTION: a native document's signing PAGE renders from the CURRENT template
+// row, while its hashed sourcePdf is a snapshot from send time. Re-seeding this
+// file while a document is out for signature changes what the signer reads but
+// not what was hashed. Void and re-send instead of editing mid-flight.
 //
 // Usage: npx tsx --env-file=.env script/seed-cic-creator-marketplace-template.ts
 
@@ -53,12 +62,6 @@ export const variables = [
     label: "Event",
     type: "text",
     default: "the Christchurch International Cup, 5–16 July 2026",
-    required: true,
-  },
-  {
-    key: "creator_fee",
-    label: "Additional Services Fee (whole event)",
-    type: "money",
     required: true,
   },
   {
@@ -125,12 +128,14 @@ export const content = {
       ],
     },
     {
-      heading: "4. Additional Services Fee",
+      heading: "4. Payment for this work",
       items: [
-        { kind: "bullet", text: "The Club will pay the Creator {{creator_fee}} for capturing, editing, organising and delivering Covered Content across the event." },
-        { kind: "bullet", text: "This fee is separate from, and in addition to, any amount payable to the Creator under the Existing Agreement." },
-        { kind: "bullet", text: "It is payable whether or not any Covered Content is ever sold, and it is not deducted or recouped from the Revenue Share." },
-        { kind: "bullet", text: "The fee is inclusive of GST (if any). The Creator is responsible for their own tax obligations, including IRD and any ACC levies." },
+        { kind: "bullet", text: "The Creator’s only payment under this Agreement is the Revenue Share in clause 5. No separate fee is payable." },
+        { kind: "bullet", text: "The Revenue Share covers all of the Creator’s work on Covered Content — shooting, editing, categorising, organising by team, uploading and delivering it." },
+        { kind: "bullet", text: "This is the separate payment contemplated by clause 5.3 of the Existing Agreement for Additional Services." },
+        { kind: "bullet", text: "The Creator’s weekly fee and non-cash benefits under the Existing Agreement continue unchanged, and are not affected, reduced or replaced by this Agreement." },
+        { kind: "bullet", text: "The Creator understands that if no Covered Content sells, no Revenue Share is payable. The Club gives no guarantee of sales (see clause 7)." },
+        { kind: "bullet", text: "All amounts are inclusive of GST (if any). The Creator is responsible for their own tax obligations, including IRD and any ACC levies." },
       ],
     },
     {
@@ -141,6 +146,7 @@ export const content = {
         { kind: "bullet", text: "A sale is attributed to the Creator where the Covered Content sold was delivered to the Club’s content system under the Creator’s own account." },
         { kind: "bullet", text: "Where a single purchase contains content captured by more than one creator, the Net Revenue for that purchase is apportioned between them in proportion to the number of items each supplied." },
         { kind: "bullet", text: "No Revenue Share is payable on a sale that is refunded, reversed or charged back. Where it has already been paid, the Club may set it off against the next statement." },
+        { kind: "bullet", text: "The Revenue Share is not reduced by any fee, cost or deduction other than those stated in the definition of Net Revenue above." },
         { kind: "bullet", text: "Bespoke content commissioned by a customer (for example, a highlight edit ordered for one player) is not offered in this phase. If the Club introduces it, the Parties will agree the Creator’s fee for that work in writing before it goes on sale." },
       ],
     },
@@ -277,7 +283,7 @@ async function main() {
         orgId,
         SLUG,
         "Content Marketplace Creator Agreement",
-        "Revenue-share agreement for content creators whose photos and video are sold to families through the Club's Content Marketplace. Supplemental to an existing contractor agreement — does not vary base pay or status. Fee + share set per creator at send time.",
+        "Revenue-share agreement for content creators whose photos and video are sold to families through the Club's Content Marketplace. Supplemental to an existing contractor agreement — does not vary base pay or status. The revenue share is the creator's only payment for this work; the % is set per creator at send time.",
         JSON.stringify(brand),
         JSON.stringify(content),
         JSON.stringify(variables),

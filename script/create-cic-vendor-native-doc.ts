@@ -13,8 +13,11 @@
 //   (omit --send to leave it as a DRAFT for Daniel to send from the e-Sign tab)
 //   optional: --trading-period "5–16 July 2026"  --message "..."  --title "..."
 //             --counter-name "Daniel Meyn"  --counter-email danielmeyn963@gmail.com
+//             --var key=value   (repeatable — sets any sender-set template variable)
 //
-// Templates: cic-food-vendor-agreement | cic-popup-vendor-agreement  (org: CIC = 5)
+// Works with any NATIVE template in the CIC workspace (org 5):
+//   cic-food-vendor-agreement | cic-popup-vendor-agreement
+//   content-marketplace-creator-agreement  (needs --var creator_fee=...)
 
 import { Pool } from "pg";
 import crypto from "crypto";
@@ -34,6 +37,20 @@ function arg(flag: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 const has = (flag: string) => process.argv.includes(flag);
+
+// Repeatable `--var key=value` → { key: value }. Lets any sender-set template
+// variable be supplied without teaching this script about each template.
+function varOverrides(): Record<string, string> {
+  const out: Record<string, string> = {};
+  process.argv.forEach((a, i) => {
+    if (a !== "--var") return;
+    const kv = process.argv[i + 1] ?? "";
+    const eq = kv.indexOf("=");
+    if (eq <= 0) throw new Error(`--var expects key=value, got "${kv}"`);
+    out[kv.slice(0, eq).trim()] = kv.slice(eq + 1);
+  });
+  return out;
+}
 
 // Exact copy of routes.ts esignInviteHtml (CIC gold gradient).
 const inviteHtml = (p: { signerName: string; title: string; message: string | null; link: string; fromName: string }) => `
@@ -95,13 +112,17 @@ async function main() {
     const tplForm: any[] = tpl.form ?? [];
     const tplSettings: Record<string, any> = tpl.settings ?? {};
 
-    // Build sender-set variable values (defaults + trading_period override).
+    // Build sender-set variable values (explicit --var wins, then the legacy
+    // --trading-period shortcut, then the template's own default).
+    const overrides = varOverrides();
+    const unknown = Object.keys(overrides).filter((k) => !tplVars.some((v) => v.key === k));
+    if (unknown.length) throw new Error(`Unknown --var key(s) for template '${slug}': ${unknown.join(", ")}`);
     const templateData: Record<string, string> = {};
     for (const v of tplVars) {
-      let raw = "";
-      if (v.key === "trading_period" && overridePeriod) raw = overridePeriod;
+      let raw = overrides[v.key] ?? "";
+      if (!raw && v.key === "trading_period" && overridePeriod) raw = overridePeriod;
       if (!raw && v.default) raw = String(v.default);
-      if (v.required !== false && !raw) throw new Error(`Variable '${v.label || v.key}' is required`);
+      if (v.required !== false && !raw) throw new Error(`Variable '${v.label || v.key}' is required — pass --var ${v.key}=...`);
       templateData[v.key] = raw.slice(0, 200);
     }
 

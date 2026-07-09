@@ -14,7 +14,6 @@ const OUT = process.argv[2] ?? "/tmp/creator-marketplace-agreement-PROOF.pdf";
 // Illustrative values only — nothing here is a decided fee.
 const values: Record<string, string> = {
   event_name: "the Christchurch International Cup, 5–16 July 2026",
-  creator_fee: "$0.00 (TO BE SET)",
   share_pct: "30%",
   creator_name: "Max Comrie",
 };
