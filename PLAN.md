@@ -99,7 +99,14 @@ Tables per `02-architecture.md`: `acct_codes`, `acct_mapping_rules`, `acct_posti
 - Mirror into `shared/schema.ts`.
 - Header comment: *"Run on Supabase prod BEFORE the Fly deploy. DO NOT db:push."*
 
-- [ ] **T4 — `server/accounting/post.ts`: the posting emitter (DRY-RUN default)**
+- [x] **T4 — `server/accounting/post.ts`: the posting emitter (DRY-RUN default)** — done.
+`emitPosting()` is a pure no-op (dryRun, never opens `../db`) unless `ACCOUNTING_SUBLEDGER=1`;
+the double-post guard is `onConflictDoNothing({target: acctPostings.idempotencyKey})` +
+`.returning()`, a DB constraint not app logic. `AccountingDb` is dependency-injected (derived
+from `typeof realDb` via a type-only import so the module never pulls in `../db` at load time).
+7/7 tests pass (`npx tsx script/test-accounting-post.ts`); tsc unchanged at 536 vs the pre-T4
+commit (the 533 in this file is stale — see AGENTS.md note; re-measured via clean `git archive`
+export at the prior commit, T4 adds exactly zero).
 `emitPosting(source, sourceId, idempotencyKey, gross, fee, net, occurredAt)`.
 
 - Behind `ACCOUNTING_SUBLEDGER=1`. **Default off** — a fresh deploy changes nothing.

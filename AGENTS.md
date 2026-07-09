@@ -169,4 +169,19 @@ The Fly app `clubos` serves **every** branch that gets deployed to it, so deploy
   Test: `script/test-accounting.ts` (14 assertions, covers effective-dating, all 4 specificity
   tiers, payment-method tie-breaking, and the unmapped/ambiguous throw paths).
 
+- **T4 shipped** `server/accounting/post.ts` — `emitPosting()`, the only place that writes
+  `acct_postings`. Gated on `ACCOUNTING_SUBLEDGER=1`; with the flag off it returns
+  `{inserted:false, dryRun:true}` WITHOUT ever `import("../db")` — verified in
+  `script/test-accounting-post.ts` by calling it with no db arg at all while the flag is off (if
+  the short-circuit were wrong, the missing-DATABASE_URL import would throw). Idempotency is
+  `.onConflictDoNothing({target: acctPostings.idempotencyKey}).returning()` — a DB constraint, not
+  a `SELECT-then-INSERT` race. `AccountingDb = Pick<typeof realDb, "insert">` is a type-only
+  derivation from the real db (erased at runtime) so the fake-db test still type-checks against
+  drizzle's real insert/onConflict API shape. 7/7 tests, tsc unchanged.
+- **Baseline drift note:** PLAN.md's stated tsc baseline (533) is stale — a clean `git archive`
+  export of the commit immediately before T4 (`bb9eecf`, i.e. T1–T3 already shipped) already
+  typechecks at **536** (T3's own note recorded a +6 drizzle-zod delta over 533 for the same
+  reason). Don't chase 533; always diff against the immediately-preceding commit via a clean
+  archive export, per the T3/T21 verification trick — that's what proves a task's OWN delta.
+
 Merge conflict note: merging attribution forward collides (union, keep BOTH sides) in `App.tsx`, `server/routes.ts` (import lists), `shared/schema.ts` (import line + additive tables), `server/storage.ts` (imports + IStorage methods + `DatabaseStorage` methods — the attribution short-link methods go INSIDE the class, `studioSectionLabel` stays a top-level fn AFTER the class close), `server/email.ts` (imports), `app-sidebar.tsx` (lucide icons). Tsc is NOT clean on this repo (~500 pre-existing drizzle-zod `.omit()` + `req.params` errors); gate on `npm run build` (esbuild) + the `script/test-attribution*.ts` suites, and diff tsc error COUNT vs the pre-merge commit to prove zero new error types (see T21 verification trick).
