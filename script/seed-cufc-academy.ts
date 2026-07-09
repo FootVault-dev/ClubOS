@@ -65,6 +65,8 @@ type ProgrammeSeed = {
   ageMin: number;
   ageMax: number;
   descriptionShort: string;
+  /** Slugs this programme may already exist under in production. Adopted, not duplicated. */
+  legacySlugs?: string[];
   /** Priced bands. A null price means no trustworthy source exists. */
   options: OptionSeed[];
   allowFullYear: boolean; // informational; the API derives this from `section` + term
@@ -76,7 +78,9 @@ type ProgrammeSeed = {
 const PROGRAMMES: ProgrammeSeed[] = [
   // ── Core pathway ──────────────────────────────────────────────────────────
   {
-    slug: "funino-u4-u8",
+    // Already exists in prod as `u4-u8` (id 4), carrying term_price_cents=16000 —
+    // a fifth independent confirmation of the $160 fee. Adopted, not duplicated.
+    slug: "u4-u8",
     name: "FUNiño — First Kicks",
     section: "core",
     ageMin: 4,
@@ -133,7 +137,8 @@ const PROGRAMMES: ProgrammeSeed[] = [
 
   // ── Additional programmes (no full-year discount — policy excludes them) ───
   {
-    slug: "technification-u9-u12",
+    // Already exists in prod as `technification` (id 5), unpriced and unbound.
+    slug: "technification",
     name: "Technification",
     section: "additional",
     ageMin: 9,
@@ -181,71 +186,109 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+function nzTodayIso(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Pacific/Auckland", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+}
+
 async function main() {
   const org = await pool.query("SELECT id, name FROM organizations WHERE slug = $1", [ORG_SLUG]);
   if (org.rows.length === 0) throw new Error(`No organisation with slug '${ORG_SLUG}'`);
   const orgId: number = org.rows[0].id;
-  console.log(`Organisation: ${org.rows[0].name} (id ${orgId})\n`);
+  console.log(`Organisation: ${org.rows[0].name} (id ${orgId})`);
 
-  // Bind to the current term if the workspace has one. Not fatal if absent —
-  // pro-rating simply won't kick in until a term is attached in /admin/terms.
-  const term = await pool.query(
-    "SELECT id, name, term_number, start_date, end_date FROM terms WHERE organization_id = $1 AND year = $2 ORDER BY term_number DESC LIMIT 1",
-    [orgId, SEASON],
+  // Bind to the term that is CURRENT or NEXT — never a term that has already
+  // finished. `u4-u8` was bound to Term 2, which ended on 3 July; a programme
+  // bound to a dead term is unsellable (the API refuses, correctly).
+  // Read the dates as text: a `date` column read through node-postgres comes
+  // back as a Date at 12:00Z and renders a day early via toISOString().
+  const today = nzTodayIso();
+  const t = await pool.query(
+    `SELECT id, term_number, start_date::text AS start_date, end_date::text AS end_date
+       FROM terms WHERE organization_id = $1 AND year = $2 AND end_date::text >= $3
+       ORDER BY term_number LIMIT 1`,
+    [orgId, SEASON, today],
   );
-  const termId: number | null = term.rows[0]?.id ?? null;
-  if (termId) {
-    const t = term.rows[0];
-    console.log(`Binding to term: ${t.name ?? `Term ${t.term_number}`} ${SEASON} (${t.start_date} → ${t.end_date})\n`);
-  } else {
-    console.log(`⚠ No ${SEASON} term found for this org. Programmes will be created unbound —`);
-    console.log(`  add terms in /admin/terms, then re-run to attach.\n`);
-  }
+  if (t.rows.length === 0) throw new Error(`No ${SEASON} term ends on or after ${today} — add terms in /admin/terms`);
+  const term = t.rows[0];
+  const termId: number = term.id;
+  console.log(`Today (NZ): ${today}`);
+  console.log(`Binding to: Term ${term.term_number} ${SEASON}  ${term.start_date} → ${term.end_date}`);
+  console.log(
+    today < term.start_date
+      ? `            term hasn't started — everyone pays the full term fee\n`
+      : `            term is under way — joins are pro-rated to the sessions left\n`,
+  );
 
-  if (!COMMIT) {
-    console.log("DRY RUN — nothing will be written. Re-run with --commit.\n");
-  }
+  if (!COMMIT) console.log("DRY RUN — nothing will be written. Re-run with --commit.\n");
 
   for (const p of PROGRAMMES) {
-    const existing = await pool.query("SELECT id, name FROM programs WHERE slug = $1", [p.slug]);
+    // Belt and braces: a programme can never open without a real price on every
+    // option, whatever the table above says. The public API enforces this too.
+    const priced = p.options.every((o) => typeof o.termPriceCents === "number" && o.termPriceCents > 0);
+    const willOpen = p.open && priced;
+    if (p.open && !priced) console.log(`! ${p.slug} marked open but an option has no price — forcing CLOSED`);
 
-    if (existing.rows.length > 0) {
-      console.log(`= ${p.slug.padEnd(28)} already exists (id ${existing.rows[0].id}) — left untouched`);
+    const candidates = [p.slug, ...(p.legacySlugs ?? [])];
+    const found = await pool.query(
+      "SELECT id, slug, name, is_active FROM programs WHERE organization_id = $1 AND slug = ANY($2)",
+      [orgId, candidates],
+    );
+
+    const state = willOpen ? "OPEN" : "CLOSED (waitlist)";
+    const verb = found.rows.length ? "adopt" : "create";
+    console.log(`${verb === "adopt" ? "~" : "+"} ${p.slug.padEnd(26)} ${p.name.padEnd(26)} [${p.section}] U${p.ageMin}–U${p.ageMax}  → ${state}`);
+
+    let programId: number;
+
+    if (found.rows.length > 0) {
+      programId = found.rows[0].id;
+      console.log(`    adopting existing programme id ${programId} (slug '${found.rows[0].slug}')`);
+      if (!COMMIT) { await reportOptions(programId, p); continue; }
+      await pool.query(
+        `UPDATE programs SET
+           name = $2, academy_section = $3, season_year = $4, description_short = $5,
+           age_min = $6, age_max = $7, schedule_type = 'term', term_id = $8,
+           session_count = COALESCE(session_count, 10),
+           pricing_model = 'term_prorated',
+           is_active = true, registration_open = $9
+         WHERE id = $1`,
+        [programId, p.name, p.section, SEASON, p.descriptionShort, p.ageMin, p.ageMax, termId, willOpen],
+      );
+    } else {
+      if (!COMMIT) { for (const o of p.options) printOption(o); continue; }
+      const ins = await pool.query(
+        `INSERT INTO programs
+           (organization_id, name, slug, type, academy_section, season_year,
+            description_short, age_min, age_max, schedule_type, term_id,
+            session_count, pricing_model, is_active, registration_open)
+         VALUES ($1,$2,$3,'academy',$4,$5,$6,$7,$8,'term',$9,10,'term_prorated',true,$10)
+         RETURNING id`,
+        [orgId, p.name, p.slug, p.section, SEASON, p.descriptionShort, p.ageMin, p.ageMax, termId, willOpen],
+      );
+      programId = ins.rows[0].id;
+    }
+
+    // Options: never add a second priced band next to one that already sells.
+    const existingOpts = await pool.query(
+      "SELECT id, name, full_price_cents, is_active FROM program_options WHERE program_id = $1",
+      [programId],
+    );
+    const alreadySelling = existingOpts.rows.filter((o) => o.is_active && o.full_price_cents > 0);
+
+    if (alreadySelling.length > 0) {
+      console.log(`    keeping ${alreadySelling.length} existing priced option(s) — not duplicating:`);
+      for (const o of alreadySelling) console.log(`      · ${o.name} — $${(o.full_price_cents / 100).toFixed(2)}/term`);
       continue;
     }
 
-    // Belt and braces: a programme can never be opened without a real price, no
-    // matter what the table above says. The API enforces the same rule.
-    const priced = p.options.every((o) => typeof o.termPriceCents === "number" && o.termPriceCents > 0);
-    const willOpen = p.open && priced;
-    if (p.open && !priced) {
-      console.log(`! ${p.slug.padEnd(28)} marked open but an option has no price — forcing CLOSED`);
-    }
-
-    const state = willOpen ? "OPEN, live" : "CLOSED, waitlist";
-    console.log(`+ ${p.slug.padEnd(28)} ${p.name}  [${p.section}]  U${p.ageMin}–U${p.ageMax}  → ${state}`);
-    for (const o of p.options) {
-      const price = o.termPriceCents === null ? "no price — needs Ryan" : `$${(o.termPriceCents / 100).toFixed(2)}/term`;
-      console.log(`    · ${o.name.padEnd(12)} ${price}${o.scheduleText ? `  (${o.scheduleText})` : ""}`);
-    }
-
-    if (!COMMIT) continue;
-
-    const prog = await pool.query(
-      `INSERT INTO programs
-         (organization_id, name, slug, type, academy_section, season_year,
-          description_short, age_min, age_max, schedule_type, term_id,
-          session_count, pricing_model, is_active, registration_open)
-       VALUES ($1,$2,$3,'academy',$4,$5,$6,$7,$8,'term',$9,10,'term_prorated',true,$10)
-       RETURNING id`,
-      [orgId, p.name, p.slug, p.section, SEASON, p.descriptionShort, p.ageMin, p.ageMax, termId, willOpen],
-    );
-    const programId: number = prog.rows[0].id;
-
     let order = 0;
     for (const o of p.options) {
-      // An unpriced option is stored inactive at $0 so the admin has a row to
-      // fill in, and the public API's `full_price_cents > 0` gate keeps it unsellable.
+      printOption(o);
+      if (!COMMIT) continue;
+      // An unpriced option is stored inactive at $0 so the admin has a row to fill in;
+      // the API's `full_price_cents > 0` gate keeps it unsellable meanwhile.
       await pool.query(
         `INSERT INTO program_options
            (program_id, name, schedule_text, full_price_cents, pricing_model,
@@ -256,20 +299,33 @@ async function main() {
     }
   }
 
-  console.log("\n" + "─".repeat(72));
+  console.log("\n" + "─".repeat(74));
   if (COMMIT) {
-    console.log("Seeded.");
-    console.log("  OPEN now:   FUNiño $160 · Pre-Academy $405/$540 · Academy $805/$882 ·");
-    console.log("              Technification $150 · Morning $125   (all per term, pro-rated");
-    console.log("              if the term has already started)");
-    console.log("  CLOSED:     Goalkeeper, High Performance — no trustworthy fee exists.");
-    console.log("              Both take waitlist signups. Add a price in /admin/academy,");
-    console.log("              activate the option, tick 'Registrations open'.");
+    console.log("Done.");
+    console.log("  OPEN:   FUNiño $160 · Pre-Academy $405/$540 · Academy $805/$882 ·");
+    console.log("          Technification $150 · Morning $125   (per term; pro-rated once the");
+    console.log("          term is under way)");
+    console.log("  CLOSED: Goalkeeper, High Performance — no trustworthy fee exists. Both take");
+    console.log("          waitlist signups. Price them in /admin/academy, activate the option,");
+    console.log("          then tick 'Registrations open'.");
     console.log("");
     console.log("  ⚠ Affiliation fees, MF levies and uniform are NOT collected at checkout.");
     console.log("    If the club expects them with the term fee, we are under-collecting.");
   } else {
     console.log("Dry run complete. Re-run with --commit to write.");
+  }
+}
+
+function printOption(o: OptionSeed) {
+  const price = o.termPriceCents === null ? "NO PRICE — needs Ryan" : `$${(o.termPriceCents / 100).toFixed(2)}/term`;
+  console.log(`      · ${o.name.padEnd(12)} ${price}${o.scheduleText ? `  (${o.scheduleText})` : ""}`);
+}
+
+async function reportOptions(programId: number, p: ProgrammeSeed) {
+  const r = await pool.query("SELECT name, full_price_cents, is_active FROM program_options WHERE program_id = $1", [programId]);
+  if (r.rows.length === 0) { for (const o of p.options) printOption(o); return; }
+  for (const o of r.rows) {
+    console.log(`      · existing: ${o.name} — $${(o.full_price_cents / 100).toFixed(2)}/term ${o.is_active ? "(active)" : "(inactive)"}`);
   }
 }
 
