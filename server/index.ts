@@ -202,6 +202,11 @@ app.use(attributionCookieMiddleware);
   const { startAttributionMaintenanceCron } = await import("./attribution-maintenance-cron");
   startAttributionMaintenanceCron();
 
+  // Marketing Suite ("MarketingOS", Phase B) — durable send worker (graphile-worker).
+  // Self-guards on DATABASE_URL / MARKETING_WORKER_DISABLED and never crashes boot.
+  const { startMarketingWorker } = await import("./marketing/worker");
+  void startMarketingWorker();
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

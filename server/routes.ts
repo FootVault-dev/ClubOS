@@ -84,6 +84,7 @@ import { mountMcpServer } from "./mcp";
 import { CURRENT_LOGO_LICENCE, canonicalConsentText } from "./logo-licence";
 import { buildLogoLicencePdf } from "./logo-licence-pdf";
 import { PDFDocument as PdfLibDocument } from "pdf-lib";
+import { registerMarketingRoutes } from "./marketing/routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -21659,6 +21660,10 @@ export async function registerRoutes(
       res.json(buildCashflowInsight());
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+
+  // Marketing Suite ("MarketingOS", Phase B) — mounts the Resend webhook + public
+  // unsub/preference pages + the auth-gated admin API. One integration point.
+  registerMarketingRoutes(app);
 
   return httpServer;
 }

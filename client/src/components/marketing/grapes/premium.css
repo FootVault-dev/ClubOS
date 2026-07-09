@@ -1,0 +1,524 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   premium.css — turns stock GrapesJS into a first-party ClubOS tool.
+
+   Strategy:
+   • Everything is scoped under `.clubos-gjs` so nothing leaks into the rest of
+     ClubOS. The stock GrapesJS panels are HIDDEN — the UI you see is the custom
+     3-pane shell built in editor.ts (LEFT palette · CENTER canvas · RIGHT
+     inspector) plus a custom top toolbar.
+   • Chrome colours come from the ClubOS design tokens (--card / --background /
+     --border / --muted-foreground / --foreground) so the builder follows the
+     app's light/dark theme automatically.
+   • The BRAND accent (--ce-accent, set inline per brand) drives selection
+     outlines, active states and block-tile hover — so it feels on-brand.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.clubos-gjs {
+  /* ClubOS token bridge */
+  --ce-bg: hsl(var(--background));
+  --ce-panel: hsl(var(--card));
+  --ce-panel-2: hsl(var(--muted));
+  --ce-border: hsl(var(--border));
+  --ce-text: hsl(var(--foreground));
+  --ce-muted: hsl(var(--muted-foreground));
+  --ce-radius: 0.75rem;
+  /* --ce-accent is set inline per brand by editor.ts (fallback = ClubOS primary) */
+  --ce-accent: hsl(var(--primary));
+
+  /* Remap GrapesJS internals so any gjs-rendered widget follows ClubOS + brand */
+  --gjs-main-font: "Inter Tight", Inter, system-ui, -apple-system, sans-serif;
+  --gjs-font-size: 12px;
+  --gjs-primary-color: var(--ce-panel);
+  --gjs-secondary-color: var(--ce-text);
+  --gjs-tertiary-color: var(--ce-muted);
+  --gjs-quaternary-color: var(--ce-accent);
+  --gjs-font-color: var(--ce-text);
+  --gjs-font-color-active: var(--ce-text);
+  --gjs-color-highlight: var(--ce-accent);
+  /* Selection outline, resizer handles, component toolbar + badge all read
+     --gjs-color-blue — remap it so every selection cue is the brand accent. */
+  --gjs-color-blue: var(--ce-accent);
+  --gjs-placeholder-background-color: var(--ce-accent);
+  --gjs-main-dark-color: var(--ce-border);
+  --gjs-main-light-color: var(--ce-panel-2);
+  --gjs-light-border: var(--ce-border);
+  --gjs-canvas-top: 0;
+
+  height: 100%;
+  color: var(--ce-text);
+  font-family: var(--gjs-main-font);
+}
+
+/* Holder sizing — a real, tall builder, not a cramped widget */
+.mkt-grapes-holder {
+  height: min(78vh, 900px);
+  min-height: 540px;
+  width: 100%;
+}
+
+/* Kill the stock GrapesJS chrome — we render our own shell */
+.clubos-gjs .gjs-pn-panels {
+  display: none !important;
+}
+.clubos-gjs .gjs-editor,
+.clubos-gjs .gjs-cv-canvas {
+  background: var(--ce-bg);
+}
+.clubos-gjs .gjs-editor {
+  font-family: var(--gjs-main-font);
+}
+
+/* ── Shell skeleton ─────────────────────────────────────────────────────────── */
+
+.ce-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--ce-panel);
+  border: 1px solid var(--ce-border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.ce-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.ce-left {
+  width: 236px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--ce-border);
+  background: var(--ce-panel);
+}
+.ce-canvas {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  background: var(--ce-bg);
+}
+.ce-right {
+  width: 292px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--ce-border);
+  background: var(--ce-panel);
+}
+.ce-right-body {
+  flex: 1;
+  overflow-y: auto;
+}
+.ce-hidden {
+  display: none !important;
+}
+
+/* ── Top toolbar ────────────────────────────────────────────────────────────── */
+
+.ce-topbar {
+  height: 52px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ce-panel) 88%, var(--ce-panel-2)), var(--ce-panel));
+  border-bottom: 1px solid var(--ce-border);
+}
+.ce-topbar-left,
+.ce-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ce-tb-grp {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ce-tb-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ce-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+.ce-tb-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.ce-tb-btn:hover {
+  background: var(--ce-panel-2);
+  color: var(--ce-text);
+}
+.ce-tb-btn:active {
+  transform: translateY(1px);
+}
+.ce-tb-btn.is-active {
+  color: var(--ce-accent);
+  background: color-mix(in srgb, var(--ce-accent) 15%, transparent);
+}
+/* Segmented device switch */
+.ce-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--ce-panel-2);
+  border: 1px solid var(--ce-border);
+  border-radius: 11px;
+}
+.ce-seg .ce-tb-btn {
+  width: 40px;
+  height: 28px;
+  border-radius: 8px;
+}
+.ce-seg .ce-tb-btn.is-active {
+  background: var(--ce-panel);
+  color: var(--ce-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+/* ── Left: block palette ────────────────────────────────────────────────────── */
+
+.ce-panel-head {
+  padding: 13px 14px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ce-muted);
+}
+.ce-blocks {
+  flex: 1;
+  overflow-y: auto;
+}
+/* GrapesJS renders categories + block tiles inside .ce-blocks */
+.clubos-gjs .gjs-blocks-cs {
+  padding: 4px 10px 14px;
+}
+.clubos-gjs .gjs-block-category {
+  border: 0;
+  margin-top: 6px;
+}
+.clubos-gjs .gjs-block-category .gjs-title,
+.clubos-gjs .gjs-blocks-cs .gjs-title {
+  background: transparent;
+  border: 0;
+  padding: 12px 4px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ce-muted);
+}
+.clubos-gjs .gjs-title .gjs-caret-icon {
+  color: var(--ce-muted);
+  margin-right: 6px;
+}
+.clubos-gjs .gjs-blocks-c {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 2px 0;
+}
+.clubos-gjs .gjs-block {
+  width: auto;
+  min-height: 0;
+  height: auto;
+  margin: 0;
+  padding: 15px 8px 11px;
+  float: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: var(--ce-panel);
+  border: 1px solid var(--ce-border);
+  border-radius: 12px;
+  color: var(--ce-text);
+  box-shadow: none;
+  cursor: grab;
+  transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.clubos-gjs .gjs-block:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--ce-accent) 55%, var(--ce-border));
+  box-shadow: 0 10px 22px -8px rgba(0, 0, 0, 0.3);
+}
+.clubos-gjs .gjs-block:active {
+  cursor: grabbing;
+}
+.clubos-gjs .gjs-block__media {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ce-muted);
+  transition: color 0.16s ease;
+}
+.clubos-gjs .gjs-block:hover .gjs-block__media {
+  color: var(--ce-accent);
+}
+.clubos-gjs .gjs-block__media svg {
+  width: 22px;
+  height: 22px;
+}
+.clubos-gjs .gjs-block-label {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ce-text);
+  text-align: center;
+}
+
+/* ── Right: inspector ──────────────────────────────────────────────────────── */
+
+.ce-right-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px;
+  border-bottom: 1px solid var(--ce-border);
+}
+.ce-tab {
+  flex: 1;
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ce-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.ce-tab:hover {
+  color: var(--ce-text);
+  background: var(--ce-panel-2);
+}
+.ce-tab.is-active {
+  color: var(--ce-accent);
+  background: color-mix(in srgb, var(--ce-accent) 15%, transparent);
+}
+.ce-empty {
+  padding: 52px 26px;
+  text-align: center;
+  color: var(--ce-muted);
+}
+.ce-empty-icon {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 14px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ce-panel-2);
+  color: var(--ce-muted);
+}
+.ce-empty-icon svg {
+  width: 22px;
+  height: 22px;
+}
+.ce-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ce-text);
+  margin: 0 0 5px;
+}
+.ce-empty-sub {
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* Style manager sectors */
+.clubos-gjs .gjs-sm-sectors {
+  background: transparent;
+}
+.clubos-gjs .gjs-sm-sector,
+.clubos-gjs .gjs-sm-sector.gjs-sm-open {
+  border: 0;
+  border-bottom: 1px solid var(--ce-border);
+  background: transparent;
+}
+.clubos-gjs .gjs-sm-sector-title,
+.clubos-gjs .gjs-sm-title {
+  background: transparent;
+  border: 0;
+  padding: 11px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ce-muted);
+}
+.clubos-gjs .gjs-sm-properties {
+  padding: 4px 12px 14px;
+}
+.clubos-gjs .gjs-sm-label,
+.clubos-gjs .gjs-label,
+.clubos-gjs .gjs-trt-trait .gjs-label {
+  color: var(--ce-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* Inputs / fields — match ClubOS form controls */
+.clubos-gjs .gjs-field,
+.clubos-gjs .gjs-sm-field,
+.clubos-gjs .gjs-clm-select,
+.clubos-gjs .gjs-select {
+  background: var(--ce-bg);
+  border: 1px solid var(--ce-border);
+  border-radius: 8px;
+  color: var(--ce-text);
+  box-shadow: none;
+}
+.clubos-gjs .gjs-field:focus-within {
+  border-color: color-mix(in srgb, var(--ce-accent) 60%, var(--ce-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ce-accent) 14%, transparent);
+}
+.clubos-gjs .gjs-field input,
+.clubos-gjs .gjs-field select,
+.clubos-gjs .gjs-sm-field input,
+.clubos-gjs .gjs-sm-field select,
+.clubos-gjs .gjs-clm-tags .gjs-sm-field input {
+  color: var(--ce-text);
+  background: transparent;
+}
+.clubos-gjs .gjs-field .gjs-d-s-arrow,
+.clubos-gjs .gjs-field-arrow-u,
+.clubos-gjs .gjs-field-arrow-d {
+  border-color: var(--ce-muted) transparent;
+}
+/* Radio/btn groups (align, etc.) */
+.clubos-gjs .gjs-radio-item {
+  background: var(--ce-bg);
+  border-color: var(--ce-border);
+}
+.clubos-gjs .gjs-radio-item-label {
+  color: var(--ce-muted);
+}
+.clubos-gjs .gjs-radio-item input:checked + .gjs-radio-item-label {
+  color: var(--ce-accent);
+  background: color-mix(in srgb, var(--ce-accent) 15%, transparent);
+}
+
+/* Traits (settings) */
+.clubos-gjs .gjs-trt-traits {
+  padding: 6px 0;
+}
+.clubos-gjs .gjs-trt-trait {
+  padding: 9px 14px;
+}
+
+/* Layers tree */
+.clubos-gjs .gjs-layer-title {
+  background: transparent;
+  border-color: var(--ce-border);
+}
+.clubos-gjs .gjs-layer-name {
+  color: var(--ce-text);
+}
+.clubos-gjs .gjs-layer.gjs-selected .gjs-layer-title {
+  background: color-mix(in srgb, var(--ce-accent) 14%, transparent);
+}
+.clubos-gjs .gjs-layer-count,
+.clubos-gjs .gjs-layer-caret {
+  color: var(--ce-muted);
+}
+
+/* ── Canvas + selection ─────────────────────────────────────────────────────── */
+
+.clubos-gjs .gjs-cv-canvas {
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--ce-bg);
+}
+.clubos-gjs .gjs-frame-wrapper {
+  padding-top: 26px;
+}
+.clubos-gjs .gjs-frame {
+  border: 1px solid var(--ce-border);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px -14px rgba(0, 0, 0, 0.5), 0 8px 22px -10px rgba(0, 0, 0, 0.35);
+}
+/* Selection + hover chrome uses the brand accent */
+.clubos-gjs .gjs-badge {
+  background: var(--ce-accent);
+  color: #fff;
+  border-radius: 5px 5px 0 0;
+  font-weight: 600;
+  font-size: 10px;
+  padding: 3px 7px;
+}
+.clubos-gjs .gjs-toolbar {
+  background: var(--ce-accent);
+  border-radius: 6px;
+}
+.clubos-gjs .gjs-toolbar-item {
+  color: #fff;
+}
+.clubos-gjs .gjs-com-badge,
+.clubos-gjs .gjs-placeholder {
+  border-color: var(--ce-accent);
+}
+.clubos-gjs .gjs-placeholder.horizontal {
+  border-top-color: var(--ce-accent);
+}
+.clubos-gjs .gjs-placeholder-int {
+  background: var(--ce-accent);
+}
+.clubos-gjs .gjs-dashed *[data-gjs-highlightable] {
+  outline-color: color-mix(in srgb, var(--ce-accent) 40%, transparent) !important;
+}
+
+/* ── Preview mode — collapse side panels for a clean look ────────────────────── */
+.clubos-gjs.ce-previewing .ce-left,
+.clubos-gjs.ce-previewing .ce-right {
+  display: none;
+}
+
+/* ── Code / export modal (may mount outside the scope) ──────────────────────── */
+.gjs-mdl-dialog {
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  box-shadow: 0 30px 80px -12px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  font-family: "Inter Tight", Inter, system-ui, sans-serif;
+}
+.gjs-mdl-header {
+  border-bottom: 1px solid hsl(var(--border));
+}
+.gjs-mdl-title {
+  color: hsl(var(--foreground));
+  font-weight: 700;
+}
+.gjs-mdl-content {
+  background: hsl(var(--card));
+}
+.gjs-mdl-btn-close {
+  color: hsl(var(--muted-foreground));
+}
+
+/* ── Light-mode nicety: soften the workspace so the email pops ──────────────── */
+html:not(.dark) .clubos-gjs .gjs-cv-canvas,
+html:not(.dark) .clubos-gjs .ce-canvas {
+  background: hsl(220 14% 95%);
+}

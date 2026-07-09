@@ -151,6 +151,10 @@ import PrintUpload from "@/pages/print-upload";
 import ClubDossier from "@/pages/club-dossier";
 import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
+import MarketingHome from "@/pages/marketing/Home";
+import MarketingCampaignWizard from "@/pages/marketing/CampaignWizard";
+import MarketingCampaignDetail from "@/pages/marketing/CampaignDetail";
+import MarketingFlowEditor from "@/pages/marketing/FlowEditor";
 import { Search, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -224,6 +228,11 @@ function AdminRouter() {
         <Route path="/admin/print-landing" component={PrintsLanding} />
         <Route path="/admin/print-email" component={PrintsEmail} />
         <Route path="/admin/integrations" component={PrintsIntegrations} />
+        <Route path="/admin/marketing/campaigns/new" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id/edit" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id" component={MarketingCampaignDetail} />
+        <Route path="/admin/marketing/flows/:id" component={MarketingFlowEditor} />
+        <Route path="/admin/marketing" component={MarketingHome} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -253,6 +262,11 @@ function AdminRouter() {
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
         <Route path="/admin/cashflow" component={GroupCashflow} />
+        <Route path="/admin/marketing/campaigns/new" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id/edit" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id" component={MarketingCampaignDetail} />
+        <Route path="/admin/marketing/flows/:id" component={MarketingFlowEditor} />
+        <Route path="/admin/marketing" component={MarketingHome} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -284,6 +298,11 @@ function AdminRouter() {
         <Route path="/admin/camps/:id/edit-page" component={AdminEditPage} />
         <Route path="/admin/camps/:id" component={AdminCampDetail} />
         <Route path="/admin/camps/:campId/session/:dateId/:sessionType" component={AdminSessionRoll} />
+        <Route path="/admin/marketing/campaigns/new" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id/edit" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id" component={MarketingCampaignDetail} />
+        <Route path="/admin/marketing/flows/:id" component={MarketingFlowEditor} />
+        <Route path="/admin/marketing" component={MarketingHome} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -322,6 +341,11 @@ function AdminRouter() {
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/cic-watch" component={CicWatch} />
         <Route path="/admin/cic-content-marketplace" component={ContentMarketplace} />
+        <Route path="/admin/marketing/campaigns/new" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id/edit" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id" component={MarketingCampaignDetail} />
+        <Route path="/admin/marketing/flows/:id" component={MarketingFlowEditor} />
+        <Route path="/admin/marketing" component={MarketingHome} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -355,6 +379,11 @@ function AdminRouter() {
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
         <Route path="/admin/discounts" component={AdminDiscounts} />
         <Route path="/admin/league-settings" component={LeagueSettings} />
+        <Route path="/admin/marketing/campaigns/new" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id/edit" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id" component={MarketingCampaignDetail} />
+        <Route path="/admin/marketing/flows/:id" component={MarketingFlowEditor} />
+        <Route path="/admin/marketing" component={MarketingHome} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -383,6 +412,11 @@ function AdminRouter() {
         <Route path="/admin/payments" component={VenuePayments} />
         <Route path="/admin/venue-settings" component={VenueSettings} />
         <Route path="/admin/website" component={VenueWebsite} />
+        <Route path="/admin/marketing/campaigns/new" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id/edit" component={MarketingCampaignWizard} />
+        <Route path="/admin/marketing/campaigns/:id" component={MarketingCampaignDetail} />
+        <Route path="/admin/marketing/flows/:id" component={MarketingFlowEditor} />
+        <Route path="/admin/marketing" component={MarketingHome} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -428,6 +462,11 @@ function AdminRouter() {
       <Route path="/admin/declarations" component={AdminDeclarations} />
       <Route path="/admin/events" component={AdminEvents} />
       <Route path="/admin/membership" component={AdminMembership} />
+      <Route path="/admin/marketing/campaigns/new" component={MarketingCampaignWizard} />
+      <Route path="/admin/marketing/campaigns/:id/edit" component={MarketingCampaignWizard} />
+      <Route path="/admin/marketing/campaigns/:id" component={MarketingCampaignDetail} />
+      <Route path="/admin/marketing/flows/:id" component={MarketingFlowEditor} />
+      <Route path="/admin/marketing" component={MarketingHome} />
       <Route path="/admin/studio/new" component={StudioNew} />
       <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
       <Route path="/admin/studio/:id" component={StudioEditor} />
