@@ -92,12 +92,14 @@ import LeagueLoyalty from "@/pages/league-loyalty";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
+import LeagueStore from "@/pages/league-store";
 import CicInbox from "@/pages/cic-inbox";
 import CicLiveChat from "@/pages/cic-livechat";
 import MflLiveChat from "@/pages/mfl-livechat";
 import CugcLiveChat from "@/pages/cugc-livechat";
 import PrintLiveChat from "@/pages/print-livechat";
 import CicLogoConsents from "@/pages/cic-logo-consents";
+import MediaLibrary from "@/pages/media-library";
 import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
 import CicWatch from "@/pages/cic-watch";
@@ -320,6 +322,7 @@ function AdminRouter() {
         <Route path="/admin/cic-push" component={CicPush} />
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/cic-watch" component={CicWatch} />
+        <Route path="/admin/media" component={MediaLibrary} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -348,6 +351,7 @@ function AdminRouter() {
         <Route path="/admin/loyalty" component={LeagueLoyalty} />
         <Route path="/admin/analytics" component={LeagueAnalytics} />
         <Route path="/admin/business-plan" component={LeagueBusinessPlan} />
+        <Route path="/admin/store" component={LeagueStore} />
         <Route path="/admin/inbox" component={LeagueInbox} />
         <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
         <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />

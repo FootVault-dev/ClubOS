@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb, serial, uuid } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -4320,3 +4320,312 @@ export type PredictorPrediction = typeof predictorPredictions.$inferSelect;
 export const insertPredictorSquadSchema = createInsertSchema(predictorSquad).omit({ id: true, createdAt: true });
 export type InsertPredictorSquad = z.infer<typeof insertPredictorSquadSchema>;
 export type PredictorSquadPlayer = typeof predictorSquad.$inferSelect;
+// ═══════════════════════════════════════════════════════════════════════════
+// Shop — native e-commerce module (MFL Store pilot, Shopify replacement).
+// Generic multi-brand: everything hangs off organization_id; MFL (org 3) is
+// the first store. Money = integer NZD cents (except costUsd, a supplier cost
+// REFERENCE only — USD, ex shipping/duties — never used in calculations).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const shopProducts = pgTable("shop_products", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  slug: text("slug").notNull(),
+  title: text("title").notNull(),
+  subtitle: text("subtitle"),
+  description: text("description"),
+  type: text("type").notNull().default("shirt"),        // 'kit' | 'shirt' | ... open-ended
+  priceCents: integer("price_cents").notNull().default(0),
+  compareAtCents: integer("compare_at_cents"),
+  costUsd: decimal("cost_usd", { precision: 10, scale: 2 }),  // reference only (USD, ex shipping/duties)
+  badge: text("badge"),
+  status: text("status").notNull().default("draft"),    // 'draft' | 'active' | 'archived'
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgSlugUnq: uniqueIndex("shop_products_org_slug_unique").on(t.organizationId, t.slug),
+}));
+export const insertShopProductSchema = createInsertSchema(shopProducts).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertShopProduct = z.infer<typeof insertShopProductSchema>;
+export type ShopProduct = typeof shopProducts.$inferSelect;
+
+export const shopProductColours = pgTable("shop_product_colours", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  productId: integer("product_id").notNull().references(() => shopProducts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  swatchHex: text("swatch_hex"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+});
+export const insertShopProductColourSchema = createInsertSchema(shopProductColours).omit({ id: true });
+export type InsertShopProductColour = z.infer<typeof insertShopProductColourSchema>;
+export type ShopProductColour = typeof shopProductColours.$inferSelect;
+
+// colourId null = product-level image.
+export const shopProductImages = pgTable("shop_product_images", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  productId: integer("product_id").notNull().references(() => shopProducts.id, { onDelete: "cascade" }),
+  colourId: integer("colour_id").references(() => shopProductColours.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  alt: text("alt"),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertShopProductImageSchema = createInsertSchema(shopProductImages).omit({ id: true });
+export type InsertShopProductImage = z.infer<typeof insertShopProductImageSchema>;
+export type ShopProductImage = typeof shopProductImages.$inferSelect;
+
+// Variant = colour × size. Stock lives here.
+export const shopVariants = pgTable("shop_variants", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  productId: integer("product_id").notNull().references(() => shopProducts.id, { onDelete: "cascade" }),
+  colourId: integer("colour_id").notNull().references(() => shopProductColours.id, { onDelete: "cascade" }),
+  size: text("size").notNull(),
+  sku: text("sku"),
+  stock: integer("stock").notNull().default(0),
+  // Optional per-variant price override (NZD cents). Null → use the product
+  // price (all MFL kits). Used by variable-price products like the CIC Gift Card
+  // where each denomination variant carries its own price.
+  priceCents: integer("price_cents"),
+  active: boolean("active").notNull().default(true),
+}, (t) => ({
+  colourSizeUnq: uniqueIndex("shop_variants_colour_size_unique").on(t.colourId, t.size),
+}));
+export const insertShopVariantSchema = createInsertSchema(shopVariants).omit({ id: true });
+export type InsertShopVariant = z.infer<typeof insertShopVariantSchema>;
+export type ShopVariant = typeof shopVariants.$inferSelect;
+
+export const shopShippingOptions = pgTable("shop_shipping_options", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  label: text("label").notNull(),
+  description: text("description"),
+  priceCents: integer("price_cents").notNull().default(0),
+  requiresAddress: boolean("requires_address").notNull().default(false),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertShopShippingOptionSchema = createInsertSchema(shopShippingOptions).omit({ id: true });
+export type InsertShopShippingOption = z.infer<typeof insertShopShippingOptionSchema>;
+export type ShopShippingOption = typeof shopShippingOptions.$inferSelect;
+
+// kind 'percent' → value is a whole percent (10 = 10%); 'fixed' → value is cents.
+export const shopDiscountCodes = pgTable("shop_discount_codes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
+  kind: text("kind").notNull().default("percent"),
+  value: integer("value").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  startsAt: timestamp("starts_at"),
+  endsAt: timestamp("ends_at"),
+  maxUses: integer("max_uses"),
+  usedCount: integer("used_count").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgCodeUnq: uniqueIndex("shop_discount_codes_org_code_unique").on(t.organizationId, t.code),
+}));
+export const insertShopDiscountCodeSchema = createInsertSchema(shopDiscountCodes).omit({ id: true, createdAt: true });
+export type InsertShopDiscountCode = z.infer<typeof insertShopDiscountCodeSchema>;
+export type ShopDiscountCode = typeof shopDiscountCodes.$inferSelect;
+
+// Shop customisation contract (stored as jsonb on shop_order_items; the
+// storefront is built against EXACTLY these shapes):
+export interface ShopSponsorSlot { text?: string; logoUrl?: string } // logoUrl wins if both
+export interface ShopKitCustomisation {
+  teamLogo?: ShopSponsorSlot; // team crest — chest, over the heart
+  frontSponsor?: ShopSponsorSlot;
+  backTopSponsor?: ShopSponsorSlot;
+  backBottomSponsor?: ShopSponsorSlot;
+}
+export interface ShopUnitPersonalisation { name?: string; number?: string } // number = 1–2 digits
+
+// Totals are GST-INCLUSIVE; gstCents = NZ GST content = round(total * 3 / 23).
+// orderToken = public status-lookup key; orderNumber = human "MFL-1001".
+export const shopOrders = pgTable("shop_orders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  orderNumber: text("order_number").unique(),
+  orderToken: uuid("order_token").notNull().unique().default(sql`gen_random_uuid()`),
+  status: text("status").notNull().default("pending"),
+  // 'pending' | 'paid' | 'processing' | 'ready_for_pickup' | 'shipped' |
+  // 'completed' | 'cancelled' | 'refunded'
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  shippingOptionId: integer("shipping_option_id").references(() => shopShippingOptions.id, { onDelete: "set null" }),
+  shippingLabel: text("shipping_label"),
+  shippingCents: integer("shipping_cents").notNull().default(0),
+  addressLine1: text("address_line1"),
+  addressLine2: text("address_line2"),
+  suburb: text("suburb"),
+  city: text("city"),
+  postcode: text("postcode"),
+  subtotalCents: integer("subtotal_cents").notNull().default(0),
+  discountCents: integer("discount_cents").notNull().default(0),
+  discountCode: text("discount_code"),
+  gstCents: integer("gst_cents").notNull().default(0),
+  totalCents: integer("total_cents").notNull().default(0),
+  currency: text("currency").notNull().default("NZD"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  contactId: integer("contact_id").references(() => contacts.id),
+  source: text("source").notNull().default("online"),   // POS-ready
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  utmContent: text("utm_content"),
+  utmTerm: text("utm_term"),
+  fbclid: text("fbclid"),
+  gclid: text("gclid"),
+  visitorId: text("visitor_id"),
+  notes: text("notes"),
+  // Player Pay (group payment): 'standard' | 'player_pay'. player_pay orders
+  // start as status='awaiting_players' and flip to 'paid' (all_paid_at set)
+  // when the LAST shop_order_shares row is paid.
+  paymentMode: text("payment_mode").notNull().default("standard"),
+  teamName: text("team_name"),
+  allPaidAt: timestamp("all_paid_at"),
+  paidAt: timestamp("paid_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertShopOrderSchema = createInsertSchema(shopOrders).omit({ id: true, orderToken: true, createdAt: true, updatedAt: true });
+export type InsertShopOrder = z.infer<typeof insertShopOrderSchema>;
+export type ShopOrder = typeof shopOrders.$inferSelect;
+
+// Line items snapshot everything at purchase time so history never drifts.
+export const shopOrderItems = pgTable("shop_order_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  orderId: integer("order_id").notNull().references(() => shopOrders.id, { onDelete: "cascade" }),
+  productId: integer("product_id").references(() => shopProducts.id, { onDelete: "set null" }),
+  variantId: integer("variant_id").references(() => shopVariants.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  colourName: text("colour_name"),
+  size: text("size"),
+  imageUrl: text("image_url"),
+  unitCents: integer("unit_cents").notNull().default(0),
+  qty: integer("qty").notNull().default(1),
+  lineCents: integer("line_cents").notNull().default(0),
+  costUsdSnapshot: decimal("cost_usd_snapshot", { precision: 10, scale: 2 }),
+  // Kit customisation (sponsor slots) + per-shirt personalisation. When units
+  // is present its length === qty. Personalisation is included in the price
+  // ($0 — no price impact).
+  customisation: jsonb("customisation").$type<ShopKitCustomisation | null>(),
+  units: jsonb("units").$type<ShopUnitPersonalisation[] | null>(),
+});
+export const insertShopOrderItemSchema = createInsertSchema(shopOrderItems).omit({ id: true });
+export type InsertShopOrderItem = z.infer<typeof insertShopOrderItemSchema>;
+export type ShopOrderItem = typeof shopOrderItems.$inferSelect;
+
+// Player Pay — one row per player on a payment_mode='player_pay' order.
+// shareToken is the public pay-link key; amounts sum EXACTLY to the order
+// total (shipping split evenly, remainder cents on the last share).
+export const shopOrderShares = pgTable("shop_order_shares", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  orderId: integer("order_id").notNull().references(() => shopOrders.id, { onDelete: "cascade" }),
+  playerName: text("player_name").notNull(),
+  playerEmail: text("player_email").notNull(),
+  playerPhone: text("player_phone"),
+  size: text("size").notNull(),
+  shirtName: text("shirt_name"),
+  shirtNumber: text("shirt_number"),
+  amountCents: integer("amount_cents").notNull(),
+  shareToken: uuid("share_token").notNull().unique().default(sql`gen_random_uuid()`),
+  status: text("status").notNull().default("pending"), // 'pending' | 'paid'
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  paidAt: timestamp("paid_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export type InsertShopOrderShare = typeof shopOrderShares.$inferInsert;
+export type ShopOrderShare = typeof shopOrderShares.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CIC Media Library — staff (Max) upload photos/videos and organise them by
+// team + custom categories ("like our Google Drive"). Feeds a public catalog
+// API (/api/public/media/:brand/*) a future storefront will read. Greenfield —
+// first brand is CIC (org 5), multi-brand ready like the shop module.
+//
+// Storage: originals live PRIVATE (clubos-media bucket, storage_key); once a
+// gallery/asset is published, a watermarked preview + thumb are generated into
+// the PUBLIC clubos-media-previews bucket (preview_key / thumb_key). The
+// public API only ever returns preview/thumb URLs — never storage_key, never
+// player_name (internal-only, e.g. matching a face to a shirt for staff).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const mediaCategories = pgTable("media_categories", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgSlugUnq: uniqueIndex("media_categories_org_slug_unique").on(t.organizationId, t.slug),
+}));
+export const insertMediaCategorySchema = createInsertSchema(mediaCategories).omit({ id: true, createdAt: true });
+export type InsertMediaCategory = z.infer<typeof insertMediaCategorySchema>;
+export type MediaCategory = typeof mediaCategories.$inferSelect;
+
+// A shoot/collection — usually one per team per day, but can be a custom
+// grouping too. tournamentId/teamId are set when created "from a team" via the
+// picker; ageGroup/clubName are denormalised snapshots so the gallery still
+// reads sensibly even if the team is later renamed or removed.
+export const mediaGalleries = pgTable("media_galleries", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  tournamentId: integer("tournament_id").references(() => tournaments.id, { onDelete: "set null" }),
+  teamId: integer("team_id").references(() => tournamentTeams.id, { onDelete: "set null" }),
+  ageGroup: text("age_group"),
+  clubName: text("club_name"),
+  title: text("title").notNull(),
+  slug: text("slug").notNull(),
+  // FK to media_assets added via ALTER TABLE in the migration (media_assets is
+  // created after this table) — plain int here, same precedent as
+  // clubLogoConsents.clubId above.
+  coverAssetId: integer("cover_asset_id"),
+  shootDate: date("shoot_date"),
+  status: text("status").notNull().default("draft"), // 'draft' | 'published' | 'hidden'
+  assetCount: integer("asset_count").notNull().default(0),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgSlugUnq: uniqueIndex("media_galleries_org_slug_unique").on(t.organizationId, t.slug),
+}));
+export const insertMediaGallerySchema = createInsertSchema(mediaGalleries).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertMediaGallery = z.infer<typeof insertMediaGallerySchema>;
+export type MediaGallery = typeof mediaGalleries.$inferSelect;
+
+// One row per uploaded file. kind='video' skips the sharp preview pipeline
+// (previewKey/thumbKey stay null — video thumbnails are a later phase).
+// bibNumber is public-safe (storefront search-by-bib); playerName is
+// INTERNAL ONLY and must never appear in a /api/public/media response.
+export const mediaAssets = pgTable("media_assets", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  galleryId: integer("gallery_id").references(() => mediaGalleries.id, { onDelete: "set null" }),
+  categoryId: integer("category_id").references(() => mediaCategories.id, { onDelete: "set null" }),
+  teamId: integer("team_id").references(() => tournamentTeams.id, { onDelete: "set null" }),
+  kind: text("kind").notNull().default("photo"), // 'photo' | 'video'
+  storageKey: text("storage_key").notNull(),      // PRIVATE original (clubos-media bucket)
+  previewKey: text("preview_key"),                // watermarked preview, PUBLIC (clubos-media-previews)
+  thumbKey: text("thumb_key"),                    // small thumb, PUBLIC (clubos-media-previews)
+  originalFilename: text("original_filename"),
+  contentType: text("content_type"),
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
+  width: integer("width"),
+  height: integer("height"),
+  durationSec: integer("duration_sec"),
+  bibNumber: integer("bib_number"),
+  playerName: text("player_name"), // INTERNAL ONLY — never returned by the public API
+  takenAt: timestamp("taken_at", { withTimezone: true }),
+  priceCents: integer("price_cents"),
+  status: text("status").notNull().default("draft"), // 'draft' | 'published'
+  sortOrder: integer("sort_order").notNull().default(0),
+  uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertMediaAssetSchema = createInsertSchema(mediaAssets).omit({ id: true, createdAt: true });
+export type InsertMediaAsset = z.infer<typeof insertMediaAssetSchema>;
+export type MediaAsset = typeof mediaAssets.$inferSelect;

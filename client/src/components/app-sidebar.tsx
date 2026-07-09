@@ -67,6 +67,7 @@ import {
   MessageSquarePlus,
   Link2,
   Target,
+  Images,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -164,6 +165,7 @@ const leagueNav = [
   { tab: "loyalty", title: "Loyalty", url: "/admin/loyalty", icon: Crown },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "business-plan", title: "Business Plan", url: "/admin/business-plan", icon: FileText },
+  { tab: "store", title: "Store", url: "/admin/store", icon: ShoppingCart },
 ];
 
 const venueSecondary = [
@@ -198,6 +200,7 @@ const tournamentNav = [
   { tab: "cic-push", title: "Notifications", url: "/admin/cic-push", icon: BellRing },
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
   { tab: "cic-watch", title: "Watch", url: "/admin/cic-watch", icon: Radio },
+  { tab: "media", title: "Media", url: "/admin/media", icon: Images },
 ];
 
 const tournamentSecondary = [
