@@ -7,6 +7,22 @@
 # mount) and no Facebook tracking. (This is exactly what broke v114.)
 #
 # Always deploy with this script so the VITE_* values from .env are passed.
+#
+# ── D16: ONE DEPLOY BRANCH (2026-07-09) ──────────────────────────────────────
+# app 'clubos' serves ALL branches that get deployed to it — so if you deploy
+# from a branch that lacks a merge, you SILENTLY drop that feature from prod.
+# This happened to AttributionOS: post-07-04 deploys ran from a branch without
+# the loop/attribution merge and /t.js reverted to serving HTML (zero data
+# collected for days, nobody noticed). Rule: deploy ONLY from the one canonical
+# branch that contains every merged feature. This script now PRINTS the current
+# branch before shipping — LOOK AT IT and confirm it's the right one.
+#
+# ── PERMANENT POST-DEPLOY SMOKE CHECKLIST (run every time, --no-cache if stale)
+#   curl -sI https://app.usg.co.nz/t.js         → content-type: application/javascript  (NOT text/html)
+#   curl -sI https://app.usg.co.nz/l/<realkey>  → 302 (NOT 200 HTML)
+#   curl -s  https://app.usg.co.nz/api/admin/... → 401 (admin still gated)
+#   + a route unique to the NEWEST merge returns its real response (not 404/HTML)
+# A text/html /t.js means attribution regressed out again — reship from the right branch.
 set -e
 cd "$(dirname "$0")"
 
@@ -29,12 +45,15 @@ case "$VITE_STRIPE_PUBLISHABLE_KEY" in
   *) echo "❌ VITE_STRIPE_PUBLISHABLE_KEY doesn't look like a Stripe key — aborting."; exit 1;;
 esac
 
+_GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<unknown>")
 echo "==============================================="
 echo "  ClubOS deploy → app 'clubos' (Sydney)"
+echo "  Branch     : ${_GIT_BRANCH}   ← D16: confirm this is the ONE canonical deploy branch"
 echo "  Stripe key : ${VITE_STRIPE_PUBLISHABLE_KEY:0:11}…  (${#VITE_STRIPE_PUBLISHABLE_KEY} chars)"
 echo "  Meta pixel : ${VITE_META_PIXEL_ID:-<none>}"
 echo "==============================================="
 echo "  ⚠️  Run any DB migration BEFORE this deploy if the schema changed."
+echo "  ⚠️  After deploy, smoke-test /t.js (must be application/javascript, not text/html)."
 echo ""
 
 exec flyctl deploy -a clubos \
