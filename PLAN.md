@@ -7,7 +7,6 @@
 
 ## Phase 1 — Behavioral Depth (the overnight target)
 
-- [ ] **T1. `shared/behavior.ts` — pure event-shaping module.** `shapeBehaviorEvent(raw, {userAgent})` → validated row or null. Whitelist event_type (page_leave/scroll/section_view/click/rage_click/route_change/form_start/form_abandon/vitals). Sanitise css_path (cap length, strip nothing executable), clamp offset_x/offset_y to [0,1], bucket scroll to nearest 10% band (0..100), coerce viewport to mobile|tablet|desktop, drop any raw text (keep only a stable text hash if present), reuse `detectBot` from `shared/attribution.ts` for `is_bot`. No DB imports. Also `shapeBehaviorEvents(arr, ctx, cap=50)`. verify: `npx tsx script/test-behavior.ts` green (write it, ≥30 assertions incl. bad-payload→null, offset clamp, band bucketing, bot flag).
 
 - [ ] **T2. `behavior_events` partitioned table — migration FILE + drizzle mirror.** Write `migrations/<today>_behavior_events.sql` per AGENTS §3 (parent PARTITION BY RANGE (ts) + current + next 2 monthly partitions + parent indexes, all `IF NOT EXISTS`). Add the matching `behaviorEvents` `pgTable` mirror to `shared/schema.ts` (no partition clause) + insert type. verify: `npm run build` green AND the SQL file has only additive verbs (grep it: no DROP/ALTER-rename/db:push).
 
@@ -41,5 +40,7 @@
 - [ ] **T15. 30-day replay retention cron.** verify: `npm run build` green.
 
 ## Done
+
+- [x] **T1. `shared/behavior.ts` — pure event-shaping module.** Built `shapeBehaviorEvent`/`shapeBehaviorEvents` (whitelist, css_path sanitising, offset clamp, scroll-band bucketing, viewport coercion, site normalising, FNV-1a text hash instead of raw text, `detectBot` reuse). `script/test-behavior.ts`: 77 assertions green. `npm run build` green. NOTE for T2: added a `textHash` field not listed in AGENTS §3 — the migration needs a `text_hash text` column too (see AGENTS Lessons learned).
 
 <!-- completed tasks move here with a one-line note from the agent -->

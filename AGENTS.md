@@ -65,4 +65,6 @@ The base tracker stays ES5-safe and small; `renderTrackerScript` returns a STRIN
 - Reuse `detectBot`, `setTrackerCors`, `attributionScope`/`workspaceOrg`, the tab-registration pattern. Don't reinvent.
 
 ## Lessons learned (append-only)
-- (add gotchas here as you hit them)
+- **T1:** The AGENTS §3 `behavior_events` column list is missing a column implied by §1's click-event spec ("a text hash (NO raw text)"). `shared/behavior.ts` adds `textHash: string | null` (FNV-1a 32-bit hex of any client-sent `text` field) to `ShapedBehaviorEvent`. **T2 must add `text_hash text` to the migration + drizzle mirror** alongside the columns already listed in §3 — don't silently drop it.
+- **T1:** `raw.site` (the tracker's `location.hostname`) isn't sent by the current `/t.js` (`shared/tracker-script.ts`) at all yet — it's a NEW field the v2 behavioral layer (T6) must add to every event payload. `shapeBehaviorEvent` normalises it (strips protocol/www/path/query, lowercases) and treats it as optional/nullable so T1 doesn't block on T6 not existing yet.
+- **T1:** Field-name aliases accepted so later tasks aren't locked to one client key: `pagePath` accepts `raw.pagePath ?? raw.page`; `scrollBand` accepts `raw.scrollBand ?? raw.scrollPercent`. Pick one when building T6's t.js payload (doesn't matter which, both map through).
