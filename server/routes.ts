@@ -72,7 +72,7 @@ import {
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
 import { behaviorEventsToInsert } from "@shared/behavior";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
-import { renderTrackerScript } from "@shared/tracker-script";
+import { renderTrackerScript, renderBehaviorScript } from "@shared/tracker-script";
 import { CID_COOKIE, CID_MAX_AGE_SECONDS, VID_COOKIE, VID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId, isValidClickId, parseCookieHeader } from "./attribution-cookies";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
@@ -218,6 +218,29 @@ export async function registerRoutes(
       const proto = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
       const collectorBase = `${proto}://${String(req.headers.host || "")}`;
       const js = renderTrackerScript({ collectorBase, domains: CLUB_ROOT_DOMAINS });
+      res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      const origin = String(req.headers.origin || "");
+      if (origin && isOurOrigin(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+      }
+      res.send(js);
+    } catch {
+      res.status(500).type("application/javascript").send("/* tracker unavailable */");
+    }
+  });
+
+  // `GET /t2.js` — lazy-loaded Phase 1 (Behavioral Depth) collector (T6). The boot
+  // script (/t.js) sets window.__usgB={base,vid,sid} then injects this as a second
+  // <script> tag once a visitor id exists, so it never re-derives cookies itself.
+  // Same headers/CORS pattern as /t.js. Registered before the SPA catch-all.
+  app.get("/t2.js", (req, res) => {
+    try {
+      const proto = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+      const collectorBase = `${proto}://${String(req.headers.host || "")}`;
+      const js = renderBehaviorScript({ collectorBase });
       res.setHeader("Content-Type", "application/javascript; charset=utf-8");
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("X-Content-Type-Options", "nosniff");
