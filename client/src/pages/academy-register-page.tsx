@@ -21,6 +21,8 @@ import {
   MapPin, Users, Info, Mail,
 } from "lucide-react";
 import { checkEligibility, GENDERS, type Gender, type AcademyPaymentPlan } from "@shared/academy";
+import { initPixel, trackEvent } from "@/lib/meta-pixel";
+import { purchaseEventId } from "@shared/meta-events";
 
 // Only initialise Stripe if the publishable key was actually baked into the
 // build — otherwise render a clear message instead of a silently blank
@@ -92,6 +94,9 @@ interface Quote {
   sessionsRemaining?: number | null;
   totalSessions?: number | null;
   termStatus?: "before" | "running" | "ended" | null;
+  /** Promo code applied at register time. */
+  promoCents?: number;
+  discountCode?: string | null;
 }
 
 interface TermInfo {
@@ -301,6 +306,21 @@ function PaymentForm({
     }
 
     if (paymentIntent?.status === "succeeded" || paymentIntent?.status === "processing") {
+      // Browser Purchase pixel. Deduped against the server CAPI event by the
+      // shared deterministic id `purchase_<registrationId>` — Meta keeps one.
+      try {
+        trackEvent(
+          "Purchase",
+          {
+            value: reg.quote.totalCents / 100,
+            currency: "NZD",
+            content_name: `${reg.programme.name} — academy registration`,
+            content_ids: [reg.programme.slug],
+            num_items: 1,
+          },
+          purchaseEventId(reg.registrationId),
+        );
+      } catch { /* a tracking failure must never break a paid registration */ }
       onSuccess();
     } else {
       setError("Payment could not be completed. Please try another card.");
@@ -467,6 +487,12 @@ export default function AcademyRegisterPage() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [term, setTerm] = useState<TermInfo | null>(null);
   const [ethnicities, setEthnicities] = useState<string[]>([]);
+  // Promo code. The client only ever holds the STRING — every amount comes back
+  // from the server, which re-derives it from scratch when it charges the card.
+  const [discountCode, setDiscountCode] = useState("");
+  const [promo, setPromo] = useState<{ code: string; promoCents: number; totalCents: number; wasCents: number } | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [promoChecking, setPromoChecking] = useState(false);
 
   // Wizard state
   const [step, setStep] = useState<WizardStep>("choose");
@@ -507,6 +533,22 @@ export default function AcademyRegisterPage() {
         setEthnicities(body.ethnicities || []);
         if (body.programme.options.length === 1) setSelectedOptionId(body.programme.options[0].id);
         document.title = `Register — ${body.programme.name} | Christchurch United FC`;
+
+        // Initialise the Meta pixel on the funnel itself. Without this there is
+        // no _fbp cookie, no ViewContent, and the Purchase event has nothing to
+        // attach to — a Facebook campaign would be optimising on clicks.
+        // No child data is ever passed; the programme is all Meta sees.
+        const pixelId = (import.meta as any).env?.VITE_META_PIXEL_ID;
+        if (pixelId) {
+          try {
+            initPixel(pixelId);
+            trackEvent("ViewContent", {
+              content_name: body.programme.name,
+              content_category: "Academy Programme",
+              content_ids: [body.programme.slug],
+            });
+          } catch { /* never break the page for a tracker */ }
+        }
       })
       .catch((e) => setLoadError(e.message || "This programme isn't available right now."))
       .finally(() => setLoading(false));
@@ -563,6 +605,26 @@ export default function AcademyRegisterPage() {
     isPhone(emergency.phone);
   const consentsValid = consents.policy === true && consents.medical === true;
 
+  const applyDiscount = async () => {
+    if (!selectedOption || promoChecking) return;
+    setPromoChecking(true);
+    setPromoError(null);
+    try {
+      const res = await fetch("/api/public/academy/validate-discount", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ programSlug: slug, programOptionId: selectedOption.id, paymentPlan: plan, code: discountCode.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!body.valid) { setPromo(null); setPromoError(body.message || "That code isn't valid."); return; }
+      setPromo({ code: body.code, promoCents: body.promoCents, totalCents: body.totalCents, wasCents: body.wasCents });
+    } catch {
+      setPromoError("Couldn't check that code — try again.");
+    } finally {
+      setPromoChecking(false);
+    }
+  };
+
   const submitRegistration = async () => {
     if (!programme || !selectedOption || submitting) return;
     setSubmitting(true);
@@ -575,6 +637,7 @@ export default function AcademyRegisterPage() {
           programSlug: slug,
           programOptionId: selectedOption.id,
           paymentPlan: plan,
+          discountCode: promo ? promo.code : undefined,
           child: {
             firstName: child.firstName.trim(),
             lastName: child.lastName.trim(),
@@ -967,6 +1030,38 @@ export default function AcademyRegisterPage() {
                     <TextareaInput value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="input-notes" />
                   </div>
 
+                  {/* Promo code. The server re-derives the price when it charges,
+                      so this preview can never become the amount taken. */}
+                  <div className="rounded-2xl p-4" style={{ background: BRAND.ink, border: `1px solid ${BRAND.line}` }}>
+                    <Label>Discount code (optional)</Label>
+                    <div className="flex gap-2">
+                      <TextInput
+                        value={discountCode}
+                        onChange={(e) => { setDiscountCode(e.target.value.toUpperCase()); setPromo(null); setPromoError(null); }}
+                        placeholder="Enter a code"
+                        autoCapitalize="characters"
+                        data-testid="input-discount-code"
+                      />
+                      <button
+                        type="button"
+                        onClick={applyDiscount}
+                        disabled={!discountCode.trim() || promoChecking}
+                        className="rounded-xl px-4 text-[13px] font-semibold min-h-[44px] flex-shrink-0 disabled:opacity-40"
+                        style={{ background: "transparent", border: `1px solid ${BRAND.gold}`, color: BRAND.goldBright }}
+                        data-testid="button-apply-discount"
+                      >
+                        {promoChecking ? "Checking…" : "Apply"}
+                      </button>
+                    </div>
+                    {promoError && <p className="mt-2 text-[12px]" style={{ color: BRAND.red }}>{promoError}</p>}
+                    {promo && (
+                      <p className="mt-2 text-[12px] flex items-center gap-1.5" style={{ color: BRAND.goldBright }}>
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {promo.code} applied — {money(promo.promoCents)} off. You'll pay {money(promo.totalCents)}.
+                      </p>
+                    )}
+                  </div>
+
                   {submitError && <ErrorBanner>{submitError}</ErrorBanner>}
 
                   <ContinueButton onClick={submitRegistration} disabled={!consentsValid || submitting} testId="button-continue-payment">
@@ -996,6 +1091,12 @@ export default function AcademyRegisterPage() {
                         <span>Full-year saving (5%)</span><span className="font-mono">−{money(registerResponse.quote.discountCents)}</span>
                       </div>
                     </>
+                  )}
+                  {(registerResponse.quote.promoCents ?? 0) > 0 && (
+                    <div className="flex justify-between text-sm" style={{ color: BRAND.goldBright }}>
+                      <span>Discount ({registerResponse.quote.discountCode})</span>
+                      <span className="font-mono">−{money(registerResponse.quote.promoCents!)}</span>
+                    </div>
                   )}
                   <div className="flex justify-between font-bold pt-2" style={{ borderTop: `1px solid ${BRAND.line}` }}>
                     <span>Total</span><span style={{ color: BRAND.goldBright }}>{money(registerResponse.quote.totalCents)} NZD</span>

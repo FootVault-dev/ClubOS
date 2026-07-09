@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -59,6 +59,7 @@ import {
   checkSquadEligibility,
 } from "@shared/squads";
 import {
+  applyPromo as applyAcademyPromo,
   quoteAcademy as quoteAcademyFees,
   checkEligibility as checkAcademyEligibility,
   fullYearAvailable as academyFullYearAvailable,
@@ -2318,6 +2319,35 @@ export async function registerRoutes(
    *  So pending seats are only held for ACADEMY_SEAT_HOLD_MINUTES. */
   const ACADEMY_SEAT_HOLD_MINUTES = 30;
 
+  /**
+   * Resolve a promo code for an academy programme. Server-side only — the client
+   * sends a string, never an amount.
+   *
+   * Checks, in order: exists in THIS org · not disabled · started · not expired ·
+   * uses remaining · and scoped to this programme (`applies_to = 'all'`, or the
+   * programme is named in `camp_ids`). A code minted for one programme must never
+   * silently discount another.
+   */
+  async function resolveAcademyPromo(code: string, orgId: number, programId: number) {
+    const trimmed = String(code ?? "").trim();
+    if (!trimmed) return { ok: false as const, reason: "Enter a code." };
+
+    const promo = await storage.getDiscountByCode(trimmed, orgId);
+    if (!promo) return { ok: false as const, reason: "That code isn't valid." };
+    if ((promo as any).status === "disabled") return { ok: false as const, reason: "That code is no longer active." };
+
+    const now = new Date();
+    if (promo.startDate && new Date(promo.startDate) > now) return { ok: false as const, reason: "That code isn't active yet." };
+    if (promo.endDate && new Date(promo.endDate) < now) return { ok: false as const, reason: "That code has expired." };
+    if (promo.maxTotalUses && ((promo as any).timesUsed ?? 0) >= promo.maxTotalUses) {
+      return { ok: false as const, reason: "That code has been used up." };
+    }
+    const scoped = promo.appliesTo === "all" || (promo.campIds ?? []).includes(programId);
+    if (!scoped) return { ok: false as const, reason: "That code doesn't apply to this programme." };
+
+    return { ok: true as const, promo };
+  }
+
   /** Case-insensitive guardian lookup. Emails have been stored with whatever
    *  casing the parent typed, across years of different flows, so an exact match
    *  silently forks a family into two contacts. Backed by contacts_lower_email_idx. */
@@ -2516,6 +2546,26 @@ export async function registerRoutes(
       }
       if (quote.totalCents <= 0) return res.status(409).json({ code: "not_open", waitlist: true, message: "Registrations for this programme aren't open yet." });
 
+      // Promo code. Resolved and priced entirely server-side — the request may
+      // name a code, never an amount. Applied AFTER pro-rata, on what is owed.
+      let promoCents = 0;
+      let promoId: number | null = null;
+      let promoCode: string | null = null;
+      if (body.discountCode) {
+        const resolved = await resolveAcademyPromo(String(body.discountCode), program.organizationId, program.id);
+        if (!resolved.ok) return res.status(400).json({ message: resolved.reason, code: "bad_discount" });
+        const applied = applyAcademyPromo(quote.totalCents, resolved.promo.valueType, resolved.promo.value as any);
+        if (!applied.ok) return res.status(400).json({ message: applied.reason, code: "bad_discount" });
+        promoCents = applied.promoCents;
+        promoId = resolved.promo.id;
+        promoCode = resolved.promo.code;
+      }
+
+      // subtotal − discount === total, exactly. The pro-rata reduction and the
+      // promo are both discounts off the same list price.
+      const chargeCents = quote.totalCents - promoCents;
+      const totalDiscountCents = quote.discountCents + promoCents;
+
       // ── 6. Guardian: find, don't duplicate. Enrich, never overwrite. ────────
       // NOT storage.findContactByEmail — that does an exact, case-sensitive match
       // on any contact type. A parent stored as "Daniel@CUFC.co.nz" by an older
@@ -2617,8 +2667,10 @@ export async function registerRoutes(
         academyPaymentPlan: plan,
         seasonYear,
         subtotalCents: quote.subtotalCents,
-        discountCents: quote.discountCents,
-        totalCents: quote.totalCents,
+        discountCents: totalDiscountCents,
+        totalCents: chargeCents,
+        discountCode: promoCode,
+        discountId: promoId,
         currency: "NZD",
         registrationLocation: "online",
         policyAcceptedAt: now,
@@ -2631,7 +2683,7 @@ export async function registerRoutes(
       // ── 9. Our own checkout: a PaymentIntent, never a hosted Stripe page. ───
       const { stripe } = await import("./stripe");
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: quote.totalCents,
+        amount: chargeCents,
         currency: "nzd",
         receipt_email: email,
         description: `${program.name} — ${option.name} (${plan === "year" ? `${seasonYear} full year` : "one term"})`,
@@ -2647,6 +2699,7 @@ export async function registerRoutes(
           academyPaymentPlan: plan,
           seasonYear: String(seasonYear),
           parentEmail: email,
+          ...(promoCode ? { discountCode: promoCode } : {}),
         },
       });
       await storage.updateRegistration(reg.id, { stripePaymentIntentId: paymentIntent.id } as any);
@@ -2654,7 +2707,8 @@ export async function registerRoutes(
       res.json({
         registrationId: reg.id,
         clientSecret: paymentIntent.client_secret,
-        quote,
+        // The quote the parent sees must be the amount the card is charged.
+        quote: { ...quote, promoCents, discountCents: totalDiscountCents, totalCents: chargeCents, discountCode: promoCode },
         programme: { name: program.name, slug: program.slug, section },
         option: { id: option.id, name: option.name, scheduleText: option.scheduleText },
         player: { firstName: player.firstName, grade: eligibility.grade, seasonYear },
@@ -2662,6 +2716,45 @@ export async function registerRoutes(
     } catch (e: any) {
       console.error("[Academy register] failed:", e);
       res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Public — check a promo code against a programme before the parent commits.
+  // Returns the real, pro-rated total. The register endpoint re-derives all of
+  // this from scratch; this exists only so the page can show a price.
+  app.post("/api/public/academy/validate-discount", async (req, res) => {
+    try {
+      const program: any = await storage.getProgramBySlug(String(req.body?.programSlug ?? ""));
+      if (!program || !program.isActive || program.type !== "academy") return res.status(404).json({ valid: false, message: "Programme not found" });
+
+      const section: "core" | "additional" = program.academySection === "additional" ? "additional" : "core";
+      const options = await storage.getProgramOptions(program.id, { activeOnly: true });
+      const option = options.find((o: any) => o.id === Number(req.body?.programOptionId) && (o.fullPriceCents ?? 0) > 0);
+      if (!option) return res.status(400).json({ valid: false, message: "Choose a programme option first." });
+
+      const plan: "term" | "year" = req.body?.paymentPlan === "year" ? "year" : "term";
+      const term = await academyTermFor(program);
+      const quote = academyQuoteFor(program, term, section, option.fullPriceCents, plan);
+      if (!quote) return res.status(409).json({ valid: false, message: "This term has finished." });
+
+      const resolved = await resolveAcademyPromo(String(req.body?.code ?? ""), program.organizationId, program.id);
+      if (!resolved.ok) return res.json({ valid: false, message: resolved.reason });
+
+      const applied = applyAcademyPromo(quote.totalCents, resolved.promo.valueType, resolved.promo.value as any);
+      if (!applied.ok) return res.json({ valid: false, message: applied.reason });
+
+      res.json({
+        valid: true,
+        code: resolved.promo.code,
+        title: resolved.promo.title,
+        promoCents: applied.promoCents,
+        // What the card will actually be charged.
+        totalCents: applied.totalCents,
+        wasCents: quote.totalCents,
+      });
+    } catch (e: any) {
+      console.error("[Academy validate-discount] failed:", e);
+      res.status(500).json({ valid: false, message: e.message });
     }
   });
 
@@ -13726,14 +13819,24 @@ export async function registerRoutes(
 
   // Typeset a native document to PDF. final=false → blank details/signatures
   // (the hashed "what was sent" record); final=true → filled + signed.
+  // Who fills the details schedule, and who the other party is. Deliberately NOT
+  // "signingOrder === 0" — signing order says who signs FIRST, which since
+  // 2026-07-10 may be the Club. Falls back to the order-0 signer, so documents
+  // created before is_form_signer existed behave exactly as they always did.
+  function esignRoles<T extends { id: number; signingOrder: number; isFormSigner?: boolean | null }>(signers: T[]) {
+    const formSigner = signers.find((s) => s.isFormSigner) ?? signers.find((s) => s.signingOrder === 0) ?? signers[0];
+    const other = signers.find((s) => s.id !== formSigner?.id) ?? null;
+    return { formSigner, other };
+  }
+
   async function esignRenderNativeDoc(
     doc: typeof esignDocuments.$inferSelect,
     tpl: typeof esignTemplates.$inferSelect,
     final: boolean,
   ): Promise<Uint8Array> {
     const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id)).orderBy(esignSigners.signingOrder, esignSigners.id);
-    const primary = signers.find((s) => s.signingOrder === 0) ?? signers[0];
-    const counter = signers.find((s) => s.signingOrder > 0) ?? null;
+    // `primary` = the party whose details the agreement records (never the Club).
+    const { formSigner: primary, other: counter } = esignRoles(signers);
     const form = (tpl.form ?? []) as any[];
     const fd = (final ? primary?.formData : null) as Record<string, any> | null;
     const values: Record<string, string> = {};
@@ -13971,8 +14074,20 @@ export async function registerRoutes(
         createdBy: req.session.userId ?? null,
       }).returning();
       const senderName = [sender.firstName, sender.lastName].filter(Boolean).join(" ").trim() || "The League";
-      await db.insert(esignSigners).values({ documentId: doc.id, organizationId: orgId, name: signerName, email: signerEmail, signingOrder: 0, token: esignToken() });
-      await db.insert(esignSigners).values({ documentId: doc.id, organizationId: orgId, name: senderName, email: sender.email, signingOrder: 1, token: esignToken() });
+      // Signing order. `settings.clubSignsFirst` (per template) puts US at
+      // order 0, so the counterparty opens a document we have already signed and
+      // their signature completes it — Daniel's standing rule, 2026-07-10.
+      // The recipient is ALWAYS the form signer: it's their details the
+      // agreement records, whichever order the signatures fall in.
+      const clubFirst = ((tpl.settings ?? {}) as Record<string, any>).clubSignsFirst === true;
+      await db.insert(esignSigners).values({
+        documentId: doc.id, organizationId: orgId, name: signerName, email: signerEmail,
+        signingOrder: clubFirst ? 1 : 0, isFormSigner: true, token: esignToken(),
+      });
+      await db.insert(esignSigners).values({
+        documentId: doc.id, organizationId: orgId, name: senderName, email: sender.email,
+        signingOrder: clubFirst ? 0 : 1, isFormSigner: false, token: esignToken(),
+      });
 
       // Typeset the unsigned agreement — this exact render is what gets hashed.
       const sourceBytes = await esignRenderNativeDoc(doc, tpl, false);
@@ -14200,7 +14315,7 @@ export async function registerRoutes(
       if ((doc.docType || "pdf") === "native" && doc.templateId) {
         const [tpl] = await db.select().from(esignTemplates).where(eq(esignTemplates.id, doc.templateId));
         if (tpl) {
-          const primary = allSigners.find((s) => s.signingOrder === 0) ?? allSigners[0];
+          const { formSigner: primary, other } = esignRoles(allSigners);
           const isPrimary = signer.id === primary.id;
           const form = (tpl.form ?? []) as any[];
           native = {
@@ -14217,6 +14332,15 @@ export async function registerRoutes(
               formData: primary.formData ?? null,
               signatureImage: primary.signatureImage,
               signedAt: primary.signedAt,
+            },
+            // When the Club signs first, the form signer must SEE that signature
+            // sitting on the page — that is the whole point of signing first.
+            // Null until they've actually signed, so it can never imply consent
+            // that hasn't been given.
+            counterDetails: !isPrimary || !other?.signedAt ? null : {
+              name: other.signatureName || other.name,
+              signatureImage: other.signatureImage,
+              signedAt: other.signedAt,
             },
           };
         }
@@ -14266,9 +14390,13 @@ export async function registerRoutes(
       const now = new Date();
 
       // Native docs: validate + store the signer-filled details (and the
-      // parent/guardian co-signature when the signer is under 18).
+      // parent/guardian co-signature when the signer is under 18). Gated on the
+      // FORM signer, not the first signer — the Club may now sign first, and it
+      // must never be asked for the counterparty's DOB, bank account or IRD.
+      // `?? signingOrder === 0` keeps pre-column documents behaving as before.
+      const isFormSigner = signer.isFormSigner ?? (signer.signingOrder === 0);
       let nativeFormData: Record<string, any> | null = null;
-      if ((doc.docType || "pdf") === "native" && signer.signingOrder === 0) {
+      if ((doc.docType || "pdf") === "native" && isFormSigner) {
         if (!doc.templateId) return res.status(500).json({ message: "This document is missing its template." });
         const [tpl] = await db.select().from(esignTemplates).where(eq(esignTemplates.id, doc.templateId));
         if (!tpl) return res.status(500).json({ message: "This document is missing its template." });
@@ -22033,6 +22161,35 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
         });
       } catch (e: any) {
         console.error("[Academy confirmation email] failed:", e.message);
+      }
+    }
+
+    // Meta Purchase (server-side CAPI). Without this a Facebook campaign has
+    // nothing to optimise on — clicks, not registrations. Deduped against the
+    // browser pixel by the shared deterministic id `purchase_<registrationId>`.
+    //
+    // The tracked person is the PAYING PARENT. No child name, DOB or medical
+    // detail ever reaches Meta (AGENTS.md hard rule 4).
+    if (program && guardian?.email) {
+      try {
+        await sendPurchaseEvent({
+          registrationId,
+          campId: program.id,
+          totalCents: reg.totalCents ?? 0,
+          currency: reg.currency || "NZD",
+          email: guardian.email,
+          phone: guardian.phone || undefined,
+          firstName: guardian.firstName,
+          lastName: guardian.lastName,
+          fbp: (reg as any).fbp || metadata?.fbp || undefined,
+          fbc: (reg as any).fbc || metadata?.fbc || undefined,
+          userAgent: metadata?.userAgent || undefined,
+          eventId: purchaseEventId(registrationId),
+          contentName: `${program.name} — academy registration`,
+          contentIds: [program.slug || String(program.id)],
+        });
+      } catch (e: any) {
+        console.error("[Academy Meta Purchase] failed:", e.message);
       }
     }
     return;

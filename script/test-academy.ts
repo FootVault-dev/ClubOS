@@ -19,6 +19,9 @@ import {
   daysBetween,
   termProgress,
   prorateTermPriceCents,
+  promoDiscountCents,
+  applyPromo,
+  STRIPE_MIN_CHARGE_CENTS,
   type AcademyRegistrationInput,
 } from "../shared/academy";
 
@@ -471,3 +474,52 @@ ok("POLICY_VERSION is pinned", () => assert.equal(POLICY_VERSION, "2026-01-01"))
 
 console.log(`\n✅ academy: ${passed} assertions passed`);
 if (process.exitCode) console.error("❌ some assertions failed");
+
+// ── Promo codes ─────────────────────────────────────────────────────────────
+ok("percentage off the payable amount", () => assert.equal(promoDiscountCents(15_000, "percentage", 20), 3_000));
+ok("fixed_amount is dollars → cents", () => assert.equal(promoDiscountCents(15_000, "fixed_amount", 149), 14_900));
+ok("'fixed' is treated the same as fixed_amount", () => assert.equal(promoDiscountCents(15_000, "fixed", 149), 14_900));
+ok("a discount can never exceed the base", () => assert.equal(promoDiscountCents(1_000, "fixed_amount", 500), 1_000));
+ok("a discount can never be negative", () => assert.equal(promoDiscountCents(1_000, "percentage", -50), 0));
+ok("a zero-value code takes nothing off", () => assert.equal(promoDiscountCents(1_000, "percentage", 0), 0));
+ok("junk value takes nothing off", () => assert.equal(promoDiscountCents(1_000, "percentage", "abc"), 0));
+ok("promo applies to the PRO-RATED price, not the list price", () => {
+  // Half a $150 term = $75; 20% off that is $15, not $30.
+  const p = termProgress("2026-08-24", T_START, T_END, 10)!;
+  const payable = prorateTermPriceCents(15_000, p.sessionsRemaining, p.totalSessions);
+  assert.equal(payable, 7_500);
+  assert.equal(promoDiscountCents(payable, "percentage", 20), 1_500);
+});
+
+ok("the $1 Technification test: $150 less $149 = $1.00", () => {
+  const r = applyPromo(15_000, "fixed_amount", 149);
+  assert.equal(r.ok, true);
+  assert.equal(r.promoCents, 14_900);
+  assert.equal(r.totalCents, 100);
+});
+ok("a 100% code is refused — no free-registration path exists", () => {
+  const r = applyPromo(15_000, "percentage", 100);
+  assert.equal(r.ok, false);
+  assert.match(r.reason!, /\$0 payment/);
+});
+ok("a total under Stripe's 50c floor is refused", () => {
+  const r = applyPromo(15_000, "fixed_amount", 149.7);   // → 30c
+  assert.equal(r.ok, false);
+  assert.match(r.reason!, /smallest card payment/i);
+});
+ok("exactly 50c is allowed", () => {
+  const r = applyPromo(15_000, "fixed_amount", 149.5);
+  assert.equal(r.ok, true);
+  assert.equal(r.totalCents, 50);
+});
+ok("STRIPE_MIN_CHARGE_CENTS is 50", () => assert.equal(STRIPE_MIN_CHARGE_CENTS, 50));
+ok("promo never makes the total negative, fuzzed", () => {
+  for (let base = 100; base <= 100_000; base += 977) {
+    for (const [vt, v] of [["percentage", 130], ["fixed_amount", 9999]] as const) {
+      const d = promoDiscountCents(base, vt, v);
+      assert.ok(d <= base && d >= 0, `${base}/${vt}/${v} → ${d}`);
+    }
+  }
+});
+
+console.log(`\n✅ academy (with promos): ${passed} assertions passed`);

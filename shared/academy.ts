@@ -309,6 +309,52 @@ export function quoteAcademy(input: AcademyQuoteInput): AcademyQuote {
   };
 }
 
+// ── Promo codes ─────────────────────────────────────────────────────────────
+
+/** Stripe will not take a card charge below NZD $0.50. A code that drives the
+ *  total under that has to be refused, not silently rounded up — and we have no
+ *  free-registration path for the academy yet. */
+export const STRIPE_MIN_CHARGE_CENTS = 50;
+
+export type PromoValueType = "percentage" | "fixed_amount" | "fixed";
+
+/**
+ * Cents to take off, given the amount the parent would otherwise pay.
+ *
+ * Applied AFTER pro-rata, on what's actually owed — a "20% off" code on a
+ * half-term join discounts the half-term price, not the full-term list price.
+ * Clamped to [0, base] so a code can never make a total negative, and never
+ * credits the parent money.
+ */
+export function promoDiscountCents(baseCents: number, valueType: string, value: number | string): number {
+  if (!Number.isInteger(baseCents) || baseCents <= 0) return 0;
+  const v = Number(value);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  const raw = valueType === "percentage" ? Math.round((baseCents * v) / 100) : Math.round(v * 100);
+  return Math.min(baseCents, Math.max(0, raw));
+}
+
+export interface PromoOutcome {
+  ok: boolean;
+  promoCents: number;
+  totalCents: number;
+  reason?: string;
+}
+
+/** Does this code leave a chargeable amount? Pure — the caller has already
+ *  loaded and authorised the discount row. */
+export function applyPromo(payableCents: number, valueType: string, value: number | string): PromoOutcome {
+  const promoCents = promoDiscountCents(payableCents, valueType, value);
+  const totalCents = payableCents - promoCents;
+  if (totalCents <= 0) {
+    return { ok: false, promoCents, totalCents, reason: "That code covers the full fee — we can't take a $0 payment here yet." };
+  }
+  if (totalCents < STRIPE_MIN_CHARGE_CENTS) {
+    return { ok: false, promoCents, totalCents, reason: `The smallest card payment we can take is $${(STRIPE_MIN_CHARGE_CENTS / 100).toFixed(2)}.` };
+  }
+  return { ok: true, promoCents, totalCents };
+}
+
 // ── Validation ──────────────────────────────────────────────────────────────
 
 export interface AcademyRegistrationInput {
