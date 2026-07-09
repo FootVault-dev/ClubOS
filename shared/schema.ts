@@ -4320,3 +4320,182 @@ export type PredictorPrediction = typeof predictorPredictions.$inferSelect;
 export const insertPredictorSquadSchema = createInsertSchema(predictorSquad).omit({ id: true, createdAt: true });
 export type InsertPredictorSquad = z.infer<typeof insertPredictorSquadSchema>;
 export type PredictorSquadPlayer = typeof predictorSquad.$inferSelect;
+
+// Accounting sub-ledger — Phase 1 (shadow ledger, no Xero writes). Mirrors
+// migrations/2026-07-10_accounting_subledger.sql 1:1 — see that file's header
+// for the design rationale. ClubOS is the sub-ledger (full 805-code
+// granularity); Xero stays a lean general ledger. Nothing here is written to
+// by application code yet except script/seed-accounting.ts (T10, dry-run by
+// default) — Phase 1's posting emitter (T4) is the first live writer.
+export const acctCodes = pgTable("acct_codes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  code: text("code").notNull().unique(),  // "01-02-01-T1-[PlayerName]"
+  level: integer("level").notNull(),  // 1-5
+  type: text("type").notNull(),  // income | expense
+  parentCode: text("parent_code").references((): any => acctCodes.code),
+  rootCode: text("root_code").notNull(),  // the level-1 ancestor, e.g. "01"
+  parentCategory: text("parent_category").notNull(),
+  name: text("name").notNull(),
+  period: text("period"),  // "T1".."T4" or null
+  invoiceTo: text("invoice_to"),
+  invoiceDescription: text("invoice_description"),
+  basis: text("basis"),
+  owner: text("owner"),
+  status: text("status").notNull(),  // verbatim from the workbook, e.g. "To Confirm"
+  notes: text("notes"),
+  isInvoiceStage: boolean("is_invoice_stage").notNull().default(false),
+  isTemplate: boolean("is_template").notNull().default(false),
+  // original_note | expanded_from_original_note | suggested_placeholder —
+  // verbatim from the workbook's own `Source Basis` column. NEVER re-labelled.
+  // A `suggested_placeholder` code is a proposal, not an approved account.
+  provenance: text("provenance").notNull(),
+  // Reserved for future code-tree versioning (02-architecture.md). Unused,
+  // always NULL, in Phase 1.
+  activeFrom: date("active_from"),
+  activeTo: date("active_to"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  parentIdx: index("acct_codes_parent_idx").on(t.parentCode),
+  rootIdx: index("acct_codes_root_idx").on(t.rootCode),
+}));
+
+export const insertAcctCodeSchema = createInsertSchema(acctCodes).omit({ id: true, createdAt: true });
+export type InsertAcctCode = z.infer<typeof insertAcctCodeSchema>;
+export type AcctCode = typeof acctCodes.$inferSelect;
+
+// (what was sold) -> (how it's coded). Effective-dated; resolve() in
+// shared/accounting.ts reads these as of the transaction's occurred_at, never
+// "now" — a rule Victor adds in January must never re-code last July.
+export const acctMappingRules = pgTable("acct_mapping_rules", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id),
+  // All three of programId / programOptionId / programType are NULLABLE —
+  // resolve()'s 4-tier specificity (option -> programme -> programme type ->
+  // org default) is which of these three is non-null. Exactly one is, by
+  // construction; that is an application invariant (script/seed-accounting.ts,
+  // shared/accounting.ts), not a DB constraint.
+  programId: integer("program_id").references(() => programs.id),
+  programOptionId: integer("program_option_id").references(() => programOptions.id),
+  // NOT the `programs.type` Postgres enum — free text because resolve()'s
+  // programme-type tier must also match the Stripe-metadata-only "class"
+  // pseudo-type (00-verified-findings.md §5), which the enum can't hold.
+  programType: text("program_type"),
+  paymentMethod: text("payment_method"),  // null = matches any
+  effectiveFrom: date("effective_from").notNull(),  // inclusive
+  effectiveTo: date("effective_to"),  // exclusive end, null = still open
+  code: text("code").notNull().references(() => acctCodes.code),
+  xeroAccountCode: text("xero_account_code"),  // null until Victor supplies real codes
+  tracking1: text("tracking_1"),
+  tracking2: text("tracking_2"),
+  taxType: text("tax_type"),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("acct_mapping_rules_org_idx").on(t.organizationId, t.effectiveFrom),
+  programIdx: index("acct_mapping_rules_program_idx").on(t.programId),
+  optionIdx: index("acct_mapping_rules_option_idx").on(t.programOptionId),
+}));
+
+export const insertAcctMappingRuleSchema = createInsertSchema(acctMappingRules).omit({ id: true, createdAt: true });
+export type InsertAcctMappingRule = z.infer<typeof insertAcctMappingRuleSchema>;
+export type AcctMappingRuleRow = typeof acctMappingRules.$inferSelect;
+
+// Append-only. NEVER UPDATE a row here — a correction is a new reversing
+// posting whose reversedById (on the ORIGINAL row) points at it.
+export const acctPostings = pgTable("acct_postings", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id),
+  // registration | print | booking | member | shop. Polymorphic on purpose —
+  // sourceId has no FK because it points at different tables depending on
+  // sourceType (shop_orders doesn't exist on this branch yet; see PLAN.md T5).
+  sourceType: text("source_type").notNull(),
+  sourceId: integer("source_id").notNull(),
+  // The double-post guard. A DB constraint, not application logic: a replayed
+  // Stripe webhook must be mechanically incapable of writing a second row.
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  postedAt: timestamp("posted_at", { withTimezone: true }).defaultNow().notNull(),  // when ClubOS wrote this row
+  // the transaction's NZ business date; callers MUST derive this via
+  // nzTodayIso() (shared/academy.ts) or the payment's own dated field —
+  // never new Date().toISOString()
+  occurredAt: date("occurred_at").notNull(),
+  code: text("code").notNull().references(() => acctCodes.code),
+  xeroAccountCode: text("xero_account_code"),
+  tracking1: text("tracking_1"),
+  tracking2: text("tracking_2"),
+  taxType: text("tax_type"),
+  grossCents: bigint("gross_cents", { mode: "number" }).notNull(),
+  feeCents: bigint("fee_cents", { mode: "number" }).notNull().default(0),
+  netCents: bigint("net_cents", { mode: "number" }).notNull(),
+  // null = not yet determined (GST treatment unresolved, see
+  // 00-verified-findings.md §7 question 3) — never 0 as a stand-in for "unknown"
+  taxCents: bigint("tax_cents", { mode: "number" }),
+  currency: text("currency").notNull().default("NZD"),
+  // Pins the acct_mapping_rules.version that coded this posting, so a later
+  // rule change never silently re-codes history.
+  mappingRuleVersion: integer("mapping_rule_version").notNull(),
+  reversedById: integer("reversed_by_id").references((): any => acctPostings.id),
+}, (t) => ({
+  sourceIdx: index("acct_postings_source_idx").on(t.sourceType, t.sourceId),
+  orgOccurredIdx: index("acct_postings_org_occurred_idx").on(t.organizationId, t.occurredAt),
+  codeIdx: index("acct_postings_code_idx").on(t.code),
+}));
+
+export const insertAcctPostingSchema = createInsertSchema(acctPostings).omit({ id: true, postedAt: true });
+export type InsertAcctPosting = z.infer<typeof insertAcctPostingSchema>;
+export type AcctPosting = typeof acctPostings.$inferSelect;
+
+// Term revenue recognition. A fee taken on 19 July for a term ending 24
+// September is not July's income — this spreads it, one row per calendar
+// month, released pro-rata from the join date (T8).
+export const acctDeferredSchedule = pgTable("acct_deferred_schedule", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  postingId: integer("posting_id").notNull().references(() => acctPostings.id, { onDelete: "cascade" }),
+  period: text("period").notNull(),  // "2026-08" (calendar year-month, not a date)
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  // Set once the reconciliation/recognition job has released this period's
+  // revenue. NULL = still deferred, not yet recognised.
+  recognisedAt: timestamp("recognised_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  postingIdx: index("acct_deferred_schedule_posting_idx").on(t.postingId),
+  periodIdx: index("acct_deferred_schedule_period_idx").on(t.period),
+}));
+
+export const insertAcctDeferredScheduleSchema = createInsertSchema(acctDeferredSchedule).omit({ id: true, createdAt: true });
+export type InsertAcctDeferredSchedule = z.infer<typeof insertAcctDeferredScheduleSchema>;
+export type AcctDeferredSchedule = typeof acctDeferredSchedule.$inferSelect;
+
+// Per-posting Xero state. Entirely unused until Phase 3 (draft-then-approve
+// invoice push) — Phase 1 never calls the Xero API.
+export const acctXeroSync = pgTable("acct_xero_sync", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  postingId: integer("posting_id").notNull().unique().references(() => acctPostings.id, { onDelete: "cascade" }),
+  xeroInvoiceId: text("xero_invoice_id"),
+  status: text("status").notNull().default("pending"),  // pending | draft | approved | failed
+  lastError: text("last_error"),
+  syncedAt: timestamp("synced_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const insertAcctXeroSyncSchema = createInsertSchema(acctXeroSync).omit({ id: true, createdAt: true });
+export type InsertAcctXeroSync = z.infer<typeof insertAcctXeroSyncSchema>;
+export type AcctXeroSync = typeof acctXeroSync.$inferSelect;
+
+// Drift detection audit. The nightly job (T7) compares ClubOS postings
+// against Stripe (and later Xero) and writes one row per comparison run.
+// Reports drift. Never silently corrects it.
+export const acctReconciliationRuns = pgTable("acct_reconciliation_runs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  ranAt: timestamp("ran_at", { withTimezone: true }).defaultNow().notNull(),
+  source: text("source").notNull(),  // e.g. "stripe", "xero"
+  expectedCents: bigint("expected_cents", { mode: "number" }).notNull(),
+  actualCents: bigint("actual_cents", { mode: "number" }).notNull(),
+  driftCents: bigint("drift_cents", { mode: "number" }).notNull(),
+  details: jsonb("details"),  // offending ids etc., shape owned by T7
+}, (t) => ({
+  ranAtIdx: index("acct_reconciliation_runs_ran_at_idx").on(t.ranAt),
+}));
+
+export const insertAcctReconciliationRunSchema = createInsertSchema(acctReconciliationRuns).omit({ id: true });
+export type InsertAcctReconciliationRun = z.infer<typeof insertAcctReconciliationRunSchema>;
+export type AcctReconciliationRun = typeof acctReconciliationRuns.$inferSelect;
