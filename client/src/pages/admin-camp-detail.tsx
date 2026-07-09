@@ -24,6 +24,13 @@ function OverviewTab({ camp, onUpdate }: { camp: any; onUpdate: (data: any) => v
   const [ageMax, setAgeMax] = useState(String(camp.ageMax || ""));
   const [capacity, setCapacity] = useState(String(camp.capacity || ""));
   const [isActive, setIsActive] = useState(camp.isActive);
+  // Academy programmes only. Separate from isActive on purpose: a programme can
+  // be publicly listed and described while its registrations are shut. Defaults
+  // false so a newly seeded programme can never take money by accident.
+  const [registrationOpen, setRegistrationOpen] = useState<boolean>(
+    Boolean((camp as any).registrationOpen),
+  );
+  const isAcademy = (camp as any).type === "academy";
 
   // Local mode — starts with whatever's saved, can be flipped in-place so an
   // existing holiday camp can be converted to a term program without
@@ -56,6 +63,7 @@ function OverviewTab({ camp, onUpdate }: { camp: any; onUpdate: (data: any) => v
       ageMax: parseInt(ageMax) || null,
       capacity: parseInt(capacity) || null,
       isActive,
+      ...(isAcademy ? { registrationOpen } : {}),
     };
     if (isTermMode) {
       // Promote to term mode (or keep it). Backend will auto-fill startDate/
@@ -144,6 +152,21 @@ function OverviewTab({ camp, onUpdate }: { camp: any; onUpdate: (data: any) => v
             <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)} className="w-4 h-4 rounded" data-testid="input-camp-active" />
             <span className="text-[13px] text-white/60">Active</span>
           </label>
+          {isAcademy && (
+            <label
+              className="flex items-center gap-2 cursor-pointer ml-5"
+              title="Parents can register and pay online. Requires at least one active option with a real price."
+            >
+              <input
+                type="checkbox"
+                checked={registrationOpen}
+                onChange={e => setRegistrationOpen(e.target.checked)}
+                className="w-4 h-4 rounded"
+                data-testid="input-camp-registration-open"
+              />
+              <span className="text-[13px] text-white/60">Registrations open</span>
+            </label>
+          )}
         </div>
       </div>
 
