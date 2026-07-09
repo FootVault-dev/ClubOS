@@ -22098,6 +22098,29 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
   if (!won) return;
   await storage.assignOrderNumber(registrationId);
 
+  // Accounting sub-ledger (T5) — after the atomic flip, never before. A
+  // posting failure must never break this payment; postAccountingEntry
+  // never throws (logs + swallows on any error, incl. an unmapped programme).
+  try {
+    const program = await storage.getProgram(reg.programId);
+    const { postAccountingEntry } = await import("./accounting/hook");
+    const { nzTodayIso } = await import("@shared/academy");
+    await postAccountingEntry({
+      organizationId: (program as any)?.organizationId,
+      sourceType: "registration",
+      sourceId: registrationId,
+      idempotencyKey: reg.stripePaymentIntentId || stripeSessionId || `registration_${registrationId}`,
+      occurredAt: nzTodayIso(),
+      programId: reg.programId,
+      optionId: reg.programOptionId ?? null,
+      programType: metadata?.registrationType ?? (program as any)?.type ?? null,
+      paymentMethod: "stripe_card",
+      grossCents: paidCents,
+    });
+  } catch (e: any) {
+    console.error("[Accounting] posting failed for registration", registrationId, e?.message);
+  }
+
   await recordRegistrationDiscountUsage(reg);
 
   // MFL team registration — materialise the league team + send branded email
