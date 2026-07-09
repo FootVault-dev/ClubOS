@@ -99,6 +99,7 @@ const campsNav = [
   { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "camps", title: "Camps", url: "/admin/camps", icon: Tent },
   { tab: "academy", title: "Academy", url: "/admin/academy", icon: GraduationCap },
+  { tab: "squads", title: "Squads", url: "/admin/squads", icon: Shield },
   // Terms intentionally NOT in the sidebar — it's reachable as a sub-tab
   // from the Academy page (Programs / Term Dates), matching the gymnastics
   // workspace's All Programs / Term Dates pattern.

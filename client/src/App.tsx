@@ -67,6 +67,7 @@ import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
 import GroupCashflow from "@/pages/group-cashflow";
 import AdminAcademy from "@/pages/admin-academy";
+import AdminSquads from "@/pages/admin-squads";
 import LinksPage from "@/pages/links";
 import AttributionPage from "@/pages/attribution";
 import VenueFacilities from "@/pages/venue-facilities";
@@ -402,6 +403,7 @@ function AdminRouter() {
       <Route path="/admin/camps/:id" component={AdminCampDetail} />
       <Route path="/admin/camps/:campId/session/:dateId/:sessionType" component={AdminSessionRoll} />
       <Route path="/admin/academy" component={AdminAcademy} />
+      <Route path="/admin/squads" component={AdminSquads} />
       <Route path="/admin/terms" component={GymnasticsTerms} />
       <Route path="/admin/registrations" component={AdminRegistrations} />
       <Route path="/admin/contacts" component={AdminContacts} />

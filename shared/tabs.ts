@@ -53,6 +53,7 @@ const campsTabs: TabDef[] = [
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "camps", title: "Camps", url: "/admin/camps" },
   { slug: "academy", title: "Academy", url: "/admin/academy" },
+  { slug: "squads", title: "Squads", url: "/admin/squads" },
   { slug: "registrations", title: "Registrations", url: "/admin/registrations" },
   { slug: "contacts", title: "Contacts", url: "/admin/contacts" },
   { slug: "volunteers", title: "Volunteers", url: "/admin/volunteers" },
