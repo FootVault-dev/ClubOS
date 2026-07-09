@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -70,6 +70,7 @@ import {
   NZF_ETHNICITIES as NZF_ETHNICITY_OPTIONS,
 } from "@shared/academy";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
+import { behaviorEventsToInsert } from "@shared/behavior";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
 import { renderTrackerScript } from "@shared/tracker-script";
 import { CID_COOKIE, CID_MAX_AGE_SECONDS, VID_COOKIE, VID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId, isValidClickId, parseCookieHeader } from "./attribution-cookies";
@@ -8125,6 +8126,29 @@ export async function registerRoutes(
       res.json({ ok: true, count: shaped.length });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Phase 1 behavioral collector (T5) — a SEPARATE pipeline from the attribution
+  // touch path above (rule 4: never touch /hello, /event, /batch). Writes the new
+  // v2 taxonomy (scroll/section/click/rage_click/route_change/form_*/vitals/
+  // page_leave) into `behavior_events`. Bot-flagged rows are dropped at ingest —
+  // unlike analytics_events, this table has no attribution/audit need to keep them.
+  // Fail-silent by design (rule 5): a malformed batch or a DB hiccup NEVER
+  // surfaces a non-200 to the client, so the tracker never retries/blocks on it.
+  app.options("/api/public/analytics/behavior", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/analytics/behavior", async (req, res) => {
+    setTrackerCors(req, res);
+    try {
+      const { events } = req.body || {};
+      const toInsert = behaviorEventsToInsert(events, { userAgent: req.headers["user-agent"] }, 50);
+      if (toInsert.length > 0) {
+        await db.insert(behaviorEvents).values(toInsert);
+      }
+      res.json({ ok: true, count: toInsert.length });
+    } catch (error: any) {
+      console.error("Behavior collector error:", error?.message || error);
+      res.json({ ok: false });
     }
   });
 

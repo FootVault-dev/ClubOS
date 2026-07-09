@@ -205,3 +205,19 @@ export function shapeBehaviorEvents(
   }
   return out;
 }
+
+/**
+ * T5's `POST /api/public/analytics/behavior` collector maps a raw request body
+ * straight to `db.insert(behaviorEvents).values(...)` via this one function — kept
+ * here (not inlined in the route) so the shape→insert-rows mapping unit-tests
+ * without a database (script/test-behavior-endpoint.ts). Bot-flagged rows are
+ * dropped entirely rather than stored-and-flagged (unlike analytics_events):
+ * behavior_events has no attribution/audit need to keep bot noise.
+ */
+export function behaviorEventsToInsert(
+  rawEvents: unknown,
+  ctx?: ShapeBehaviorContext,
+  limit = 50,
+): ShapedBehaviorEvent[] {
+  return shapeBehaviorEvents(rawEvents, ctx, limit).filter((e) => !e.isBot);
+}
