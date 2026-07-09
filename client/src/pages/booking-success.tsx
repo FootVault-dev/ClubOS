@@ -5,9 +5,11 @@ import { useRoute, Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle, Calendar, Mail, ArrowRight, Home, Clock, ShieldCheck, Sparkles } from "lucide-react";
-import { trackEvent, generateEventId } from "@/lib/meta-pixel";
+import { trackEvent } from "@/lib/meta-pixel";
+import { purchaseEventId } from "@shared/meta-events";
 import { formatCurrency } from "@/lib/format";
 import { brandForOrg } from "@/lib/camp-brand";
+import HdyhauCard from "@/components/hdyhau-card";
 
 export default function BookingSuccess() {
   const [, params] = useRoute("/:slug/success");
@@ -64,7 +66,7 @@ export default function BookingSuccess() {
     if (registration && (registration.status === "confirmed" || confirmed)) {
       const pixelId = (import.meta as any).env?.VITE_META_PIXEL_ID;
       if (pixelId) {
-        const eventId = generateEventId();
+        // Deterministic id → dedups with the server CAPI Purchase (handlePaymentSuccess).
         trackEvent("Purchase", {
           content_name: registration.campName,
           content_category: "Holiday Camp",
@@ -72,7 +74,7 @@ export default function BookingSuccess() {
           currency: registration.currency || "NZD",
           content_ids: [registration.campSlug],
           num_items: registration.itemCount,
-        }, eventId);
+        }, purchaseEventId(registration.id));
       }
     }
   }, [registration, confirmed]);
@@ -165,6 +167,10 @@ export default function BookingSuccess() {
                 </div>
               </div>
             </div>
+
+            {registration?.id && (
+              <HdyhauCard type="registration" id={registration.id} variant="light" accent={BRAND.blue} answered={!!registration?.referralSource} />
+            )}
 
             <div className="rounded-2xl p-5 text-left space-y-4" style={{ background: `${BRAND.blue}06`, border: `1px solid ${BRAND.blue}12` }}>
               <h3 className="text-[13px] font-bold" style={{ color: BRAND.darkBlue }}>What Happens Next</h3>

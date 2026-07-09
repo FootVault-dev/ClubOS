@@ -1,4 +1,6 @@
 import { storage } from "./storage";
+import { instrumentEmailHtml, type EmailUtmOptions } from "@shared/email-attribution";
+import { recordEmailClickToken } from "./email-token";
 import { campFromForOrg, fromForOrg } from "@shared/org-domains";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
@@ -19,6 +21,10 @@ interface EmailParams {
   campId?: number;
   registrationId?: number;
   attachments?: EmailAttachment[];
+  // When set (T14), rewrite ours-domain hrefs in `html` to carry utm_source=email
+  // + medium/campaign (+ ci for broadcasts) before send. Opt-in per call so only
+  // customer-facing broadcast/transactional mail is instrumented, not internal notes.
+  utm?: EmailUtmOptions;
 }
 
 // Strip HTML to a plain-text approximation. Used as a fallback when callers
@@ -50,6 +56,13 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
     return false;
   }
 
+  // T14: instrument ours-domain links with utm (+ ci) when the caller opts in.
+  // Defensive — a rewrite failure must never stop the send.
+  let html = params.html;
+  if (params.utm) {
+    try { html = instrumentEmailHtml(params.html, params.utm); } catch { html = params.html; }
+  }
+
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -62,8 +75,8 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
         to: [params.to],
         reply_to: params.replyTo || undefined,
         subject: params.subject,
-        html: params.html,
-        text: params.text ?? htmlToText(params.html),
+        html,
+        text: params.text ?? htmlToText(html),
         attachments: params.attachments?.map(a => ({
           filename: a.filename,
           content: a.content,
@@ -81,7 +94,7 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
         registrationId: params.registrationId || null,
         toEmail: params.to,
         subject: params.subject,
-        body: params.html,
+        body: html,
         providerMessageId: result.id || null,
       });
     } catch (e) {
@@ -266,12 +279,17 @@ export async function sendLeagueBroadcastEmail(params: {
   replyTo?: string;
   unsubscribeUrl: string;
   campId?: number;
+  orgId?: number;        // T14: for the per-recipient ci click token
+  campaignId?: number;   // T14: emailCampaigns.id — utm_campaign + ci key
 }): Promise<boolean> {
   const unsubFooter = `
     <p style="color:#5a5a5a; font-size:11px; line-height:1.6; margin:18px 0 0; border-top:1px solid #1f1f1f; padding-top:14px;">
       You're receiving this because you registered a team or player with Mini Football Leagues.
       <a href="${params.unsubscribeUrl}" style="color:#8a8a8a; text-decoration:underline;">Unsubscribe</a>
     </p>`;
+  // T14: instrument this recipient's ours-domain links with utm=email/broadcast +
+  // a signed per-recipient ci token (resolvable to their email → identity bind on click).
+  const ci = params.campaignId ? await recordEmailClickToken(params.orgId ?? null, params.campaignId, params.to) : null;
   return sendEmail({
     to: params.to,
     from: MFL_FROM,
@@ -279,6 +297,7 @@ export async function sendLeagueBroadcastEmail(params: {
     subject: params.subject,
     html: mflShell({ heading: params.subject, bodyHtml: params.bodyHtml + unsubFooter }),
     ...(params.campId ? { campId: params.campId } : {}),
+    ...(params.campaignId ? { utm: { source: "email", medium: "broadcast", campaign: String(params.campaignId), ci } } : {}),
   });
 }
 
@@ -295,7 +314,10 @@ export async function sendCicBroadcastEmail(params: {
   brand: "youth" | "7s";
   replyTo?: string;
   unsubscribeUrl: string;
+  orgId?: number;        // T14: per-recipient ci click token
+  campaignId?: number;   // T14: emailCampaigns.id — utm_campaign + ci key
 }): Promise<boolean> {
+  const ci = params.campaignId ? await recordEmailClickToken(params.orgId ?? null, params.campaignId, params.to) : null;
   const is7s = params.brand === "7s";
   const accent = is7s ? "#cffd5a" : "#c9a43e";
   const bg = is7s ? "#0a1122" : "#0b0b08";
@@ -331,6 +353,7 @@ export async function sendCicBroadcastEmail(params: {
     replyTo: params.replyTo || "info@cicyouth.com",
     subject: params.subject,
     html,
+    ...(params.campaignId ? { utm: { source: "email", medium: "broadcast", campaign: String(params.campaignId), ci } } : {}),
   });
 }
 
@@ -477,6 +500,7 @@ export async function sendLeagueConfirmationEmail(params: {
     html: mflShell({ heading: isFull ? "You're in! 🎉" : "Spot locked in", bodyHtml }),
     campId: params.programId,
     registrationId: params.registrationId,
+    utm: { medium: "transactional", campaign: "league-confirmation" },
   });
 }
 
@@ -545,6 +569,7 @@ export async function sendSplitTeamConfirmedEmail(params: {
     html: mflShell({ heading: "Your team's in! 🎉", bodyHtml }),
     campId: params.programId,
     registrationId: params.registrationId,
+    utm: { medium: "transactional", campaign: "league-team-confirmed" },
   });
 }
 
@@ -570,6 +595,7 @@ export async function sendSeasonRewardEmail(params: {
     to: params.to, from: MFL_FROM, replyTo: MFL_REPLY_TO,
     subject: `You've unlocked ${params.tierName} — Season Ticket Rewards`,
     html: mflShell({ heading: `${params.tierName} unlocked 🎉`, bodyHtml }),
+    utm: { medium: "transactional", campaign: "league-season-reward" },
   });
 }
 
@@ -622,6 +648,7 @@ export async function sendMflWaitlistConfirmation(params: {
     replyTo: MFL_REPLY_TO,
     subject: `You're on the waitlist — ${params.teamName}`,
     html: mflShell({ heading: "You're on the waitlist ⚽", bodyHtml }),
+    utm: { medium: "transactional", campaign: "mfl-waitlist" },
   });
 }
 

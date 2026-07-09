@@ -5,6 +5,7 @@ import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Lock, ShieldCheck, Loader2, AlertCircle } from "lucide-react";
 import { trackEvent } from "@/lib/meta-pixel";
+import { purchaseEventId } from "@shared/meta-events";
 import { formatCurrency } from "@/lib/format";
 
 // Only initialise Stripe if the publishable key was actually baked into the
@@ -94,7 +95,7 @@ function PaymentForm({ data, slug, mode }: { data: CheckoutData; slug: string; m
             value: data.amountDueNowCents / 100,
             currency: data.currency,
             content_ids: [slug],
-          }, `mfl_purchase_${data.registrationId}`);
+          }, purchaseEventId(data.registrationId));
         }
         setLocation(`/league/${data.slug || slug}/success?registrationId=${data.registrationId}`);
       } else if (paymentIntent.status === "processing") {

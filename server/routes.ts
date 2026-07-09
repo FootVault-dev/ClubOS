@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -12,12 +12,15 @@ import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
 import * as watch from "./watch-supabase";
+import { buildConversionAttribution } from "./attribution-stamp";
+import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
 import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
-import { sendPurchaseEvent, sendLeadEvent } from "./meta-capi";
+import { sendPurchaseEvent, sendLeadEvent, sendVenuePurchaseEvent } from "./meta-capi";
+import { purchaseEventId } from "@shared/meta-events";
 import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
@@ -30,6 +33,10 @@ import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
 import { scorePrediction } from "@shared/predictor-scoring";
+import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
+import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
+import { renderTrackerScript } from "@shared/tracker-script";
+import { CID_COOKIE, CID_MAX_AGE_SECONDS, VID_COOKIE, VID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId, isValidClickId, parseCookieHeader } from "./attribution-cookies";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
 import multer from "multer";
@@ -45,6 +52,203 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // ── AttributionOS: trackable short-link / QR redirect (T9) ─────────────────
+  // Public GET on every domain. Looks up an active short_links row by key, mints a
+  // first-party click id, records the click (ip_hash = SHA256(ip+ua), 1h dedupe per
+  // link, bot-flagged, QR-flagged from ?qr=1), bumps the cached click counter, plants
+  // usg_cid, then 302s to the link's ALLOW-LISTED destination with ?ci=<clickId> + the
+  // link's stored utm set appended (existing destination params preserved). Unknown /
+  // inactive / foreign-destination keys fall back to the brand's main site — never an
+  // open redirect. Registered inside registerRoutes so it wins over the SPA catch-all.
+  // Fully defensive: attribution must never break a click-through.
+  app.get("/l/:key", async (req, res) => {
+    const fallback = mainSiteForHost(String(req.headers.host || ""));
+    try {
+      const key = String(req.params.key || "").trim();
+      if (!key || !/^[A-Za-z0-9_-]{1,64}$/.test(key)) {
+        return res.redirect(302, fallback);
+      }
+
+      const [link] = await db
+        .select()
+        .from(shortLinks)
+        .where(and(eq(shortLinks.key, key), eq(shortLinks.active, true)))
+        .limit(1);
+      if (!link || !isAllowedDestination(link.destination)) {
+        return res.redirect(302, fallback);
+      }
+
+      const ua = String(req.headers["user-agent"] || "");
+      const ipRaw =
+        String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
+        req.ip ||
+        req.socket?.remoteAddress ||
+        "";
+      const ipHash = crypto.createHash("sha256").update(ipHashSeed(ipRaw, ua)).digest("hex");
+      const isBot = detectBot({ userAgent: ua });
+      const isQr = req.query.qr === "1" || req.query.qr === "true";
+      const usgVid = (req as any).usgVid;
+      const visitorId = isValidVisitorId(usgVid) ? String(usgVid) : null;
+
+      // 1h dedupe per link on the ip+ua hash: reuse the prior click id for double
+      // taps / link prefetch / QR re-scans so the counter isn't inflated. Bots are
+      // never deduped or counted.
+      let clickId: string | null = null;
+      let counted = false;
+      if (!isBot) {
+        const since = new Date(Date.now() - 60 * 60 * 1000);
+        const [recent] = await db
+          .select({ clickId: linkClicks.clickId })
+          .from(linkClicks)
+          .where(
+            and(
+              eq(linkClicks.linkId, link.id),
+              eq(linkClicks.ipHash, ipHash),
+              eq(linkClicks.isBot, false),
+              gt(linkClicks.createdAt, since),
+            ),
+          )
+          .orderBy(desc(linkClicks.createdAt))
+          .limit(1);
+        if (recent?.clickId) clickId = recent.clickId;
+      }
+
+      if (!clickId) {
+        clickId = clickIdFromBytes(crypto.randomBytes(16));
+        try {
+          await db.insert(linkClicks).values({
+            linkId: link.id,
+            clickId,
+            visitorId,
+            ipHash,
+            ua: ua.slice(0, 1024) || null,
+            referrer: String(req.headers.referer || (req.headers as any).referrer || "").slice(0, 2048) || null,
+            isQr: Boolean(isQr),
+            isBot,
+          });
+          counted = !isBot;
+        } catch {
+          // unique clickId collision or transient error — still redirect, don't count
+          counted = false;
+        }
+      }
+
+      if (counted) {
+        try {
+          await db
+            .update(shortLinks)
+            .set({ clicks: sql`${shortLinks.clicks} + 1` })
+            .where(eq(shortLinks.id, link.id));
+        } catch {
+          /* counter bump is best-effort — repairable from link_clicks (T21) */
+        }
+      }
+
+      // Plant the click cookie (90d sliding) so a same-domain conversion inherits it.
+      const secure = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https";
+      res.append(
+        "Set-Cookie",
+        serializeSetCookie({ name: CID_COOKIE, value: clickId, maxAgeSeconds: CID_MAX_AGE_SECONDS }, { secure }),
+      );
+
+      const target = buildRedirectUrl(link.destination, clickId, {
+        channel: link.channel,
+        medium: link.medium,
+        campaign: link.campaign,
+        content: link.content,
+      });
+      return res.redirect(302, target);
+    } catch {
+      try {
+        return res.redirect(302, fallback);
+      } catch {
+        /* response already sent — nothing more we can safely do */
+      }
+    }
+  });
+
+  // ── AttributionOS: cross-site embeddable tracker (T12) ─────────────────────
+  // `GET /t.js` — served on every ClubOS-hosted brand domain. The marketing sites
+  // load it from THEIR same-root funnel domain (minifootball.co.nz ←
+  // join.minifootball.co.nz/t.js), so it is first-party to the brand root. We inject
+  // the serving origin (so the script knows where to POST from the marketing page's
+  // context) and the brand-root list (so it can decorate cross-root outbound links).
+  // Scripts load without CORS, but we reflect a known origin for good measure. Cached
+  // for an hour. Registered before the SPA catch-all so it wins on all domains.
+  app.get("/t.js", (req, res) => {
+    try {
+      const proto = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+      const collectorBase = `${proto}://${String(req.headers.host || "")}`;
+      const js = renderTrackerScript({ collectorBase, domains: CLUB_ROOT_DOMAINS });
+      res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      const origin = String(req.headers.origin || "");
+      if (origin && isOurOrigin(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+      }
+      res.send(js);
+    } catch {
+      res.status(500).type("application/javascript").send("/* tracker unavailable */");
+    }
+  });
+
+  // CORS for the cross-site tracker fetch endpoints (hello + collector). Reflects the
+  // request origin only when it is one of ours (isOurOrigin), allows credentials so
+  // the first-party Set-Cookie sticks, and always sets Vary: Origin.
+  function setTrackerCors(req: Request, res: Response) {
+    const origin = String(req.headers.origin || "");
+    if (origin && isOurOrigin(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Access-Control-Allow-Credentials", "true");
+    }
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+  }
+
+  // `POST /api/public/analytics/hello` — the cross-site boot. Sets a first-party
+  // usg_vid scoped to the brand ROOT (so the marketing site + funnel subdomain share
+  // one visitor id), refreshes usg_cid from an incoming ?ci=/body.ci, and echoes back
+  // { visitorId, clickId } so the tracker can decorate outbound links immediately.
+  // Fully defensive — never throws. (T13 owns the full ?vi= adopt/alias matrix; here
+  // we only adopt a body.vi when there is no existing visitor cookie at all.)
+  app.options("/api/public/analytics/hello", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/analytics/hello", (req, res) => {
+    setTrackerCors(req, res);
+    try {
+      const cookies = parseCookieHeader(req.headers.cookie);
+      const secure = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https";
+      const domain = rootDomainForHost(String(req.headers.host || "")); // null → host-only
+
+      const body = (req.body || {}) as Record<string, unknown>;
+      const existingVid = cookies[VID_COOKIE];
+      let visitorId: string;
+      if (isValidVisitorId(existingVid)) visitorId = existingVid;
+      else if (isValidVisitorId(body.vi)) visitorId = String(body.vi); // adopt a decorated cross-root id
+      else visitorId = crypto.randomUUID();
+      res.append(
+        "Set-Cookie",
+        serializeSetCookie({ name: VID_COOKIE, value: visitorId, maxAgeSeconds: VID_MAX_AGE_SECONDS }, { secure, domain }),
+      );
+
+      let clickId: string | null = null;
+      if (isValidClickId(body.ci)) clickId = String(body.ci);
+      else if (isValidClickId(cookies[CID_COOKIE])) clickId = cookies[CID_COOKIE];
+      if (clickId) {
+        res.append(
+          "Set-Cookie",
+          serializeSetCookie({ name: CID_COOKIE, value: clickId, maxAgeSeconds: CID_MAX_AGE_SECONDS }, { secure, domain }),
+        );
+      }
+
+      res.json({ visitorId, clickId });
+    } catch {
+      try { res.json({ visitorId: null, clickId: null }); } catch { /* response gone */ }
+    }
+  });
 
   app.post("/api/auth/login", async (req, res) => {
     try {
@@ -956,6 +1160,312 @@ export async function registerRoutes(
     }
   });
 
+  // ── AttributionOS: short-link admin API (T10) ──────────────────────────────
+  // Org-scoped (workspace) trackable-link builder feeding the /l/:key redirect
+  // (T9). requireAuth + workspace membership; every mutating/stats path re-checks
+  // the workspace org actually OWNS the link (no cross-org edits). Destinations
+  // are validated to our own domains at create/edit time so the DB only ever
+  // holds allow-listed targets (defence in depth alongside the redirect guard).
+  const linkStrOrNull = (v: any): string | null => {
+    const s = v == null ? "" : String(v).trim();
+    return s ? s : null;
+  };
+  // utm_campaign should be a stable slug — lowercase, spaces/punct → single '-'.
+  const slugifyCampaign = (v: any): string | null => {
+    const s = v == null ? "" : String(v).trim().toLowerCase();
+    if (!s) return null;
+    const slug = s.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+    return slug || null;
+  };
+  const validateLinkChannel = (v: any): { ok: true; value: string | null } | { ok: false } => {
+    if (v == null || String(v).trim() === "") return { ok: true, value: null };
+    const c = String(v).trim().toLowerCase();
+    if (!(CANONICAL_CHANNELS as readonly string[]).includes(c)) return { ok: false };
+    return { ok: true, value: c };
+  };
+
+  app.get("/api/admin/links", requireAuth, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
+      if (!(await checkUserOrg(req.session.userId!, org.id))) return res.status(403).json({ message: "Forbidden" });
+      const includeArchived = req.query.archived === "1" || req.query.archived === "true";
+      const links = await storage.listShortLinks(org.id, { includeArchived });
+      res.json(links);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/admin/links", requireAuth, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
+      if (!(await checkUserOrg(req.session.userId!, org.id))) return res.status(403).json({ message: "Forbidden" });
+
+      const body = req.body || {};
+      const destination = String(body.destination || "").trim();
+      if (!isAllowedDestination(destination)) {
+        return res.status(400).json({ message: "Destination must be a full URL on one of our own domains (no open redirects)." });
+      }
+      const channel = validateLinkChannel(body.channel);
+      if (!channel.ok) {
+        return res.status(400).json({ message: `channel must be one of: ${CANONICAL_CHANNELS.join(", ")}` });
+      }
+
+      // Key: a validated custom slug, else an auto nanoid-style key with
+      // collision retry (widening length after a few misses).
+      let key = "";
+      const custom = body.key != null ? String(body.key).trim() : "";
+      if (custom) {
+        if (!isValidLinkKey(custom)) {
+          return res.status(400).json({ message: "Invalid custom key — use 2–64 letters/numbers/-/_ and not a reserved word." });
+        }
+        if (await storage.getShortLinkByKey(custom)) {
+          return res.status(409).json({ message: "That key is already taken — pick another." });
+        }
+        key = custom;
+      } else {
+        for (let attempt = 0; attempt < 6 && !key; attempt++) {
+          const candidate = linkKeyFromBytes(crypto.randomBytes(16), 7 + Math.floor(attempt / 3));
+          if (!(await storage.getShortLinkByKey(candidate))) key = candidate;
+        }
+        if (!key) return res.status(500).json({ message: "Could not allocate a unique key — please retry." });
+      }
+
+      const link = await storage.createShortLink({
+        organizationId: org.id,
+        key,
+        destination,
+        channel: channel.value,
+        medium: linkStrOrNull(body.medium),
+        campaign: slugifyCampaign(body.campaign),
+        content: linkStrOrNull(body.content),
+        brand: linkStrOrNull(body.brand),
+        note: linkStrOrNull(body.note),
+        qrDefault: Boolean(body.qrDefault),
+        active: true,
+        createdBy: req.session.userId!,
+      });
+      res.status(201).json(link);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/admin/links/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid id" });
+      const existing = await storage.getShortLink(id);
+      if (!existing) return res.status(404).json({ message: "Link not found" });
+      const org = await workspaceOrg(req);
+      if (!org || existing.organizationId !== org.id) return res.status(403).json({ message: "Forbidden" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+
+      const body = req.body || {};
+      // Drizzle-native insert type for the mutable patch (reliable for property
+      // writes; storage.updateShortLink accepts the equivalent Partial).
+      const patch: Partial<typeof shortLinks.$inferInsert> = {};
+      // Archive / restore.
+      if (typeof body.active === "boolean") patch.active = body.active;
+      // Safe editable metadata (key + org + counters are immutable here).
+      if ("note" in body) patch.note = linkStrOrNull(body.note);
+      if ("brand" in body) patch.brand = linkStrOrNull(body.brand);
+      if ("campaign" in body) patch.campaign = slugifyCampaign(body.campaign);
+      if ("medium" in body) patch.medium = linkStrOrNull(body.medium);
+      if ("content" in body) patch.content = linkStrOrNull(body.content);
+      if (typeof body.qrDefault === "boolean") patch.qrDefault = body.qrDefault;
+      if ("channel" in body) {
+        const channel = validateLinkChannel(body.channel);
+        if (!channel.ok) return res.status(400).json({ message: `channel must be one of: ${CANONICAL_CHANNELS.join(", ")}` });
+        patch.channel = channel.value;
+      }
+      if ("destination" in body) {
+        const destination = String(body.destination || "").trim();
+        if (!isAllowedDestination(destination)) {
+          return res.status(400).json({ message: "Destination must be a full URL on one of our own domains (no open redirects)." });
+        }
+        patch.destination = destination;
+      }
+      if (Object.keys(patch).length === 0) return res.status(400).json({ message: "No editable fields provided" });
+
+      const updated = await storage.updateShortLink(id, patch);
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/links/:id/stats", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid id" });
+      const existing = await storage.getShortLink(id);
+      if (!existing) return res.status(404).json({ message: "Link not found" });
+      const org = await workspaceOrg(req);
+      if (!org || existing.organizationId !== org.id) return res.status(403).json({ message: "Forbidden" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+
+      const days = req.query.days ? parseInt(req.query.days as string) : 30;
+      const stats = await storage.getShortLinkStats(id, days);
+      res.json({ link: existing, ...stats });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ── AttributionOS: admin reporting API (T19) ───────────────────────────────
+  // Read-only attribution dashboards backed by the T18 query layer
+  // (server/attribution-reports.ts). requireAuth + workspace membership; scoped
+  // to the current workspace's org, OR — in group=1 mode from the master (group)
+  // workspace — every org the admin belongs to, rolled up. Consistent JSON
+  // shapes (each carries `group`) for the T20 dashboard tab.
+  async function attributionScope(
+    req: Request,
+  ): Promise<
+    | { ok: true; org: { id: number; slug: string }; orgIds: number[]; group: boolean }
+    | { ok: false; status: number; message: string }
+  > {
+    const org = await workspaceOrg(req);
+    if (!org) return { ok: false, status: 400, message: "X-Workspace-Slug header required" };
+    if (!(await checkUserOrg(req.session.userId!, org.id)))
+      return { ok: false, status: 403, message: "Forbidden" };
+    const wantGroup = req.query.group === "1" || req.query.group === "true";
+    // Group rollup is only honoured from the master (group) workspace — a normal
+    // brand workspace can never widen its scope past its own org.
+    if (wantGroup && workspaceTypeFor(org.slug) === "group") {
+      const userOrgs = await storage.getUserOrganizations(req.session.userId!);
+      const orgIds = Array.from(new Set(userOrgs.map((o) => o.id)));
+      return { ok: true, org, orgIds: orgIds.length ? orgIds : [org.id], group: true };
+    }
+    return { ok: true, org, orgIds: [org.id], group: false };
+  }
+
+  // Parse the shared reporting query params: attribution model, lookback window,
+  // conversion date range (explicit start/end, or a trailing `days` count) and
+  // the new-vs-returning filter. All optional — the report layer supplies defaults.
+  function parseAttributionParams(req: Request, orgIds: number[]): ReportParams {
+    const q = req.query as Record<string, any>;
+    const num = (v: any): number | undefined => {
+      if (v == null || v === "") return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const parseDate = (v: any): number | undefined => {
+      if (v == null || v === "") return undefined;
+      const t = Date.parse(String(v));
+      return Number.isFinite(t) ? t : undefined;
+    };
+    let startMs = parseDate(q.start);
+    let endMs = parseDate(q.end);
+    // A trailing `days` window is the common dashboard control; an explicit start wins.
+    const days = num(q.days);
+    if (startMs == null && days && days > 0) {
+      endMs = endMs ?? Date.now();
+      startMs = endMs - days * 86_400_000;
+    }
+    const filterRaw = String(q.filter || "");
+    const filter = filterRaw === "new" || filterRaw === "returning" ? filterRaw : "all";
+    return {
+      orgIds,
+      model: q.model ? String(q.model) : undefined,
+      windowDays: num(q.windowDays),
+      startMs,
+      endMs,
+      filter,
+    };
+  }
+
+  app.get("/api/admin/attribution/overview", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await attributionOverview(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/campaigns", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await revenueByCampaign(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/ads", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await revenueByAd(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/leads", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await leadsByChannel(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/attribution/reconciliation", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const data = await reconciliation(parseAttributionParams(req, scope.orgIds));
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Journeys drilldown list — most-recent conversions in scope. Anonymous rows
+  // included (personId null); only person-backed rows open a timeline below.
+  app.get("/api/admin/attribution/journeys", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const params = parseAttributionParams(req, scope.orgIds);
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const data = await recentConversions({ ...params, limit });
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Single person timeline. Org-scoped: a person with NO conversion in the scoped
+  // orgs is treated as not-found (person PII never leaks across workspaces, even
+  // though the touch log itself has no org column).
+  app.get("/api/admin/attribution/journey/:personId", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const personId = parseInt(String(req.params.personId), 10);
+      if (!Number.isInteger(personId) || personId <= 0)
+        return res.status(400).json({ message: "Invalid personId" });
+      const data = await personJourney(personId, scope.orgIds);
+      if (!data || data.conversionCount === 0)
+        return res.status(404).json({ message: "No journey for that person in this workspace" });
+      res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Generic programs endpoint — same underlying table as camps/academy but
   // returns whatever the workspace needs. Used by United Gymnastics (and
   // future workspaces) where the program isn't a 'holiday_camp' or
@@ -1170,6 +1680,7 @@ export async function registerRoutes(
         : 0;
 
       // Create the registration row in 'pending' state
+      const attribution = await buildConversionAttribution(req, { email, firstName, lastName });
       const reg = await storage.createRegistration({
         programId: program.id,
         programOptionId: option?.id ?? null,
@@ -1190,6 +1701,7 @@ export async function registerRoutes(
         fbclid: utm?.fbclid || null,
         gclid: utm?.gclid || null,
         registrationLocation: "online",
+        ...attribution,
       } as any);
 
       const sharedMetadata = {
@@ -4375,6 +4887,10 @@ export async function registerRoutes(
       const intent = await retrievePaymentIntent(pi);
       if (intent.status === "succeeded") {
         const updated = await confirmAndEmailVenueBookings(pi);
+        // Bind the paying customer to a durable person + stitch their history.
+        // facilityBookings has no attribution columns (T3) so this is identity-only.
+        // buildConversionAttribution is fully defensive — never blocks the confirmation.
+        await buildConversionAttribution(req, { email: emailQ });
         return res.json({ status: "paid", confirmed: updated.length });
       }
       return res.json({ status: bookings[0].status, paymentStatus: intent.status });
@@ -4493,6 +5009,9 @@ export async function registerRoutes(
       }
 
       const normalizedHalfFull = (facility.halfFull || facility.quarterField) ? (parsed.halfFull || "full") : null;
+      const bookingAttribution = await buildConversionAttribution(req, {
+        email: parsed.email, firstName: parsed.fullName, phone: parsed.phone,
+      });
       const [request] = await db.insert(bookingRequests).values({
         organizationId: orgId,
         facilityId: parsed.facilityId,
@@ -4500,6 +5019,7 @@ export async function registerRoutes(
         dateOfBirth: parsed.dateOfBirth,
         email: parsed.email,
         phone: parsed.phone,
+        ...bookingAttribution,
         bookingDate: parsed.date,
         startTime: parsed.startTime,
         endTime: parsed.endTime,
@@ -5053,6 +5573,7 @@ export async function registerRoutes(
         sendLeagueBroadcastEmail({
           to: email, subject: subj, bodyHtml: String(body), replyTo: replyTo || undefined,
           unsubscribeUrl: mflUnsubUrl(MFL_ORG_ID, email), campId: undefined,
+          orgId: MFL_ORG_ID, campaignId: campaign.id,
         }),
       ).catch((e) => console.error("[League mailer queue] error:", e));
 
@@ -6663,9 +7184,19 @@ export async function registerRoutes(
     return r[0] || {};
   }
 
+  // The collector accepts cross-site touches from the T12 `/t.js` tracker running on
+  // the marketing sites, so it reflects CORS for our origins + handles preflight.
+  app.options("/api/public/analytics/event", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+  app.options("/api/public/analytics/batch", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+
   app.post("/api/public/analytics/event", async (req, res) => {
+    setTrackerCors(req, res);
     try {
-      await db.insert(analyticsEvents).values(req.body);
+      // Shape at ingest: classify touch, clean macros, flag bots (T6). A malformed
+      // payload (missing/illegal ids) shapes to null and is silently dropped.
+      const shaped = shapeAnalyticsEvent(req.body, { userAgent: req.headers["user-agent"] });
+      if (!shaped) return res.json({ ok: false, dropped: true });
+      await db.insert(analyticsEvents).values(shaped);
       res.json({ ok: true });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -6673,16 +7204,16 @@ export async function registerRoutes(
   });
 
   app.post("/api/public/analytics/batch", async (req, res) => {
+    setTrackerCors(req, res);
     try {
       const { events } = req.body || {};
-      if (!events || !Array.isArray(events) || events.length === 0) {
-        return res.json({ ok: true });
+      // Shape + drop malformed rows + cap at 50 (T6). Classifies touch on
+      // session_start / page_view, cleans macro values, flags bots.
+      const shaped = shapeAnalyticsEvents(events, { userAgent: req.headers["user-agent"] }, 50);
+      if (shaped.length > 0) {
+        await db.insert(analyticsEvents).values(shaped);
       }
-      const validEvents = events.filter((e: any) => e.visitorId && e.sessionId && e.eventType).slice(0, 50);
-      if (validEvents.length > 0) {
-        await db.insert(analyticsEvents).values(validEvents);
-      }
-      res.json({ ok: true, count: validEvents.length });
+      res.json({ ok: true, count: shaped.length });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
@@ -11224,7 +11755,7 @@ export async function registerRoutes(
     };
   }
 
-  async function fiCreateApplication(body: any, source: string) {
+  async function fiCreateApplication(body: any, source: string, req?: Request) {
     const applicantName = s(body?.applicantName || `${s(body?.studentFirstName, 60)} ${s(body?.studentLastName, 60)}`, 120);
     const email = s(body?.email, 160).toLowerCase();
     if (!applicantName) return { error: "Student name is required" };
@@ -11249,6 +11780,10 @@ export async function registerRoutes(
       intakeYear: Number.isFinite(intakeYearNum) && intakeYearNum > 2024 && intakeYearNum < 2100 ? intakeYearNum : null,
       source,
     };
+    // Identity person = the PARENT only. Never fall back to applicantName — the
+    // applicant is the student (year 9–13, often a minor); child names must not
+    // reach the persons table (Hard Rule 4; verifier finding MAJOR-1, 2026-07-04).
+    if (req) Object.assign(values, await buildConversionAttribution(req, { email, firstName: s(body?.parentName, 120) || undefined, phone: body?.phone }));
     const [row] = await db.insert(footballInstituteApplications).values(values).returning();
     return { application: row };
   }
@@ -11298,7 +11833,7 @@ export async function registerRoutes(
   app.post("/api/public/football-institute/apply", async (req, res) => {
     fiApplyCors(req, res);
     try {
-      const result = await fiCreateApplication(req.body, "website");
+      const result = await fiCreateApplication(req.body, "website", req);
       if ("error" in result) return res.status(400).json({ message: result.error });
       // Email is best-effort — never fail the application if Resend hiccups.
       try {
@@ -13339,6 +13874,9 @@ export async function registerRoutes(
 
       const totalCents = subtotalCents - discountCents;
 
+      const campAttribution = await buildConversionAttribution(req, {
+        email: parent?.email, firstName: parent?.firstName, lastName: parent?.lastName, phone: parent?.phone,
+      });
       const registration = await storage.createRegistration({
         programId: camp.id,
         contactId: parentContact.id,
@@ -13356,6 +13894,7 @@ export async function registerRoutes(
         utmMedium: utmMedium || null,
         utmCampaign: utmCampaign || null,
         fbclid: fbclid || null,
+        ...campAttribution,
       });
 
       await storage.createRegistrationItems(registrationItems.map(item => ({
@@ -13809,6 +14348,65 @@ export async function registerRoutes(
       res.json({ ok: true });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // T17 — generalized self-reported "how did you hear about us?" (HDYHAU) capture.
+  // One entry point for the reusable success-screen card: writes the answer onto
+  // the correct conversion row. Registration/camp reuse the existing
+  // `referral_source` column; the newer lead tables use `hdyhau` (T3). Optional
+  // and best-effort — a failed self-report must NEVER surface an error that
+  // discourages the tap, so anything unexpected returns 200 { ok: false }.
+  app.post("/api/public/hdyhau", async (req, res) => {
+    try {
+      const type = String(req.body?.type || "").trim();
+      const id = parseInt(String(req.body?.id ?? ""), 10);
+      const value = normalizeHdyhauAnswer(req.body?.value); // strict whitelist of HDYHAU_OPTIONS ids
+      if (!Number.isFinite(id) || id <= 0 || !value) {
+        return res.status(400).json({ message: "type, id and value are required" });
+      }
+      // Anti-tamper (verifier MAJOR-2): the row must be the caller's own — its
+      // stamped visitor_id must match the caller's usg_vid cookie when both
+      // exist — and the answer is write-once (existing self-reports are never
+      // overwritten by an unauthenticated call).
+      const callerVid = parseCookieHeader(req.headers.cookie)[VID_COOKIE] || "";
+      const guard = (rowVid: string | null | undefined, existing: string | null | undefined): "write" | "keep" | "deny" => {
+        if (existing) return "keep";
+        if (rowVid && rowVid !== callerVid) return "deny";
+        return "write";
+      };
+      let outcome: "write" | "keep" | "deny" = "deny";
+      switch (type) {
+        case "registration": { // MFL team + camp + class all live in `registrations`
+          const row = await storage.getRegistration(id);
+          if (!row) return res.status(200).json({ ok: false });
+          outcome = guard((row as any).visitorId, row.referralSource);
+          if (outcome === "write") await storage.updateRegistration(id, { referralSource: value });
+          break;
+        }
+        case "waitlist": {
+          const [row] = await db.select().from(leagueWaitlist).where(eq(leagueWaitlist.id, id));
+          if (!row) return res.status(200).json({ ok: false });
+          outcome = guard((row as any).visitorId, (row as any).hdyhau);
+          if (outcome === "write") await storage.updateLeagueWaitlistEntry(id, { hdyhau: value } as any);
+          break;
+        }
+        case "booking_request": {
+          const [row] = await db.select().from(bookingRequests).where(eq(bookingRequests.id, id));
+          if (!row) return res.status(200).json({ ok: false });
+          outcome = guard((row as any).visitorId, (row as any).hdyhau);
+          if (outcome === "write") await db.update(bookingRequests).set({ hdyhau: value } as any).where(eq(bookingRequests.id, id));
+          break;
+        }
+        default:
+          return res.status(400).json({ message: "Unknown conversion type" });
+      }
+      // Same 200 shape for all outcomes — the success-screen card never shows an
+      // error, and probing responses don't reveal which ids exist or hold data.
+      res.json({ ok: outcome !== "deny" });
+    } catch (error: any) {
+      console.error("[HDYHAU] capture failed:", error?.message || error);
+      res.status(200).json({ ok: false });
     }
   });
 
@@ -15898,12 +16496,16 @@ export async function registerRoutes(
         if (day !== 0 && day !== 6) added++;
       }
 
+      const printAttribution = await buildConversionAttribution(req, {
+        email: customer.email, firstName: customer.firstName, lastName: customer.lastName, phone: customer.phone,
+      });
       const order = await storage.createPrintOrder({
         organizationId: orgId,
         orderNumber,
         customerName: `${customer.firstName} ${customer.lastName}`.trim(),
         customerEmail: customer.email,
         customerPhone: customer.phone,
+        ...printAttribution,
         customerCompany: customer.company || null,
         title: material.name,
         description: null,
@@ -16770,6 +17372,7 @@ export async function registerRoutes(
           && Date.now() - new Date(w.createdAt).getTime() < 24 * 3600_000,
       );
 
+      const waitlistAttribution = await buildConversionAttribution(req, { email, firstName: contactName, phone });
       let entry;
       if (existing) {
         const merged = [...new Set([...(existing.divisionIds || []), ...valid.map((d) => d.id)])];
@@ -16785,6 +17388,7 @@ export async function registerRoutes(
           phone: phone || null,
           divisionIds: valid.map((d) => d.id),
           status: "waiting",
+          ...waitlistAttribution,
           utmSource: req.body.utmSource || null,
           utmMedium: req.body.utmMedium || null,
           utmCampaign: req.body.utmCampaign || null,
@@ -16890,6 +17494,9 @@ export async function registerRoutes(
       const wantsFull = String(req.body.paymentChoice || "").toLowerCase() === "full";
 
       // Create one registration per team.
+      const leagueAttribution = await buildConversionAttribution(req, {
+        email: captain?.email, firstName: captain?.firstName, lastName: captain?.lastName, phone: captain?.phone,
+      });
       const created: { registration: any; pay: any; teamTotalCents: number }[] = [];
       for (let i = 0; i < teamsResolved.length; i++) {
         const { team, division, subtotalCents, lineItems } = teamsResolved[i];
@@ -16928,6 +17535,7 @@ export async function registerRoutes(
           utmMedium: utmMedium || null,
           utmCampaign: utmCampaign || null,
           fbclid: fbclid || null,
+          ...leagueAttribution,
         } as any);
 
         await storage.createRegistrationItems(lineItems.map((li) => ({
@@ -17123,6 +17731,9 @@ export async function registerRoutes(
         name, email, phone: phone || null, subject: subject || null, body: message,
         sourceUrl: String(req.body.sourceUrl || "minifootball.co.nz"), status: "new",
       });
+      // Lead → durable person (cross-origin form: usually no visitor cookie, so
+      // identity-only — links this enquirer to their eventual columned conversion).
+      await buildConversionAttribution(req, { email, firstName: name, phone: phone || undefined });
       try {
         await sendMflContactNotification({ to: "info@minifootball.co.nz", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
       } catch (e) { console.error("[MFL contact] email failed:", e); }
@@ -17152,10 +17763,12 @@ export async function registerRoutes(
       if (!firstName || !/.+@.+\..+/.test(email)) return res.status(400).json({ message: "Please add your name and a valid email." });
 
       const orgId = await skillsOrgId(); // CIC org — CIC 7's lives under it
+      const cic7sAttribution = await buildConversionAttribution(req, { email, firstName, lastName, phone });
       await db.insert(cic7sRegistrations).values({
         organizationId: orgId, firstName, lastName: lastName || null, email,
         location: location || null, phone: phone || null, category: category || null,
         sourceUrl: String(req.body.sourceUrl || "cic7s.com"), status: "new",
+        ...cic7sAttribution,
       });
       try {
         await sendCic7sRegistrationNotification({
@@ -17207,6 +17820,8 @@ export async function registerRoutes(
         name, email, phone: phone || null, subject: subject || null, body: message,
         sourceUrl: String(req.body.sourceUrl || "cicyouth.com"), status: "new",
       });
+      // Lead → durable person (identity-only; cross-origin form). Never blocks the enquiry.
+      await buildConversionAttribution(req, { email, firstName: name, phone: phone || undefined });
       try {
         await sendCicContactNotification({ to: "info@cicyouth.com", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
       } catch (e) { console.error("[CIC contact] email failed:", e); }
@@ -17800,6 +18415,7 @@ export async function registerRoutes(
         sendCicBroadcastEmail({
           to: email, subject: subj, bodyHtml: String(body), brand: source,
           replyTo: replyTo || undefined, unsubscribeUrl: cicUnsubUrl(orgId, email),
+          orgId, campaignId: campaign.id,
         }),
       ).catch((e) => console.error("[CIC mailer queue] error:", e));
 
@@ -18479,6 +19095,8 @@ export async function registerRoutes(
         name, email, phone: phone || null, subject: subject || null, body: message,
         sourceUrl: String(req.body.sourceUrl || "cugc.co.nz"), status: "new",
       });
+      // Lead → durable person (identity-only; cross-origin form). Never blocks the enquiry.
+      await buildConversionAttribution(req, { email, firstName: name, phone: phone || undefined });
       try {
         await sendCugcContactNotification({ to: "info@cugc.co.nz", name, email, phone: phone || undefined, subject: subject || undefined, message, sourceUrl: String(req.body.sourceUrl || "") });
       } catch (e) { console.error("[CUGC contact] email failed:", e); }
@@ -18557,6 +19175,9 @@ export async function registerRoutes(
       const termName = String(req.body.term || "").trim() || CUGC_TERM.name;
       const orgId = await cugcOrgId();
 
+      const cugcAttribution = await buildConversionAttribution(req, {
+        email, firstName: parentName, phone: String(req.body.phone || "").trim() || null,
+      });
       const [row] = await db.insert(cugcRegistrations).values({
         organizationId: orgId,
         programSlug: program.slug,
@@ -18580,6 +19201,7 @@ export async function registerRoutes(
         // First/last-touch ad attribution captured client-side on cugc.co.nz
         // (utm_*, fbclid, referrer, landing, visits) — feeds CAC/LTV reporting.
         attribution: req.body.attribution && typeof req.body.attribution === "object" ? req.body.attribution : null,
+        ...cugcAttribution,
       }).returning();
 
       // Custom EMBEDDED checkout — return a PaymentIntent clientSecret for our own
@@ -18726,6 +19348,9 @@ export async function registerRoutes(
       const live = existing.find((r) => r.status !== "cancelled");
       if (live) return res.json({ ok: true, id: live.id, alreadyBooked: true });
 
+      const freeSessionAttribution = await buildConversionAttribution(req, {
+        email, firstName: parentName, phone: phone || null,
+      });
       const [row] = await db.insert(cugcFreeSessions).values({
         organizationId: orgId,
         programSlug: program.slug,
@@ -18741,6 +19366,7 @@ export async function registerRoutes(
         status: "booked",
         sourceUrl: String(req.body.sourceUrl || "").slice(0, 500) || null,
         attribution: req.body.attribution && typeof req.body.attribution === "object" ? req.body.attribution : null,
+        ...freeSessionAttribution,
       }).returning();
 
       // Emails: confirmation to the parent + heads-up to the club. Never block
@@ -19976,6 +20602,26 @@ async function confirmAndEmailVenueBookings(paymentIntentId: string) {
   } catch (e) {
     console.error("[Venue email] failed", e);
   }
+  // Server-side Purchase for venue revenue (no browser pixel on the venue flow).
+  // Idempotent: confirmFacilityBookingsByPaymentIntent only returns newly-flipped
+  // rows, so a webhook+self-heal double-confirm returns early above and never
+  // re-fires this. Fully defensive — a CAPI failure must not break confirmation.
+  try {
+    const nameParts = (first.customerName || "").trim().split(/\s+/).filter(Boolean);
+    await sendVenuePurchaseEvent({
+      bookingId: first.id,
+      bookingGroupId: first.bookingGroupId || paymentIntentId,
+      totalCents,
+      currency: "NZD",
+      email: first.customerEmail || "",
+      phone: first.customerPhone || undefined,
+      firstName: nameParts[0] || undefined,
+      lastName: nameParts.length > 1 ? nameParts.slice(1).join(" ") : undefined,
+      facilityName: sessions[0]?.facilityName,
+    });
+  } catch (e) {
+    console.error("[Venue CAPI] Purchase failed", e);
+  }
   return updated;
 }
 
@@ -20018,6 +20664,24 @@ async function confirmAndEmailVenueBookingGroup(groupId: string) {
     });
   } catch (e) {
     console.error("[Venue email] group confirm failed", e);
+  }
+  // Server Purchase for the Player-Pay venue path (idempotent: only the first
+  // flip returns rows, so this fires once per group). Defensive.
+  try {
+    const nameParts = (first.customerName || "").trim().split(/\s+/).filter(Boolean);
+    await sendVenuePurchaseEvent({
+      bookingId: first.id,
+      bookingGroupId: groupId,
+      totalCents,
+      currency: "NZD",
+      email: first.customerEmail || "",
+      phone: first.customerPhone || undefined,
+      firstName: nameParts[0] || undefined,
+      lastName: nameParts.length > 1 ? nameParts.slice(1).join(" ") : undefined,
+      facilityName: sessions[0]?.facilityName,
+    });
+  } catch (e) {
+    console.error("[Venue CAPI] group Purchase failed", e);
   }
   return updated;
 }
@@ -20235,7 +20899,9 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
     totalPaid: `$${((reg.totalCents || 0) / 100).toFixed(2)} NZD`,
   }).catch(e => console.error("[Post-payment] Email error:", e));
 
-  const eventId = `purchase_${registrationId}_${Date.now()}`;
+  // Deterministic id shared with the browser Purchase pixel (checkout-page /
+  // booking-page / booking-success) so Meta dedups the two — NO timestamp.
+  const eventId = purchaseEventId(registrationId);
   sendPurchaseEvent({
     registrationId,
     campId: program.id,
@@ -20541,7 +21207,8 @@ async function handleLeagueRegistrationSuccess(registrationId: number, metadata?
       fbp: metadata?.fbp || undefined,
       fbc: metadata?.fbc || undefined,
       userAgent: metadata?.userAgent || undefined,
-      eventId: `mfl_purchase_${primaryId}`,
+      // Canonical deterministic id — matches mfl-checkout-page + mfl-success-page.
+      eventId: purchaseEventId(primaryId),
       contentName: "MFL Term 3 Team Registration",
       contentIds: [program.slug || String(program.id)],
     }).catch((e) => console.error("[MFL] Purchase CAPI failed:", e));

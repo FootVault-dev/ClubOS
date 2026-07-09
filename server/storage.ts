@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, ne } from "drizzle-orm";
+import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, ne, gt } from "drizzle-orm";
 import crypto from "crypto";
 import { contentHashOf } from "./studio/hash";
 import {
@@ -86,6 +86,8 @@ import {
   studioDocumentVersions, type StudioDocumentVersion,
   studioAnalyticsSessions, type StudioAnalyticsSession,
   studioAnalyticsEvents,
+  shortLinks, linkClicks,
+  type InsertShortLink, type ShortLink,
 } from "@shared/schema";
 import type { ReadClass } from "@shared/studio-signal";
 
@@ -573,7 +575,31 @@ export interface IStorage {
   getStudioDocumentSessions(documentId: number): Promise<StudioSessionRow[]>;
   getStudioSectionEngagement(documentId: number): Promise<StudioSectionEngagement>;
   getStudioHotLeads(orgId: number): Promise<StudioHotLead[]>;
+
+  // AttributionOS — short links (T10)
+  listShortLinks(orgId: number, opts?: { includeArchived?: boolean }): Promise<ShortLinkWithClicks[]>;
+  getShortLink(id: number): Promise<ShortLink | undefined>;
+  getShortLinkByKey(key: string): Promise<ShortLink | undefined>;
+  createShortLink(data: InsertShortLink): Promise<ShortLink>;
+  updateShortLink(id: number, data: Partial<InsertShortLink>): Promise<ShortLink | undefined>;
+  getShortLinkStats(linkId: number, days: number): Promise<ShortLinkStats>;
 }
+
+// A short link plus its trailing-7-day (non-bot) click count, for the list view.
+export type ShortLinkWithClicks = ShortLink & { last7dClicks: number };
+
+// Per-link stats: NZ-local daily click series + conversions matched to the
+// link's minted click ids across every attribution-columned conversion table.
+export type ShortLinkStats = {
+  linkId: number;
+  days: number;
+  totalClicks: number;        // counted (non-bot) clicks in window
+  totalConversions: number;
+  totalLeads: number;
+  totalSales: number;
+  dailyClicks: Array<{ date: string; clicks: number }>;
+  conversions: Array<{ source: string; kind: "lead" | "sale"; count: number }>;
+};
 
 export class DatabaseStorage implements IStorage {
   async getUser(id: number): Promise<User | undefined> {
@@ -3303,6 +3329,120 @@ export class DatabaseStorage implements IStorage {
       ctaClicks: Number(x.cta_clicks ?? 0),
       isReturning: !!x.is_returning,
     }));
+  }
+
+  // ── AttributionOS short links (T10) ────────────────────────────────────────
+
+  async listShortLinks(orgId: number, opts?: { includeArchived?: boolean }): Promise<ShortLinkWithClicks[]> {
+    const conds = [eq(shortLinks.organizationId, orgId)];
+    if (!opts?.includeArchived) conds.push(eq(shortLinks.active, true));
+    const links = await db
+      .select()
+      .from(shortLinks)
+      .where(and(...conds))
+      .orderBy(desc(shortLinks.createdAt));
+    if (links.length === 0) return [];
+
+    // Trailing-7-day counted (non-bot) clicks per link, one grouped query.
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select({ linkId: linkClicks.linkId, n: sql<number>`count(*)::int` })
+      .from(linkClicks)
+      .where(and(
+        inArray(linkClicks.linkId, links.map((l) => l.id)),
+        eq(linkClicks.isBot, false),
+        gt(linkClicks.createdAt, since),
+      ))
+      .groupBy(linkClicks.linkId);
+    const last7d = new Map<number, number>();
+    for (const r of rows) last7d.set(r.linkId, Number(r.n) || 0);
+
+    return links.map((l) => ({ ...l, last7dClicks: last7d.get(l.id) ?? 0 }));
+  }
+
+  async getShortLink(id: number): Promise<ShortLink | undefined> {
+    const [r] = await db.select().from(shortLinks).where(eq(shortLinks.id, id));
+    return r;
+  }
+
+  async getShortLinkByKey(key: string): Promise<ShortLink | undefined> {
+    const [r] = await db.select().from(shortLinks).where(eq(shortLinks.key, key));
+    return r;
+  }
+
+  async createShortLink(data: InsertShortLink): Promise<ShortLink> {
+    const [r] = await db.insert(shortLinks).values(data).returning();
+    return r;
+  }
+
+  async updateShortLink(id: number, data: Partial<InsertShortLink>): Promise<ShortLink | undefined> {
+    const [r] = await db.update(shortLinks).set(data).where(eq(shortLinks.id, id)).returning();
+    return r;
+  }
+
+  async getShortLinkStats(linkId: number, days: number): Promise<ShortLinkStats> {
+    const windowDays = Math.max(1, Math.min(365, Math.floor(days) || 30));
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+    // NZ-local daily click series (never toISOString for NZ dates — group on the
+    // Pacific/Auckland-local calendar date).
+    const dayRows = await db
+      .select({
+        date: sql<string>`to_char(${linkClicks.createdAt} AT TIME ZONE 'Pacific/Auckland', 'YYYY-MM-DD')`,
+        clicks: sql<number>`count(*)::int`,
+      })
+      .from(linkClicks)
+      .where(and(
+        eq(linkClicks.linkId, linkId),
+        eq(linkClicks.isBot, false),
+        gt(linkClicks.createdAt, since),
+      ))
+      .groupBy(sql`1`)
+      .orderBy(sql`1`);
+    const dailyClicks = dayRows.map((r) => ({ date: r.date, clicks: Number(r.clicks) || 0 }));
+    const totalClicks = dailyClicks.reduce((s, d) => s + d.clicks, 0);
+
+    // Conversions attributed to THIS link = conversion rows whose click_id was
+    // one of the link's minted (non-bot) click ids. One CTE feeds every table so
+    // it's a single round-trip. Kinds mark revenue (sale) vs lead surfaces.
+    const SOURCES: Array<{ table: string; kind: "lead" | "sale" }> = [
+      { table: "registrations", kind: "sale" },
+      { table: "cugc_registrations", kind: "sale" },
+      { table: "print_orders", kind: "sale" },
+      { table: "league_waitlist", kind: "lead" },
+      { table: "cugc_free_sessions", kind: "lead" },
+      { table: "cic7s_registrations", kind: "lead" },
+      { table: "football_institute_applications", kind: "lead" },
+      { table: "booking_requests", kind: "lead" },
+    ];
+    const unions = SOURCES.map(
+      (s) => sql`select ${s.table} as source, count(*)::int as n from ${sql.raw(s.table)} where click_id in (select click_id from cids)`,
+    );
+    const convSql = sql`with cids as (select click_id from link_clicks where link_id = ${linkId} and is_bot = false and click_id is not null) ${sql.join(unions, sql` union all `)}`;
+    const convRes = await db.execute(convSql);
+    const countBySource = new Map<string, number>();
+    for (const row of (convRes.rows as Array<{ source: string; n: number }>)) {
+      countBySource.set(row.source, Number(row.n) || 0);
+    }
+
+    const conversions = SOURCES.map((s) => ({
+      source: s.table,
+      kind: s.kind,
+      count: countBySource.get(s.table) ?? 0,
+    }));
+    const totalLeads = conversions.filter((c) => c.kind === "lead").reduce((s, c) => s + c.count, 0);
+    const totalSales = conversions.filter((c) => c.kind === "sale").reduce((s, c) => s + c.count, 0);
+
+    return {
+      linkId,
+      days: windowDays,
+      totalClicks,
+      totalConversions: totalLeads + totalSales,
+      totalLeads,
+      totalSales,
+      dailyClicks,
+      conversions,
+    };
   }
 }
 

@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth } from "./auth";
+import { attributionCookieMiddleware } from "./attribution-cookies";
 
 const app = express();
 const httpServer = createServer(app);
@@ -65,6 +66,11 @@ app.use((req, res, next) => {
 
   next();
 });
+
+// AttributionOS (T4): ensure first-party usg_vid / usg_cid cookies on real page
+// loads, before any route runs. Defensive — never throws, never touches /api or
+// static assets. See server/attribution-cookies.ts.
+app.use(attributionCookieMiddleware);
 
 (async () => {
   const { seedDatabase, migrateScheduleData } = await import("./seed");
@@ -176,6 +182,15 @@ app.use((req, res, next) => {
   // External API security: nightly retention pruning of the key audit tables.
   const { startApiSecurityJobs } = await import("./api-security");
   startApiSecurityJobs();
+
+  // AttributionOS: daily Meta ad-spend sync (no-op without META_ACCESS_TOKEN + accounts).
+  const { startAdSpendCron } = await import("./ad-spend-cron");
+  startAdSpendCron();
+
+  // AttributionOS: nightly data-quality guards (prune stale page views, bot-flag
+  // backstop, short-link counter reconciliation).
+  const { startAttributionMaintenanceCron } = await import("./attribution-maintenance-cron");
+  startAttributionMaintenanceCron();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

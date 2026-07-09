@@ -9,7 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link, useLocation } from "wouter";
 import { ArrowLeft, Plus, X, User, Calendar, CreditCard, ShieldCheck, Clock, ArrowRight, CheckCircle, Lock, Sparkles, Heart, Tag } from "lucide-react";
-import { trackEvent, getFbp, getFbc, generateEventId } from "@/lib/meta-pixel";
+import { trackEvent, getFbp, getFbc } from "@/lib/meta-pixel";
+import { purchaseEventId } from "@shared/meta-events";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { brandForOrg, type CampBrand } from "@/lib/camp-brand";
@@ -146,14 +147,14 @@ function PaymentFormInner({ slug, registrationId, totalCents, parentEmail, paren
           });
         } catch {}
 
-        const eventId = generateEventId();
+        // Deterministic id → dedups with the server CAPI Purchase (handlePaymentSuccess).
         trackEvent("Purchase", {
           value: totalCents / 100,
           currency,
           content_name: campName,
           content_ids: [String(registrationId)],
           num_items: itemCount,
-        }, eventId);
+        }, purchaseEventId(registrationId));
 
         try {
           const sv = (window as any)._cufc_split_variants;
