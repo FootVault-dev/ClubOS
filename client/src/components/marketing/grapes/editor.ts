@@ -22,6 +22,7 @@ import grapesjsMjml from "grapesjs-mjml";
 import "grapesjs/dist/css/grapes.min.css";
 import "./premium.css";
 import { registerBlocks } from "./blocks";
+import { registerClubBlocks } from "./club-blocks";
 import { applyBrandTheme, brandCanvasTheme, brandColorPalette, buildStarterMjml } from "./brand";
 
 // ── doc + result shapes ───────────────────────────────────────────────────────
@@ -281,6 +282,7 @@ export function createEmailEditor({ container, brandKey, initialDoc }: CreateEma
   });
 
   registerBlocks(editor, brandKey, { brand });
+  registerClubBlocks(editor, brandKey);
   applyBrandTheme(editor, brandKey);
   loadDoc(editor, initialDoc, brandKey);
 
