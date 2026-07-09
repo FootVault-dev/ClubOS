@@ -7,7 +7,7 @@
 // campaigns — audience-estimate reads audience off the saved row — so the
 // wizard always has a real id to PATCH against from step 1 onward).
 import { useEffect, useRef, useState, Component, type ReactNode, Suspense, lazy } from "react";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -18,17 +18,24 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ChevronLeft, ChevronRight, Check, X, Loader2, Send, CalendarClock, Users, Mail, Code2 } from "lucide-react";
-import type { MktCampaign, MktList, MktSegment, AudienceRef, CampaignAudience, AudienceEstimate } from "./types";
+import { ChevronLeft, ChevronRight, Check, X, Loader2, Send, CalendarClock, Users, Mail, MessageSquare, Code2 } from "lucide-react";
+import type { MktCampaign, MktList, MktSegment, AudienceRef, CampaignAudience, AudienceEstimate, SmsCampaignPreview, MktChannel } from "./types";
 import { fmtDateTime } from "./ui";
+import { formatCurrency } from "@/lib/format";
 import type { EmailBuilderResult } from "@/components/marketing/EmailBuilder";
 import TemplatePicker from "@/components/marketing/TemplatePicker";
+
+// Real money per SMS send — the send-confirm friction (type the recipient
+// count) kicks in above this estimated cost. $50 NZD ex-GST.
+const SMS_CONFIRM_COST_THRESHOLD_CENTS = 5000;
 
 // Mirrors server/marketing/brand.ts BRAND_KEY_BY_ORG — client-side copy since
 // that file lives under server/ and can't be imported from the browser bundle.
@@ -55,8 +62,13 @@ export default function CampaignWizard() {
   const { toast } = useToast();
   const { currentOrg } = useWorkspace();
   const [, setLocation] = useLocation();
+  const search = useSearch();
   const [editMatch, editParams] = useRoute("/admin/marketing/campaigns/:id/edit");
   const editId = editMatch ? Number(editParams?.id) : null;
+  // Channel is chosen on "New campaign" (Campaigns.tsx) via ?channel=sms|email
+  // and baked into the draft at creation — an edit-mode load overrides it from
+  // the saved row (see the init effect below).
+  const channelFromQuery: MktChannel = new URLSearchParams(search).get("channel") === "sms" ? "sms" : "email";
 
   const [step, setStep] = useState(0);
   const [campaignId, setCampaignId] = useState<number | null>(editId);
@@ -65,6 +77,7 @@ export default function CampaignWizard() {
 
   // form state
   const [name, setName] = useState("Untitled campaign");
+  const [channel, setChannel] = useState<MktChannel>(channelFromQuery);
   const [audienceMode, setAudienceMode] = useState<"all" | "specific">("all");
   const [include, setInclude] = useState<AudienceRef[]>([]);
   const [exclude, setExclude] = useState<AudienceRef[]>([]);
@@ -82,10 +95,15 @@ export default function CampaignWizard() {
   const [builderKey, setBuilderKey] = useState(0);
   const [builderResult, setBuilderResult] = useState<EmailBuilderResult | null>(null);
   const [testEmail, setTestEmail] = useState("");
+  // SMS-only content state (channel === 'sms').
+  const [smsBody, setSmsBody] = useState("");
+  const [allowUnicode, setAllowUnicode] = useState(false);
+  const [testPhone, setTestPhone] = useState("");
   const [sendMode, setSendMode] = useState<"now" | "schedule">("now");
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("10:00");
   const [confirmSend, setConfirmSend] = useState(false);
+  const [confirmCountInput, setConfirmCountInput] = useState(""); // send-confirm friction for expensive SMS sends
   const [blocked, setBlocked] = useState<string | null>(null);
 
   const { data: lists = [] } = useQuery<MktList[]>({ queryKey: ["/api/admin/marketing/lists"] });
@@ -93,10 +111,10 @@ export default function CampaignWizard() {
 
   const createDraft = useMutation({
     mutationFn: async () => {
-      const r = await apiRequest("POST", "/api/admin/marketing/campaigns", { name: "Untitled campaign", channel: "email" });
+      const r = await apiRequest("POST", "/api/admin/marketing/campaigns", { name: "Untitled campaign", channel: channelFromQuery });
       return r.json() as Promise<MktCampaign>;
     },
-    onSuccess: (row) => { setCampaignId(row.id); setLoaded(true); },
+    onSuccess: (row) => { setCampaignId(row.id); setChannel(row.channel === "sms" ? "sms" : "email"); setLoaded(true); },
     onError: (e: any) => toast({ title: "Couldn't start a new campaign", description: e.message, variant: "destructive" }),
   });
 
@@ -113,15 +131,22 @@ export default function CampaignWizard() {
       initRef.current = true;
       if (existing.status !== "draft") { setBlocked(existing.status); return; }
       setName(existing.name);
+      const ch: MktChannel = existing.channel === "sms" ? "sms" : "email";
+      setChannel(ch);
       const aud = existing.audience || {};
       const inc = aud.include ?? [];
       if (inc.some((r) => r.type === "all")) { setAudienceMode("all"); }
       else { setAudienceMode("specific"); setInclude(inc); }
       setExclude(aud.exclude ?? []);
-      setSubject(existing.subject ?? "");
-      setPreheader(existing.preheader ?? "");
-      setReplyTo(existing.replyTo ?? "");
-      setBodyHtml(existing.bodyHtml ?? "");
+      if (ch === "sms") {
+        setSmsBody(existing.bodyHtml ?? "");
+        setAllowUnicode(aud.smsOptions?.allowUnicode === true);
+      } else {
+        setSubject(existing.subject ?? "");
+        setPreheader(existing.preheader ?? "");
+        setReplyTo(existing.replyTo ?? "");
+        setBodyHtml(existing.bodyHtml ?? "");
+      }
       setLoaded(true);
     } else if (!initRef.current) {
       initRef.current = true;
@@ -139,7 +164,11 @@ export default function CampaignWizard() {
     onError: (e: any) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
   });
 
-  const currentAudience: CampaignAudience = audienceMode === "all" ? { include: [{ type: "all" }], exclude } : { include, exclude };
+  const currentAudience: CampaignAudience = {
+    ...(audienceMode === "all" ? { include: [{ type: "all" as const }] } : { include }),
+    exclude,
+    ...(channel === "sms" ? { smsOptions: { allowUnicode } } : {}),
+  };
 
   // Debounced audience autosave → re-estimate whenever include/exclude/mode changes.
   const estimate = useMutation({
@@ -168,6 +197,29 @@ export default function CampaignWizard() {
     mutationFn: () => apiRequest("POST", `/api/admin/marketing/campaigns/${campaignId}/test-email`, { to: testEmail.trim() }).then((r) => r.json()),
     onSuccess: (r: { ok: boolean; skipped?: boolean }) =>
       toast(r.ok ? { title: "Test sent", description: `Check ${testEmail}` } : { title: "Test failed", description: r.skipped ? "Resend isn't configured in this environment." : "Check the address and try again.", variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't send test", description: e.message, variant: "destructive" }),
+  });
+
+  // Live SMS cost/encoding preview (debounced) — runs the SAME compose pipeline
+  // the send worker uses, so what's shown while typing matches what gets sent.
+  const smsPreview = useMutation({
+    mutationFn: async () => {
+      if (!campaignId) return null;
+      const r = await apiRequest("POST", `/api/admin/marketing/campaigns/${campaignId}/sms-preview`, { body: smsBody, allowUnicode });
+      return r.json() as Promise<SmsCampaignPreview>;
+    },
+  });
+  useEffect(() => {
+    if (!campaignId || !loaded || channel !== "sms") return;
+    const t = setTimeout(() => smsPreview.mutate(), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId, loaded, channel, smsBody, allowUnicode]);
+
+  const testSms = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/admin/marketing/campaigns/${campaignId}/test-sms`, { to: testPhone.trim() }).then((r) => r.json()),
+    onSuccess: (r: { ok: boolean }) =>
+      toast(r.ok ? { title: "Test sent", description: `Check ${testPhone}` } : { title: "Test failed", description: "Check the number and try again.", variant: "destructive" }),
     onError: (e: any) => toast({ title: "Couldn't send test", description: e.message, variant: "destructive" }),
   });
 
@@ -201,20 +253,32 @@ export default function CampaignWizard() {
   }
 
   const sendableCount = (step === 0 ? estimate.data : reviewEstimate.data)?.sendable ?? null;
-  const contentOk = stripHtml(bodyHtml).length > 0;
+  const contentOk = channel === "sms" ? smsBody.trim().length > 0 : stripHtml(bodyHtml).length > 0;
   // What "Save current as template" saves: the rich editor's last compiled
   // result in that mode, or a synthetic { doc: null, html, text } built from
   // the plain-HTML textarea in simple mode — either way, whatever's on screen.
   const currentBuilderResult: EmailBuilderResult | null = simpleMode
     ? (bodyHtml.trim() ? { doc: null, html: bodyHtml, text: stripHtml(bodyHtml) } : null)
     : builderResult;
-  const subjectOk = subject.trim().length > 0;
+  const subjectOk = channel === "sms" ? true : subject.trim().length > 0; // SMS has no subject line
   const audienceOk = (sendableCount ?? 0) > 0;
   const reviewOk = contentOk && subjectOk && audienceOk;
 
+  // Real-money friction: an SMS send over $50 (ex-GST) requires typing the
+  // exact recipient count to confirm before either send button is enabled.
+  const smsCostCents = channel === "sms" ? (smsPreview.data?.estCostCents ?? 0) : 0;
+  const needsCountConfirm = channel === "sms" && smsCostCents > SMS_CONFIRM_COST_THRESHOLD_CENTS;
+  const countConfirmed = !needsCountConfirm || Number(confirmCountInput.trim()) === (sendableCount ?? -1);
+
   const goStep = async (next: number) => {
     if (step === 0) await patch.mutateAsync({ name: name.trim() || "Untitled campaign", audience: currentAudience });
-    if (step === 1) await patch.mutateAsync({ subject: subject.trim(), preheader: preheader.trim() || null, replyTo: replyTo.trim() || null, bodyHtml });
+    if (step === 1) {
+      if (channel === "sms") {
+        await patch.mutateAsync({ bodyHtml: smsBody, audience: currentAudience });
+      } else {
+        await patch.mutateAsync({ subject: subject.trim(), preheader: preheader.trim() || null, replyTo: replyTo.trim() || null, bodyHtml });
+      }
+    }
     setStep(next);
   };
 
@@ -255,7 +319,7 @@ export default function CampaignWizard() {
           )}
 
           <Card>
-            <CardContent className="p-4 grid grid-cols-3 gap-3 text-center">
+            <CardContent className={`p-4 grid ${channel === "sms" ? "grid-cols-4" : "grid-cols-3"} gap-3 text-center`}>
               <div>
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Total</p>
                 <p className="text-xl font-bold">{estimate.isPending ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (estimate.data?.total ?? "—")}</p>
@@ -264,6 +328,12 @@ export default function CampaignWizard() {
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Suppressed</p>
                 <p className="text-xl font-bold text-muted-foreground">{estimate.isPending ? "…" : (estimate.data?.suppressed ?? "—")}</p>
               </div>
+              {channel === "sms" && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground">No phone</p>
+                  <p className="text-xl font-bold text-muted-foreground">{estimate.isPending ? "…" : (estimate.data?.noPhone ?? "—")}</p>
+                </div>
+              )}
               <div>
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Sendable</p>
                 <p className="text-2xl font-extrabold text-emerald-500" data-testid="mkt-wizard-sendable">{estimate.isPending ? <Loader2 className="w-5 h-5 animate-spin mx-auto text-emerald-500" /> : (estimate.data?.sendable ?? "—")}</p>
@@ -275,7 +345,16 @@ export default function CampaignWizard() {
         </div>
       )}
 
-      {step === 1 && (
+      {step === 1 && channel === "sms" && (
+        <SmsContentStep
+          smsBody={smsBody} setSmsBody={setSmsBody}
+          allowUnicode={allowUnicode} setAllowUnicode={setAllowUnicode}
+          preview={smsPreview.data} previewPending={smsPreview.isPending}
+          onBack={() => setStep(0)} onNext={() => goStep(2)} nextDisabled={patch.isPending || !contentOk}
+        />
+      )}
+
+      {step === 1 && channel === "email" && (
         <div className="space-y-4">
           <div>
             <Label htmlFor="mkt-wizard-subject">Subject</Label>
@@ -336,7 +415,45 @@ export default function CampaignWizard() {
         </div>
       )}
 
-      {step === 2 && (
+      {step === 2 && channel === "sms" && (
+        <div className="space-y-4">
+          <div className="rounded-xl border divide-y">
+            <ComplianceRow ok label="Reply STOP to opt out" note="Appended automatically to every marketing SMS." />
+            <ComplianceRow ok label="Quiet hours (8pm–8am NZ)" note="A send that lands in the quiet window queues automatically to 8am NZ — nothing texts overnight." />
+            <ComplianceRow ok={contentOk} label="Message present" note={contentOk ? "Body has content." : "Add a message in step 2."} />
+            <ComplianceRow
+              ok={audienceOk}
+              label={`${sendableCount ?? "…"} recipients with express consent (sendable)`}
+              note={reviewEstimate.isLoading ? "Checking…" : audienceOk ? "Ready to send." : "0 sendable — check your audience, consent, and phone numbers in step 1."}
+            />
+          </div>
+
+          <Card>
+            <CardContent className="p-4 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Estimated cost</span>
+              <span className="font-semibold" data-testid="mkt-wizard-sms-cost">
+                {smsPreview.data ? `${formatCurrency(smsPreview.data.estCostCents, { fromCents: true })} + GST for ${smsPreview.data.totalMessages.toLocaleString()} messages` : "—"}
+              </span>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4 space-y-2">
+              <Label htmlFor="mkt-wizard-test-phone">Send a test</Label>
+              <div className="flex gap-2">
+                <Input id="mkt-wizard-test-phone" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+64211234567" data-testid="mkt-wizard-test-phone" />
+                <Button variant="outline" onClick={() => testSms.mutate()} disabled={!testPhone.trim() || testSms.isPending} data-testid="mkt-wizard-test-send-sms">
+                  {testSms.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageSquare className="w-4 h-4" />}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <WizardFooter onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!reviewOk} nextLabel="Continue to send" />
+        </div>
+      )}
+
+      {step === 2 && channel === "email" && (
         <div className="space-y-4">
           <div className="rounded-xl border divide-y">
             <ComplianceRow ok label="One-click unsubscribe headers" note="Added automatically to every marketing send (RFC 8058)." />
@@ -394,19 +511,38 @@ export default function CampaignWizard() {
           <Card>
             <CardContent className="p-4 text-sm space-y-1">
               <p><span className="text-muted-foreground">Campaign:</span> {name}</p>
-              <p><span className="text-muted-foreground">Subject:</span> {subject}</p>
+              {channel === "email" ? (
+                <p><span className="text-muted-foreground">Subject:</span> {subject}</p>
+              ) : (
+                <p className="line-clamp-2"><span className="text-muted-foreground">Message:</span> {smsPreview.data?.finalBody || smsBody}</p>
+              )}
               <p><span className="text-muted-foreground">Sendable:</span> {reviewEstimate.data?.sendable ?? sendableCount ?? "—"} recipients</p>
+              {channel === "sms" && smsPreview.data && (
+                <p><span className="text-muted-foreground">Estimated cost:</span> {formatCurrency(smsPreview.data.estCostCents, { fromCents: true })} + GST</p>
+              )}
             </CardContent>
           </Card>
+
+          {needsCountConfirm && (
+            <Card className="border-amber-500/40">
+              <CardContent className="p-4 space-y-2">
+                <p className="text-sm text-amber-500 font-medium">
+                  This is a real-money send — an estimated {formatCurrency(smsCostCents, { fromCents: true })} + GST for {sendableCount ?? 0} messages.
+                </p>
+                <Label htmlFor="mkt-wizard-confirm-count" className="text-xs text-muted-foreground">Type {sendableCount ?? 0} to confirm before sending or scheduling</Label>
+                <Input id="mkt-wizard-confirm-count" value={confirmCountInput} onChange={(e) => setConfirmCountInput(e.target.value)} placeholder={`${sendableCount ?? 0}`} data-testid="mkt-wizard-confirm-count" />
+              </CardContent>
+            </Card>
+          )}
 
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="w-4 h-4 mr-1" /> Back</Button>
             {sendMode === "now" ? (
-              <Button onClick={() => setConfirmSend(true)} disabled={!reviewOk || sendNow.isPending} data-testid="mkt-wizard-send-now">
+              <Button onClick={() => setConfirmSend(true)} disabled={!reviewOk || sendNow.isPending || !countConfirmed} data-testid="mkt-wizard-send-now">
                 <Send className="w-4 h-4 mr-1.5" /> Send to {sendableCount ?? 0} now
               </Button>
             ) : (
-              <Button onClick={() => schedule.mutate()} disabled={!reviewOk || !scheduleDate || schedule.isPending} data-testid="mkt-wizard-schedule">
+              <Button onClick={() => schedule.mutate()} disabled={!reviewOk || !scheduleDate || schedule.isPending || !countConfirmed} data-testid="mkt-wizard-schedule">
                 {schedule.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <CalendarClock className="w-4 h-4 mr-1.5" />} Schedule send
               </Button>
             )}
@@ -424,7 +560,7 @@ export default function CampaignWizard() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => sendNow.mutate()} disabled={sendNow.isPending} data-testid="mkt-wizard-confirm-send">
+            <AlertDialogAction onClick={() => sendNow.mutate()} disabled={sendNow.isPending || !countConfirmed} data-testid="mkt-wizard-confirm-send">
               {sendNow.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : null} Send now
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -441,6 +577,88 @@ function WizardFooter({ onBack, onNext, nextDisabled, nextLabel }: { onBack?: ()
       <Button onClick={onNext} disabled={nextDisabled} data-testid="mkt-wizard-next">
         {nextLabel ?? "Continue"} <ChevronRight className="w-4 h-4 ml-1" />
       </Button>
+    </div>
+  );
+}
+
+// SMS "Content" step (channel === 'sms') — the message textarea + live
+// feedback: char/segment count, GSM-7-vs-Unicode encoding badge, the
+// auto-appended "Reply STOP to opt out" suffix shown greyed inline, a
+// sanitize-notice for any character sanitizeToGsm7 stripped, and the
+// allowUnicode override with its cost warning.
+const STOP_SUFFIX_MARKER = "Reply STOP to opt out";
+function SmsContentStep({
+  smsBody, setSmsBody, allowUnicode, setAllowUnicode, preview, previewPending, onBack, onNext, nextDisabled,
+}: {
+  smsBody: string; setSmsBody: (v: string) => void;
+  allowUnicode: boolean; setAllowUnicode: (v: boolean) => void;
+  preview?: SmsCampaignPreview | null; previewPending: boolean;
+  onBack: () => void; onNext: () => void; nextDisabled?: boolean;
+}) {
+  const finalBody = preview?.finalBody ?? "";
+  const suffixIdx = finalBody.indexOf(STOP_SUFFIX_MARKER);
+  const mainPart = suffixIdx >= 0 ? finalBody.slice(0, suffixIdx) : finalBody;
+  const suffixPart = suffixIdx >= 0 ? finalBody.slice(suffixIdx) : "";
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label htmlFor="mkt-wizard-sms-body">Message</Label>
+        <Textarea
+          id="mkt-wizard-sms-body" value={smsBody} onChange={(e) => setSmsBody(e.target.value)} rows={6}
+          placeholder="Training moved to 6pm tonight, same field. See you there!" data-testid="mkt-wizard-sms-body"
+        />
+      </div>
+
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span className="text-xs text-muted-foreground">
+          {previewPending ? <Loader2 className="w-3.5 h-3.5 animate-spin inline" /> : `${preview?.chars ?? 0} chars · ${preview?.segments ?? 0} segment${(preview?.segments ?? 0) === 1 ? "" : "s"}`}
+        </span>
+        {preview && (
+          <Badge variant="outline" className={preview.encoding === "ucs2" ? "text-amber-500 border-amber-500/30 bg-amber-500/10" : "text-emerald-500 border-emerald-500/30 bg-emerald-500/10"}>
+            {preview.encoding === "ucs2" ? "Unicode — costs more" : "GSM-7"}
+          </Badge>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-dashed p-3 text-xs" data-testid="mkt-wizard-sms-preview">
+        <p className="text-muted-foreground mb-1">Preview — what actually sends:</p>
+        {finalBody ? (
+          <p>
+            <span>{mainPart}</span>
+            {suffixPart && <span className="text-muted-foreground/60">{suffixPart}</span>}
+          </p>
+        ) : (
+          <p className="text-muted-foreground">Start typing above…</p>
+        )}
+      </div>
+
+      {!allowUnicode && (preview?.sanitizedRemoved?.length ?? 0) > 0 && (
+        <p className="text-xs text-amber-500" data-testid="mkt-wizard-sanitize-notice">
+          Removed non-SMS characters (smart quotes, emoji, etc): <span className="font-mono">{preview!.sanitizedRemoved.join(" ")}</span> — turn on "Allow unicode" below to keep them.
+        </p>
+      )}
+
+      <label className="flex items-center gap-2 text-xs cursor-pointer">
+        <Switch checked={allowUnicode} onCheckedChange={setAllowUnicode} data-testid="mkt-wizard-allow-unicode" />
+        Allow unicode / emoji — uses UCS-2 encoding (up to 3x the segments and cost per message)
+      </label>
+
+      <Card>
+        <CardContent className="p-4 grid grid-cols-2 gap-3 text-center">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Messages</p>
+            <p className="text-xl font-bold">{previewPending ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (preview?.totalMessages ?? "—")}</p>
+          </div>
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Est. cost</p>
+            <p className="text-xl font-bold">{preview ? `${formatCurrency(preview.estCostCents, { fromCents: true })} + GST` : "—"}</p>
+          </div>
+        </CardContent>
+      </Card>
+      <p className="text-[11px] text-muted-foreground">"Reply STOP to opt out" is added automatically to every marketing SMS — no need to include it yourself.</p>
+
+      <WizardFooter onBack={onBack} onNext={onNext} nextDisabled={nextDisabled} />
     </div>
   );
 }

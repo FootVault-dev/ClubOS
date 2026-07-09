@@ -49,9 +49,12 @@ export default function CampaignDetailPage() {
     return <div className="p-4 sm:p-6"><LoadingRows rows={6} /></div>;
   }
 
-  const { campaign, funnel, engagement, kpis, links, conversions } = data;
-  const progressPct = campaign.status === "sending" && campaign.recipientCount > 0 ? Math.round((funnel.sent / campaign.recipientCount) * 100) : undefined;
-  const deliveredPct = funnel.sent > 0 ? funnel.delivered / funnel.sent : 0;
+  const { campaign, funnel, engagement, kpis, links = [], conversions, smsFunnel, smsCost, smsInboundStopCount } = data;
+  const isSms = campaign.channel === "sms";
+  const progressPct = campaign.status === "sending" && campaign.recipientCount > 0
+    ? Math.round(((isSms ? smsFunnel?.sent ?? 0 : funnel?.sent ?? 0) / campaign.recipientCount) * 100)
+    : undefined;
+  const deliveredPct = !isSms && funnel && funnel.sent > 0 ? funnel.delivered / funnel.sent : 0;
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-5xl">
@@ -80,61 +83,92 @@ export default function CampaignDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Delivered" value={`${funnel.delivered}/${funnel.sent}`} sub={funnel.sent ? pct(deliveredPct) : undefined} />
-        <StatCard label="Human clicks — bots filtered" value={engagement.humanClickCount} sub={`${engagement.botClickCount} bot clicks filtered out`} tone="good" />
-        <StatCard label="Conversions & revenue" value={formatCurrency(conversions.revenue)} sub={`${conversions.count} conversion${conversions.count === 1 ? "" : "s"}`} tone="good" />
-        <StatCard label="Revenue per recipient" value={formatCurrency(kpis.revenuePerRecipient, { decimals: 2 })} />
-      </div>
-
-      <StatCard
-        label="Opens"
-        value={engagement.uniqueOpens}
-        sub={`inflated by Apple Mail Privacy Protection — directional only (${engagement.machineOpenCount} of ${engagement.openCount} total opens flagged machine)`}
-        muted
-      />
-
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Funnel</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <FunnelRow label="Queued" value={funnel.total} max={funnel.total} />
-          <FunnelRow label="Sent" value={funnel.sent} max={funnel.total} />
-          <FunnelRow label="Delivered" value={funnel.delivered} max={funnel.total} />
-          <FunnelRow label="Human clicks" value={engagement.humanClickCount} max={funnel.total} color="hsl(160 84% 39%)" />
-          <FunnelRow label="Conversions" value={conversions.count} max={funnel.total} color="hsl(45 93% 47%)" />
-          <div className="grid grid-cols-3 gap-3 pt-2 text-xs text-muted-foreground">
-            <span>{funnel.bounced} bounced</span>
-            <span>{funnel.complained} complained</span>
-            <span>{funnel.unsubscribed} unsubscribed</span>
+      {isSms && smsFunnel ? (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard label="Sent" value={smsFunnel.sent} sub={`of ${campaign.recipientCount} recipients`} />
+            <StatCard label="Delivered" value={smsFunnel.delivered} sub={smsFunnel.sent ? pct(smsFunnel.delivered / smsFunnel.sent) : undefined} tone="good" />
+            <StatCard label="Failed" value={smsFunnel.failed} tone={smsFunnel.failed ? "warn" : "default"} />
+            <StatCard label="Actual cost" value={formatCurrency(smsCost?.actualCents ?? 0, { fromCents: true, decimals: 2 })} sub="+ GST" />
           </div>
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Link clicks</CardTitle></CardHeader>
-        <CardContent>
-          {!links.length ? (
-            <p className="text-sm text-muted-foreground py-6 text-center">No clicks recorded yet.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow><TableHead>Link</TableHead><TableHead className="text-right">Human clicks</TableHead><TableHead className="text-right">Bot clicks</TableHead></TableRow>
-                </TableHeader>
-                <TableBody>
-                  {links.map((l) => (
-                    <TableRow key={l.linkUrl}>
-                      <TableCell className="max-w-xs truncate flex items-center gap-1.5"><Link2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />{l.linkUrl}</TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">{l.humanClicks}</TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">{l.clicks - l.humanClicks}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          <StatCard
+            label="STOP replies"
+            value={smsInboundStopCount ?? 0}
+            sub="from numbers this campaign texted, since it sent — each one is opted out globally"
+            tone={smsInboundStopCount ? "warn" : "default"}
+            testId="mkt-detail-sms-stop-count"
+          />
+
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Funnel</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <FunnelRow label="Queued" value={smsFunnel.queued} max={smsFunnel.total} />
+              <FunnelRow label="Sent" value={smsFunnel.sent} max={smsFunnel.total} />
+              <FunnelRow label="Delivered" value={smsFunnel.delivered} max={smsFunnel.total} color="hsl(160 84% 39%)" />
+              <FunnelRow label="Failed" value={smsFunnel.failed} max={smsFunnel.total} color="hsl(0 84% 60%)" />
+            </CardContent>
+          </Card>
+        </>
+      ) : funnel && engagement && kpis && conversions ? (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard label="Delivered" value={`${funnel.delivered}/${funnel.sent}`} sub={funnel.sent ? pct(deliveredPct) : undefined} />
+            <StatCard label="Human clicks — bots filtered" value={engagement.humanClickCount} sub={`${engagement.botClickCount} bot clicks filtered out`} tone="good" />
+            <StatCard label="Conversions & revenue" value={formatCurrency(conversions.revenue)} sub={`${conversions.count} conversion${conversions.count === 1 ? "" : "s"}`} tone="good" />
+            <StatCard label="Revenue per recipient" value={formatCurrency(kpis.revenuePerRecipient, { decimals: 2 })} />
+          </div>
+
+          <StatCard
+            label="Opens"
+            value={engagement.uniqueOpens}
+            sub={`inflated by Apple Mail Privacy Protection — directional only (${engagement.machineOpenCount} of ${engagement.openCount} total opens flagged machine)`}
+            muted
+          />
+
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Funnel</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <FunnelRow label="Queued" value={funnel.total} max={funnel.total} />
+              <FunnelRow label="Sent" value={funnel.sent} max={funnel.total} />
+              <FunnelRow label="Delivered" value={funnel.delivered} max={funnel.total} />
+              <FunnelRow label="Human clicks" value={engagement.humanClickCount} max={funnel.total} color="hsl(160 84% 39%)" />
+              <FunnelRow label="Conversions" value={conversions.count} max={funnel.total} color="hsl(45 93% 47%)" />
+              <div className="grid grid-cols-3 gap-3 pt-2 text-xs text-muted-foreground">
+                <span>{funnel.bounced} bounced</span>
+                <span>{funnel.complained} complained</span>
+                <span>{funnel.unsubscribed} unsubscribed</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Link clicks</CardTitle></CardHeader>
+            <CardContent>
+              {!links.length ? (
+                <p className="text-sm text-muted-foreground py-6 text-center">No clicks recorded yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow><TableHead>Link</TableHead><TableHead className="text-right">Human clicks</TableHead><TableHead className="text-right">Bot clicks</TableHead></TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {links.map((l) => (
+                        <TableRow key={l.linkUrl}>
+                          <TableCell className="max-w-xs truncate flex items-center gap-1.5"><Link2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />{l.linkUrl}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">{l.humanClicks}</TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">{l.clicks - l.humanClicks}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
 
       <p className="text-xs text-muted-foreground">Sent {fmtDateTime(campaign.sentAt)} · {campaign.recipientCount} recipients</p>
 

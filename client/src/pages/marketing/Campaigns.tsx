@@ -13,7 +13,8 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Plus, Send, Trash2 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Plus, Send, MessageSquare, Mail, Trash2 } from "lucide-react";
 import type { MktCampaign } from "./types";
 import { CampaignStatusBadge, EmptyState, LoadingRows, fmtDateTime } from "./ui";
 
@@ -42,9 +43,21 @@ export default function CampaignsView() {
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Button onClick={() => setLocation("/admin/marketing/campaigns/new")} data-testid="mkt-campaign-new">
-          <Plus className="w-4 h-4 mr-1.5" /> New campaign
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button data-testid="mkt-campaign-new">
+              <Plus className="w-4 h-4 mr-1.5" /> New campaign
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setLocation("/admin/marketing/campaigns/new?channel=email")} data-testid="mkt-campaign-new-email">
+              <Mail className="w-4 h-4 mr-2" /> Email campaign
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setLocation("/admin/marketing/campaigns/new?channel=sms")} data-testid="mkt-campaign-new-sms">
+              <MessageSquare className="w-4 h-4 mr-2" /> SMS campaign
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {isLoading ? (
@@ -53,8 +66,8 @@ export default function CampaignsView() {
         <EmptyState
           icon={Send}
           title="No campaigns yet — create your first"
-          description="Pick an audience, write your email and send it — with the suppression gate and unsubscribe compliance built in automatically."
-          action={<Button size="sm" className="mt-2" onClick={() => setLocation("/admin/marketing/campaigns/new")}>Create your first campaign</Button>}
+          description="Pick an audience, write your email or SMS and send it — with the suppression gate and unsubscribe compliance built in automatically."
+          action={<Button size="sm" className="mt-2" onClick={() => setLocation("/admin/marketing/campaigns/new?channel=email")}>Create your first campaign</Button>}
         />
       ) : (
         <div className="rounded-xl border overflow-x-auto">
@@ -74,7 +87,10 @@ export default function CampaignsView() {
                 return (
                   <TableRow key={c.id} className="cursor-pointer" onClick={() => setLocation(`/admin/marketing/campaigns/${c.id}`)} data-testid={`mkt-campaign-row-${c.id}`}>
                     <TableCell className="font-medium">
-                      {c.name}
+                      <div className="flex items-center gap-1.5">
+                        {c.channel === "sms" ? <MessageSquare className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <Mail className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+                        {c.name}
+                      </div>
                       {c.subject && <div className="text-xs text-muted-foreground truncate max-w-xs">{c.subject}</div>}
                     </TableCell>
                     <TableCell><CampaignStatusBadge status={c.status} progressPct={progressPct} /></TableCell>

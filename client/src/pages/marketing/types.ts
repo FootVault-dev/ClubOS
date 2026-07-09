@@ -64,19 +64,23 @@ export interface SegmentDefinition { all: ConditionGroup[] }
 
 // ── Campaigns ───────────────────────────────────────────────────────────────
 export interface AudienceRef { type: "list" | "segment" | "all"; id?: number }
-export interface CampaignAudience { include?: AudienceRef[]; exclude?: AudienceRef[] }
+// { allowUnicode } lives inside audience.smsOptions — see server/marketing/
+// campaign-sms.ts's file header for why (no schema change for SMS campaigns).
+export interface CampaignAudience { include?: AudienceRef[]; exclude?: AudienceRef[]; smsOptions?: { allowUnicode?: boolean } }
 
 export interface MktCampaign {
   id: number;
   workspaceId: number;
   name: string;
-  channel: string;
+  channel: MktChannel;
   subject: string | null;
   preheader: string | null;
   fromName: string | null;
   fromEmail: string | null;
   replyTo: string | null;
   templateId: number | null;
+  // For channel='sms' campaigns this holds the plain-text SMS body TEMPLATE
+  // (reused column — see server/marketing/campaign-sms.ts's header comment).
   bodyHtml: string | null;
   audience: CampaignAudience;
   smartSend: boolean;
@@ -101,23 +105,46 @@ export interface AudienceEstimate {
     excludedBySuppression: number;
     excludedNoIdentifier: number;
   };
+  // sms only — how many of the excluded were excluded for having no phone at all.
+  noPhone?: number;
+}
+
+// POST /campaigns/:id/sms-preview response — live cost/encoding preview for
+// the wizard's Content step (see server/marketing/routes.ts).
+export interface SmsCampaignPreview {
+  encoding: "gsm7" | "ucs2";
+  chars: number;
+  segments: number;
+  segmentLength: number;
+  offendingChars: string[];
+  finalBody: string;
+  sanitizedRemoved: string[];
+  segmentsPerMessage: number;
+  totalMessages: number;
+  centsPerSegment: number;
+  estCostCents: number;
 }
 
 export interface CampaignAnalytics {
-  campaign: { id: number; name: string; subject: string | null; status: CampaignStatus; sentAt: string | null; recipientCount: number };
-  funnel: {
+  campaign: { id: number; name: string; subject: string | null; status: CampaignStatus; sentAt: string | null; recipientCount: number; channel?: MktChannel };
+  // ── email ──
+  funnel?: {
     total: number; queued: number; sent: number; delivered: number;
     bounced: number; complained: number; failed: number; unsubscribed: number;
   };
-  engagement: {
+  engagement?: {
     uniqueOpens: number; uniqueClicks: number; openCount: number; humanOpenCount: number;
     machineOpenCount: number; clickCount: number; humanClickCount: number; botClickCount: number;
   };
-  kpis: {
+  kpis?: {
     humanClickRate: number; conversionRate: number; revenuePerRecipient: number; openRateMppInflated: number;
   };
-  links: { linkUrl: string; clicks: number; humanClicks: number }[];
-  conversions: { count: number; revenue: number };
+  links?: { linkUrl: string; clicks: number; humanClicks: number }[];
+  conversions?: { count: number; revenue: number };
+  // ── sms ──
+  smsFunnel?: { total: number; queued: number; sent: number; delivered: number; failed: number };
+  smsCost?: { actualCents: number; currency: string };
+  smsInboundStopCount?: number;
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────

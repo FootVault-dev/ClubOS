@@ -11,26 +11,45 @@
  *                          suppression gate, snapshot one mkt_email_messages row
  *                          per sendable recipient (idempotent via the
  *                          (campaign_id, profile_id) unique index), then fan out
- *                          campaign:send_batch jobs of 50.
- *   campaign:send_batch  — sequential send of ≤50 messages via the shared Resend
+ *                          campaign:send_batch jobs of 50. For channel='sms'
+ *                          campaigns, an NZ quiet-hours gate (D7) reschedules the
+ *                          WHOLE send to the next sendable instant instead of
+ *                          starting, then delegates to campaign:send_sms_batch.
+ *   campaign:send_batch  — sequential send of ≤50 EMAILS via the shared Resend
  *                          client, personalisation merge tags, per-message
  *                          try/catch → sent/failed + resend_email_id. Triggers
  *                          finalize when the campaign's queued backlog hits 0.
- *   campaign:finalize    — roll counts up to mkt_campaigns.status='sent'.
+ *   campaign:send_sms_batch — sequential send of ≤50 SMS via the configured
+ *                          SmsProvider (server/marketing/sms/): merge-tag render
+ *                          → sanitize to GSM-7 (unless the campaign's allowUnicode
+ *                          override) → opt-out suffix → mkt_sms_messages row +
+ *                          send. Re-checks quiet hours per batch (a big send can
+ *                          cross the 20:00 NZ boundary mid-flight). Triggers
+ *                          finalize once every recipient has a resolved status.
+ *   campaign:finalize    — roll counts up to mkt_campaigns.status='sent', from
+ *                          mkt_email_messages or mkt_sms_messages per channel.
  *
  * Scheduled sends: the route enqueues campaign:send with `runAt = scheduled_at`;
  * cancel just flips the campaign status, and the orchestrator bails on a
  * non-sending status when the job fires.
  *
- * Spec: synthesis §6 (Postgres job runner) + build directives (a)/(b).
+ * Spec: synthesis §6 (Postgres job runner) + build directives (a)/(b) + Phase F
+ * SMS campaigns (server/marketing/campaign-sms.ts holds the pure body/cost math).
  */
 
 import { run, makeWorkerUtils, type Runner, type WorkerUtils, type JobHelpers, type TaskList } from "graphile-worker";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../db";
-import { mktCampaigns, mktEmailMessages, mktProfiles } from "@shared/schema";
+import { mktCampaigns, mktEmailMessages, mktProfiles, mktSmsMessages } from "@shared/schema";
 import { resolveAudience } from "./segments";
 import { sendMarketingEmail } from "./resend-client";
+import { getSmsProvider, estimateCost } from "./sms";
+import { composeCampaignSmsBody, getCampaignAllowUnicode, campaignSmsCentsPerSegment, quietHoursDecision } from "./campaign-sms";
+// Aliased — this file already has its own (email-shaped, camelCase) local
+// MergeCtx interface below; flow-graph's is the snake_case {{tag}} shape
+// composeCampaignSmsBody expects. Same name, two different shapes — alias to
+// avoid the collision rather than rename either (each is right for its file).
+import type { MergeCtx as SmsMergeCtx } from "./flow-graph";
 import { brandKeyForWorkspace, brandShell, publicBaseUrl } from "./brand";
 import { signUnsubscribeToken, signPreferenceToken } from "./tokens";
 // Phase E — the flows runtime + nightly sweep. Imported lazily-at-call inside the
@@ -104,8 +123,20 @@ async function taskCampaignSend(payload: unknown, helpers: JobHelpers): Promise<
     helpers.logger.info(`campaign ${campaignId} status=${campaign.status} — skipping send`);
     return;
   }
-  if (campaign.channel !== "email") {
-    helpers.logger.info(`campaign ${campaignId} channel=${campaign.channel} — email engine only (SMS is Phase F)`);
+
+  if (campaign.channel === "sms") {
+    // Whole-campaign NZ quiet-hours gate (D7): reschedule the ENTIRE send
+    // rather than start mid-window. Checked BEFORE flipping to "sending" so a
+    // requeued send still reads as in-flight (the send-now route already set
+    // "sending"; a scheduled send stays "scheduled" until this fires for real).
+    const qh = quietHoursDecision(new Date());
+    if (qh.reschedule) {
+      helpers.logger.info(`campaign ${campaignId} sms send lands in NZ quiet hours — rescheduling to ${qh.runAt.toISOString()}`);
+      await helpers.addJob("campaign:send", { campaignId }, { runAt: qh.runAt, jobKey: `campaign-send:${campaignId}`, jobKeyMode: "replace" });
+      return;
+    }
+    await db.update(mktCampaigns).set({ status: "sending", updatedAt: new Date() }).where(eq(mktCampaigns.id, campaignId));
+    await taskCampaignSendSms(campaign, helpers);
     return;
   }
 
@@ -245,30 +276,167 @@ async function markFailed(messageId: number): Promise<void> {
   await db.update(mktEmailMessages).set({ status: "failed" }).where(eq(mktEmailMessages.id, messageId));
 }
 
+// ── Task: campaign:send (SMS orchestrator) ───────────────────────────────────
+// Called from taskCampaignSend once the whole-campaign quiet-hours gate has
+// passed and status='sending' is set. Mirrors the email orchestrator's shape
+// (resolve → snapshot → fan out batches) but adapted for mkt_sms_messages,
+// which — unlike mkt_email_messages' campaignProfileUnq — has NO
+// (campaign_id, profile_id) unique index (the brief added no schema for this
+// build), so idempotency on a resumed/requeued send is app-level: skip any
+// profile that already has a row for this campaign, checked here AND again
+// per-row in taskCampaignSendSmsBatch (belt and braces against two batch jobs
+// racing on the same profile).
+async function taskCampaignSendSms(campaign: typeof mktCampaigns.$inferSelect, helpers: JobHelpers): Promise<void> {
+  const resolved = await resolveAudience(
+    (campaign.audience as any) || {},
+    campaign.workspaceId,
+    { channel: "sms", isMarketing: campaign.isMarketing },
+  );
+  const sendable = resolved.gate?.sendable ?? [];
+
+  await db.update(mktCampaigns)
+    .set({ recipientCount: sendable.length, updatedAt: new Date() })
+    .where(eq(mktCampaigns.id, campaign.id));
+
+  if (sendable.length === 0) {
+    await helpers.addJob("campaign:finalize", { campaignId: campaign.id }, { jobKey: `finalize:${campaign.id}` });
+    return;
+  }
+
+  const already = await db.select({ profileId: mktSmsMessages.profileId }).from(mktSmsMessages)
+    .where(eq(mktSmsMessages.campaignId, campaign.id));
+  const alreadySet = new Set(already.map((a) => a.profileId).filter((n): n is number => n != null));
+  const pending = sendable.filter((p) => !alreadySet.has(p.id));
+
+  if (pending.length === 0) {
+    await helpers.addJob("campaign:finalize", { campaignId: campaign.id }, { jobKey: `finalize:${campaign.id}` });
+    return;
+  }
+
+  for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+    const profileIds = pending.slice(i, i + BATCH_SIZE).map((p) => p.id);
+    await helpers.addJob("campaign:send_sms_batch", { campaignId: campaign.id, profileIds });
+  }
+  helpers.logger.info(`campaign ${campaign.id}: queued ${pending.length} SMS in ${Math.ceil(pending.length / BATCH_SIZE)} batches`);
+}
+
+// ── Task: campaign:send_sms_batch ────────────────────────────────────────────
+async function taskCampaignSendSmsBatch(payload: unknown, helpers: JobHelpers): Promise<void> {
+  const { campaignId, profileIds } = (payload || {}) as { campaignId?: number; profileIds?: number[] };
+  if (!campaignId || !Array.isArray(profileIds) || profileIds.length === 0) return;
+
+  const [campaign] = await db.select().from(mktCampaigns).where(eq(mktCampaigns.id, campaignId)).limit(1);
+  if (!campaign) return;
+  if (campaign.status === "cancelled" || campaign.status === "paused") {
+    helpers.logger.info(`campaign ${campaignId} ${campaign.status} — sms batch aborted`);
+    return;
+  }
+
+  // Re-check quiet hours per batch — a large multi-batch send can cross the
+  // 20:00 NZ boundary mid-flight; reschedule just THIS batch, not the whole send.
+  const qh = quietHoursDecision(new Date());
+  if (qh.reschedule) {
+    await helpers.addJob("campaign:send_sms_batch", { campaignId, profileIds }, { runAt: qh.runAt });
+    return;
+  }
+
+  const profiles = await db.select({
+    id: mktProfiles.id, phoneE164: mktProfiles.phoneE164,
+    firstName: mktProfiles.firstName, lastName: mktProfiles.lastName, email: mktProfiles.email,
+  }).from(mktProfiles).where(inArray(mktProfiles.id, profileIds));
+  const profileById = new Map(profiles.map((p) => [p.id, p]));
+
+  const isMkt = campaign.isMarketing;
+  const allowUnicode = getCampaignAllowUnicode(campaign.audience);
+  const rawTemplate = campaign.bodyHtml || ""; // SMS body lives in body_html (see campaign-sms.ts header)
+  const provider = getSmsProvider();
+  const centsPerSegment = campaignSmsCentsPerSegment();
+
+  for (const pid of profileIds) {
+    const profile = profileById.get(pid);
+    if (!profile || !profile.phoneE164) continue; // the gate already filtered these out; defensive only
+
+    // Row-level idempotency re-check (belt and braces vs the orchestrator's
+    // check — protects against two batch jobs racing on the same profile).
+    const existing = await db.select({ id: mktSmsMessages.id }).from(mktSmsMessages)
+      .where(and(eq(mktSmsMessages.campaignId, campaignId), eq(mktSmsMessages.profileId, pid))).limit(1);
+    if (existing.length) continue;
+
+    const ctx: SmsMergeCtx = {
+      first_name: profile.firstName || "", last_name: profile.lastName || "", email: profile.email || "",
+      unsubscribe_url: "", preferences_url: "", // unused in SMS — STOP handles opt-out, not a link
+    };
+    const { finalBody, analysis } = composeCampaignSmsBody(rawTemplate, ctx, { isMarketing: isMkt, allowUnicode });
+
+    const [msg] = await db.insert(mktSmsMessages).values({
+      profileId: pid, phoneE164: profile.phoneE164, campaignId, body: finalBody,
+      encoding: analysis.encoding, segments: analysis.segments, provider: provider.name,
+      isMarketing: isMkt, status: "queued",
+    }).returning({ id: mktSmsMessages.id });
+
+    try {
+      const result = await provider.send({ to: profile.phoneE164, body: finalBody, clientRef: `${campaignId}:${pid}` });
+      await db.update(mktSmsMessages).set({
+        status: "sent", sentAt: new Date(), providerMessageId: result.providerMessageId,
+        segments: result.segments, costCents: result.costCentsEstimate ?? estimateCost(analysis.segments, 1, centsPerSegment),
+      }).where(eq(mktSmsMessages.id, msg.id));
+    } catch (err: any) {
+      helpers.logger.error(`campaign ${campaignId} sms msg ${msg.id} send failed: ${err?.message}`);
+      await db.update(mktSmsMessages).set({ status: "failed" }).where(eq(mktSmsMessages.id, msg.id));
+    }
+  }
+
+  // Once every sendable recipient has a resolved status, finalize (deduped by job_key).
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(mktSmsMessages)
+    .where(and(eq(mktSmsMessages.campaignId, campaignId), inArray(mktSmsMessages.status, ["sent", "delivered", "failed", "undelivered"])));
+  if (Number(n) >= campaign.recipientCount) {
+    await helpers.addJob("campaign:finalize", { campaignId }, { jobKey: `finalize:${campaignId}` });
+  }
+}
+
 // ── Task: campaign:finalize ──────────────────────────────────────────────────
 async function taskCampaignFinalize(payload: unknown, helpers: JobHelpers): Promise<void> {
   const { campaignId } = (payload || {}) as { campaignId?: number };
   if (!campaignId) return;
 
-  const [sentRow] = await db.select({ n: sql<number>`count(*)::int` })
-    .from(mktEmailMessages)
-    .where(and(eq(mktEmailMessages.campaignId, campaignId), inArray(mktEmailMessages.status, ["sent", "delivered"])));
-  const [failedRow] = await db.select({ n: sql<number>`count(*)::int` })
-    .from(mktEmailMessages)
-    .where(and(eq(mktEmailMessages.campaignId, campaignId), eq(mktEmailMessages.status, "failed")));
+  const [campaignRow] = await db.select({ channel: mktCampaigns.channel }).from(mktCampaigns).where(eq(mktCampaigns.id, campaignId)).limit(1);
+  const isSms = campaignRow?.channel === "sms";
+
+  let sentCount = 0;
+  let failedCount = 0;
+  if (isSms) {
+    const [sentRow] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(mktSmsMessages)
+      .where(and(eq(mktSmsMessages.campaignId, campaignId), inArray(mktSmsMessages.status, ["sent", "delivered"])));
+    const [failedRow] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(mktSmsMessages)
+      .where(and(eq(mktSmsMessages.campaignId, campaignId), inArray(mktSmsMessages.status, ["failed", "undelivered"])));
+    sentCount = Number(sentRow?.n ?? 0);
+    failedCount = Number(failedRow?.n ?? 0);
+  } else {
+    const [sentRow] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(mktEmailMessages)
+      .where(and(eq(mktEmailMessages.campaignId, campaignId), inArray(mktEmailMessages.status, ["sent", "delivered"])));
+    const [failedRow] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(mktEmailMessages)
+      .where(and(eq(mktEmailMessages.campaignId, campaignId), eq(mktEmailMessages.status, "failed")));
+    sentCount = Number(sentRow?.n ?? 0);
+    failedCount = Number(failedRow?.n ?? 0);
+  }
 
   await db.update(mktCampaigns).set({
     status: "sent", sentAt: new Date(),
-    sentCount: Number(sentRow?.n ?? 0), failedCount: Number(failedRow?.n ?? 0),
+    sentCount, failedCount,
     updatedAt: new Date(),
   }).where(and(eq(mktCampaigns.id, campaignId), ne(mktCampaigns.status, "cancelled")));
-  helpers.logger.info(`campaign ${campaignId} finalized: sent=${sentRow?.n} failed=${failedRow?.n}`);
+  helpers.logger.info(`campaign ${campaignId} finalized (${isSms ? "sms" : "email"}): sent=${sentCount} failed=${failedCount}`);
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 const taskList: TaskList = {
   "campaign:send": taskCampaignSend,
   "campaign:send_batch": taskCampaignSendBatch,
+  "campaign:send_sms_batch": taskCampaignSendSmsBatch,
   "campaign:finalize": taskCampaignFinalize,
   // Phase E — flows engine. `flow:step` advances one enrollment; `flow:sweep` is
   // the every-15-min cron that enrols date-property flows + derives the

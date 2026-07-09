@@ -17,10 +17,11 @@ import { requireAuth, requireTab } from "../auth";
 import {
   organizations, mktLists, mktListMembers, mktSegments, mktCampaigns, mktProfiles,
   mktConsent, mktSuppressions, mktEvents, mktMetrics, mktEmailMessages, mktEmailEvents, mktEmailLinkClicks, mktConversions,
-  mktTemplates, mktFlows, mktFlowVersions, mktFlowEnrollments, mktFlowStepRuns, mktSmsMessages,
+  mktTemplates, mktFlows, mktFlowVersions, mktFlowEnrollments, mktFlowStepRuns, mktSmsMessages, mktSmsInbound,
 } from "@shared/schema";
 import { registerMarketingWebhook } from "./webhook";
 import { registerMarketingPublicRoutes } from "./public-routes";
+import { registerSmsWebhookRoutes } from "./sms-webhook";
 import { resolveAudience, computeSegment, evaluateDefinition, type CampaignAudience } from "./segments";
 import { suppress, unsuppress, filterSendable } from "./suppression";
 import { sendMarketingEmail } from "./resend-client";
@@ -31,7 +32,12 @@ import { signUnsubscribeToken, signPreferenceToken } from "./tokens";
 import { enrollFromListAdd, saveDraftGraph, publishFlow, newestVersion } from "./flows";
 import { normalizeGraph } from "./flow-graph";
 import { FLOW_TEMPLATES, getFlowTemplate } from "./flow-templates";
-import { analyzeSms, appendOptOutSuffix, estimateCost } from "./sms";
+import { analyzeSms, appendOptOutSuffix, estimateCost, getSmsProvider, STOP_KEYWORDS } from "./sms";
+// Phase F — SMS campaign pure helpers (body compose + cost math), shared with worker.ts.
+import {
+  composeCampaignSmsBody, estimateCampaignSmsCostCents, campaignSmsCentsPerSegment,
+  getCampaignAllowUnicode,
+} from "./campaign-sms";
 
 // Resolve X-Workspace-Slug → org id (mirrors registerRoutes' workspaceOrg helper).
 async function workspaceOrg(req: Request): Promise<{ id: number; slug: string } | null> {
@@ -45,9 +51,11 @@ const gate = [requireAuth, requireTab("marketing")] as const;
 const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 
 export function registerMarketingRoutes(app: Express): void {
-  // Public (ungated) — the Resend webhook + unsubscribe/preference pages.
+  // Public (ungated) — the Resend webhook + unsubscribe/preference pages + the
+  // SMS provider's inbound/DLR webhooks (Phase F).
   registerMarketingWebhook(app);
   registerMarketingPublicRoutes(app);
+  registerSmsWebhookRoutes(app);
 
   // ════════════════════════════ LISTS ════════════════════════════
   app.get("/api/admin/marketing/lists", ...gate, async (req, res) => {
@@ -243,14 +251,82 @@ export function registerMarketingRoutes(app: Express): void {
   });
 
   // Audience estimate → {total, suppressed, sendable} (dry-run through the gate).
+  // Channel-aware: an sms campaign gates on channel='sms' (phone + sms consent)
+  // and surfaces `noPhone` — how many of the excluded profiles were excluded
+  // specifically for having no phone number at all, so the wizard can say "add
+  // phone numbers" instead of a generic "check consent" when sendable is 0.
   app.post("/api/admin/marketing/campaigns/:id/audience-estimate", ...gate, async (req, res) => {
     try {
       const org = await workspaceOrg(req); const id = num(req.params.id);
       if (!org || id == null) return res.status(400).json({ message: "Bad request" });
       const [c] = await db.select().from(mktCampaigns).where(and(eq(mktCampaigns.id, id), eq(mktCampaigns.workspaceId, org.id))).limit(1);
       if (!c) return res.status(404).json({ message: "Not found" });
-      const r = await resolveAudience((c.audience as CampaignAudience) || {}, org.id, { channel: "email", isMarketing: c.isMarketing });
-      res.json({ total: r.total, sendable: r.profileIds.length, suppressed: r.gate?.excluded ?? 0, breakdown: r.gate });
+      const channel: "email" | "sms" = c.channel === "sms" ? "sms" : "email";
+      const r = await resolveAudience((c.audience as CampaignAudience) || {}, org.id, { channel, isMarketing: c.isMarketing });
+      res.json({
+        total: r.total, sendable: r.profileIds.length, suppressed: r.gate?.excluded ?? 0, breakdown: r.gate,
+        noPhone: channel === "sms" ? (r.gate?.excludedNoIdentifier ?? 0) : undefined,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // SMS live cost/encoding preview for the wizard's Content step — runs the
+  // EXACT same compose pipeline the send worker uses (campaign-sms.ts's
+  // composeCampaignSmsBody), so what's shown while typing matches exactly what
+  // will be sent: segments, GSM-7-vs-UCS-2 encoding, the auto opt-out suffix,
+  // which characters sanitizeToGsm7 stripped, and total cost for the campaign's
+  // CURRENT sendable count (recomputed live, not the last-saved snapshot).
+  app.post("/api/admin/marketing/campaigns/:id/sms-preview", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [c] = await db.select().from(mktCampaigns).where(and(eq(mktCampaigns.id, id), eq(mktCampaigns.workspaceId, org.id))).limit(1);
+      if (!c) return res.status(404).json({ message: "Not found" });
+
+      const raw = String(req.body?.body ?? "");
+      const allowUnicode = req.body?.allowUnicode === true;
+      const { finalBody, analysis, sanitizedRemoved } = composeCampaignSmsBody(
+        raw,
+        { first_name: "there", last_name: "", email: "", unsubscribe_url: "", preferences_url: "" },
+        { isMarketing: c.isMarketing, allowUnicode },
+      );
+
+      const audience = await resolveAudience((c.audience as CampaignAudience) || {}, org.id, { channel: "sms", isMarketing: c.isMarketing });
+      const totalMessages = audience.gate?.sendable.length ?? 0;
+
+      res.json({
+        encoding: analysis.encoding, chars: analysis.chars, segments: analysis.segments,
+        segmentLength: analysis.segmentLength, offendingChars: analysis.offendingChars,
+        finalBody, sanitizedRemoved,
+        segmentsPerMessage: analysis.segments, totalMessages,
+        centsPerSegment: campaignSmsCentsPerSegment(),
+        estCostCents: estimateCampaignSmsCostCents(analysis.segments, totalMessages),
+      });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send one test SMS to an arbitrary phone (no suppression gate — an explicit
+  // admin-entered number, same trust model as /test-email). dryrun (the default
+  // SMS_PROVIDER) just logs it — see server/marketing/sms/README.md.
+  app.post("/api/admin/marketing/campaigns/:id/test-sms", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const to = String(req.body?.to || "").trim();
+      if (!to) return res.status(400).json({ message: "Recipient phone required" });
+      const [c] = await db.select().from(mktCampaigns).where(and(eq(mktCampaigns.id, id), eq(mktCampaigns.workspaceId, org.id))).limit(1);
+      if (!c) return res.status(404).json({ message: "Not found" });
+
+      const allowUnicode = getCampaignAllowUnicode(c.audience);
+      const { finalBody, analysis } = composeCampaignSmsBody(
+        `[TEST] ${c.bodyHtml || ""}`,
+        { first_name: "there", last_name: "", email: "", unsubscribe_url: "", preferences_url: "" },
+        { isMarketing: c.isMarketing, allowUnicode },
+      );
+
+      const provider = getSmsProvider();
+      const result = await provider.send({ to, body: finalBody, clientRef: `test-${id}-${Date.now()}` });
+      res.json({ ok: true, providerMessageId: result.providerMessageId, segments: result.segments, encoding: analysis.encoding, costCentsEstimate: result.costCentsEstimate });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -325,13 +401,48 @@ export function registerMarketingRoutes(app: Express): void {
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // Campaign analytics — funnel + human/machine split + link map + conversions.
+  // Campaign analytics — funnel + human/machine split + link map + conversions
+  // (email), or the SMS-shaped funnel/cost/inbound-STOP view (sms).
   app.get("/api/admin/marketing/campaigns/:id/analytics", ...gate, async (req, res) => {
     try {
       const org = await workspaceOrg(req); const id = num(req.params.id);
       if (!org || id == null) return res.status(400).json({ message: "Bad request" });
       const [c] = await db.select().from(mktCampaigns).where(and(eq(mktCampaigns.id, id), eq(mktCampaigns.workspaceId, org.id))).limit(1);
       if (!c) return res.status(404).json({ message: "Not found" });
+
+      if (c.channel === "sms") {
+        const agg = await db.select({
+          total: sql<number>`count(*)::int`,
+          queued: sql<number>`count(*) filter (where status = 'queued')::int`,
+          sent: sql<number>`count(*) filter (where status in ('sent','delivered'))::int`,
+          delivered: sql<number>`count(*) filter (where status = 'delivered')::int`,
+          failed: sql<number>`count(*) filter (where status in ('failed','undelivered'))::int`,
+          costActualCents: sql<number>`coalesce(sum(cost_cents),0)::int`,
+        }).from(mktSmsMessages).where(eq(mktSmsMessages.campaignId, id));
+        const m = agg[0];
+
+        // STOP replies attributable to THIS campaign — inbound rows from a phone
+        // number mkt_sms_messages actually shows this campaign texted, received
+        // on/after the send (mkt_sms_inbound carries no campaign_id itself, so
+        // this join-by-phone is the honest best-effort attribution available).
+        const [stopRow] = await db.select({ n: sql<number>`count(*)::int` })
+          .from(mktSmsInbound)
+          .where(and(
+            inArray(mktSmsInbound.matchedKeyword, [...STOP_KEYWORDS]),
+            c.sentAt ? gte(mktSmsInbound.receivedAt, c.sentAt) : sql`true`,
+            sql`${mktSmsInbound.phoneE164} IN (SELECT phone_e164 FROM mkt_sms_messages WHERE campaign_id = ${id})`,
+          ));
+
+        return res.json({
+          campaign: { id: c.id, name: c.name, subject: null, status: c.status, sentAt: c.sentAt, recipientCount: c.recipientCount, channel: "sms" },
+          smsFunnel: {
+            total: Number(m.total), queued: Number(m.queued), sent: Number(m.sent),
+            delivered: Number(m.delivered), failed: Number(m.failed),
+          },
+          smsCost: { actualCents: Number(m.costActualCents ?? 0), currency: "NZD" },
+          smsInboundStopCount: Number(stopRow?.n ?? 0),
+        });
+      }
 
       const agg = await db.select({
         total: sql<number>`count(*)::int`,
@@ -372,7 +483,7 @@ export function registerMarketingRoutes(app: Express): void {
 
       const delivered = Number(m.delivered) || Number(m.sent) || 0;
       res.json({
-        campaign: { id: c.id, name: c.name, subject: c.subject, status: c.status, sentAt: c.sentAt, recipientCount: c.recipientCount },
+        campaign: { id: c.id, name: c.name, subject: c.subject, status: c.status, sentAt: c.sentAt, recipientCount: c.recipientCount, channel: "email" },
         funnel: {
           total: Number(m.total), queued: Number(m.queued), sent: Number(m.sent), delivered: Number(m.delivered),
           bounced: Number(m.bounced), complained: Number(m.complained), failed: Number(m.failed), unsubscribed: Number(unsub?.n ?? 0),
