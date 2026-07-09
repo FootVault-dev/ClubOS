@@ -201,6 +201,7 @@ const tournamentNav = [
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
   { tab: "cic-watch", title: "Watch", url: "/admin/cic-watch", icon: Radio },
   { tab: "media", title: "Media", url: "/admin/media", icon: Images },
+  { tab: "cic-content-marketplace", title: "Content Marketplace", url: "/admin/cic-content-marketplace", icon: BarChart3 },
 ];
 
 const tournamentSecondary = [

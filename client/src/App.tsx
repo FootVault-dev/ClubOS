@@ -103,6 +103,7 @@ import MediaLibrary from "@/pages/media-library";
 import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
 import CicWatch from "@/pages/cic-watch";
+import ContentMarketplace from "@/pages/content-marketplace";
 import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
 import CugcFreeSessions from "@/pages/cugc-free-sessions";
@@ -323,6 +324,7 @@ function AdminRouter() {
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/cic-watch" component={CicWatch} />
         <Route path="/admin/media" component={MediaLibrary} />
+        <Route path="/admin/cic-content-marketplace" component={ContentMarketplace} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
