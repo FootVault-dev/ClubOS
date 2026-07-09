@@ -212,3 +212,91 @@ export interface WebhookHealth {
   events24h: number;
   byType24h: Record<string, number>;
 }
+
+// ── Flows (Phase E) ───────────────────────────────────────────────────────────
+export type FlowStatus = "draft" | "live" | "paused" | "archived";
+export type FlowTriggerType = "event" | "list" | "segment" | "date_property";
+export type FlowStepType = "delay" | "condition" | "email" | "sms" | "update_property" | "exit";
+
+export interface FlowStep {
+  id: string;
+  type: FlowStepType;
+  config: Record<string, any>;
+  next: string | null;
+  nextIfFalse?: string | null;
+}
+export interface FlowGraph {
+  steps: FlowStep[];
+  entry?: string | null;
+}
+
+export interface FlowStats {
+  totalEnrollments: number;
+  activeEnrollments: number;
+  completed: number;
+  exited: number;
+  messagesSent: number;
+  conversions: number;
+  revenue: number;
+}
+
+export interface MktFlow {
+  id: number;
+  workspaceId: number;
+  brandKey: string | null;
+  name: string;
+  status: FlowStatus;
+  triggerType: FlowTriggerType;
+  triggerConfig: Record<string, any>;
+  entryFilter: Record<string, any> | null;
+  reEntry: boolean;
+  quietHours: Record<string, any>;
+  liveVersionId: number | null;
+  createdAt: string;
+  updatedAt: string;
+  stats?: FlowStats;
+}
+
+export interface MktFlowDetail extends MktFlow {
+  draftGraph: FlowGraph;
+  draftVersionId: number | null;
+  draftDirty: boolean;
+  liveVersion: { id: number; versionNo: number; publishedAt: string | null } | null;
+}
+
+export interface FlowTemplateCard {
+  key: string;
+  name: string;
+  description: string;
+  expectedImpact: string;
+  triggerType: FlowTriggerType;
+  stepCount: number;
+}
+
+export interface FlowAnalytics {
+  flow: { id: number; name: string; status: FlowStatus };
+  perStep: Record<string, { sent: number; skipped: number; failed: number }>;
+  stats: FlowStats;
+}
+
+export interface FlowEnrollmentRow {
+  id: number;
+  status: string;
+  currentStepId: string | null;
+  enteredAt: string;
+  exitedAt: string | null;
+  exitReason: string | null;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+}
+
+export interface SmsPreview {
+  encoding: "gsm7" | "ucs2";
+  chars: number;
+  segments: number;
+  segmentLength: number;
+  offendingChars: string[];
+  finalBody: string;
+  costEstimatePerRecipientCents: number;
+}

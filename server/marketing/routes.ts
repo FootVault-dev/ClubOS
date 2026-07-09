@@ -17,7 +17,7 @@ import { requireAuth, requireTab } from "../auth";
 import {
   organizations, mktLists, mktListMembers, mktSegments, mktCampaigns, mktProfiles,
   mktConsent, mktSuppressions, mktEvents, mktMetrics, mktEmailMessages, mktEmailEvents, mktEmailLinkClicks, mktConversions,
-  mktTemplates,
+  mktTemplates, mktFlows, mktFlowVersions, mktFlowEnrollments, mktFlowStepRuns, mktSmsMessages,
 } from "@shared/schema";
 import { registerMarketingWebhook } from "./webhook";
 import { registerMarketingPublicRoutes } from "./public-routes";
@@ -27,6 +27,11 @@ import { sendMarketingEmail } from "./resend-client";
 import { addMarketingJob } from "./worker";
 import { brandKeyForWorkspace, brandShell, publicBaseUrl } from "./brand";
 import { signUnsubscribeToken, signPreferenceToken } from "./tokens";
+// Phase E — flows engine helpers + the v1 flow template library + SMS preview.
+import { enrollFromListAdd, saveDraftGraph, publishFlow, newestVersion } from "./flows";
+import { normalizeGraph } from "./flow-graph";
+import { FLOW_TEMPLATES, getFlowTemplate } from "./flow-templates";
+import { analyzeSms, appendOptOutSuffix, estimateCost } from "./sms";
 
 // Resolve X-Workspace-Slug → org id (mirrors registerRoutes' workspaceOrg helper).
 async function workspaceOrg(req: Request): Promise<{ id: number; slug: string } | null> {
@@ -96,6 +101,8 @@ export function registerMarketingRoutes(app: Express): void {
       const profileIds: number[] = Array.isArray(req.body?.profileIds) ? req.body.profileIds.map(Number).filter(Number.isFinite) : [];
       if (profileIds.length) {
         await db.insert(mktListMembers).values(profileIds.map((profileId) => ({ listId: id, profileId, source: "admin" }))).onConflictDoNothing();
+        // Phase E — list-trigger: enrol newly-added members into any live flow keyed on this list.
+        await enrollFromListAdd(org.id, id, profileIds).catch(() => {});
       }
       res.json({ ok: true, added: profileIds.length });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -731,6 +738,274 @@ export function registerMarketingRoutes(app: Express): void {
         }).returning();
       }
       res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ═════════════════════════════ Flows (Phase E) ═════════════════════════════
+  // The automations engine: versioned flow graphs, event/list/date triggers, the
+  // abandoned-enrolment derivation, and per-step analytics. Every message step
+  // sends through the SAME suppression gate + segment evaluator as campaigns.
+
+  // Per-flow rollup stats (kept O(flows), not O(enrollments)).
+  async function flowStats(flowId: number) {
+    const [enr] = await db.select({
+      total: sql<number>`count(*)::int`,
+      active: sql<number>`count(*) filter (where status = 'active')::int`,
+      completed: sql<number>`count(*) filter (where status = 'completed')::int`,
+      exited: sql<number>`count(*) filter (where status in ('exited','cancelled'))::int`,
+    }).from(mktFlowEnrollments).where(eq(mktFlowEnrollments.flowId, flowId));
+    const [sent] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(mktFlowStepRuns).innerJoin(mktFlowEnrollments, eq(mktFlowEnrollments.id, mktFlowStepRuns.enrollmentId))
+      .where(and(eq(mktFlowEnrollments.flowId, flowId), eq(mktFlowStepRuns.status, "sent")));
+    const [conv] = await db.select({
+      count: sql<number>`count(*)::int`, revenueCents: sql<number>`coalesce(sum(${mktConversions.revenueCents}),0)::int`,
+    }).from(mktConversions).innerJoin(mktEmailMessages, eq(mktEmailMessages.id, mktConversions.messageId))
+      .where(eq(mktEmailMessages.flowId, flowId));
+    return {
+      totalEnrollments: Number(enr?.total ?? 0), activeEnrollments: Number(enr?.active ?? 0),
+      completed: Number(enr?.completed ?? 0), exited: Number(enr?.exited ?? 0),
+      messagesSent: Number(sent?.n ?? 0),
+      conversions: Number(conv?.count ?? 0), revenue: Number(conv?.revenueCents ?? 0) / 100,
+    };
+  }
+
+  function reEntryBool(triggerConfig: any): boolean {
+    const p = triggerConfig?.reEntry;
+    return p != null && p !== "never";
+  }
+
+  // The v1 flow template gallery (static). Registered BEFORE /flows/:id so the
+  // literal 'templates' segment isn't captured as an id.
+  app.get("/api/admin/marketing/flows/templates", ...gate, async (_req, res) => {
+    res.json(FLOW_TEMPLATES.map((t) => ({
+      key: t.key, name: t.name, description: t.description, expectedImpact: t.expectedImpact,
+      triggerType: t.triggerType, stepCount: t.graph.steps.length,
+    })));
+  });
+
+  // SMS body preview — segments / chars / encoding / cost (server-side; analyzeSms
+  // is a server module, so the editor calls this instead of importing it).
+  app.post("/api/admin/marketing/flows/preview-sms", ...gate, async (req, res) => {
+    try {
+      const raw = String(req.body?.body || "");
+      const isMarketing = req.body?.isMarketing !== false;
+      const finalBody = isMarketing ? appendOptOutSuffix(raw) : raw;
+      const a = analyzeSms(finalBody);
+      const centsPerSegment = Number(process.env.SMS_CENTS_PER_SEGMENT || "10");
+      res.json({
+        encoding: a.encoding, chars: a.chars, segments: a.segments, segmentLength: a.segmentLength,
+        offendingChars: a.offendingChars, finalBody,
+        costEstimatePerRecipientCents: estimateCost(a.segments, 1, centsPerSegment),
+      });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/marketing/flows", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const flows = await db.select().from(mktFlows).where(eq(mktFlows.workspaceId, org.id)).orderBy(desc(mktFlows.createdAt));
+      const withStats = await Promise.all(flows.map(async (f) => ({ ...f, stats: await flowStats(f.id) })));
+      res.json(withStats);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Create — from a template or blank. Always starts as a DRAFT (nothing sends
+  // until the user reviews + publishes).
+  app.post("/api/admin/marketing/flows", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const b = req.body || {};
+      let triggerType: string, triggerConfig: any, entryFilter: any, name: string, graph: any;
+      if (b.templateKey) {
+        const t = getFlowTemplate(String(b.templateKey));
+        if (!t) return res.status(400).json({ message: "Unknown template" });
+        triggerType = t.triggerType; triggerConfig = t.triggerConfig; entryFilter = t.entryFilter ?? null;
+        name = String(b.name || t.name); graph = t.graph;
+      } else {
+        triggerType = ["event", "list", "segment", "date_property"].includes(b.triggerType) ? b.triggerType : "event";
+        triggerConfig = b.triggerConfig ?? {}; entryFilter = b.entryFilter ?? null;
+        name = String(b.name || "Untitled flow"); graph = { steps: [], entry: null };
+      }
+      const [flow] = await db.insert(mktFlows).values({
+        workspaceId: org.id, name, status: "draft", triggerType: triggerType as any,
+        triggerConfig, entryFilter, reEntry: reEntryBool(triggerConfig),
+      }).returning();
+      await saveDraftGraph(flow.id, normalizeGraph(graph));
+      const draft = await newestVersion(flow.id);
+      res.json({ ...flow, draftGraph: draft?.graph ?? { steps: [] }, stats: await flowStats(flow.id) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/marketing/flows/:id", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [flow] = await db.select().from(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).limit(1);
+      if (!flow) return res.status(404).json({ message: "Not found" });
+      const draft = await newestVersion(flow.id);
+      const live = flow.liveVersionId != null
+        ? (await db.select().from(mktFlowVersions).where(eq(mktFlowVersions.id, flow.liveVersionId)).limit(1))[0] ?? null
+        : null;
+      res.json({
+        ...flow,
+        draftGraph: draft?.graph ?? { steps: [] },
+        draftVersionId: draft?.id ?? null,
+        draftDirty: draft ? draft.publishedAt == null : false,
+        liveVersion: live ? { id: live.id, versionNo: live.versionNo, publishedAt: live.publishedAt } : null,
+        stats: await flowStats(flow.id),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Update settings (never the graph — that's the draft endpoint).
+  app.patch("/api/admin/marketing/flows/:id", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const b = req.body || {};
+      const patch: any = { updatedAt: new Date() };
+      if (b.name !== undefined) patch.name = String(b.name);
+      if (b.triggerType !== undefined && ["event", "list", "segment", "date_property"].includes(b.triggerType)) patch.triggerType = b.triggerType;
+      if (b.triggerConfig !== undefined) { patch.triggerConfig = b.triggerConfig; patch.reEntry = reEntryBool(b.triggerConfig); }
+      if (b.entryFilter !== undefined) patch.entryFilter = b.entryFilter;
+      if (b.quietHours !== undefined) patch.quietHours = b.quietHours;
+      const [row] = await db.update(mktFlows).set(patch).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).returning();
+      res.json(row ?? null);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Save the draft graph (leaves the live version + running enrollments untouched).
+  app.put("/api/admin/marketing/flows/:id/draft", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [flow] = await db.select({ id: mktFlows.id }).from(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).limit(1);
+      if (!flow) return res.status(404).json({ message: "Not found" });
+      const graph = normalizeGraph(req.body?.graph);
+      const versionId = await saveDraftGraph(id, graph);
+      res.json({ ok: true, versionId, graph });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Publish — new entrants get the new version; running enrollments keep theirs.
+  app.post("/api/admin/marketing/flows/:id/publish", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [flow] = await db.select({ id: mktFlows.id }).from(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).limit(1);
+      if (!flow) return res.status(404).json({ message: "Not found" });
+      const published = await publishFlow(id);
+      if (!published) return res.status(400).json({ message: "Nothing to publish — add at least one step first" });
+      res.json({ ok: true, ...published });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/marketing/flows/:id/pause", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [row] = await db.update(mktFlows).set({ status: "paused", updatedAt: new Date() })
+        .where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).returning();
+      res.json(row ?? null);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/marketing/flows/:id/resume", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [flow] = await db.select().from(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).limit(1);
+      if (!flow) return res.status(404).json({ message: "Not found" });
+      if (flow.liveVersionId == null) return res.status(400).json({ message: "Publish the flow before setting it live" });
+      const [row] = await db.update(mktFlows).set({ status: "live", updatedAt: new Date() }).where(eq(mktFlows.id, id)).returning();
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/admin/marketing/flows/:id", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      await db.delete(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Enrollment list for a flow (most-recent first, joined to the profile).
+  app.get("/api/admin/marketing/flows/:id/enrollments", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [flow] = await db.select({ id: mktFlows.id }).from(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).limit(1);
+      if (!flow) return res.status(404).json({ message: "Not found" });
+      const rows = await db.select({
+        id: mktFlowEnrollments.id, status: mktFlowEnrollments.status, currentStepId: mktFlowEnrollments.currentStepId,
+        enteredAt: mktFlowEnrollments.enteredAt, exitedAt: mktFlowEnrollments.exitedAt, exitReason: mktFlowEnrollments.exitReason,
+        email: mktProfiles.email, firstName: mktProfiles.firstName, lastName: mktProfiles.lastName,
+      }).from(mktFlowEnrollments).leftJoin(mktProfiles, eq(mktProfiles.id, mktFlowEnrollments.profileId))
+        .where(eq(mktFlowEnrollments.flowId, id)).orderBy(desc(mktFlowEnrollments.enteredAt)).limit(200);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Per-step analytics — sent / skipped / failed per step id, from the step-run
+  // ledger, plus the flow-level enrollment + conversion rollup.
+  app.get("/api/admin/marketing/flows/:id/analytics", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const [flow] = await db.select().from(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).limit(1);
+      if (!flow) return res.status(404).json({ message: "Not found" });
+
+      const runs = await db.select({
+        stepId: mktFlowStepRuns.stepId,
+        sent: sql<number>`count(*) filter (where ${mktFlowStepRuns.status} = 'sent')::int`,
+        skipped: sql<number>`count(*) filter (where ${mktFlowStepRuns.status} = 'skipped')::int`,
+        failed: sql<number>`count(*) filter (where ${mktFlowStepRuns.status} = 'failed')::int`,
+      }).from(mktFlowStepRuns).innerJoin(mktFlowEnrollments, eq(mktFlowEnrollments.id, mktFlowStepRuns.enrollmentId))
+        .where(eq(mktFlowEnrollments.flowId, id)).groupBy(mktFlowStepRuns.stepId);
+
+      const perStep: Record<string, { sent: number; skipped: number; failed: number }> = {};
+      for (const r of runs) perStep[r.stepId] = { sent: Number(r.sent), skipped: Number(r.skipped), failed: Number(r.failed) };
+
+      res.json({ flow: { id: flow.id, name: flow.name, status: flow.status }, perStep, stats: await flowStats(flow.id) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Send a test of one email step to an arbitrary address (no gate — sender's own inbox).
+  app.post("/api/admin/marketing/flows/:id/test-email", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req); const id = num(req.params.id);
+      if (!org || id == null) return res.status(400).json({ message: "Bad request" });
+      const to = String(req.body?.to || "").trim();
+      const stepId = String(req.body?.stepId || "");
+      if (!to || !stepId) return res.status(400).json({ message: "Recipient + stepId required" });
+      const [flow] = await db.select().from(mktFlows).where(and(eq(mktFlows.id, id), eq(mktFlows.workspaceId, org.id))).limit(1);
+      if (!flow) return res.status(404).json({ message: "Not found" });
+      const draft = await newestVersion(id);
+      const graph = normalizeGraph(draft?.graph);
+      const step = graph.steps.find((s) => s.id === stepId);
+      if (!step || step.type !== "email") return res.status(400).json({ message: "Email step not found" });
+
+      const shell = brandShell(org.id);
+      const base = publicBaseUrl();
+      const unsubToken = signUnsubscribeToken({ profileId: 0, workspaceId: org.id, scope: "brand" });
+      const oneClickUrl = `${base}/api/public/marketing/unsubscribe/oneclick?token=${encodeURIComponent(unsubToken)}`;
+      let html = String((step.config as any)?.bodyHtml || "<p>(no content yet)</p>")
+        .replace(/\{\{\s*first_name\s*\}\}/gi, "there").replace(/\{\{\s*(last_name|email)\s*\}\}/gi, "");
+      if (!html.includes(oneClickUrl)) {
+        html += `<div style="margin-top:24px;font-size:12px;color:#8a8a8a;text-align:center;">${shell.name} · <a href="${oneClickUrl}">Unsubscribe</a></div>`;
+      }
+      const isMkt = (step.config as any)?.isMarketing !== false;
+      const result = await sendMarketingEmail({
+        orgId: org.id, to, subject: `[TEST] ${(step.config as any)?.subject || flow.name}`, html,
+        idempotencyKey: `flowtest-${id}-${stepId}-${Date.now()}`, stream: isMkt ? "marketing" : "transactional",
+        listUnsubscribeUrl: oneClickUrl,
+      });
+      if (!result.ok) return res.status(502).json({ message: result.error || "Send failed" });
+      res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 }

@@ -18,6 +18,9 @@
 import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "../db";
 import { mktProfiles, mktMetrics, mktEvents, mktEmailLinkClicks, mktConversions } from "@shared/schema";
+// Phase E — flow trigger hook. events ⇄ flows is a benign function-scoped cycle
+// (enrollFromEvent is only referenced inside trackEvent's body, at call time).
+import { enrollFromEvent } from "./flows";
 
 const lc = (s: string | null | undefined) => (s || "").trim().toLowerCase();
 
@@ -120,6 +123,11 @@ export async function trackEvent(input: TrackEventInput): Promise<TrackEventResu
 
   // Advance last_event_at (best-effort).
   await db.update(mktProfiles).set({ lastEventAt: occurredAt }).where(eq(mktProfiles.id, profileId)).catch(() => {});
+
+  // Phase E — fire the flow trigger hook: enrol into event-triggered flows on this
+  // metric + exit any recovery flow this metric ends. Idempotent (enrollment guards
+  // dedupe), best-effort (a flow error must never break event tracking).
+  await enrollFromEvent(input.workspaceId, profileId, input.metric, { properties: input.properties ?? {} }).catch(() => {});
 
   // Value-bearing, newly-inserted events run last-touch click attribution.
   let conversionId: number | null = null;

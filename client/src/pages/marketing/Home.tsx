@@ -3,20 +3,22 @@
 // rather than registering a distinct route per view — campaign wizard + detail
 // are the only views that get their own URLs, since they need direct linking).
 import { useState } from "react";
-import { LayoutDashboard, Users, ListFilter, Send, Settings as SettingsIcon } from "lucide-react";
+import { LayoutDashboard, Users, ListFilter, Send, Zap, Settings as SettingsIcon } from "lucide-react";
 import DashboardView from "./Dashboard";
 import AudienceView from "./Audience";
 import SegmentsView from "./Segments";
 import CampaignsView from "./Campaigns";
+import FlowsView from "./Flows";
 import SettingsView from "./Settings";
 
-type View = "dashboard" | "audience" | "segments" | "campaigns" | "settings";
+type View = "dashboard" | "audience" | "segments" | "campaigns" | "flows" | "settings";
 
 const NAV: { key: View; label: string; icon: any }[] = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "audience", label: "Audience", icon: Users },
   { key: "segments", label: "Segments", icon: ListFilter },
   { key: "campaigns", label: "Campaigns", icon: Send },
+  { key: "flows", label: "Flows", icon: Zap },
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -55,6 +57,7 @@ export default function MarketingHome() {
       {view === "audience" && <AudienceView />}
       {view === "segments" && <SegmentsView />}
       {view === "campaigns" && <CampaignsView />}
+      {view === "flows" && <FlowsView />}
       {view === "settings" && <SettingsView />}
     </div>
   );

@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import type { CampaignStatus, LegalBasis, SubState } from "./types";
+import type { CampaignStatus, LegalBasis, SubState, FlowStatus, MktFlow } from "./types";
 
 export function PageHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: React.ReactNode }) {
   return (
@@ -82,6 +82,34 @@ export function ConsentBadge({ subState }: { subState: SubState }) {
 
 export function LegalBasisBadge({ legalBasis }: { legalBasis: LegalBasis }) {
   return <Badge variant="outline" className="text-muted-foreground">{legalBasis.replace(/_/g, " ")}</Badge>;
+}
+
+export function FlowStatusBadge({ status }: { status: FlowStatus }) {
+  const map: Record<FlowStatus, { label: string; className: string }> = {
+    draft: { label: "Draft", className: "bg-muted text-muted-foreground" },
+    live: { label: "Live", className: "bg-emerald-500/15 text-emerald-500 border-emerald-500/30" },
+    paused: { label: "Paused", className: "bg-amber-500/15 text-amber-500 border-amber-500/30" },
+    archived: { label: "Archived", className: "bg-muted text-muted-foreground" },
+  };
+  const m = map[status] || map.draft;
+  return <Badge variant="outline" className={m.className}>{m.label}</Badge>;
+}
+
+/** Plain-English one-liner describing what starts a flow. */
+export function flowTriggerSummary(flow: Pick<MktFlow, "triggerType" | "triggerConfig">): string {
+  const c = flow.triggerConfig || {};
+  switch (flow.triggerType) {
+    case "event": return `When "${c.metricName || c.metric || "an event"}" happens`;
+    case "list": return `When added to a list${c.listId ? ` (#${c.listId})` : ""}`;
+    case "segment": return `When entering a segment${c.segmentId ? ` (#${c.segmentId})` : ""}`;
+    case "date_property": {
+      const off = Number(c.offsetDays ?? 0);
+      const when = off === 0 ? "on" : off < 0 ? `${Math.abs(off)} days before` : `${off} days after`;
+      const src = c.source === "profile_prop" ? (c.propertyPath || "a date") : "term start";
+      return `${when} ${src}${c.time ? ` at ${c.time}` : ""}`;
+    }
+    default: return "—";
+  }
 }
 
 export function timeAgo(iso: string | null | undefined): string {

@@ -33,6 +33,9 @@ import { resolveAudience } from "./segments";
 import { sendMarketingEmail } from "./resend-client";
 import { brandKeyForWorkspace, brandShell, publicBaseUrl } from "./brand";
 import { signUnsubscribeToken, signPreferenceToken } from "./tokens";
+// Phase E — the flows runtime + nightly sweep. Imported lazily-at-call inside the
+// task wrappers below (worker ⇄ flows is a benign function-scoped import cycle).
+import { runFlowStep, flowSweep } from "./flows";
 
 const BATCH_SIZE = 50;
 const CONNECTION = process.env.DATABASE_URL;
@@ -267,7 +270,16 @@ const taskList: TaskList = {
   "campaign:send": taskCampaignSend,
   "campaign:send_batch": taskCampaignSendBatch,
   "campaign:finalize": taskCampaignFinalize,
+  // Phase E — flows engine. `flow:step` advances one enrollment; `flow:sweep` is
+  // the every-15-min cron that enrols date-property flows + derives the
+  // abandoned-enrolment signal from pending registration rows.
+  "flow:step": (payload, helpers) => runFlowStep(payload, helpers),
+  "flow:sweep": () => flowSweep(),
 };
+
+// graphile-worker crontab (runner option): fire flow:sweep every 15 minutes.
+// `?fill=1h` backfills a missed run after downtime; the enrol guards make it safe.
+const MARKETING_CRONTAB = "*/15 * * * * flow:sweep ?fill=1h";
 
 /**
  * Start the marketing worker. Called once from server/index.ts. Resilient: a
@@ -290,6 +302,7 @@ export async function startMarketingWorker(): Promise<void> {
       pollInterval: 2000,
       noHandleSignals: true, // the server owns process signals
       taskList,
+      crontab: MARKETING_CRONTAB,
     });
     console.log("[Marketing] durable send worker started (graphile-worker)");
     runner.promise.catch((e) => console.error("[Marketing] worker stopped:", e));
