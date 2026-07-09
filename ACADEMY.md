@@ -134,8 +134,19 @@ discounting an add-on. Those programmes sell by the term only.
 **Money rounds the discount, never the total**, so `subtotal − discount === total`
 exactly. Fuzzed over 1,800 price points in `script/test-academy.ts`.
 
-**Capacity counts pending registrations.** A seat held mid-checkout is not a free
-seat. When a programme is full, the page shows the waitlist form instead.
+**Capacity counts pending registrations, but only for 30 minutes.** A seat held
+mid-checkout is not a free seat — but an abandoned checkout is. `pending` rows are
+never cleaned up, so counting all of them would let every parent who opened the
+form and wandered off permanently consume a place, until a programme read "full"
+with nobody enrolled. When a programme is full, the page shows the waitlist form.
+
+> **Known limitation:** the capacity check is read-then-write, not a lock. Two
+> parents submitting within the same instant on the last remaining place can both
+> pass it and oversell by one. Fixing it properly needs a transaction with
+> `SELECT … FOR UPDATE` on the programme row, or a partial unique index. It has
+> been left alone because academy capacities are soft (a place is a coaching
+> decision, not a seat) and the waitlist absorbs the overflow. Revisit if a
+> programme is ever genuinely hard-capped.
 
 **One child, one contact row.** The old class flow `INSERT`ed a new player contact
 on every registration, so re-enrolling next term forked the child's history. The

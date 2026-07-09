@@ -1887,7 +1887,14 @@ export async function registerRoutes(
   }
 
   /** Confirmed + pending registrations against a programme's capacity.
-   *  Pending counts: a seat held mid-checkout is not a free seat. */
+   *
+   *  A seat held mid-checkout is not a free seat — but an ABANDONED checkout is.
+   *  `pending` rows are never cleaned up, so counting all of them would let every
+   *  parent who opened the form and wandered off permanently consume a place, and
+   *  a programme would eventually read "full" with nobody actually enrolled.
+   *  So pending seats are only held for ACADEMY_SEAT_HOLD_MINUTES. */
+  const ACADEMY_SEAT_HOLD_MINUTES = 30;
+
   async function academySpotsRemaining(program: any): Promise<number | null> {
     if (typeof program.capacity !== "number" || program.capacity <= 0) return null;
     const rows = await db
@@ -1896,7 +1903,13 @@ export async function registerRoutes(
       .where(
         and(
           eq(registrations.programId, program.id),
-          inArray(registrations.status, ["confirmed", "pending"]),
+          or(
+            eq(registrations.status, "confirmed"),
+            and(
+              eq(registrations.status, "pending"),
+              sql`${registrations.registeredAt} > now() - make_interval(mins => ${ACADEMY_SEAT_HOLD_MINUTES})`,
+            ),
+          ),
         ),
       );
     const taken = rows[0]?.n ?? 0;
