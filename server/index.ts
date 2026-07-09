@@ -82,6 +82,10 @@ app.use(attributionCookieMiddleware);
   const { registerClubDossierRoutes } = await import("./club-dossier-routes");
   registerClubDossierRoutes(app);
 
+  // Sandbox workspace — Market Research (read-only competitor intelligence).
+  const { registerMarketResearchRoutes } = await import("./market-research-routes");
+  registerMarketResearchRoutes(app);
+
   // Staff feedback board — Feature Requests / Bug Reports (any logged-in staff
   // can submit; managers triage). Universal tab, gated by requireAuth only.
   const { registerFeedbackRoutes } = await import("./feedback-routes");

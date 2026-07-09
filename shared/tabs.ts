@@ -201,6 +201,7 @@ const printsTabs: TabDef[] = [
 // the Club Dossier. Keep this tab set minimal; add tabs as experiments land.
 const sandboxTabs: TabDef[] = [
   { slug: "club-dossier", title: "Club Dossier", url: "/admin/club-dossier" },
+  { slug: "market-research", title: "Market Research", url: "/admin/market-research" },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
 ];
 
@@ -248,6 +249,7 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.
   "cic-watch", // OTT streaming platform control (watch.cicyouth.com) — launched dark to Daniel. Remove to open to Isaac/managers.
   "club-dossier", // Sandbox — first-party people intelligence (PII across all programs). Daniel only.
+  "market-research", // Sandbox — competitor & category intelligence. Daniel only while it's shaped.
 ]);
 
 /**

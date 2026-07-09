@@ -63,6 +63,7 @@ import {
   Radio,
   FlaskConical,
   Fingerprint,
+  Telescope,
   MessageSquarePlus,
   Link2,
   Target,
@@ -281,6 +282,7 @@ const printsSecondary = [
 // Sandbox — private super-admin experimentation workspace (Daniel only).
 const sandboxNav = [
   { tab: "club-dossier", title: "Club Dossier", url: "/admin/club-dossier", icon: Fingerprint },
+  { tab: "market-research", title: "Market Research", url: "/admin/market-research", icon: Telescope },
 ];
 
 const sandboxSecondary = [

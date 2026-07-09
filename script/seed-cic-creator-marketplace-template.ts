@@ -16,32 +16,35 @@
 //   it deliberately does NOT restate, vary or replace his weekly fee, his
 //   hours, or his engagement status. Do not add those terms here.
 //
-// LEGAL ENTITY
-//   The counterparty is Christchurch United Football Club Incorporated.
-//   "CIC" is a brand of that entity, not a separate legal person — so this
-//   template is seeded to the christchurch-united workspace (org 1), and sends
-//   from cufc.co.nz, even though the marketplace is CIC-branded.
+// LEGAL ENTITY vs WORKSPACE — these are deliberately different.
+//   The contracting party is Christchurch United Football Club Incorporated.
+//   "Christchurch International Cup" is a brand/event of that entity, not a
+//   separate legal person, so it cannot be a party to a contract. The parties
+//   block therefore names CUFC Inc — matching the Existing Agreement exactly,
+//   which is what keeps the supplemental link airtight.
+//   The TEMPLATE is seeded to the CIC workspace (org 5) so it lives in the CIC
+//   e-Sign tab and sends from cicyouth.com, and it carries CIC branding.
 //
 // PRICES ARE NOT WIRED IN THIS FILE. The fee and the share % are sender-set
 // variables, typed at send time. Nobody's pay is hard-coded in the repo.
 //
-// Usage: npx tsx --env-file=.env script/seed-cufc-creator-marketplace-template.ts
+// Usage: npx tsx --env-file=.env script/seed-cic-creator-marketplace-template.ts
 
 import { Pool } from "pg";
 
-const ORG_SLUG = "christchurch-united";
+const ORG_SLUG = "christchurch-international-cup";
 const SLUG = "content-marketplace-creator-agreement";
 
 export const brand = {
-  orgLabel: "Christchurch United",
-  logoUrl: "/logos/christchurch-united.png",
-  bg: "#0C1640",        // Midnight Navy
-  panel: "#13182F",     // ink
-  border: "#232B4E",    // line
-  accent: "#D4AF37",    // Chatham Gold
-  accentDeep: "#263996", // United Royal
-  paper: "#ffffff",
-  ink: "#0C1640",
+  orgLabel: "Christchurch International Cup",
+  logoUrl: "/logos/christchurch-international-cup.png",
+  bg: "#141511",
+  panel: "#1c1d18",
+  border: "#2c2d26",
+  accent: "#C9A43E",
+  accentDeep: "#a8862c",
+  paper: "#faf8f2",
+  ink: "#141511",
 };
 
 export const variables = [
@@ -62,9 +65,9 @@ export const variables = [
     key: "share_pct",
     label: "Revenue share",
     type: "select",
-    options: ["20%", "25%", "30%"],
+    options: ["30%", "25%", "20%"],
     allowCustom: true,
-    default: "20%",
+    default: "30%",
     required: true,
   },
 ];
@@ -91,7 +94,7 @@ export const content = {
   docTitle: "Content Marketplace Creator Agreement",
   partiesIntro: [
     "This Agreement is made between:",
-    "Christchurch United Football Club Incorporated (“the Club”)",
+    "Christchurch United Football Club Incorporated, which operates the Christchurch International Cup (“the Club”)",
     "and",
     "{{creator_name}} (“the Creator”).",
     "It is supplemental to the Contractor Work Agreement between the Parties dated 12 January 2026 (“the Existing Agreement”).",
@@ -100,7 +103,7 @@ export const content = {
     {
       heading: "1. Purpose",
       items: [
-        { kind: "p", text: "The Club is launching a Content Marketplace, where families can buy photographs and video of their own child taken at Club events. This Agreement sets out how the Creator is paid for capturing that content, and how the Creator shares in the revenue it earns." },
+        { kind: "p", text: "The Club is launching a Content Marketplace, beginning at the Christchurch International Cup, where families can buy photographs and video of their own child taken at Club events. This Agreement sets out how the Creator is paid for capturing, editing, organising and delivering that content, and how the Creator shares in the revenue it earns." },
         { kind: "p", text: "This is Additional Services work under clause 5.3 of the Existing Agreement. It is offered to the Creator, not required of them." },
       ],
     },
@@ -124,7 +127,7 @@ export const content = {
     {
       heading: "4. Additional Services Fee",
       items: [
-        { kind: "bullet", text: "The Club will pay the Creator {{creator_fee}} for capturing and delivering Covered Content across the event." },
+        { kind: "bullet", text: "The Club will pay the Creator {{creator_fee}} for capturing, editing, organising and delivering Covered Content across the event." },
         { kind: "bullet", text: "This fee is separate from, and in addition to, any amount payable to the Creator under the Existing Agreement." },
         { kind: "bullet", text: "It is payable whether or not any Covered Content is ever sold, and it is not deducted or recouped from the Revenue Share." },
         { kind: "bullet", text: "The fee is inclusive of GST (if any). The Creator is responsible for their own tax obligations, including IRD and any ACC levies." },
@@ -290,6 +293,6 @@ async function main() {
 }
 
 // Only run when invoked directly (the proof renderer imports the content).
-if (process.argv[1]?.includes("seed-cufc-creator-marketplace-template")) {
+if (process.argv[1]?.includes("seed-cic-creator-marketplace-template")) {
   main().catch((err) => { console.error("❌ Seed failed:", err); process.exit(1); });
 }

@@ -1560,6 +1560,56 @@ export const insertAcademyWaitlistSchema = createInsertSchema(academyWaitlist).o
 export type InsertAcademyWaitlist = z.infer<typeof insertAcademyWaitlistSchema>;
 export type AcademyWaitlist = typeof academyWaitlist.$inferSelect;
 
+// ── Club squads ─────────────────────────────────────────────────────────────
+// The club's own teams, U9 → First Team, and who is in them. NOT leagueTeams
+// (MFL social sides) and NOT tournamentTeams (visiting clubs at CIC).
+// A squad IS a season's team, so season_year lives here, not on the member.
+export const clubSquads = pgTable("club_squads", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  name: text("name").notNull(),
+  slug: text("slug"),
+  ageGrade: integer("age_grade"),          // NZF grade; NULL for seniors
+  seasonYear: integer("season_year").notNull(),
+  competition: text("competition"),
+  displayOrder: integer("display_order").notNull().default(0),
+  band: text("band"),                      // youth | academy | senior
+  notes: text("notes"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  orgSeasonNameKey: uniqueIndex("club_squads_org_season_name_key").on(t.organizationId, t.seasonYear, sql`lower(${t.name})`),
+  orgSeasonIdx: index("club_squads_org_season_idx").on(t.organizationId, t.seasonYear, t.displayOrder),
+}));
+export const insertClubSquadSchema = createInsertSchema(clubSquads).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertClubSquad = z.infer<typeof insertClubSquadSchema>;
+export type ClubSquad = typeof clubSquads.$inferSelect;
+
+// A squad member is a CONTACT with a role — players and coaches already live in
+// `contacts`, and forking them would fork the club's database.
+// `leftAt` retires someone without deleting history: a child who left in August
+// still played until August, and the NZF audit has to be able to show it.
+export const clubSquadMembers = pgTable("club_squad_members", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  squadId: integer("squad_id").notNull().references(() => clubSquads.id, { onDelete: "cascade" }),
+  contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+  role: text("role").notNull().default("player"),
+  squadNumber: integer("squad_number"),
+  position: text("position"),               // GK | DF | MF | FW
+  joinedAt: date("joined_at"),
+  leftAt: date("left_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqueMember: uniqueIndex("club_squad_members_unique").on(t.squadId, t.contactId, t.role),
+  squadIdx: index("club_squad_members_squad_idx").on(t.squadId, t.role),
+  contactIdx: index("club_squad_members_contact_idx").on(t.contactId),
+}));
+export const insertClubSquadMemberSchema = createInsertSchema(clubSquadMembers).omit({ id: true, createdAt: true });
+export type InsertClubSquadMember = z.infer<typeof insertClubSquadMemberSchema>;
+export type ClubSquadMember = typeof clubSquadMembers.$inferSelect;
+
 export type InsertCampPricing = z.infer<typeof insertCampPricingSchema>;
 export type CampPricing = typeof campPricing.$inferSelect;
 export type InsertCampDate = z.infer<typeof insertCampDateSchema>;

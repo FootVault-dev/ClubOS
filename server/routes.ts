@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -50,6 +50,14 @@ import {
   type PredictorActualResult,
   type PredictorPredictionInput,
 } from "@shared/predictor-scoring";
+import {
+  isSquadRole,
+  isPosition as isSquadPosition,
+  validateSquad,
+  validateSquadMember,
+  bandForAgeGrade,
+  checkSquadEligibility,
+} from "@shared/squads";
 import {
   quoteAcademy as quoteAcademyFees,
   checkEligibility as checkAcademyEligibility,
@@ -1833,6 +1841,341 @@ export async function registerRoutes(
       res.status(500).json({ message: e.message });
     }
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // CLUB SQUADS — the club's own teams, U9 → First Team, and who is in them.
+  //
+  // Distinct from leagueTeams (MFL social sides a captain buys into) and
+  // tournamentTeams (visiting clubs at CIC). A squad member is a `contacts` row
+  // with a role, because players and coaches already live there.
+  //
+  // This is the spine for payments, registrations and roles: a registration says
+  // a child paid for a PROGRAMME; a squad says which TEAM they play for. NZF's
+  // registration sync needs team + role per registrant, and this supplies both.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /** Resolve + authorise the workspace org for a squad request. */
+  async function squadScope(req: Request) {
+    const org = await workspaceOrg(req);
+    if (!org) return { ok: false as const, status: 400, message: "No workspace selected" };
+    const userId = (req.session as any).userId as number;
+    if (!(await checkUserOrg(userId, org.id))) return { ok: false as const, status: 403, message: "Forbidden" };
+    return { ok: true as const, org };
+  }
+
+  /** Squad rows never leave their org. Verified on every mutation, not just the list. */
+  async function squadInOrg(squadId: number, orgId: number) {
+    const [sq] = await db.select().from(clubSquads).where(and(eq(clubSquads.id, squadId), eq(clubSquads.organizationId, orgId)));
+    return sq ?? null;
+  }
+
+  app.get("/api/admin/squads", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+
+      const season = req.query.season ? parseInt(String(req.query.season), 10) : null;
+      const where = season
+        ? and(eq(clubSquads.organizationId, scope.org.id), eq(clubSquads.seasonYear, season))
+        : eq(clubSquads.organizationId, scope.org.id);
+
+      const squads = await db.select().from(clubSquads).where(where);
+      const ids = squads.map((s) => s.id);
+
+      // One grouped query, never N+1. Departed members don't count toward a roster.
+      const counts = ids.length
+        ? await db
+            .select({
+              squadId: clubSquadMembers.squadId,
+              role: clubSquadMembers.role,
+              n: sql<number>`count(*)::int`,
+            })
+            .from(clubSquadMembers)
+            .where(and(inArray(clubSquadMembers.squadId, ids), isNull(clubSquadMembers.leftAt)))
+            .groupBy(clubSquadMembers.squadId, clubSquadMembers.role)
+        : [];
+
+      const byId = new Map<number, { players: number; staff: number }>();
+      for (const c of counts) {
+        const e = byId.get(c.squadId) ?? { players: 0, staff: 0 };
+        if (c.role === "player") e.players += c.n; else e.staff += c.n;
+        byId.set(c.squadId, e);
+      }
+
+      // Seasons the workspace has ever fielded a squad in — powers the season picker.
+      const seasons = await db
+        .selectDistinct({ y: clubSquads.seasonYear })
+        .from(clubSquads)
+        .where(eq(clubSquads.organizationId, scope.org.id));
+
+      res.json({
+        seasons: seasons.map((s) => s.y).sort((a, b) => b - a),
+        squads: squads
+          .map((s) => ({ ...s, ...(byId.get(s.id) ?? { players: 0, staff: 0 }) }))
+          // First Team at the top, U9s at the foot.
+          .sort((a, b) => {
+            const k = (x: any) => (x.displayOrder ? x.displayOrder : x.ageGrade == null ? 0 : 100 - x.ageGrade);
+            return k(a) - k(b);
+          }),
+      });
+    } catch (e: any) {
+      console.error("[Squads list] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/admin/squads", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+
+      const errors = validateSquad(req.body ?? {});
+      if (errors.length) return res.status(400).json({ message: errors[0], errors });
+
+      const ageGrade = req.body.ageGrade === "" || req.body.ageGrade == null ? null : Number(req.body.ageGrade);
+      const [created] = await db
+        .insert(clubSquads)
+        .values({
+          organizationId: scope.org.id,
+          name: String(req.body.name).trim(),
+          seasonYear: Number(req.body.seasonYear),
+          ageGrade,
+          competition: req.body.competition ? String(req.body.competition).trim() : null,
+          band: req.body.band || bandForAgeGrade(ageGrade),
+          notes: req.body.notes ? String(req.body.notes).trim() : null,
+          displayOrder: Number(req.body.displayOrder ?? 0),
+        } as any)
+        .returning();
+      res.status(201).json(created);
+    } catch (e: any) {
+      if (String(e.message).includes("club_squads_org_season_name_key")) {
+        return res.status(409).json({ message: "A squad with that name already exists for this season." });
+      }
+      console.error("[Squad create] failed:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/admin/squads/:id", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const squad = await squadInOrg(parseInt(String(req.params.id), 10), scope.org.id);
+      if (!squad) return res.status(404).json({ message: "Squad not found" });
+
+      const members = await db
+        .select({
+          id: clubSquadMembers.id,
+          role: clubSquadMembers.role,
+          squadNumber: clubSquadMembers.squadNumber,
+          position: clubSquadMembers.position,
+          joinedAt: clubSquadMembers.joinedAt,
+          leftAt: clubSquadMembers.leftAt,
+          notes: clubSquadMembers.notes,
+          contactId: contacts.id,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          dateOfBirth: contacts.dateOfBirth,
+          email: contacts.email,
+          phone: contacts.phone,
+        })
+        .from(clubSquadMembers)
+        .innerJoin(contacts, eq(contacts.id, clubSquadMembers.contactId))
+        .where(eq(clubSquadMembers.squadId, squad.id));
+
+      // Flag anyone too old for the grade. Playing UP is legal; playing DOWN is
+      // what gets a club sanctioned, so we surface it rather than block it.
+      const withAge = members.map((m) => ({
+        ...m,
+        eligibility: m.role === "player" ? checkSquadEligibility(m.dateOfBirth, squad.seasonYear, squad.ageGrade) : null,
+      }));
+
+      res.json({ squad, members: withAge });
+    } catch (e: any) {
+      console.error("[Squad detail] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/admin/squads/:id", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const squad = await squadInOrg(parseInt(String(req.params.id), 10), scope.org.id);
+      if (!squad) return res.status(404).json({ message: "Squad not found" });
+
+      const patch: any = { updatedAt: new Date() };
+      for (const k of ["name", "competition", "notes", "band"] as const) {
+        if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : String(req.body[k]).trim();
+      }
+      if (req.body.ageGrade !== undefined) patch.ageGrade = req.body.ageGrade === "" || req.body.ageGrade === null ? null : Number(req.body.ageGrade);
+      if (req.body.seasonYear !== undefined) patch.seasonYear = Number(req.body.seasonYear);
+      if (req.body.displayOrder !== undefined) patch.displayOrder = Number(req.body.displayOrder);
+      if (req.body.isActive !== undefined) patch.isActive = Boolean(req.body.isActive);
+
+      const merged = { name: patch.name ?? squad.name, seasonYear: patch.seasonYear ?? squad.seasonYear, ageGrade: patch.ageGrade ?? squad.ageGrade, band: patch.band ?? squad.band };
+      const errors = validateSquad(merged);
+      if (errors.length) return res.status(400).json({ message: errors[0], errors });
+
+      const [updated] = await db.update(clubSquads).set(patch).where(eq(clubSquads.id, squad.id)).returning();
+      res.json(updated);
+    } catch (e: any) {
+      console.error("[Squad update] failed:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/admin/squads/:id", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const squad = await squadInOrg(parseInt(String(req.params.id), 10), scope.org.id);
+      if (!squad) return res.status(404).json({ message: "Squad not found" });
+
+      // A roster is a record. Archive it rather than erase who played.
+      const [{ n }] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(clubSquadMembers)
+        .where(eq(clubSquadMembers.squadId, squad.id));
+      if (n > 0) {
+        await db.update(clubSquads).set({ isActive: false, updatedAt: new Date() }).where(eq(clubSquads.id, squad.id));
+        return res.json({ ok: true, archived: true, message: `Archived — ${n} member(s) on record.` });
+      }
+      await db.delete(clubSquads).where(eq(clubSquads.id, squad.id));
+      res.json({ ok: true, archived: false });
+    } catch (e: any) {
+      console.error("[Squad delete] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // People who could join this squad. Searches the org's contacts.
+  app.get("/api/admin/squads/:id/candidates", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const squad = await squadInOrg(parseInt(String(req.params.id), 10), scope.org.id);
+      if (!squad) return res.status(404).json({ message: "Squad not found" });
+
+      const q = String(req.query.q ?? "").trim().toLowerCase();
+      const wantStaff = String(req.query.staff ?? "") === "1";
+
+      const rows = await db
+        .select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, dateOfBirth: contacts.dateOfBirth, type: contacts.type, email: contacts.email })
+        .from(contacts)
+        .where(
+          and(
+            wantStaff ? ne(contacts.type, "player") : eq(contacts.type, "player"),
+            q ? sql`(lower(${contacts.firstName}) like ${"%" + q + "%"} or lower(${contacts.lastName}) like ${"%" + q + "%"})` : sql`true`,
+          ),
+        )
+        .limit(50);
+
+      const already = await db.select({ contactId: clubSquadMembers.contactId }).from(clubSquadMembers).where(eq(clubSquadMembers.squadId, squad.id));
+      const taken = new Set(already.map((a) => a.contactId));
+
+      res.json(
+        rows
+          .filter((r) => !taken.has(r.id))
+          .map((r) => ({ ...r, eligibility: wantStaff ? null : checkSquadEligibility(r.dateOfBirth, squad.seasonYear, squad.ageGrade) })),
+      );
+    } catch (e: any) {
+      console.error("[Squad candidates] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/admin/squads/:id/members", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const squad = await squadInOrg(parseInt(String(req.params.id), 10), scope.org.id);
+      if (!squad) return res.status(404).json({ message: "Squad not found" });
+
+      const errors = validateSquadMember(req.body ?? {});
+      if (errors.length) return res.status(400).json({ message: errors[0], errors });
+
+      const [created] = await db
+        .insert(clubSquadMembers)
+        .values({
+          squadId: squad.id,
+          contactId: Number(req.body.contactId),
+          role: String(req.body.role),
+          squadNumber: req.body.squadNumber ? Number(req.body.squadNumber) : null,
+          position: req.body.position || null,
+          joinedAt: req.body.joinedAt || null,
+          notes: req.body.notes ? String(req.body.notes).trim() : null,
+        } as any)
+        .returning();
+      res.status(201).json(created);
+    } catch (e: any) {
+      const m = String(e.message);
+      if (m.includes("club_squad_members_unique")) return res.status(409).json({ message: "They're already in this squad in that role." });
+      if (m.includes("club_squad_members_number_key")) return res.status(409).json({ message: "That squad number is already taken." });
+      console.error("[Squad member add] failed:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/admin/squad-members/:id", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+
+      const memberId = parseInt(String(req.params.id), 10);
+      const [row] = await db
+        .select({ m: clubSquadMembers, orgId: clubSquads.organizationId })
+        .from(clubSquadMembers)
+        .innerJoin(clubSquads, eq(clubSquads.id, clubSquadMembers.squadId))
+        .where(eq(clubSquadMembers.id, memberId));
+      if (!row || row.orgId !== scope.org.id) return res.status(404).json({ message: "Member not found" });
+
+      const patch: any = {};
+      if (req.body.role !== undefined) {
+        if (!isSquadRole(req.body.role)) return res.status(400).json({ message: "Unknown role." });
+        patch.role = req.body.role;
+      }
+      if (req.body.squadNumber !== undefined) patch.squadNumber = req.body.squadNumber === "" || req.body.squadNumber === null ? null : Number(req.body.squadNumber);
+      if (req.body.position !== undefined) {
+        if (req.body.position && !isSquadPosition(req.body.position)) return res.status(400).json({ message: "Unknown position." });
+        patch.position = req.body.position || null;
+      }
+      if (req.body.joinedAt !== undefined) patch.joinedAt = req.body.joinedAt || null;
+      if (req.body.leftAt !== undefined) patch.leftAt = req.body.leftAt || null;
+      if (req.body.notes !== undefined) patch.notes = req.body.notes ? String(req.body.notes).trim() : null;
+
+      const merged = { contactId: row.m.contactId, role: patch.role ?? row.m.role, squadNumber: patch.squadNumber ?? row.m.squadNumber, position: patch.position ?? row.m.position };
+      const errors = validateSquadMember(merged);
+      if (errors.length) return res.status(400).json({ message: errors[0], errors });
+
+      const [updated] = await db.update(clubSquadMembers).set(patch).where(eq(clubSquadMembers.id, memberId)).returning();
+      res.json(updated);
+    } catch (e: any) {
+      if (String(e.message).includes("club_squad_members_number_key")) return res.status(409).json({ message: "That squad number is already taken." });
+      console.error("[Squad member update] failed:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/admin/squad-members/:id", requireAuth, async (req, res) => {
+    try {
+      const scope = await squadScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const memberId = parseInt(String(req.params.id), 10);
+      const [row] = await db
+        .select({ orgId: clubSquads.organizationId })
+        .from(clubSquadMembers)
+        .innerJoin(clubSquads, eq(clubSquads.id, clubSquadMembers.squadId))
+        .where(eq(clubSquadMembers.id, memberId));
+      if (!row || row.orgId !== scope.org.id) return res.status(404).json({ message: "Member not found" });
+      await db.delete(clubSquadMembers).where(eq(clubSquadMembers.id, memberId));
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[Squad member remove] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+  // ────────────────────────────── END CLUB SQUADS ─────────────────────────────
 
   // ══════════════════════════════════════════════════════════════════════════
   // ACADEMY REGISTRATIONS — "The Great Reset" (2026-07-09)

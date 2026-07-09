@@ -7,7 +7,7 @@
 
 import { writeFileSync, readFileSync } from "node:fs";
 import { renderNativePdf } from "../server/esign-native-pdf";
-import { brand, content, form, settings } from "./seed-cufc-creator-marketplace-template";
+import { brand, content, form, settings } from "./seed-cic-creator-marketplace-template";
 
 const OUT = process.argv[2] ?? "/tmp/creator-marketplace-agreement-PROOF.pdf";
 
@@ -15,14 +15,14 @@ const OUT = process.argv[2] ?? "/tmp/creator-marketplace-agreement-PROOF.pdf";
 const values: Record<string, string> = {
   event_name: "the Christchurch International Cup, 5–16 July 2026",
   creator_fee: "$0.00 (TO BE SET)",
-  share_pct: "20%",
+  share_pct: "30%",
   creator_name: "Max Comrie",
 };
 
 async function main() {
   let logoBytes: Uint8Array | null = null;
   try {
-    logoBytes = new Uint8Array(readFileSync("client/public/logos/christchurch-united.png"));
+    logoBytes = new Uint8Array(readFileSync("client/public/logos/christchurch-international-cup.png"));
   } catch {
     console.warn("⚠️  logo not found — rendering without it");
   }

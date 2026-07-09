@@ -147,6 +147,7 @@ import PrintCheckout from "@/pages/print-checkout";
 import PrintOrderStatus from "@/pages/print-order-status";
 import PrintUpload from "@/pages/print-upload";
 import ClubDossier from "@/pages/club-dossier";
+import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
 import { Search, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -200,6 +201,7 @@ function AdminRouter() {
       <Switch>
         <Route path="/admin"><Redirect to="/admin/club-dossier" /></Route>
         <Route path="/admin/club-dossier" component={ClubDossier} />
+        <Route path="/admin/market-research" component={MarketResearch} />
         <Route path="/admin/team" component={AdminTeam} />
         <Route component={NotFound} />
       </Switch>

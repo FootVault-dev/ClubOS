@@ -17,6 +17,31 @@
 # branch that contains every merged feature. This script now PRINTS the current
 # branch before shipping — LOOK AT IT and confirm it's the right one.
 #
+# ── WHEN THE BUILD HANGS: "Waiting for depot builder..." (2026-07-10) ────────
+# Fly's depot builder can hang indefinitely and then fail with
+#   Error: ... error building: deadline_exceeded / context deadline exceeded
+# even while status.flyio.net says "All Systems Operational". It failed 6x in a row.
+#
+# Two things fix it, and you need BOTH:
+#   1. DROP THE APP TOKEN. `.env`'s FLY_API_TOKEN is app-scoped and cannot
+#      provision a builder — with it set, --depot=false dies with
+#      "Failed to start remote builder heartbeat: unauthorized".
+#      Deploy under the logged-in `systems@unitedsportsgroup.co.nz` session instead.
+#   2. WAKE THE LEGACY BUILDER and use it:
+#        fly machine list -a fly-builder-mellow-lagoon-2640
+#        fly machine start -a fly-builder-mellow-lagoon-2640 <machine-id>
+#
+#   Then:
+#     env -u FLY_API_TOKEN flyctl deploy -a clubos --depot=false --remote-only \
+#       --build-arg VITE_STRIPE_PUBLISHABLE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY" \
+#       --build-arg VITE_META_PIXEL_ID="$VITE_META_PIXEL_ID"
+#
+#   (No local Docker on this Mac, so --local-only is not an option.)
+#
+# ── `fly deploy` SHIPS THE WHOLE WORKING TREE, not your commit ───────────────
+# Never deploy while a subagent or a parallel session is mid-edit — the Dockerfile's
+# `COPY . .` captures whatever is on disk at that instant, half-written files included.
+#
 # ── PERMANENT POST-DEPLOY SMOKE CHECKLIST (run every time, --no-cache if stale)
 #   curl -sI https://app.usg.co.nz/t.js         → content-type: application/javascript  (NOT text/html)
 #   curl -sI https://app.usg.co.nz/l/<realkey>  → 302 (NOT 200 HTML)
