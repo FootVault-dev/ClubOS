@@ -1825,3 +1825,103 @@ export async function sendLeagueBalanceFailedEmail(params: {
     registrationId: params.registrationId,
   });
 }
+
+// ── Hiring — a new job application landed ────────────────────────────────────
+// Sent to whoever the job names in `notify_email`, falling back to the club
+// inbox. Best-effort at the call site: a Resend outage must never cost us an
+// application. Nothing about a minor beyond what a reviewer needs to make
+// contact — the child's answers stay in ClubOS, behind the tab.
+const HIRING_NOTIFY_TO = "info@cufc.co.nz";
+const HIRING_APP_URL = process.env.APP_URL || "https://app.usg.co.nz";
+
+function hiringRow(label: string, value: string): string {
+  if (!value) return "";
+  return `<tr>
+    <td style="color:#8a93b8; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; padding:7px 0; vertical-align:top; white-space:nowrap;">${label}</td>
+    <td style="color:#0c1640; font-size:14px; font-weight:500; padding:7px 0 7px 16px; text-align:right;">${value}</td>
+  </tr>`;
+}
+
+const hiringEscape = (v: string): string =>
+  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+export async function sendHiringApplicationNotification(params: {
+  to?: string;
+  jobTitle: string;
+  jobSlug: string;
+  applicationId: number;
+  applicantName: string;
+  email: string;
+  phone: string;
+  city?: string;
+  guardianRequired: boolean;
+  guardianName?: string;
+  guardianPhone?: string;
+  auditionUrl?: string;
+  hasAuditionFile: boolean;
+  answers: Record<string, string | boolean>;
+  questions: { id: string; label: string; type: string }[];
+}): Promise<boolean> {
+  const link = `${HIRING_APP_URL}/admin/hiring`;
+
+  const contactRows = [
+    hiringRow("Applicant", hiringEscape(params.applicantName)),
+    hiringRow("Email", `<a href="mailto:${hiringEscape(params.email)}" style="color:#263996;">${hiringEscape(params.email)}</a>`),
+    hiringRow("Phone", `<a href="tel:${hiringEscape(params.phone)}" style="color:#263996;">${hiringEscape(params.phone)}</a>`),
+    hiringRow("Location", hiringEscape(params.city || "")),
+    params.guardianRequired
+      ? hiringRow("Guardian", `${hiringEscape(params.guardianName || "—")}${params.guardianPhone ? ` · ${hiringEscape(params.guardianPhone)}` : ""}`)
+      : "",
+  ].join("");
+
+  const auditionRows = [
+    params.auditionUrl
+      ? hiringRow("Audition link", `<a href="${hiringEscape(params.auditionUrl)}" style="color:#263996;">${hiringEscape(params.auditionUrl.slice(0, 60))}</a>`)
+      : "",
+    params.hasAuditionFile ? hiringRow("Audition file", "Uploaded — play it in ClubOS") : "",
+  ].join("");
+
+  // Long written answers read better as blocks than as table rows.
+  const written = params.questions
+    .filter((q) => q.type === "textarea" && typeof params.answers[q.id] === "string")
+    .map((q) => {
+      const body = hiringEscape(String(params.answers[q.id])).replace(/\n/g, "<br/>");
+      return `<div style="margin-top:18px;">
+        <div style="color:#8a93b8; font-size:11px; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:6px;">${hiringEscape(q.label)}</div>
+        <div style="color:#0c1640; font-size:14px; line-height:1.6; background:#f7f8fb; border:1px solid #e3e7f0; border-radius:10px; padding:12px 14px;">${body}</div>
+      </div>`;
+    })
+    .join("");
+
+  const guardianFlag = params.guardianRequired
+    ? `<div style="margin-top:16px; padding:12px 14px; border-radius:10px; background:#fff6e5; border:1px solid #f0a91e;">
+         <strong style="color:#0c1640; font-size:13px;">Under 16 — guardian consent given.</strong>
+         <div style="color:#5b6480; font-size:13px; margin-top:3px;">Contact the guardian, not the applicant, to arrange anything.</div>
+       </div>`
+    : "";
+
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width:600px; margin:0 auto; background:#ffffff;">
+    <div style="background:#0c1640; padding:26px 28px;">
+      <div style="color:#d4af37; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;">New application</div>
+      <div style="color:#ffffff; font-size:22px; font-weight:700; margin-top:6px;">${hiringEscape(params.jobTitle)}</div>
+    </div>
+    <div style="padding:24px 28px;">
+      <table style="width:100%; border-collapse:collapse;">${contactRows}${auditionRows}</table>
+      ${guardianFlag}
+      ${written}
+      <div style="margin-top:26px;">
+        <a href="${link}" style="display:inline-block; background:#263996; color:#ffffff; text-decoration:none; font-weight:700; font-size:14px; padding:12px 22px; border-radius:999px;">Review in ClubOS</a>
+      </div>
+      <div style="color:#8a93b8; font-size:12px; margin-top:18px;">Application #${params.applicationId} · ${hiringEscape(params.jobSlug)}</div>
+    </div>
+  </div>`;
+
+  return sendEmail({
+    to: params.to || HIRING_NOTIFY_TO,
+    from: fromForOrg(7, "United Sports Group"),
+    // Reply goes to the guardian when there is one — never straight to a child.
+    replyTo: params.guardianRequired ? undefined : params.email,
+    subject: `New ${params.jobTitle} application — ${params.applicantName}`,
+    html,
+  });
+}

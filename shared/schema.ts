@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { HiringQuestion } from "./hiring";
 
 export const roleEnum = pgEnum("role_type", ["super_admin", "admin", "team_member", "manager", "coach", "finance", "marketing", "registrar"]);
 export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor"]);
@@ -4325,3 +4326,104 @@ export type PredictorPrediction = typeof predictorPredictions.$inferSelect;
 export const insertPredictorSquadSchema = createInsertSchema(predictorSquad).omit({ id: true, createdAt: true });
 export type InsertPredictorSquad = z.infer<typeof insertPredictorSquadSchema>;
 export type PredictorSquadPlayer = typeof predictorSquad.$inferSelect;
+
+// ── Hiring — job postings + applications ─────────────────────────────────────
+// The careers engine behind every brand site's job adverts. A job is owned by
+// the workspace that MANAGES it (organizationId — USG hires for the group) and
+// advertised under a public `brand` key (cufc, mfl, cic…), which is what the
+// brand site's form posts to. So one Hiring tab can run recruitment for every
+// brand without each brand needing its own workspace tab.
+//
+// NOT the Volunteers module: a volunteer signs up once and is rostered onto
+// task-types by day; an applicant applies to one posting and moves through a
+// selection pipeline for it. See shared/hiring.ts.
+//
+// Named hiring_* because bare `jobs` already means print-production jobs and
+// bare `applications` already means grant + Football Institute applications.
+export const hiringJobs = pgTable("hiring_jobs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  brand: text("brand").notNull(),                          // public brand key — cufc | mfl | cic | cugc | unitedprints | siu
+  slug: text("slug").notNull(),                            // url-safe, unique within a brand
+  title: text("title").notNull(),
+  tagline: text("tagline"),
+  description: text("description"),                        // optional long copy (the advert can also live on the brand site)
+  employmentType: text("employment_type"),                 // "Paid casual — one fixture", "Part-time", "Volunteer"…
+  positions: integer("positions").notNull().default(1),
+  payLabel: text("pay_label"),                             // free text — "$50 per commentator". Never a number: pay is not always money.
+  location: text("location"),
+  status: text("status").notNull().default("draft"),       // draft | open | closed  (validated app-side, no pg enum)
+  closesAt: timestamp("closes_at", { withTimezone: true }),
+  advertUrl: text("advert_url"),                           // where the public advert lives
+  notifyEmail: text("notify_email"),                       // who gets pinged on a new application
+  // [{ id, label, type, required?, help?, placeholder?, options?, minLength?, maxLength?, accept?, maxBytes? }]
+  questions: jsonb("questions").$type<HiringQuestion[]>().notNull().default(sql`'[]'::jsonb`),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  brandSlugUnq: uniqueIndex("hiring_jobs_brand_slug_unq").on(t.brand, t.slug),
+  orgIdx: index("hiring_jobs_org_idx").on(t.organizationId, t.createdAt),
+}));
+
+export const hiringApplications = pgTable("hiring_applications", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  jobId: integer("job_id").notNull().references(() => hiringJobs.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),                          // phone is mandatory on every form we run
+  dateOfBirth: date("date_of_birth"),
+  city: text("city"),
+
+  // Under-16s need a parent/guardian. `guardianRequired` is decided SERVER-side
+  // from the date of birth — never trusted from the browser.
+  guardianRequired: boolean("guardian_required").notNull().default(false),
+  guardianName: text("guardian_name"),
+  guardianRelationship: text("guardian_relationship"),
+  guardianEmail: text("guardian_email"),
+  guardianPhone: text("guardian_phone"),
+  guardianConsent: boolean("guardian_consent").notNull().default(false),
+
+  // Answers to the job's custom questions, keyed by question id.
+  answers: jsonb("answers").$type<Record<string, string | boolean>>().notNull().default(sql`'{}'::jsonb`),
+
+  // The audition: a pasted link, or a file in object storage, or both.
+  // auditionObjectPath is "/objects/uploads/<uuid>.<ext>" — private, and only
+  // ever streamed back through the tab-gated admin endpoint.
+  auditionUrl: text("audition_url"),
+  auditionObjectPath: text("audition_object_path"),
+  auditionFilename: text("audition_filename"),
+  auditionMime: text("audition_mime"),
+  auditionBytes: integer("audition_bytes"),
+
+  status: text("status").notNull().default("new"),         // new | reviewing | shortlisted | trial | offered | hired | declined | withdrawn
+  rating: integer("rating"),                               // 1–5, reviewer's score
+  reviewerNotes: text("reviewer_notes"),
+  reviewedBy: integer("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+
+  consentContact: boolean("consent_contact").notNull().default(false),
+  consentBroadcast: boolean("consent_broadcast").notNull().default(false),
+  rightToWork: boolean("right_to_work").notNull().default(false),
+
+  sourceUrl: text("source_url"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  jobIdx: index("hiring_applications_job_idx").on(t.jobId, t.createdAt),
+  orgIdx: index("hiring_applications_org_idx").on(t.organizationId, t.createdAt),
+  // One application per email per job. A second attempt is a friendly 409, not a duplicate row.
+  jobEmailUnq: uniqueIndex("hiring_applications_job_email_unq").on(t.jobId, t.email),
+}));
+
+export const insertHiringJobSchema = createInsertSchema(hiringJobs).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertHiringJob = z.infer<typeof insertHiringJobSchema>;
+export type HiringJob = typeof hiringJobs.$inferSelect;
+
+export const insertHiringApplicationSchema = createInsertSchema(hiringApplications).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertHiringApplication = z.infer<typeof insertHiringApplicationSchema>;
+export type HiringApplication = typeof hiringApplications.$inferSelect;
