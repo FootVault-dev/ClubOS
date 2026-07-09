@@ -114,6 +114,7 @@ const tournamentTabs: TabDef[] = [
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
   { slug: "store", title: "Store", url: "/admin/store" },
+  { slug: "media", title: "Media", url: "/admin/media" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -210,6 +211,7 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.
   "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.
   "store", // MFL Store (native e-commerce, Shopify replacement pilot) — dark launch, Daniel only. Remove to open to admins/managers.
+  "media", // CIC Media Library — dark launch while Daniel shapes it with Max. Remove to open to Max (admin/manager).
 ]);
 
 /**

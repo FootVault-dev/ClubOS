@@ -3661,3 +3661,93 @@ export const shopOrderShares = pgTable("shop_order_shares", {
 });
 export type InsertShopOrderShare = typeof shopOrderShares.$inferInsert;
 export type ShopOrderShare = typeof shopOrderShares.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CIC Media Library — staff (Max) upload photos/videos and organise them by
+// team + custom categories ("like our Google Drive"). Feeds a public catalog
+// API (/api/public/media/:brand/*) a future storefront will read. Greenfield —
+// first brand is CIC (org 5), multi-brand ready like the shop module.
+//
+// Storage: originals live PRIVATE (clubos-media bucket, storage_key); once a
+// gallery/asset is published, a watermarked preview + thumb are generated into
+// the PUBLIC clubos-media-previews bucket (preview_key / thumb_key). The
+// public API only ever returns preview/thumb URLs — never storage_key, never
+// player_name (internal-only, e.g. matching a face to a shirt for staff).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const mediaCategories = pgTable("media_categories", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgSlugUnq: uniqueIndex("media_categories_org_slug_unique").on(t.organizationId, t.slug),
+}));
+export const insertMediaCategorySchema = createInsertSchema(mediaCategories).omit({ id: true, createdAt: true });
+export type InsertMediaCategory = z.infer<typeof insertMediaCategorySchema>;
+export type MediaCategory = typeof mediaCategories.$inferSelect;
+
+// A shoot/collection — usually one per team per day, but can be a custom
+// grouping too. tournamentId/teamId are set when created "from a team" via the
+// picker; ageGroup/clubName are denormalised snapshots so the gallery still
+// reads sensibly even if the team is later renamed or removed.
+export const mediaGalleries = pgTable("media_galleries", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  tournamentId: integer("tournament_id").references(() => tournaments.id, { onDelete: "set null" }),
+  teamId: integer("team_id").references(() => tournamentTeams.id, { onDelete: "set null" }),
+  ageGroup: text("age_group"),
+  clubName: text("club_name"),
+  title: text("title").notNull(),
+  slug: text("slug").notNull(),
+  // FK to media_assets added via ALTER TABLE in the migration (media_assets is
+  // created after this table) — plain int here, same precedent as
+  // clubLogoConsents.clubId above.
+  coverAssetId: integer("cover_asset_id"),
+  shootDate: date("shoot_date"),
+  status: text("status").notNull().default("draft"), // 'draft' | 'published' | 'hidden'
+  assetCount: integer("asset_count").notNull().default(0),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgSlugUnq: uniqueIndex("media_galleries_org_slug_unique").on(t.organizationId, t.slug),
+}));
+export const insertMediaGallerySchema = createInsertSchema(mediaGalleries).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertMediaGallery = z.infer<typeof insertMediaGallerySchema>;
+export type MediaGallery = typeof mediaGalleries.$inferSelect;
+
+// One row per uploaded file. kind='video' skips the sharp preview pipeline
+// (previewKey/thumbKey stay null — video thumbnails are a later phase).
+// bibNumber is public-safe (storefront search-by-bib); playerName is
+// INTERNAL ONLY and must never appear in a /api/public/media response.
+export const mediaAssets = pgTable("media_assets", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  galleryId: integer("gallery_id").references(() => mediaGalleries.id, { onDelete: "set null" }),
+  categoryId: integer("category_id").references(() => mediaCategories.id, { onDelete: "set null" }),
+  teamId: integer("team_id").references(() => tournamentTeams.id, { onDelete: "set null" }),
+  kind: text("kind").notNull().default("photo"), // 'photo' | 'video'
+  storageKey: text("storage_key").notNull(),      // PRIVATE original (clubos-media bucket)
+  previewKey: text("preview_key"),                // watermarked preview, PUBLIC (clubos-media-previews)
+  thumbKey: text("thumb_key"),                    // small thumb, PUBLIC (clubos-media-previews)
+  originalFilename: text("original_filename"),
+  contentType: text("content_type"),
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
+  width: integer("width"),
+  height: integer("height"),
+  durationSec: integer("duration_sec"),
+  bibNumber: integer("bib_number"),
+  playerName: text("player_name"), // INTERNAL ONLY — never returned by the public API
+  takenAt: timestamp("taken_at", { withTimezone: true }),
+  priceCents: integer("price_cents"),
+  status: text("status").notNull().default("draft"), // 'draft' | 'published'
+  sortOrder: integer("sort_order").notNull().default(0),
+  uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertMediaAssetSchema = createInsertSchema(mediaAssets).omit({ id: true, createdAt: true });
+export type InsertMediaAsset = z.infer<typeof insertMediaAssetSchema>;
+export type MediaAsset = typeof mediaAssets.$inferSelect;

@@ -36,6 +36,7 @@ import { detectDnsProvider, getCnameHost, getApexDomain } from "./dns/detectProv
 import { isGoDaddyConfigured, checkConnection as checkGoDaddyConnection, setCnameRecord as setGoDaddyCname, ownsDomain as goDaddyOwnsDomain, getRecords as getGoDaddyRecords, setForwarding as setGoDaddyForwarding, getForwarding as getGoDaddyForwarding } from "./dns/godaddyClient";
 import { mountMcpServer } from "./mcp";
 import { registerShopRoutes, finalizeShopOrderPaid, finalizeShopSharePaid } from "./shop-routes";
+import { registerMediaRoutes } from "./media-routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -17266,6 +17267,10 @@ export async function registerRoutes(
   // Shop — native e-commerce module (MFL Store pilot). All routes live in
   // server/shop-routes.ts; the only other touchpoint is the webhook branch above.
   registerShopRoutes(app);
+
+  // CIC Media Library — staff photo/video uploads + public catalog API. All
+  // routes live in server/media-routes.ts.
+  registerMediaRoutes(app);
 
   return httpServer;
 }

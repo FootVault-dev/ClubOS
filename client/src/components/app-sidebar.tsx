@@ -57,6 +57,7 @@ import {
   BellRing,
   CalendarCheck,
   Waves,
+  Images,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -164,6 +165,7 @@ const tournamentNav = [
   { tab: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer", icon: Mail },
   { tab: "cic-push", title: "Notifications", url: "/admin/cic-push", icon: BellRing },
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
+  { tab: "media", title: "Media", url: "/admin/media", icon: Images },
 ];
 
 const tournamentSecondary = [

@@ -87,6 +87,7 @@ import LeagueBusinessPlan from "@/pages/league-business-plan";
 import LeagueStore from "@/pages/league-store";
 import CicInbox from "@/pages/cic-inbox";
 import CicLogoConsents from "@/pages/cic-logo-consents";
+import MediaLibrary from "@/pages/media-library";
 import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
 import CugcInbox from "@/pages/cugc-inbox";
@@ -272,6 +273,7 @@ function AdminRouter() {
         <Route path="/admin/cic-mailer" component={CicMailer} />
         <Route path="/admin/cic-push" component={CicPush} />
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
+        <Route path="/admin/media" component={MediaLibrary} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
