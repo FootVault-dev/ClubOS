@@ -21,6 +21,8 @@
 
 import React, { Component, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { getBrandMeta } from "./brand-themes";
+import TemplateGallery from "./TemplateGallery";
+import type { StarterTemplateDoc } from "./grapes/templates";
 import type { EmailEditorSurfaceHandle } from "./email-editor-surface";
 
 /** What the builder hands back on save: the doc (source of truth, persisted to
@@ -75,6 +77,21 @@ function stripHtml(html: string): string {
     .replace(/&nbsp;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** True when an initialDoc carries real content — so we skip the template gallery
+ *  (editing an existing design) and open straight into the builder. */
+function isMeaningfulDoc(doc: unknown): boolean {
+  if (!doc) return false;
+  if (typeof doc === "string") return doc.trim().length > 0;
+  if (typeof doc === "object") {
+    const d = doc as Record<string, unknown>;
+    if (typeof d.mjml === "string" && d.mjml.trim()) return true;
+    if (d.project) return true;
+    if (typeof d.html === "string" && d.html.trim()) return true;
+    if (d.type === "doc") return true; // legacy Tiptap
+  }
+  return false;
 }
 
 /** True below ~768px, where the 3-pane builder is too cramped to use. */
@@ -156,6 +173,40 @@ export default function EmailBuilder({
   const [surfaceKey, setSurfaceKey] = useState(0);
   const isNarrow = useIsNarrow();
 
+  // Template gallery: a fresh builder (no meaningful initialDoc) opens on the
+  // "start from a template or blank" screen instead of a blank canvas. Once a
+  // starting point is chosen, `activeDoc` is what the surface loads; the gallery
+  // is reachable again from the toolbar (replaces the design after a confirm).
+  const startedWithDoc = isMeaningfulDoc(initialDoc);
+  const [activeDoc, setActiveDoc] = useState<unknown | null>(initialDoc ?? null);
+  const [chosen, setChosen] = useState<boolean>(startedWithDoc);
+  const [galleryOpen, setGalleryOpen] = useState<boolean>(false);
+
+  const applyTemplate = useCallback((doc: StarterTemplateDoc) => {
+    setActiveDoc(doc);
+    setChosen(true);
+    setGalleryOpen(false);
+    setSurfaceKey((k) => k + 1); // remount the surface with the chosen doc
+  }, []);
+  const startBlank = useCallback(() => {
+    setActiveDoc(null); // null → the on-brand blank starter (grapes/brand buildStarterMjml)
+    setChosen(true);
+    setGalleryOpen(false);
+    setSurfaceKey((k) => k + 1);
+  }, []);
+  // Reopened from the toolbar — replacing existing work needs a confirm.
+  const replaceWithTemplate = useCallback(
+    (doc: StarterTemplateDoc) => {
+      if (!window.confirm("Start from this template? It replaces your current design.")) return;
+      applyTemplate(doc);
+    },
+    [applyTemplate],
+  );
+  const replaceWithBlank = useCallback(() => {
+    if (!window.confirm("Start from a blank layout? It replaces your current design.")) return;
+    startBlank();
+  }, [startBlank]);
+
   // Mobile plain-HTML fallback state (seeded from a legacy html-shaped doc).
   const seededHtml =
     initialDoc && typeof initialDoc === "object" && typeof (initialDoc as { html?: unknown }).html === "string"
@@ -226,7 +277,8 @@ export default function EmailBuilder({
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Action bar */}
+      {/* Action bar — hidden on the desktop template-gallery start screen */}
+      {(isNarrow || chosen) && (
       <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-2">
         {!isNarrow && (
           <div className="flex flex-wrap items-center gap-1.5">
@@ -246,6 +298,17 @@ export default function EmailBuilder({
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          {!isNarrow && chosen && (
+            <button
+              type="button"
+              onClick={() => setGalleryOpen(true)}
+              className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+              data-testid="mkt-open-template-gallery"
+              title="Browse starter templates"
+            >
+              Templates
+            </button>
+          )}
           <span
             className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex"
             title={`This builder is themed for ${brand.name}`}
@@ -266,6 +329,7 @@ export default function EmailBuilder({
           </button>
         </div>
       </div>
+      )}
 
       {/* Messages */}
       {error && (
@@ -315,19 +379,38 @@ export default function EmailBuilder({
             />
           </div>
         </div>
+      ) : !chosen ? (
+        /* ── Template gallery start screen (fresh campaign, desktop) ────────── */
+        <TemplateGallery
+          variant="screen"
+          brandKey={brandKey}
+          onUse={applyTemplate}
+          onBlank={startBlank}
+        />
       ) : (
         /* ── Desktop 3-pane builder ────────────────────────────────────────── */
-        <SurfaceErrorBoundary onRetry={() => setSurfaceKey((k) => k + 1)}>
-          <Suspense fallback={<LoadingSurface />}>
-            <LazySurface
-              key={surfaceKey}
-              ref={surfaceRef}
+        <>
+          <SurfaceErrorBoundary onRetry={() => setSurfaceKey((k) => k + 1)}>
+            <Suspense fallback={<LoadingSurface />}>
+              <LazySurface
+                key={surfaceKey}
+                ref={surfaceRef}
+                brandKey={brandKey}
+                initialDoc={activeDoc}
+                onDirty={onDirty}
+              />
+            </Suspense>
+          </SurfaceErrorBoundary>
+          {galleryOpen && (
+            <TemplateGallery
+              variant="modal"
               brandKey={brandKey}
-              initialDoc={initialDoc}
-              onDirty={onDirty}
+              onUse={replaceWithTemplate}
+              onBlank={replaceWithBlank}
+              onClose={() => setGalleryOpen(false)}
             />
-          </Suspense>
-        </SurfaceErrorBoundary>
+          )}
+        </>
       )}
     </div>
   );
