@@ -17388,8 +17388,8 @@ export async function registerRoutes(
     unitedprints: {
       orgSlug: "united-prints",
       brandName: "United Print",
-      fromEmail: "noreply@cufc.co.nz",       // cufc.co.nz is the verified sending domain
-      notifyEmail: "info@cufc.co.nz",         // TODO: switch to a UP inbox when unitedprints.co.nz sending is verified
+      fromEmail: "noreply@unitedprints.co.nz",  // unitedprints.co.nz is a verified Resend sending domain
+      notifyEmail: "orders@unitedprints.co.nz", // real Google Workspace inbox
       accent: "#043bcb",
       siteUrl: "https://unitedprints.co.nz",
       adminPath: "print-livechat",
