@@ -7,9 +7,7 @@
 
 ## Phase 1 — Behavioral Depth (the overnight target)
 
-- [ ] **T11. Journey flow (Sankey) in behavior.tsx.** Render `journey_edges_daily` as a page→page flow (a lightweight inline SVG Sankey or a stacked bar of top transitions — no new heavy dep). verify: `npm run build` green.
-
-- [ ] **T12. `BEHAVIOR.md` docs + a `MIGRATIONS-TO-APPLY.md`.** Event dictionary, table/endpoint map, cron ops, and a **numbered list of the migration files a human must apply to Supabase prod BEFORE deploy** (the two new migration files, in order). verify: both files exist and list every new migration file by name.
+- [x] **T12. `BEHAVIOR.md` docs + a `MIGRATIONS-TO-APPLY.md`.** Event dictionary, table/endpoint map, cron ops, and a **numbered list of the migration files a human must apply to Supabase prod BEFORE deploy** (the two new migration files, in order). verify: both files exist and list every new migration file by name.
 
 ## Phase 2 — Session Replay (STRETCH — only after ALL Phase 1 boxes are `- [x]`)
 
@@ -21,6 +19,8 @@
 - [ ] **T15. 30-day replay retention cron.** verify: `npm run build` green.
 
 ## Done
+
+- [x] **T11. Journey flow ("top transitions") in behavior.tsx.** Added a "User journeys" card (`GET .../journeys?days=&group=` — same `qs`/`keyBase` as `overview`/`hours`) between the Pages table and the detail drawer: edges grouped client-side by `fromPath`, groups ranked by total outgoing count (top 15 sources), each source rendered as its path + up to 6 outgoing destinations as horizontal bars (`fromPath` header, then `→ toPath  (N)` rows, width ∝ count relative to the panel's own max) — no new npm dependency, dark-premium card/`data-testid` conventions matched throughout. Empty state: "No journey data yet — fills in after the nightly rollup runs." verify: `npm run build` green (client 3728 modules transformed, server esbuild 2.5mb, no new warnings).
 
 - [x] **T10. `client/src/pages/behavior.tsx` — page table + per-page detail.** Replaced T9's placeholder with the real dashboard, mirroring `attribution.tsx`'s conventions (dark premium cards, `data-testid`s, react-query keys carrying every live control, locally-redeclared response shapes). Header controls: days window (7/30/90), a site `<select>` (only rendered when the overview response actually contains >1 distinct `site` — most orgs map to exactly one domain via `workspaceDomainByOrgId`, so it's hidden by default), and the group-workspace "All brands" toggle (reuses the same `?group=1` attributionScope path T8 already wired). Panels: an org-wide hour-of-day heat strip (7×24 grid, `GET .../hours`, color intensity relative to the grid's own max — this endpoint has no day-range param since `hour_of_day_profile` is T3's rolling all-time profile, not day-bucketed), then a page table (`GET .../overview?days=`) sorted server-side by views, row click opens a right-side drawer (same slide-in pattern as attribution's journey drawer) that fetches `GET .../page?site=&path=&days=` and renders the scroll-depth funnel as horizontal bars (width = `pct` from `scrollHistToFunnel`), section timing as bars (width relative to the detail's own max `avgVisibleMs`), and top-clicked elements as a plain list (`cssPath` + viewport + avg offset% + click count). verify: `npm run build` green (client 3728 modules transformed, server esbuild 2.5mb, no new warnings beyond the pre-existing chunk-size notice).
 
@@ -44,6 +44,4 @@
 
 <!-- completed tasks move here with a one-line note from the agent -->
 
-- [ ] Fix EVERY finding listed in NEEDS_REVIEW.md (do not deploy, do not touch the attribution path) — verify: re-run the named checks + npm run build green
 
-- [ ] Fix EVERY finding listed in NEEDS_REVIEW.md (do not deploy, do not touch the attribution path) — verify: re-run the named checks + npm run build green

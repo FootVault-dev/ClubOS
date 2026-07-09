@@ -1,10 +1,10 @@
-// Total Tracking Platform, Phase 1 — Behavior dashboard (T10).
+// Total Tracking Platform, Phase 1 — Behavior dashboard (T10 + T11).
 //
 // Read-only reporting UI over the T8 admin endpoints (/api/admin/behavior/*),
 // which read ONLY the *_daily rollup tables (never behavior_events directly —
 // AGENTS.md North star). Mirrors attribution.tsx's dark-premium conventions:
-// header controls -> stat panels -> a page table -> a click-through detail
-// drawer. Journey flow (journey_edges_daily) lands in T11, not here.
+// header controls -> stat panels -> a page table -> a journeys panel -> a
+// click-through detail drawer.
 //
 // Client-safe: response shapes are redeclared locally (no server-type import).
 import { useMemo, useState } from "react";
@@ -12,7 +12,17 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, Layers, MousePointerClick, Clock, TrendingDown, Flame, X } from "lucide-react";
+import {
+  Activity,
+  Layers,
+  MousePointerClick,
+  Clock,
+  TrendingDown,
+  Flame,
+  X,
+  GitBranch,
+  ArrowRight,
+} from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useWorkspace } from "@/lib/workspace-context";
 import { workspaceTypeFor } from "@shared/tabs";
@@ -61,6 +71,21 @@ interface PageDetailResp {
 interface HoursResp {
   group: boolean;
   grid: number[][]; // grid[dow][hour], dow 0=Sun..6=Sat
+}
+interface JourneyEdge {
+  fromPath: string;
+  toPath: string;
+  count: number;
+}
+interface JourneysResp {
+  group: boolean;
+  range: { startDay: string; endDay: string };
+  edges: JourneyEdge[];
+}
+interface JourneySourceGroup {
+  fromPath: string;
+  total: number;
+  edges: JourneyEdge[];
 }
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
@@ -113,6 +138,11 @@ export default function BehaviorPage() {
     queryFn: async () => (await apiRequest("GET", `/api/admin/behavior/hours?${useGroup ? "group=1" : ""}`)).json(),
   });
 
+  const journeys = useQuery<JourneysResp>({
+    queryKey: ["/api/admin/behavior/journeys", ...keyBase],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/behavior/journeys?${qs}`)).json(),
+  });
+
   const detail = useQuery<PageDetailResp>({
     queryKey: ["/api/admin/behavior/page", selectedPage?.site, selectedPage?.pagePath, ...keyBase],
     enabled: !!selectedPage,
@@ -149,6 +179,32 @@ export default function BehaviorPage() {
     for (const s of detail.data?.sections || []) if (s.avgVisibleMs > max) max = s.avgVisibleMs;
     return max;
   }, [detail.data]);
+
+  // Group edges by source page, rank sources by total outgoing traffic, and
+  // cap to the top 15 sources (each showing up to 6 of its busiest
+  // destinations) — a lightweight "top transitions" flow view with no new dep.
+  const journeySources = useMemo<JourneySourceGroup[]>(() => {
+    const bySource = new Map<string, JourneySourceGroup>();
+    for (const e of journeys.data?.edges || []) {
+      let g = bySource.get(e.fromPath);
+      if (!g) {
+        g = { fromPath: e.fromPath, total: 0, edges: [] };
+        bySource.set(e.fromPath, g);
+      }
+      g.total += e.count;
+      g.edges.push(e);
+    }
+    const groups = Array.from(bySource.values());
+    for (const g of groups) g.edges.sort((a, b) => b.count - a.count);
+    groups.sort((a, b) => b.total - a.total);
+    return groups.slice(0, 15);
+  }, [journeys.data]);
+
+  const maxJourneyCount = useMemo(() => {
+    let max = 0;
+    for (const g of journeySources) for (const e of g.edges) if (e.count > max) max = e.count;
+    return max;
+  }, [journeySources]);
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
@@ -330,6 +386,69 @@ export default function BehaviorPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* User journeys — top page->page transitions */}
+      <Card className="premium-card border-white/[0.06]">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-white/90 text-base flex items-center gap-2">
+            <GitBranch className="w-4 h-4 text-emerald-400" />
+            User journeys
+            <span className="text-white/30 text-xs font-normal">
+              {WINDOWS.find((w) => w.value === days)?.label}
+            </span>
+          </CardTitle>
+          <p className="text-xs text-white/30 mt-1">
+            Top page-to-page transitions, grouped by where visitors came from.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {journeys.isLoading ? (
+            <TableSkeleton />
+          ) : !journeySources.length ? (
+            <EmptyState
+              text="No journey data yet — fills in after the nightly rollup runs."
+              testid="text-journeys-empty"
+            />
+          ) : (
+            <div className="space-y-5" data-testid="list-journeys">
+              {journeySources.map((g) => (
+                <div key={g.fromPath} data-testid={`group-journey-${g.fromPath}`}>
+                  <p className="text-[11px] text-white/50 font-mono mb-1.5 truncate" title={g.fromPath}>
+                    {formatPath(g.fromPath)}
+                    <span className="text-white/25"> · {g.total} transitions</span>
+                  </p>
+                  <div className="space-y-1.5">
+                    {g.edges.slice(0, 6).map((e) => (
+                      <div
+                        key={`${e.fromPath}->${e.toPath}`}
+                        className="flex items-center gap-2"
+                        data-testid={`row-journey-${e.fromPath}-${e.toPath}`}
+                      >
+                        <ArrowRight className="w-3 h-3 text-white/20 flex-shrink-0" />
+                        <span
+                          className="w-28 sm:w-48 text-[11px] text-white/70 truncate flex-shrink-0"
+                          title={e.toPath}
+                        >
+                          {formatPath(e.toPath)}
+                        </span>
+                        <div className="flex-1 h-3 rounded bg-white/[0.03] overflow-hidden min-w-[40px]">
+                          <div
+                            className="h-full bg-emerald-500/50 rounded"
+                            style={{
+                              width: `${maxJourneyCount > 0 ? Math.max((e.count / maxJourneyCount) * 100, 3) : 0}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="w-10 text-[10px] text-white/40 flex-shrink-0 text-right">{e.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
