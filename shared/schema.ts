@@ -4364,8 +4364,6 @@ export const acctCodes = pgTable("acct_codes", {
   rootIdx: index("acct_codes_root_idx").on(t.rootCode),
 }));
 
-export const insertAcctCodeSchema = createInsertSchema(acctCodes).omit({ id: true, createdAt: true });
-export type InsertAcctCode = z.infer<typeof insertAcctCodeSchema>;
 export type AcctCode = typeof acctCodes.$inferSelect;
 
 // (what was sold) -> (how it's coded). Effective-dated; resolve() in
@@ -4401,8 +4399,6 @@ export const acctMappingRules = pgTable("acct_mapping_rules", {
   optionIdx: index("acct_mapping_rules_option_idx").on(t.programOptionId),
 }));
 
-export const insertAcctMappingRuleSchema = createInsertSchema(acctMappingRules).omit({ id: true, createdAt: true });
-export type InsertAcctMappingRule = z.infer<typeof insertAcctMappingRuleSchema>;
 export type AcctMappingRuleRow = typeof acctMappingRules.$inferSelect;
 
 // Append-only. NEVER UPDATE a row here — a correction is a new reversing
@@ -4445,8 +4441,6 @@ export const acctPostings = pgTable("acct_postings", {
   codeIdx: index("acct_postings_code_idx").on(t.code),
 }));
 
-export const insertAcctPostingSchema = createInsertSchema(acctPostings).omit({ id: true, postedAt: true });
-export type InsertAcctPosting = z.infer<typeof insertAcctPostingSchema>;
 export type AcctPosting = typeof acctPostings.$inferSelect;
 
 // Term revenue recognition. A fee taken on 19 July for a term ending 24
@@ -4466,8 +4460,6 @@ export const acctDeferredSchedule = pgTable("acct_deferred_schedule", {
   periodIdx: index("acct_deferred_schedule_period_idx").on(t.period),
 }));
 
-export const insertAcctDeferredScheduleSchema = createInsertSchema(acctDeferredSchedule).omit({ id: true, createdAt: true });
-export type InsertAcctDeferredSchedule = z.infer<typeof insertAcctDeferredScheduleSchema>;
 export type AcctDeferredSchedule = typeof acctDeferredSchedule.$inferSelect;
 
 // Per-posting Xero state. Entirely unused until Phase 3 (draft-then-approve
@@ -4482,8 +4474,6 @@ export const acctXeroSync = pgTable("acct_xero_sync", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const insertAcctXeroSyncSchema = createInsertSchema(acctXeroSync).omit({ id: true, createdAt: true });
-export type InsertAcctXeroSync = z.infer<typeof insertAcctXeroSyncSchema>;
 export type AcctXeroSync = typeof acctXeroSync.$inferSelect;
 
 // Drift detection audit. The nightly job (T7) compares ClubOS postings
@@ -4501,6 +4491,4 @@ export const acctReconciliationRuns = pgTable("acct_reconciliation_runs", {
   ranAtIdx: index("acct_reconciliation_runs_ran_at_idx").on(t.ranAt),
 }));
 
-export const insertAcctReconciliationRunSchema = createInsertSchema(acctReconciliationRuns).omit({ id: true });
-export type InsertAcctReconciliationRun = z.infer<typeof insertAcctReconciliationRunSchema>;
 export type AcctReconciliationRun = typeof acctReconciliationRuns.$inferSelect;

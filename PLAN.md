@@ -115,7 +115,7 @@ export at the prior commit, T4 adds exactly zero).
 
 **Must assert:** calling `emitPosting` twice with the same key writes exactly one row.
 
-- [ ] **T5 — hook the four confirm functions**
+- [x] **T5 — hook the four confirm functions** — implemented by the loop, verified by hand: hooks sit after the atomic flip, try/catch, off unless `ACCOUNTING_SUBLEDGER=1`, no Xero import. Bookings/print pass `programId: 0` and have no rules yet — see OPEN-QUESTIONS.md #1.
 `handlePaymentSuccess`, `confirmAndEmailVenueBookings`, `handlePrintPaymentSuccess`,
 `finalizeMembershipPayment` (`server/routes.ts`).
 
