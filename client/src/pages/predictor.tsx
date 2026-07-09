@@ -4,7 +4,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
   Trophy, Users, ClipboardCheck, Loader2, Plus, Pencil, Trash2, X, Search,
-  Download, CheckCircle2, Clock, Medal, Goal, ListOrdered,
+  Download, CheckCircle2, Clock, Medal, ListOrdered,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -586,7 +586,7 @@ function PredictionsDialog({ fixture, onClose }: { fixture: Fixture; onClose: ()
           <table className="w-full min-w-[640px]">
             <thead>
               <tr className="border-b border-white/5">
-                {["Fan", "Email", "Predicted", "Scorer picks", "Points"].map((h) => (
+                {["Fan", "Email", "Predicted", "First scorer", "Points"].map((h) => (
                   <th key={h} className="text-left text-[10px] text-white/30 uppercase px-3 py-2 font-semibold">{h}</th>
                 ))}
               </tr>
@@ -616,14 +616,21 @@ function SquadView() {
   const { toast } = useToast();
   const [name, setName] = useState("");
   const [position, setPosition] = useState("");
+  const [shirt, setShirt] = useState("");
 
   const { data: squad = [], isLoading } = useQuery<SquadPlayer[]>({ queryKey: ["/api/admin/predictor/squad"] });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/predictor/squad"] });
 
   const create = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/admin/predictor/squad", { name: name.trim(), position: position.trim() }),
-    onSuccess: () => { invalidate(); setName(""); setPosition(""); toast({ title: "Player added" }); },
+    mutationFn: () => apiRequest("POST", "/api/admin/predictor/squad", {
+      name: name.trim(),
+      position: position.trim(),
+      shirtNumber: shirt.trim() === "" ? null : parseInt(shirt, 10),
+      // Sort by shirt number so the picker reads like a teamsheet.
+      sort: shirt.trim() === "" ? 90 : parseInt(shirt, 10),
+    }),
+    onSuccess: () => { invalidate(); setName(""); setPosition(""); setShirt(""); toast({ title: "Player added" }); },
     onError: (e: any) => toast({ title: "Couldn't add player", description: e.message, variant: "destructive" }),
   });
   const toggle = useMutation({
@@ -677,7 +684,7 @@ function SquadView() {
           <table className="w-full min-w-[520px]">
             <thead>
               <tr className="border-b border-white/5">
-                {["Player", "Position", "Status", ""].map((h) => (
+                {["No.", "Player", "Position", "Status", ""].map((h) => (
                   <th key={h} className="text-left text-[10px] text-white/30 uppercase px-4 py-2 font-semibold">{h}</th>
                 ))}
               </tr>
@@ -685,6 +692,7 @@ function SquadView() {
             <tbody>
               {squad.map((p) => (
                 <tr key={p.id} className={`border-b border-white/[0.02] ${p.active ? "" : "opacity-40"}`} data-testid={`predictor-squad-row-${p.id}`}>
+                  <td className="px-4 py-2.5 text-sm text-white/40 tabular-nums">{p.shirtNumber ?? "—"}</td>
                   <td className="px-4 py-2.5 text-sm text-white/80 font-medium">{p.name}</td>
                   <td className="px-4 py-2.5 text-sm text-white/50">{p.position || "—"}</td>
                   <td className="px-4 py-2.5">
@@ -846,7 +854,7 @@ function LeaderboardView() {
         <div className="text-center py-12 text-white/20 text-sm">Loading leaderboard…</div>
       ) : showingFixture ? (
         <Board
-          headers={["#", "Fan", "Email", "Predicted", "Scorer picks", "Points"]}
+          headers={["#", "Fan", "Email", "Predicted", "First scorer", "Points"]}
           empty="No scored predictions for this game."
           rows={(data!.fixtureBoard || []).map((r, i) => (
             <tr key={i} className="border-b border-white/[0.02]">

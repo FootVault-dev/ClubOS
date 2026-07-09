@@ -11412,8 +11412,11 @@ export async function registerRoutes(
         .where(and(eq(predictorSquad.organizationId, orgId), eq(predictorSquad.active, true)))
         .orderBy(asc(predictorSquad.sort), asc(predictorSquad.name)))
         .map((p) => ({ id: p.id, name: p.name, position: p.position, shirtNumber: p.shirtNumber }));
-      // `fixtures` is an alias of `upcoming` — older clients read that key.
-      res.json({ upcoming, fixtures: upcoming, results, squad, categoryMax: PREDICTOR_CATEGORY_MAX });
+      // Deliberately NOT aliased to `fixtures`. The pre-Chelsea cufc.co.nz page
+      // read that key; if this API ships first it must leave that page dormant
+      // ("Predictions open soon") rather than light up a form whose three
+      // goalscorer picks this server no longer scores.
+      res.json({ upcoming, results, squad, categoryMax: PREDICTOR_CATEGORY_MAX });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
