@@ -18,7 +18,7 @@ import { loadStripe, type Stripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import {
   ArrowLeft, ArrowRight, Lock, ShieldCheck, Loader2, AlertCircle, CheckCircle2,
-  MapPin, Users, Info, Mail,
+  MapPin, Users, Info, Mail, Tag, X,
 } from "lucide-react";
 import { checkEligibility, GENDERS, type Gender, type AcademyPaymentPlan } from "@shared/academy";
 import { initPixel, trackEvent } from "@/lib/meta-pixel";
@@ -97,6 +97,15 @@ interface Quote {
   /** Promo code applied at register time. */
   promoCents?: number;
   discountCode?: string | null;
+}
+
+/** A code the server has validated against one option+plan. `wasCents` is the
+ *  total it was quoted on — the anchor that detects a stale code. */
+interface AppliedPromo {
+  code: string;
+  promoCents: number;
+  totalCents: number;
+  wasCents: number;
 }
 
 interface TermInfo {
@@ -490,7 +499,7 @@ export default function AcademyRegisterPage() {
   // Promo code. The client only ever holds the STRING — every amount comes back
   // from the server, which re-derives it from scratch when it charges the card.
   const [discountCode, setDiscountCode] = useState("");
-  const [promo, setPromo] = useState<{ code: string; promoCents: number; totalCents: number; wasCents: number } | null>(null);
+  const [promo, setPromo] = useState<AppliedPromo | null>(null);
   const [promoError, setPromoError] = useState<string | null>(null);
   const [promoChecking, setPromoChecking] = useState(false);
 
@@ -579,6 +588,10 @@ export default function AcademyRegisterPage() {
     () => quotes.find((q) => q.optionId === selectedOptionId && q.plan === plan) ?? null,
     [quotes, selectedOptionId, plan],
   );
+
+  // A code is validated against ONE option+plan. Switching either would leave a
+  // total on screen that the server would never charge, so the promo is dropped.
+  useEffect(() => { setPromo(null); setPromoError(null); }, [selectedOptionId, plan]);
 
   const eligibility = programme && child.dateOfBirth
     ? checkEligibility(child.dateOfBirth, programme.seasonYear, programme.ageMin, programme.ageMax)
@@ -919,7 +932,7 @@ export default function AcademyRegisterPage() {
 
                   <ContinueButton onClick={() => setStep("guardian")} disabled={!playerValid} testId="button-continue-player">Continue</ContinueButton>
                 </div>
-                <SummaryAside programme={programme} term={term} selectedOption={selectedOption} selectedQuote={selectedQuote} />
+                <SummaryAside programme={programme} term={term} selectedOption={selectedOption} selectedQuote={selectedQuote} promo={promo} />
               </div>
             )}
 
@@ -995,7 +1008,7 @@ export default function AcademyRegisterPage() {
 
                   <ContinueButton onClick={() => setStep("consents")} disabled={!guardianValid} testId="button-continue-guardian">Continue</ContinueButton>
                 </div>
-                <SummaryAside programme={programme} term={term} selectedOption={selectedOption} selectedQuote={selectedQuote} />
+                <SummaryAside programme={programme} term={term} selectedOption={selectedOption} selectedQuote={selectedQuote} promo={promo} />
               </div>
             )}
 
@@ -1055,10 +1068,26 @@ export default function AcademyRegisterPage() {
                     </div>
                     {promoError && <p className="mt-2 text-[12px]" style={{ color: BRAND.red }}>{promoError}</p>}
                     {promo && (
-                      <p className="mt-2 text-[12px] flex items-center gap-1.5" style={{ color: BRAND.goldBright }}>
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        {promo.code} applied — {money(promo.promoCents)} off. You'll pay {money(promo.totalCents)}.
-                      </p>
+                      <div
+                        className="mt-3 flex items-center justify-between gap-2 rounded-xl px-3 py-2"
+                        style={{ background: "rgba(212,175,55,0.10)", border: `1px solid ${BRAND.gold}` }}
+                        data-testid="promo-applied"
+                      >
+                        <span className="flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: BRAND.goldBright }}>
+                          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                          {promo.code} applied — {money(promo.promoCents)} off
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => { setPromo(null); setPromoError(null); setDiscountCode(""); }}
+                          className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0"
+                          style={{ color: BRAND.mute }}
+                          aria-label={`Remove discount code ${promo.code}`}
+                          data-testid="button-remove-discount"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -1068,7 +1097,7 @@ export default function AcademyRegisterPage() {
                     {submitting ? "Loading payment…" : "Continue to payment"}
                   </ContinueButton>
                 </div>
-                <SummaryAside programme={programme} term={term} selectedOption={selectedOption} selectedQuote={selectedQuote} />
+                <SummaryAside programme={programme} term={term} selectedOption={selectedOption} selectedQuote={selectedQuote} promo={promo} />
               </div>
             )}
 
@@ -1292,8 +1321,18 @@ function ChooseStep({
 // ── Shared price summary sidebar (never fixed-position — can't cover a CTA) ─
 
 function SummaryAside({
-  programme, term, selectedOption, selectedQuote,
-}: { programme: Programme; term: TermInfo | null; selectedOption: ProgrammeOption | null; selectedQuote: Quote | null }) {
+  programme, term, selectedOption, selectedQuote, promo,
+}: {
+  programme: Programme; term: TermInfo | null;
+  selectedOption: ProgrammeOption | null; selectedQuote: Quote | null;
+  promo?: AppliedPromo | null;
+}) {
+  // Belt and braces: a promo is only ever drawn against the exact total it was
+  // quoted on. If they disagree, the code is stale — show the undiscounted
+  // price rather than a number the server would refuse to charge.
+  const promoActive = !!promo && !!selectedQuote && promo.wasCents === selectedQuote.totalCents;
+  const totalCents = promoActive ? promo!.totalCents : selectedQuote?.totalCents ?? 0;
+
   return (
     <aside className="order-1 lg:order-2 lg:sticky lg:top-20 lg:self-start">
       <div className="rounded-2xl p-5" style={{ background: BRAND.ink, border: `1px solid ${BRAND.line}` }}>
@@ -1318,9 +1357,21 @@ function SummaryAside({
                 </div>
               </>
             )}
+            {promoActive && (
+              <>
+                <div className="flex justify-between" style={{ color: BRAND.mute }}>
+                  <span>Subtotal</span>
+                  <span className="font-mono line-through">{money(selectedQuote.totalCents)}</span>
+                </div>
+                <div className="flex justify-between" style={{ color: BRAND.goldBright }} data-testid="summary-promo-line">
+                  <span className="flex items-center gap-1.5"><Tag className="w-3.5 h-3.5" />{promo!.code}</span>
+                  <span className="font-mono">−{money(promo!.promoCents)}</span>
+                </div>
+              </>
+            )}
             <div className="flex justify-between font-bold text-base pt-2" style={{ borderTop: `1px solid ${BRAND.line}` }}>
               <span>{selectedQuote.plan === "year" ? "Total (full year)" : "Total (this term)"}</span>
-              <span className="font-mono" style={{ color: BRAND.goldBright }}>{money(selectedQuote.totalCents)}</span>
+              <span className="font-mono" style={{ color: BRAND.goldBright }} data-testid="summary-total">{money(totalCents)}</span>
             </div>
           </div>
         )}
