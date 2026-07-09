@@ -43,3 +43,5 @@
 - [x] **T8. `GET /api/admin/behavior/*` read endpoints.** New `server/behavior-reports.ts` (mirrors `attribution-reports.ts`): `behaviorOverview`/`behaviorPageDetail`/`behaviorJourneys`/`behaviorHours`, all raw `db.execute(sql\`...\`)` reads over the `*_daily` rollup tables only, feeding the pure `scrollHistToFunnel`/`hourProfileToGrid` reducers from `shared/behavior-rollups.ts`. Wired into `server/routes.ts` right after the attribution journey endpoint: `GET /api/admin/behavior/{overview,page,journeys,hours}`, each `requireAuth` via `attributionScope(req)`. "Site" scoping (behavior tables have no org_id) derived from scoped orgIds via `workspaceDomainByOrgId(...).emailDomain`. `page` detail takes `site`+`path` as QUERY params, not URL segments (Express 5 wildcard syntax needs a named `*splat`, punted for a server-only API — see AGENTS Lessons learned). verify: `npm run build` green.
 
 <!-- completed tasks move here with a one-line note from the agent -->
+
+- [ ] Fix EVERY finding listed in NEEDS_REVIEW.md (do not deploy, do not touch the attribution path) — verify: re-run the named checks + npm run build green
