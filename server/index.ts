@@ -91,6 +91,12 @@ app.use(attributionCookieMiddleware);
   const { registerFeedbackRoutes } = await import("./feedback-routes");
   registerFeedbackRoutes(app);
 
+  // CIC Content Marketplace — live sales + engagement analytics for the CIC
+  // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
+  // gated by requireTab("cic-content-marketplace") to the CIC workspace.
+  const { registerContentMarketplaceRoutes } = await import("./content-marketplace-routes");
+  registerContentMarketplaceRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).
