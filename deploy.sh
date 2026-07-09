@@ -42,6 +42,19 @@
 # Never deploy while a subagent or a parallel session is mid-edit — the Dockerfile's
 # `COPY . .` captures whatever is on disk at that instant, half-written files included.
 #
+# This is not theoretical. On 2026-07-10 a parallel session had added
+# `esign_signers.is_form_signer` to shared/schema.ts with its migration NOT YET
+# APPLIED. Deploying that tree would have made every e-sign query select a column
+# that does not exist in prod. ALWAYS `git status --short` first.
+#
+# If someone else IS mid-edit, deploy from a clean worktree at your own commit:
+#     W=/tmp/clubos-deploy-$$
+#     git worktree add --detach "$W" HEAD && cp .env "$W/.env" && cd "$W"
+#     env -u FLY_API_TOKEN flyctl deploy -a clubos --depot=false --remote-only --no-cache \
+#       --build-arg VITE_STRIPE_PUBLISHABLE_KEY="…" --build-arg VITE_META_PIXEL_ID="…"
+#     cd - && git worktree remove "$W"
+# Use --no-cache from a worktree: Fly has served a STALE build layer from one before.
+#
 # ── PERMANENT POST-DEPLOY SMOKE CHECKLIST (run every time, --no-cache if stale)
 #   curl -sI https://app.usg.co.nz/t.js         → content-type: application/javascript  (NOT text/html)
 #   curl -sI https://app.usg.co.nz/l/<realkey>  → 302 (NOT 200 HTML)
