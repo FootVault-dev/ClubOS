@@ -8,8 +8,6 @@
 ## Phase 1 — Behavioral Depth (the overnight target)
 
 
-- [ ] **T2. `behavior_events` partitioned table — migration FILE + drizzle mirror.** Write `migrations/<today>_behavior_events.sql` per AGENTS §3 (parent PARTITION BY RANGE (ts) + current + next 2 monthly partitions + parent indexes, all `IF NOT EXISTS`). Add the matching `behaviorEvents` `pgTable` mirror to `shared/schema.ts` (no partition clause) + insert type. verify: `npm run build` green AND the SQL file has only additive verbs (grep it: no DROP/ALTER-rename/db:push).
-
 - [ ] **T3. Rollup tables — migration FILE + drizzle mirrors.** `migrations/<today>_behavior_rollups.sql`: `page_stats_daily`, `section_stats_daily`, `click_stats_daily`, `journey_edges_daily`, `hour_of_day_profile` per AGENTS §4 (all `CREATE TABLE IF NOT EXISTS`, a unique key per table for idempotent upsert). Add drizzle mirrors to `shared/schema.ts`. verify: `npm run build` green.
 
 - [ ] **T4. `shared/behavior-rollups.ts` — SQL builder helpers + tests.** Pure functions returning the parameterised SQL strings that recompute each rollup for a given day (used by the cron), plus the client-facing read-shape reducers if any are pure. verify: `npx tsx script/test-behavior-rollups.ts` green (≥15 assertions — e.g. builders emit the expected upsert onConflict, day-bounded WHERE, no `DROP`).
@@ -42,5 +40,7 @@
 ## Done
 
 - [x] **T1. `shared/behavior.ts` — pure event-shaping module.** Built `shapeBehaviorEvent`/`shapeBehaviorEvents` (whitelist, css_path sanitising, offset clamp, scroll-band bucketing, viewport coercion, site normalising, FNV-1a text hash instead of raw text, `detectBot` reuse). `script/test-behavior.ts`: 77 assertions green. `npm run build` green. NOTE for T2: added a `textHash` field not listed in AGENTS §3 — the migration needs a `text_hash text` column too (see AGENTS Lessons learned).
+
+- [x] **T2. `behavior_events` partitioned table — migration FILE + drizzle mirror.** `migrations/2026-07-10_behavior_events.sql`: parent `PARTITION BY RANGE (ts)` (composite `PRIMARY KEY (id, ts)` — partitioned tables require the partition key in every PK), 3 monthly partitions (2026-07/08/09), 4 parent indexes (all `IF NOT EXISTS`), includes the `text_hash` column from T1. Drizzle mirror `behaviorEvents` added to `shared/schema.ts` (+ `real` import) — no partition clause, matching indexes for query typing. verify: `npm run build` green; grep confirms only additive verbs (DROP/db:push mentions are comment prose, not SQL statements).
 
 <!-- completed tasks move here with a one-line note from the agent -->

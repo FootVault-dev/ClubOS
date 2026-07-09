@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, real, pgEnum, uniqueIndex, unique, index, time, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1407,6 +1407,50 @@ export const analyticsEvents = pgTable("analytics_events", {
 
 export const insertAnalyticsEventSchema = createInsertSchema(analyticsEvents).omit({ id: true });
 export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
+
+// ── Total Tracking Platform, Phase 1 (Behavioral Depth) ──────────────────────
+// behavior_events — a SEPARATE pipeline from analyticsEvents above (which is the
+// LIVE attribution touch path — see AGENTS.md rule 4). Written to ONLY by the
+// POST /api/public/analytics/behavior collector. The real table
+// (migrations/2026-07-10_behavior_events.sql) is monthly RANGE-partitioned on
+// `ts` with a composite (id, ts) primary key — drizzle can't own partitioning,
+// so this mirror carries matching columns for query typing only (no partition
+// clause, no PK annotation, since drizzle-kit push is never run against this
+// schema — the migration file is the source of truth).
+export const behaviorEvents = pgTable("behavior_events", {
+  id: bigint("id", { mode: "number" }).notNull(),
+  visitorId: text("visitor_id"),
+  personId: integer("person_id"),
+  sessionId: text("session_id"),
+  site: text("site"),
+  eventType: text("event_type").notNull(),
+  pagePath: text("page_path"),
+  cssPath: text("css_path"),
+  offsetX: real("offset_x"),
+  offsetY: real("offset_y"),
+  viewport: text("viewport"),
+  scrollBand: integer("scroll_band"),
+  sectionKey: text("section_key"),
+  visibleMs: integer("visible_ms"),
+  dwellMs: integer("dwell_ms"),
+  formId: text("form_id"),
+  metric: text("metric"),
+  metricValue: real("metric_value"),
+  textHash: text("text_hash"),
+  country: text("country"),
+  city: text("city"),
+  isBot: boolean("is_bot").notNull().default(false),
+  ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  visitorTsIdx: index("behavior_events_visitor_ts_idx").on(t.visitorId, t.ts),
+  pageTsIdx: index("behavior_events_page_ts_idx").on(t.pagePath, t.ts),
+  typeTsIdx: index("behavior_events_type_ts_idx").on(t.eventType, t.ts),
+  sectionTsIdx: index("behavior_events_section_ts_idx").on(t.sectionKey, t.ts),
+}));
+
+export const insertBehaviorEventSchema = createInsertSchema(behaviorEvents).omit({ id: true });
+export type InsertBehaviorEvent = z.infer<typeof insertBehaviorEventSchema>;
+export type BehaviorEvent = typeof behaviorEvents.$inferSelect;
 export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
 
 export const splitTestStatusEnum = pgEnum("split_test_status", ["active", "completed", "cancelled"]);
