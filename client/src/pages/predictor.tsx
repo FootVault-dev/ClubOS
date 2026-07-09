@@ -7,43 +7,70 @@ import {
   Download, CheckCircle2, Clock, Medal, Goal, ListOrdered,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  PREDICTOR_AUTO_CATEGORIES, PREDICTOR_MANUAL_CATEGORIES, PREDICTOR_CATEGORY_LABEL,
+  PREDICTOR_CATEGORY_MAX, PREDICTOR_OWN_GOAL, PREDICTOR_NO_SCORER,
+  predictorMaxPoints, parseCategories, type PredictorCategory,
+} from "@shared/predictor-scoring";
 
-// The Play Predictor admin — fans predict CUFC first-team scores + goalscorers
-// on cufc.co.nz; this tab runs the whole game: fixtures + prizes, the squad
-// list behind the goalscorer picker, results (which recompute points via
-// shared/predictor-scoring.ts), the entrant database and unmasked leaderboards.
+// The Play Predictor admin — fans play the Chelsea Play Predictor game on
+// cufc.co.nz; this tab runs it: fixtures + prizes + which of the nine scoring
+// categories each game is played over, the squad behind the first-goalscorer
+// picker, results (entered by hand or pulled straight off Mainland Football,
+// either way recomputing points via shared/predictor-scoring.ts), the entrant
+// database and unmasked leaderboards.
 
 type Fixture = {
   id: number;
   externalId: string | null;
+  mfMatchId: string | null;
   opponent: string;
   homeAway: string;
   kickoffAt: string;
   venue: string | null;
   status: string;
+  categories: string[] | null;
   cufcScore: number | null;
   opponentScore: number | null;
   goalscorers: string[] | null;
+  firstGoalMinute: number | null;
+  shots: number | null;
+  shotsOnTarget: number | null;
+  possession: number | null;
+  corners: number | null;
   prize: string | null;
   createdAt: string | null;
   predictionCount: number;
 };
-type SquadPlayer = { id: number; name: string; position: string | null; active: boolean; sort: number };
+type SquadPlayer = { id: number; name: string; position: string | null; shirtNumber: number | null; active: boolean; sort: number };
 type Entrant = {
   id: number; fullName: string; email: string; phone: string;
   marketingConsent: boolean; source: string | null; createdAt: string | null;
   predictionCount: number; totalPoints: number;
 };
 type SeasonRow = { rank: number; entrantId: number; name: string; email: string; points: number; games: number };
-type FixtureBoardRow = { rank: number; name: string; email?: string; points: number; predicted: string; goalscorers: string[] };
+type FixtureBoardRow = {
+  rank: number; name: string; email?: string; points: number; predicted: string;
+  firstScorer: string | null; firstGoalMinute: number | null;
+};
 type PredictionRow = {
   id: number; entrantId: number; fullName: string; email: string; phone: string;
-  cufcScore: number; opponentScore: number; goalscorers: string[]; pointsAwarded: number | null; createdAt: string | null;
+  cufcScore: number; opponentScore: number; firstScorer: string | null; firstGoalMinute: number | null;
+  pointsAwarded: number | null; createdAt: string | null;
 };
 type View = "fixtures" | "squad" | "entrants" | "leaderboard";
 
 const kickoffLabel = (iso: string) =>
-  new Date(iso).toLocaleString("en-NZ", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  new Date(iso).toLocaleString("en-NZ", {
+    weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
+    timeZone: "Pacific/Auckland",
+  });
+
+/** Turn the stored sentinels into something a human can read. */
+const scorerLabel = (name: string | null | undefined) =>
+  !name ? "—" : name === PREDICTOR_OWN_GOAL ? "Own goal" : name === PREDICTOR_NO_SCORER ? "No goalscorer" : name;
+
+const categoriesOf = (f: Fixture): PredictorCategory[] => parseCategories(f.categories);
 
 // datetime-local wants local wall time, not ISO/UTC.
 const toLocalInputValue = (iso: string) => {
@@ -139,7 +166,7 @@ function FixturesView() {
           <table className="w-full min-w-[860px]">
             <thead>
               <tr className="border-b border-white/5">
-                {["Fixture", "Kickoff", "Venue", "Prize", "Status", "Entries", ""].map((h) => (
+                {["Fixture", "Kickoff", "Venue", "Played for", "Status", "Entries", ""].map((h) => (
                   <th key={h} className="text-left text-[10px] text-white/30 uppercase px-4 py-2 font-semibold">{h}</th>
                 ))}
               </tr>
@@ -157,7 +184,10 @@ function FixturesView() {
                   </td>
                   <td className="px-4 py-2.5 text-sm text-white/60 whitespace-nowrap">{kickoffLabel(f.kickoffAt)}</td>
                   <td className="px-4 py-2.5 text-sm text-white/50">{f.venue || "—"}</td>
-                  <td className="px-4 py-2.5 text-sm text-white/50 max-w-[200px] truncate">{f.prize || "—"}</td>
+                  <td className="px-4 py-2.5 text-sm whitespace-nowrap">
+                    <span className="text-white/70 font-medium">{predictorMaxPoints(categoriesOf(f))} pts</span>
+                    <span className="ml-1.5 text-white/30">{categoriesOf(f).length}/9</span>
+                  </td>
                   <td className="px-4 py-2.5">
                     {f.status === "final"
                       ? <span className="inline-flex items-center gap-1 text-[11px] font-medium text-green-400"><CheckCircle2 className="w-3 h-3" /> Final</span>
@@ -216,6 +246,12 @@ function FixtureDialog({ fixture, onClose }: { fixture: Fixture | null; onClose:
   const [kickoff, setKickoff] = useState(fixture ? toLocalInputValue(fixture.kickoffAt) : "");
   const [venue, setVenue] = useState(fixture?.venue ?? "");
   const [prize, setPrize] = useState(fixture?.prize ?? "");
+  const [mfMatchId, setMfMatchId] = useState(fixture?.mfMatchId ?? "");
+  const [categories, setCategories] = useState<PredictorCategory[]>(
+    fixture ? categoriesOf(fixture) : [...PREDICTOR_AUTO_CATEGORIES]);
+
+  const toggleCategory = (c: PredictorCategory) =>
+    setCategories((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
 
   const save = useMutation({
     mutationFn: () => {
@@ -225,6 +261,8 @@ function FixtureDialog({ fixture, onClose }: { fixture: Fixture | null; onClose:
         kickoffAt: new Date(kickoff).toISOString(),
         venue: venue.trim(),
         prize: prize.trim(),
+        mfMatchId: mfMatchId.trim(),
+        categories,
       };
       return fixture
         ? apiRequest("PATCH", `/api/admin/predictor/fixtures/${fixture.id}`, body)
@@ -273,6 +311,34 @@ function FixtureDialog({ fixture, onClose }: { fixture: Fixture | null; onClose:
             className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/25"
             data-testid="predictor-fixture-prize" />
         </Field>
+        <Field label="Mainland Football match id (optional)">
+          <input value={mfMatchId} onChange={(e) => setMfMatchId(e.target.value)} placeholder="e.g. 6194814"
+            className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/25"
+            data-testid="predictor-fixture-mf-match-id" />
+          <p className="mt-1 text-[11px] text-white/40">With this set you can pull the result automatically instead of typing it in.</p>
+        </Field>
+
+        <Field label={`What this game is played for — ${predictorMaxPoints(categories)} points`}>
+          <CategoryPicker
+            title="Settled automatically from Mainland Football"
+            options={PREDICTOR_AUTO_CATEGORIES}
+            selected={categories}
+            onToggle={toggleCategory}
+          />
+          <CategoryPicker
+            title="Only scores if someone records it"
+            note="New Zealand football publishes no shots, shots on target, possession or corners. Switch one of these on and a staff member must log it after the game — leave it blank at result time and the category is voided: it scores nobody and drops out of the match total."
+            options={PREDICTOR_MANUAL_CATEGORIES}
+            selected={categories}
+            onToggle={toggleCategory}
+          />
+          {fixture?.status === "final" && (
+            <p className="mt-2 text-[11px] text-amber-300/80">
+              This game is already final — changing the categories will rescore every prediction on it.
+            </p>
+          )}
+        </Field>
+
         <div className="grid grid-cols-2 gap-3 pt-1">
           <button onClick={onClose} className="py-2.5 rounded-lg text-sm font-medium bg-white/10 text-white hover:bg-white/15">Cancel</button>
           <button onClick={() => save.mutate()} disabled={!canSave || save.isPending} data-testid="predictor-fixture-save"
@@ -285,31 +351,97 @@ function FixtureDialog({ fixture, onClose }: { fixture: Fixture | null; onClose:
   );
 }
 
+/** The nine categories, grouped, as tick-boxes on the fixture dialog. */
+function CategoryPicker({ title, note, options, selected, onToggle }: {
+  title: string;
+  note?: string;
+  options: PredictorCategory[];
+  selected: PredictorCategory[];
+  onToggle: (c: PredictorCategory) => void;
+}) {
+  return (
+    <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">{title}</p>
+      {note && <p className="mt-1 text-[11px] leading-relaxed text-white/40">{note}</p>}
+      <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+        {options.map((c) => (
+          <label key={c} className="flex cursor-pointer items-center gap-2 text-xs text-white/70">
+            <input type="checkbox" checked={selected.includes(c)} onChange={() => onToggle(c)}
+              data-testid={`predictor-category-${c}`}
+              className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 accent-blue-500" />
+            <span className="flex-1">{PREDICTOR_CATEGORY_LABEL[c]}</span>
+            <span className="text-white/30">{PREDICTOR_CATEGORY_MAX[c]}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A whole-number field that is allowed to be empty — empty means "voided". */
+function StatField({ label, value, onChange, placeholder, max, testId }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder: string; max: number; testId?: string;
+}) {
+  return (
+    <Field label={label}>
+      <input inputMode="numeric" value={value} onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))}
+        placeholder={placeholder} data-testid={testId}
+        className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-white text-center font-semibold placeholder:text-white/25 focus:outline-none focus:border-white/25" />
+      <p className="mt-1 text-[10px] text-white/30">Blank = voided (0 – {max})</p>
+    </Field>
+  );
+}
+
 function ResultDialog({ fixture, onClose }: { fixture: Fixture; onClose: () => void }) {
   const { toast } = useToast();
+  const live = categoriesOf(fixture);
   const [cufcScore, setCufcScore] = useState(fixture.cufcScore != null ? String(fixture.cufcScore) : "");
   const [opponentScore, setOpponentScore] = useState(fixture.opponentScore != null ? String(fixture.opponentScore) : "");
+  // United's scorers, IN THE ORDER THEY SCORED — the first entry settles the
+  // 20-point first-goalscorer question, so order is not cosmetic.
   const [scorers, setScorers] = useState<string[]>(fixture.goalscorers ?? []);
-  const [otherScorer, setOtherScorer] = useState("");
+  const [firstGoalMinute, setFirstGoalMinute] = useState(fixture.firstGoalMinute != null ? String(fixture.firstGoalMinute) : "");
+  const [shots, setShots] = useState(fixture.shots != null ? String(fixture.shots) : "");
+  const [shotsOnTarget, setShotsOnTarget] = useState(fixture.shotsOnTarget != null ? String(fixture.shotsOnTarget) : "");
+  const [possession, setPossession] = useState(fixture.possession != null ? String(fixture.possession) : "");
+  const [corners, setCorners] = useState(fixture.corners != null ? String(fixture.corners) : "");
 
   const { data: squad = [] } = useQuery<SquadPlayer[]>({ queryKey: ["/api/admin/predictor/squad"] });
   const activeSquad = squad.filter((p) => p.active);
 
-  const toggleScorer = (name: string) => {
-    setScorers((prev) => prev.some((s) => s.toLowerCase() === name.toLowerCase())
-      ? prev.filter((s) => s.toLowerCase() !== name.toLowerCase())
-      : [...prev, name]);
+  const num = (v: string) => (v.trim() === "" ? null : parseInt(v, 10));
+
+  const applyPulled = (p: { cufcScore: number; opponentScore: number; goalscorers: string[]; firstGoalMinute: number | null }) => {
+    setCufcScore(String(p.cufcScore));
+    setOpponentScore(String(p.opponentScore));
+    setScorers(p.goalscorers);
+    setFirstGoalMinute(p.firstGoalMinute != null ? String(p.firstGoalMinute) : "");
   };
-  const addOther = () => {
-    const name = otherScorer.trim();
-    if (!name) return;
-    if (!scorers.some((s) => s.toLowerCase() === name.toLowerCase())) setScorers((prev) => [...prev, name]);
-    setOtherScorer("");
-  };
+
+  const sync = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/admin/predictor/fixtures/${fixture.id}/sync-result`, {}).then((r) => r.json()),
+    onSuccess: (r: { scored: number; pulled: { cufcScore: number; opponentScore: number; goalscorers: string[]; firstGoalMinute: number | null } }) => {
+      applyPulled(r.pulled);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/predictor/fixtures"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/predictor/leaderboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/predictor/entrants"] });
+      const scorerText = r.pulled.goalscorers.map(scorerLabel).join(", ") || "no United scorers";
+      toast({
+        title: `Pulled ${r.pulled.cufcScore}–${r.pulled.opponentScore}`,
+        description: `${scorerText}${r.pulled.firstGoalMinute ? ` · first goal ${r.pulled.firstGoalMinute}'` : ""}. Scored ${r.scored} prediction${r.scored === 1 ? "" : "s"}.`,
+      });
+      onClose();
+    },
+    // The server explains reconciliation failures and tells you to enter it by
+    // hand. Show it verbatim — never swallow it.
+    onError: (e: any) => toast({ title: "Couldn't pull the result", description: e.message, variant: "destructive" }),
+  });
 
   const save = useMutation({
     mutationFn: () => apiRequest("POST", `/api/admin/predictor/fixtures/${fixture.id}/result`, {
       cufcScore: parseInt(cufcScore), opponentScore: parseInt(opponentScore), goalscorers: scorers,
+      firstGoalMinute: num(firstGoalMinute), shots: num(shots), shotsOnTarget: num(shotsOnTarget),
+      possession: num(possession), corners: num(corners),
     }).then((r) => r.json()),
     onSuccess: (r: { scored: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/predictor/fixtures"] });
@@ -322,11 +454,34 @@ function ResultDialog({ fixture, onClose }: { fixture: Fixture; onClose: () => v
   });
 
   const validScore = (v: string) => /^\d+$/.test(v) && parseInt(v) >= 0 && parseInt(v) <= 20;
-  const canSave = validScore(cufcScore) && validScore(opponentScore);
+  const goals = validScore(cufcScore) ? parseInt(cufcScore) : null;
+  const tooManyScorers = goals != null && scorers.length > goals;
+  const onTargetTooHigh = num(shotsOnTarget) != null && num(shots) != null && num(shotsOnTarget)! > num(shots)!;
+  const canSave = validScore(cufcScore) && validScore(opponentScore) && !tooManyScorers && !onTargetTooHigh;
+
+  const scorerOptions = [
+    ...activeSquad.map((p) => ({ value: p.name, label: p.shirtNumber ? `${p.shirtNumber}. ${p.name}` : p.name })),
+    { value: PREDICTOR_OWN_GOAL, label: "Own goal (no United scorer)" },
+  ];
 
   return (
-    <Modal title={`Result — ${fixtureTitle(fixture)}`} onClose={onClose}>
+    <Modal title={`Result — ${fixtureTitle(fixture)}`} onClose={onClose} wide>
       <div className="space-y-4">
+        {/* The normal path: let their feed tell us what happened. */}
+        <div className="rounded-lg border border-blue-500/25 bg-blue-500/[0.07] p-3">
+          <p className="text-xs font-semibold text-blue-100">Pull the result from Mainland Football</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-white/50">
+            Reads the score, United's scorers in order and the minute of the first goal straight off their match centre,
+            then rescores every prediction. It refuses rather than guess if their timeline doesn't add up to the published score.
+            {!fixture.mfMatchId && " Add this fixture's Mainland Football match id first."}
+          </p>
+          <button onClick={() => sync.mutate()} disabled={!fixture.mfMatchId || sync.isPending}
+            data-testid="predictor-result-sync"
+            className="mt-2.5 flex items-center gap-2 rounded-lg bg-blue-500 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-40">
+            {sync.isPending ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Pulling…</> : <><Download className="w-3.5 h-3.5" /> Pull result</>}
+          </button>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <Field label="CUFC">
             <input inputMode="numeric" value={cufcScore} onChange={(e) => setCufcScore(e.target.value)} placeholder="0"
@@ -340,44 +495,68 @@ function ResultDialog({ fixture, onClose }: { fixture: Fixture; onClose: () => v
           </Field>
         </div>
 
-        <Field label="CUFC goalscorers">
-          {activeSquad.length === 0 ? (
-            <p className="text-xs text-white/40">No active squad players yet — add them under Squad, or type names below.</p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5 max-h-[160px] overflow-y-auto pr-1">
-              {activeSquad.map((p) => {
-                const on = scorers.some((s) => s.toLowerCase() === p.name.toLowerCase());
-                return (
-                  <button key={p.id} onClick={() => toggleScorer(p.name)} data-testid={`predictor-result-scorer-${p.id}`}
-                    className={`text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors ${on ? "bg-blue-500/20 border-blue-500/40 text-blue-200" : "bg-white/[0.03] border-white/10 text-white/50 hover:text-white/80"}`}>
-                    {p.name}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <div className="flex items-center gap-2 mt-2">
-            <input value={otherScorer} onChange={(e) => setOtherScorer(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addOther(); } }}
-              placeholder="Other scorer (own goal, trialist…)"
-              className="flex-1 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-white/25" />
-            <button onClick={addOther} disabled={!otherScorer.trim()}
-              className="text-xs font-medium px-3 py-2 rounded-lg bg-white/10 text-white hover:bg-white/15 disabled:opacity-40">Add</button>
+        <Field label="United's goalscorers, in the order they scored">
+          <p className="mb-2 text-[11px] text-white/40">
+            The first name settles the 20-point first-goalscorer question, so the order matters.
+            An own goal counts on the scoreboard but has no United scorer — pick "Own goal" and that question voids for everyone.
+          </p>
+          {scorers.length === 0 && <p className="text-xs text-white/30">No United goals recorded.</p>}
+          <div className="space-y-2">
+            {scorers.map((s, i) => (
+              <div key={`${s}-${i}`} className="flex items-center gap-2">
+                <span className="w-6 text-center text-[11px] font-semibold text-white/30">{i + 1}</span>
+                <div className="flex-1">
+                  <Select value={s} onValueChange={(v) => setScorers((prev) => prev.map((x, j) => (j === i ? v : x)))}>
+                    <SelectTrigger className="premium-input text-white" data-testid={`predictor-result-scorer-${i}`}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {scorerOptions.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <button onClick={() => setScorers((prev) => prev.filter((_, j) => j !== i))} title="Remove"
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-red-400 hover:bg-red-500/10">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
           </div>
-          {scorers.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {scorers.map((s) => (
-                <span key={s} className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-blue-500/15 text-blue-200 border border-blue-500/25">
-                  <Goal className="w-3 h-3" /> {s}
-                  <button onClick={() => setScorers((prev) => prev.filter((x) => x !== s))} className="text-blue-200/60 hover:text-blue-100"><X className="w-3 h-3" /></button>
-                </span>
-              ))}
-            </div>
+          <button
+            onClick={() => setScorers((prev) => [...prev, activeSquad[0]?.name ?? PREDICTOR_OWN_GOAL])}
+            disabled={activeSquad.length === 0 && scorers.length > 0}
+            data-testid="predictor-result-add-scorer"
+            className="mt-2 flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-xs font-medium text-white hover:bg-white/15 disabled:opacity-40">
+            <Plus className="w-3.5 h-3.5" /> Add a goal
+          </button>
+          {tooManyScorers && (
+            <p className="mt-2 text-[11px] text-red-300">
+              You've listed {scorers.length} scorers but United scored {goals}.
+            </p>
           )}
         </Field>
 
+        {live.includes("firstGoalMinute") && (
+          <StatField label="Minute of United's first goal" value={firstGoalMinute} onChange={setFirstGoalMinute}
+            placeholder="—" max={90} testId="predictor-result-first-goal-minute" />
+        )}
+
+        {(live.includes("shots") || live.includes("shotsOnTarget") || live.includes("possession") || live.includes("corners")) && (
+          <div>
+            <p className="text-[11px] leading-relaxed text-amber-300/70">
+              These aren't published anywhere — record them yourself or the category voids and scores nobody.
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-3">
+              {live.includes("shots") && <StatField label="United shots" value={shots} onChange={setShots} placeholder="—" max={60} />}
+              {live.includes("shotsOnTarget") && <StatField label="Shots on target" value={shotsOnTarget} onChange={setShotsOnTarget} placeholder="—" max={40} />}
+              {live.includes("possession") && <StatField label="Possession %" value={possession} onChange={setPossession} placeholder="—" max={100} />}
+              {live.includes("corners") && <StatField label="Corners" value={corners} onChange={setCorners} placeholder="—" max={30} />}
+            </div>
+            {onTargetTooHigh && <p className="mt-2 text-[11px] text-red-300">Shots on target can't exceed total shots.</p>}
+          </div>
+        )}
+
         <p className="text-[11px] text-white/40">
-          Saving marks the game as final and recomputes points for every prediction — exact score 5, correct result 2, +1 per correct goalscorer pick. You can re-enter a corrected result any time.
+          Saving marks the game final and recomputes points for every prediction, over the {predictorMaxPoints(live)} points
+          this fixture is played for. You can re-enter a corrected result any time.
         </p>
 
         <div className="grid grid-cols-2 gap-3">
@@ -418,7 +597,9 @@ function PredictionsDialog({ fixture, onClose }: { fixture: Fixture; onClose: ()
                   <td className="px-3 py-2 text-sm text-white/80 font-medium">{p.fullName}</td>
                   <td className="px-3 py-2 text-sm text-white/50">{p.email}</td>
                   <td className="px-3 py-2 text-sm text-white/70">{p.cufcScore}–{p.opponentScore}</td>
-                  <td className="px-3 py-2 text-sm text-white/50">{(p.goalscorers || []).join(", ") || "—"}</td>
+                  <td className="px-3 py-2 text-sm text-white/50">
+                    {scorerLabel(p.firstScorer)}{p.firstGoalMinute ? ` · ${p.firstGoalMinute}'` : ""}
+                  </td>
                   <td className="px-3 py-2 text-sm text-white/70 font-semibold">{p.pointsAwarded ?? "—"}</td>
                 </tr>
               ))}
@@ -461,18 +642,25 @@ function SquadView() {
       <div className="rounded-xl border border-white/5 bg-white/[0.02] p-4">
         <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-2">Add player</p>
         <div className="flex items-center gap-2 flex-wrap">
+          <input value={shirt} onChange={(e) => setShirt(e.target.value.replace(/[^\d]/g, ""))} placeholder="No."
+            inputMode="numeric"
+            className="w-[70px] px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-white text-center placeholder:text-white/30 focus:outline-none focus:border-white/25"
+            data-testid="predictor-squad-shirt" />
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Player name"
             onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) create.mutate(); }}
             className="flex-1 min-w-[180px] px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/25"
             data-testid="predictor-squad-name" />
-          <input value={position} onChange={(e) => setPosition(e.target.value)} placeholder="Position (optional)"
+          <input value={position} onChange={(e) => setPosition(e.target.value)} placeholder="GK (or leave blank)"
             className="w-[170px] px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/25" />
           <button onClick={() => create.mutate()} disabled={!name.trim() || create.isPending} data-testid="predictor-squad-add"
             className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-lg bg-blue-500 text-white hover:bg-blue-400 disabled:opacity-40">
             {create.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add
           </button>
         </div>
-        <p className="text-[11px] text-white/30 mt-2">Active players appear in the goalscorer picker on cufc.co.nz.</p>
+        <p className="text-[11px] text-white/30 mt-2">
+          Active players appear in the first-goalscorer picker on cufc.co.nz. The squad was seeded from Mainland Football's
+          published teamsheets — re-run <code className="text-white/50">script/seed-predictor-cufc.ts</code> to refresh it.
+        </p>
       </div>
 
       {isLoading ? (
@@ -666,7 +854,9 @@ function LeaderboardView() {
               <td className="px-4 py-2.5 text-sm text-white/80 font-medium">{r.name}</td>
               <td className="px-4 py-2.5 text-sm text-white/50">{r.email || "—"}</td>
               <td className="px-4 py-2.5 text-sm text-white/70">{r.predicted}</td>
-              <td className="px-4 py-2.5 text-sm text-white/50">{(r.goalscorers || []).join(", ") || "—"}</td>
+              <td className="px-4 py-2.5 text-sm text-white/50">
+                {scorerLabel(r.firstScorer)}{r.firstGoalMinute ? ` · ${r.firstGoalMinute}'` : ""}
+              </td>
               <td className="px-4 py-2.5 text-sm text-white/85 font-semibold">{r.points}</td>
             </tr>
           ))}

@@ -14,7 +14,7 @@ import { db } from "./db";
 import * as watch from "./watch-supabase";
 import { buildConversionAttribution } from "./attribution-stamp";
 import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
-import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt } from "drizzle-orm";
+import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
@@ -32,7 +32,24 @@ import { buildCICSchedule } from "./tournament-schedule";
 import { resolveTournamentBrackets } from "./tournament-brackets";
 import { cellsOverlap } from "@shared/field-cells";
 import { computeOrderDiscount, distributeDiscountAcrossTeams, computeTeamPayment, apportion, type DiscountRule } from "@shared/league-pricing";
-import { scorePrediction } from "@shared/predictor-scoring";
+import { fetchMainlandFootballResult } from "./mainland-football";
+import {
+  scorePredictionBreakdown,
+  predictorMaxPoints,
+  predictionsClosed,
+  parseCategories,
+  normaliseGoalMinute,
+  PREDICTOR_CATEGORIES,
+  PREDICTOR_AUTO_CATEGORIES,
+  PREDICTOR_CATEGORY_MAX,
+  PREDICTOR_NO_SCORER,
+  PREDICTOR_OWN_GOAL,
+  PREDICTOR_LIMITS,
+  PREDICTOR_LOCK_BEFORE_KICKOFF_MS,
+  type PredictorCategory,
+  type PredictorActualResult,
+  type PredictorPredictionInput,
+} from "@shared/predictor-scoring";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
 import { renderTrackerScript } from "@shared/tracker-script";
@@ -11145,8 +11162,13 @@ export async function registerRoutes(
   // the admin API.
 
   const PREDICTOR_ORG_SLUG = "christchurch-united";
-  const PREDICTOR_SCORE_MAX = 20;
-  const PREDICTOR_MAX_SCORER_PICKS = 3;
+  const PREDICTOR_SCORE_MAX = PREDICTOR_LIMITS.maxGoals;
+  // Chelsea void duplicate entries and keep only the first ("Duplicate entries
+  // will be void and only the first entry submitted will be eligible"). We let a
+  // fan revise until the deadline instead: the result is unknowable until then,
+  // so nothing is compromised and a typo isn't fatal. Flip to false to match
+  // Chelsea exactly.
+  const PREDICTOR_ALLOW_REVISIONS = true;
   // Keep a just-kicked-off game on the public list (predictions closed) so the
   // page doesn't go blank at kickoff.
   const PREDICTOR_KICKOFF_GRACE_MS = 3 * 60 * 60 * 1000;
@@ -11186,23 +11208,68 @@ export async function registerRoutes(
     return n;
   }
 
-  // Normalise + dedupe the entrant's goalscorer picks (case-insensitive).
-  function predictorNormalizeScorers(input: unknown): string[] | { error: string } {
-    if (input == null) return [];
-    if (!Array.isArray(input)) return { error: "goalscorers must be a list of names" };
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const raw of input) {
-      const name = String(raw ?? "").trim().replace(/\s+/g, " ");
-      if (!name) continue;
-      if (name.length > 80) return { error: "Goalscorer names must be under 80 characters" };
-      const key = name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(name);
+  /** A whole number inside [0, max], or null when absent. Rejects junk. */
+  function predictorParseInt(v: unknown, min: number, max: number): number | null | { error: string } {
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < min || n > max) return { error: `Must be a whole number between ${min} and ${max}.` };
+    return n;
+  }
+
+  /** Trim + squash a player name. Sentinels pass through untouched. */
+  function predictorCleanName(v: unknown): string | null {
+    const s = String(v ?? "").trim().replace(/\s+/g, " ");
+    if (!s) return null;
+    if (s === PREDICTOR_NO_SCORER || s === PREDICTOR_OWN_GOAL) return s;
+    return s.slice(0, 80);
+  }
+
+  /** Which categories are live for a fixture (defaults to the five we can settle). */
+  function predictorFixtureCategories(f: typeof predictorFixtures.$inferSelect): PredictorCategory[] {
+    return parseCategories(f.categories);
+  }
+
+  /** Read a fixture row as the actual-result shape the scoring engine expects. */
+  function predictorActualOf(f: typeof predictorFixtures.$inferSelect): PredictorActualResult {
+    return {
+      cufcScore: f.cufcScore ?? 0,
+      opponentScore: f.opponentScore ?? 0,
+      goalscorers: (f.goalscorers as string[] | null) ?? [],
+      firstGoalMinute: f.firstGoalMinute ?? null,
+      shots: f.shots ?? null,
+      shotsOnTarget: f.shotsOnTarget ?? null,
+      possession: f.possession ?? null,
+      corners: f.corners ?? null,
+    };
+  }
+
+  /** Read a prediction row as the prediction shape the scoring engine expects. */
+  function predictorPredictionOf(p: typeof predictorPredictions.$inferSelect): PredictorPredictionInput {
+    return {
+      cufcScore: p.cufcScore,
+      opponentScore: p.opponentScore,
+      firstScorer: p.firstScorer ?? null,
+      firstGoalMinute: p.firstGoalMinute ?? null,
+      shots: p.shots ?? null,
+      shotsOnTarget: p.shotsOnTarget ?? null,
+      possession: p.possession ?? null,
+      corners: p.corners ?? null,
+    };
+  }
+
+  /** Score every prediction on a fixture and persist points + breakdown. */
+  async function predictorRescoreFixture(fixture: typeof predictorFixtures.$inferSelect): Promise<number> {
+    const enabled = predictorFixtureCategories(fixture);
+    const actual = predictorActualOf(fixture);
+    const predictions = await db.select().from(predictorPredictions)
+      .where(eq(predictorPredictions.fixtureId, fixture.id));
+    for (const p of predictions) {
+      const breakdown = scorePredictionBreakdown(predictorPredictionOf(p), actual, enabled);
+      await db.update(predictorPredictions)
+        .set({ pointsAwarded: breakdown.total, pointsBreakdown: breakdown, updatedAt: new Date() })
+        .where(eq(predictorPredictions.id, p.id));
     }
-    if (out.length > PREDICTOR_MAX_SCORER_PICKS) return { error: `Pick up to ${PREDICTOR_MAX_SCORER_PICKS} goalscorers` };
-    return out;
+    return predictions.length;
   }
 
   // Standard competition ranking — equal points share a rank (same approach as
@@ -11218,8 +11285,16 @@ export async function registerRoutes(
     });
   }
 
-  // Season board — sum of points_awarded across every final fixture.
-  async function predictorSeasonBoard(orgId: number, opts: { masked: boolean }) {
+  // Aggregate board — sum of points_awarded across final fixtures. `since`
+  // scopes it to a window (Chelsea run a month-long promotion beside the
+  // per-match one); omit it for the full season.
+  async function predictorAggregateBoard(orgId: number, opts: { masked: boolean; since?: Date }) {
+    const conditions = [
+      eq(predictorFixtures.organizationId, orgId),
+      eq(predictorFixtures.status, "final"),
+      sql`${predictorPredictions.pointsAwarded} IS NOT NULL`,
+    ];
+    if (opts.since) conditions.push(gte(predictorFixtures.kickoffAt, opts.since));
     const rows = await db.select({
       entrantId: predictorPredictions.entrantId,
       fullName: predictorEntrants.fullName,
@@ -11230,11 +11305,7 @@ export async function registerRoutes(
       .from(predictorPredictions)
       .innerJoin(predictorEntrants, eq(predictorPredictions.entrantId, predictorEntrants.id))
       .innerJoin(predictorFixtures, eq(predictorPredictions.fixtureId, predictorFixtures.id))
-      .where(and(
-        eq(predictorFixtures.organizationId, orgId),
-        eq(predictorFixtures.status, "final"),
-        sql`${predictorPredictions.pointsAwarded} IS NOT NULL`,
-      ))
+      .where(and(...conditions))
       .groupBy(predictorPredictions.entrantId, predictorEntrants.fullName, predictorEntrants.email);
     const sorted = rows
       .map((r) => ({ ...r, points: Number(r.points), games: Number(r.games) }))
@@ -11243,6 +11314,21 @@ export async function registerRoutes(
       ? { rank: r.rank, name: predictorMaskName(r.fullName), points: r.points, games: r.games }
       : { rank: r.rank, entrantId: r.entrantId, name: r.fullName, email: r.email, points: r.points, games: r.games });
   }
+
+  const predictorSeasonBoard = (orgId: number, opts: { masked: boolean }) =>
+    predictorAggregateBoard(orgId, opts);
+
+  /** First instant of the current month, in NZ time. */
+  function predictorMonthStart(now = new Date()): Date {
+    const nz = new Date(now.toLocaleString("en-US", { timeZone: "Pacific/Auckland" }));
+    // Build the NZ month boundary, then reinterpret it as a real instant.
+    const iso = `${nz.getFullYear()}-${String(nz.getMonth() + 1).padStart(2, "0")}-01T00:00:00`;
+    const offsetMs = now.getTime() - nz.getTime();
+    return new Date(new Date(iso).getTime() + offsetMs);
+  }
+
+  const predictorMonthBoard = (orgId: number, opts: { masked: boolean }) =>
+    predictorAggregateBoard(orgId, { ...opts, since: predictorMonthStart() });
 
   // Per-fixture board — only exists once the fixture is final (no leaking other
   // fans' picks while predictions are open).
@@ -11255,11 +11341,14 @@ export async function registerRoutes(
       pointsAwarded: predictorPredictions.pointsAwarded,
       cufcScore: predictorPredictions.cufcScore,
       opponentScore: predictorPredictions.opponentScore,
-      goalscorers: predictorPredictions.goalscorers,
+      firstScorer: predictorPredictions.firstScorer,
+      firstGoalMinute: predictorPredictions.firstGoalMinute,
     })
       .from(predictorPredictions)
       .innerJoin(predictorEntrants, eq(predictorPredictions.entrantId, predictorEntrants.id))
       .where(eq(predictorPredictions.fixtureId, fixture.id));
+    // Points, then the earliest submission — deterministic and explicable. (Chelsea
+    // settle prize ties by random draw; we publish a stable order instead.)
     const sorted = rows
       .map((r) => ({ ...r, points: r.pointsAwarded ?? 0 }))
       .sort((a, b) => b.points - a.points || a.fullName.localeCompare(b.fullName));
@@ -11269,11 +11358,13 @@ export async function registerRoutes(
       ...(opts.masked ? {} : { entrantId: r.entrantId, email: r.email }),
       points: r.points,
       predicted: `${r.cufcScore}-${r.opponentScore}`,
-      goalscorers: r.goalscorers || [],
+      firstScorer: r.firstScorer === PREDICTOR_NO_SCORER ? "No goalscorer" : r.firstScorer,
+      firstGoalMinute: r.firstGoalMinute,
     }));
   }
 
   function serializePredictorFixturePublic(f: typeof predictorFixtures.$inferSelect) {
+    const categories = predictorFixtureCategories(f);
     return {
       id: f.id,
       opponent: f.opponent,
@@ -11282,9 +11373,20 @@ export async function registerRoutes(
       venue: f.venue,
       status: f.status,
       prize: f.prize,
+      // Which of the nine categories this game is played over, and the perfect score.
+      categories,
+      maxPoints: predictorMaxPoints(categories),
+      // Predictions lock five minutes before kickoff (Chelsea's deadline).
+      lockAt: new Date(f.kickoffAt.getTime() - PREDICTOR_LOCK_BEFORE_KICKOFF_MS),
+      // The actual result — only meaningful once the fixture is final.
       cufcScore: f.cufcScore,
       opponentScore: f.opponentScore,
       goalscorers: (f.goalscorers as string[] | null) ?? [],
+      firstGoalMinute: f.firstGoalMinute,
+      shots: f.shots,
+      shotsOnTarget: f.shotsOnTarget,
+      possession: f.possession,
+      corners: f.corners,
     };
   }
 
@@ -11300,7 +11402,7 @@ export async function registerRoutes(
       const now = Date.now();
       const upcoming = fixtures
         .filter((f) => f.status === "scheduled" && f.kickoffAt.getTime() > now - PREDICTOR_KICKOFF_GRACE_MS)
-        .map((f) => ({ ...serializePredictorFixturePublic(f), predictionsOpen: f.kickoffAt.getTime() > now }));
+        .map((f) => ({ ...serializePredictorFixturePublic(f), predictionsOpen: !predictionsClosed(f.kickoffAt, now) }));
       const results = fixtures
         .filter((f) => f.status === "final")
         .sort((a, b) => b.kickoffAt.getTime() - a.kickoffAt.getTime())
@@ -11309,8 +11411,9 @@ export async function registerRoutes(
       const squad = (await db.select().from(predictorSquad)
         .where(and(eq(predictorSquad.organizationId, orgId), eq(predictorSquad.active, true)))
         .orderBy(asc(predictorSquad.sort), asc(predictorSquad.name)))
-        .map((p) => ({ id: p.id, name: p.name, position: p.position }));
-      res.json({ upcoming, results, squad });
+        .map((p) => ({ id: p.id, name: p.name, position: p.position, shirtNumber: p.shirtNumber }));
+      // `fixtures` is an alias of `upcoming` — older clients read that key.
+      res.json({ upcoming, fixtures: upcoming, results, squad, categoryMax: PREDICTOR_CATEGORY_MAX });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -11330,16 +11433,63 @@ export async function registerRoutes(
       if (cufcScore == null || opponentScore == null) {
         return res.status(400).json({ message: `Scores must be whole numbers between 0 and ${PREDICTOR_SCORE_MAX}.` });
       }
-      const scorers = predictorNormalizeScorers(req.body?.goalscorers);
-      if (!Array.isArray(scorers)) return res.status(400).json({ message: scorers.error });
 
       const orgId = await predictorOrgId();
       const [fixture] = await db.select().from(predictorFixtures)
         .where(and(eq(predictorFixtures.id, fixtureId), eq(predictorFixtures.organizationId, orgId)));
       if (!fixture) return res.status(404).json({ message: "Fixture not found" });
-      if (fixture.status !== "scheduled" || fixture.kickoffAt.getTime() <= Date.now()) {
-        return res.status(400).json({ message: "Predictions closed — kickoff!" });
+      if (fixture.status !== "scheduled" || predictionsClosed(fixture.kickoffAt)) {
+        return res.status(400).json({ message: "Predictions are closed for this game — they shut five minutes before kickoff." });
       }
+
+      // Only the categories this fixture is played over are accepted or stored.
+      const enabled = new Set(predictorFixtureCategories(fixture));
+
+      // Numeric categories, each range-checked.
+      const numeric: Array<[PredictorCategory, keyof PredictorPredictionInput, number, number]> = [
+        ["firstGoalMinute", "firstGoalMinute", PREDICTOR_LIMITS.minMinute, PREDICTOR_LIMITS.maxMinute],
+        ["shots", "shots", 0, PREDICTOR_LIMITS.maxShots],
+        ["shotsOnTarget", "shotsOnTarget", 0, PREDICTOR_LIMITS.maxShotsOnTarget],
+        ["possession", "possession", 0, 100],
+        ["corners", "corners", 0, PREDICTOR_LIMITS.maxCorners],
+      ];
+      const values: Record<string, number | null> = {};
+      for (const [category, field, min, max] of numeric) {
+        if (!enabled.has(category)) { values[field] = null; continue; }
+        const parsed = predictorParseInt(req.body?.[field], min, max);
+        if (parsed !== null && typeof parsed === "object") {
+          return res.status(400).json({ message: `${field}: ${parsed.error}` });
+        }
+        values[field] = parsed;
+      }
+
+      // The first-goalscorer pick must be a real squad player, or "no goalscorer".
+      let firstScorer: string | null = null;
+      if (enabled.has("firstScorer")) {
+        firstScorer = predictorCleanName(req.body?.firstScorer);
+        if (firstScorer === PREDICTOR_OWN_GOAL) {
+          return res.status(400).json({ message: "You can't pick an own goal." });
+        }
+        if (firstScorer && firstScorer !== PREDICTOR_NO_SCORER) {
+          const squad = await db.select({ name: predictorSquad.name }).from(predictorSquad)
+            .where(and(eq(predictorSquad.organizationId, orgId), eq(predictorSquad.active, true)));
+          const known = new Set(squad.map((s) => s.name.trim().toLowerCase()));
+          if (known.size > 0 && !known.has(firstScorer.toLowerCase())) {
+            return res.status(400).json({ message: "Pick a first goalscorer from the squad list." });
+          }
+        }
+      }
+      // Calling United to score but naming nobody, or vice versa, is incoherent.
+      if (enabled.has("firstScorer")) {
+        if (cufcScore === 0 && firstScorer && firstScorer !== PREDICTOR_NO_SCORER) {
+          return res.status(400).json({ message: "You've called United to be kept out, so you can't also name a goalscorer." });
+        }
+        if (cufcScore > 0 && firstScorer === PREDICTOR_NO_SCORER) {
+          return res.status(400).json({ message: "You've called United to score, so pick who gets the first goal." });
+        }
+      }
+      // A minute makes no sense without a United goal.
+      if (enabled.has("firstGoalMinute") && cufcScore === 0) values.firstGoalMinute = null;
 
       // Upsert the entrant on (org, lower(email)) — the newest details win.
       const [existingEntrant] = await db.select().from(predictorEntrants).where(and(
@@ -11358,21 +11508,30 @@ export async function registerRoutes(
         entrantId = row.id;
       }
 
-      // Upsert the prediction — fans can revise right up to kickoff.
+      // Upsert the prediction — a fan may revise right up to the deadline.
+      const payload = {
+        cufcScore, opponentScore, firstScorer,
+        firstGoalMinute: values.firstGoalMinute,
+        shots: values.shots,
+        shotsOnTarget: values.shotsOnTarget,
+        possession: values.possession,
+        corners: values.corners,
+      };
       const [existingPrediction] = await db.select().from(predictorPredictions).where(and(
         eq(predictorPredictions.fixtureId, fixture.id),
         eq(predictorPredictions.entrantId, entrantId),
       ));
       if (existingPrediction) {
+        if (!PREDICTOR_ALLOW_REVISIONS) {
+          return res.status(400).json({ message: "You've already entered this game — your first prediction stands." });
+        }
         await db.update(predictorPredictions)
-          .set({ cufcScore, opponentScore, goalscorers: scorers, updatedAt: new Date() })
+          .set({ ...payload, updatedAt: new Date() })
           .where(eq(predictorPredictions.id, existingPrediction.id));
       } else {
-        await db.insert(predictorPredictions).values({
-          fixtureId: fixture.id, entrantId, cufcScore, opponentScore, goalscorers: scorers,
-        });
+        await db.insert(predictorPredictions).values({ fixtureId: fixture.id, entrantId, ...payload });
       }
-      res.json({ ok: true });
+      res.json({ ok: true, updated: !!existingPrediction });
     } catch (e: any) { console.error("[Predictor predict] error:", e); res.status(400).json({ message: e.message }); }
   });
 
@@ -11390,8 +11549,28 @@ export async function registerRoutes(
         fixtureMeta = serializePredictorFixturePublic(fixture);
         fixtureBoard = await predictorFixtureBoard(fixture, { masked: true });
       }
-      const season = await predictorSeasonBoard(orgId, { masked: true });
-      res.json({ fixture: fixtureMeta, fixtureBoard, season });
+
+      // With no fixtureId, fall back to the most recent finished game so the
+      // page can always show "last game's winners" without a second round-trip.
+      if (!fixtureId) {
+        const [latest] = await db.select().from(predictorFixtures)
+          .where(and(eq(predictorFixtures.organizationId, orgId), eq(predictorFixtures.status, "final")))
+          .orderBy(desc(predictorFixtures.kickoffAt))
+          .limit(1);
+        if (latest) {
+          fixtureMeta = serializePredictorFixturePublic(latest);
+          fixtureBoard = await predictorFixtureBoard(latest, { masked: true });
+        }
+      }
+
+      const [season, month] = await Promise.all([
+        predictorSeasonBoard(orgId, { masked: true }),
+        predictorMonthBoard(orgId, { masked: true }),
+      ]);
+      const lastFixture = fixtureMeta && fixtureBoard
+        ? { label: `${fixtureMeta.homeAway === "H" ? "v" : "away to"} ${fixtureMeta.opponent}`, rows: fixtureBoard }
+        : null;
+      res.json({ fixture: fixtureMeta, fixtureBoard, lastFixture, season, month });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -11448,11 +11627,13 @@ export async function registerRoutes(
       const [row] = await db.insert(predictorFixtures).values({
         organizationId: orgId,
         externalId: String(req.body?.externalId || "").trim() || null,
+        mfMatchId: String(req.body?.mfMatchId || "").trim() || null,
         opponent,
         homeAway: req.body?.homeAway === "A" ? "A" : "H",
         kickoffAt,
         venue: String(req.body?.venue || "").trim() || null,
         prize: String(req.body?.prize || "").trim() || null,
+        categories: "categories" in req.body ? parseCategories(req.body.categories) : [...PREDICTOR_AUTO_CATEGORIES],
       }).returning();
       res.json(row);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
@@ -11476,12 +11657,16 @@ export async function registerRoutes(
       if ("venue" in req.body) updates.venue = String(req.body.venue ?? "").trim() || null;
       if ("prize" in req.body) updates.prize = String(req.body.prize ?? "").trim() || null;
       if ("externalId" in req.body) updates.externalId = String(req.body.externalId ?? "").trim() || null;
+      if ("mfMatchId" in req.body) updates.mfMatchId = String(req.body.mfMatchId ?? "").trim() || null;
+      if ("categories" in req.body) updates.categories = parseCategories(req.body.categories);
       if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
       updates.updatedAt = new Date();
       const [row] = await db.update(predictorFixtures).set(updates)
         .where(and(eq(predictorFixtures.id, parseInt(String(req.params.id))), eq(predictorFixtures.organizationId, orgId)))
         .returning();
       if (!row) return res.status(404).json({ message: "Fixture not found" });
+      // Changing which categories count changes everyone's score.
+      if ("categories" in req.body && row.status === "final") await predictorRescoreFixture(row);
       res.json(row);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
@@ -11501,7 +11686,10 @@ export async function registerRoutes(
   });
 
   // Enter (or correct) the final result — flips the fixture to 'final' and
-  // recomputes points_awarded for every prediction via shared/predictor-scoring.
+  // recomputes points for every prediction via shared/predictor-scoring.
+  //
+  // Any stat left blank stays NULL, which VOIDS that category for everyone
+  // rather than scoring the whole field zero on data we never captured.
   app.post("/api/admin/predictor/fixtures/:id/result", requireAuth, requireTab("predictor"), async (req, res) => {
     try {
       const orgId = await predictorOrgId();
@@ -11514,21 +11702,88 @@ export async function registerRoutes(
       if (cufcScore == null || opponentScore == null) {
         return res.status(400).json({ message: `Scores must be whole numbers between 0 and ${PREDICTOR_SCORE_MAX}.` });
       }
-      // Actual scorers — duplicates allowed (braces), no pick cap here.
+
+      // United's scorers, in the order they scored. __OWN_GOAL__ marks an
+      // opposition own goal. Duplicates are allowed (a brace is two entries).
       const goalscorers = (Array.isArray(req.body?.goalscorers) ? req.body.goalscorers : [])
-        .map((s: any) => String(s ?? "").trim().replace(/\s+/g, " "))
-        .filter(Boolean);
-      await db.update(predictorFixtures)
-        .set({ status: "final", cufcScore, opponentScore, goalscorers, updatedAt: new Date() })
-        .where(eq(predictorFixtures.id, fixture.id));
-      const predictions = await db.select().from(predictorPredictions).where(eq(predictorPredictions.fixtureId, fixture.id));
-      const actual = { cufcScore, opponentScore, goalscorers };
-      for (const p of predictions) {
-        const points = scorePrediction({ cufcScore: p.cufcScore, opponentScore: p.opponentScore, goalscorers: p.goalscorers || [] }, actual);
-        await db.update(predictorPredictions).set({ pointsAwarded: points, updatedAt: new Date() }).where(eq(predictorPredictions.id, p.id));
+        .map((s: any) => predictorCleanName(s))
+        .filter((s: string | null): s is string => !!s);
+      if (goalscorers.length > cufcScore) {
+        return res.status(400).json({ message: `You've listed ${goalscorers.length} scorers but United scored ${cufcScore}.` });
       }
-      res.json({ ok: true, scored: predictions.length });
+
+      const stats: Array<[string, number, number]> = [
+        ["firstGoalMinute", PREDICTOR_LIMITS.minMinute, PREDICTOR_LIMITS.maxMinute],
+        ["shots", 0, PREDICTOR_LIMITS.maxShots],
+        ["shotsOnTarget", 0, PREDICTOR_LIMITS.maxShotsOnTarget],
+        ["possession", 0, 100],
+        ["corners", 0, PREDICTOR_LIMITS.maxCorners],
+      ];
+      const actuals: Record<string, number | null> = {};
+      for (const [field, min, max] of stats) {
+        const parsed = predictorParseInt(req.body?.[field], min, max);
+        if (parsed !== null && typeof parsed === "object") {
+          return res.status(400).json({ message: `${field}: ${parsed.error}` });
+        }
+        actuals[field] = parsed;
+      }
+      if (cufcScore === 0) actuals.firstGoalMinute = null; // no goal, no minute
+      if (actuals.shotsOnTarget != null && actuals.shots != null && actuals.shotsOnTarget > actuals.shots) {
+        return res.status(400).json({ message: "Shots on target can't exceed total shots." });
+      }
+
+      const [updated] = await db.update(predictorFixtures)
+        .set({
+          status: "final", cufcScore, opponentScore, goalscorers,
+          firstGoalMinute: actuals.firstGoalMinute,
+          shots: actuals.shots,
+          shotsOnTarget: actuals.shotsOnTarget,
+          possession: actuals.possession,
+          corners: actuals.corners,
+          updatedAt: new Date(),
+        })
+        .where(eq(predictorFixtures.id, fixture.id))
+        .returning();
+      const scored = await predictorRescoreFixture(updated);
+      res.json({ ok: true, scored });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Pull the result straight off Mainland Football's match-centre feed — goals,
+  // United's scorers in order (own goals marked) and the first goal's minute.
+  // Their systems never record shots, shots on target, possession or corners,
+  // so those stay NULL and their categories void unless a human logs them.
+  app.post("/api/admin/predictor/fixtures/:id/sync-result", requireAuth, requireTab("predictor"), async (req, res) => {
+    try {
+      const orgId = await predictorOrgId();
+      const id = parseInt(String(req.params.id));
+      const [fixture] = await db.select().from(predictorFixtures)
+        .where(and(eq(predictorFixtures.id, id), eq(predictorFixtures.organizationId, orgId)));
+      if (!fixture) return res.status(404).json({ message: "Fixture not found" });
+      const matchId = String(req.body?.mfMatchId || fixture.mfMatchId || "").trim();
+      if (!matchId) return res.status(400).json({ message: "Add the Mainland Football match id to this fixture first." });
+
+      const pulled = await fetchMainlandFootballResult(matchId);
+      if (!pulled) return res.status(502).json({ message: "Mainland Football hasn't published this match yet." });
+
+      const [updated] = await db.update(predictorFixtures)
+        .set({
+          mfMatchId: matchId,
+          status: "final",
+          cufcScore: pulled.cufcScore,
+          opponentScore: pulled.opponentScore,
+          goalscorers: pulled.goalscorers,
+          firstGoalMinute: pulled.firstGoalMinute,
+          updatedAt: new Date(),
+        })
+        .where(eq(predictorFixtures.id, fixture.id))
+        .returning();
+      const scored = await predictorRescoreFixture(updated);
+      res.json({ ok: true, scored, pulled });
+    } catch (e: any) {
+      console.error("[Predictor sync-result] error:", e);
+      res.status(502).json({ message: e.message || "Couldn't reach Mainland Football." });
+    }
   });
 
   // Per-fixture predictions (unmasked) — the admin detail view.
@@ -11577,9 +11832,12 @@ export async function registerRoutes(
       const name = String(req.body?.name || "").trim();
       if (!name || name.length > 80) return res.status(400).json({ message: "Player name is required (max 80 characters)" });
       const sort = Number.isInteger(Number(req.body?.sort)) ? Number(req.body.sort) : 0;
+      const shirt = predictorParseInt(req.body?.shirtNumber, 1, 99);
+      if (shirt !== null && typeof shirt === "object") return res.status(400).json({ message: `Shirt number: ${shirt.error}` });
       const [row] = await db.insert(predictorSquad).values({
         organizationId: orgId, name,
         position: String(req.body?.position || "").trim() || null,
+        shirtNumber: shirt,
         sort,
       }).returning();
       res.json(row);
@@ -11598,6 +11856,11 @@ export async function registerRoutes(
       if ("position" in req.body) updates.position = String(req.body.position ?? "").trim() || null;
       if ("active" in req.body) updates.active = !!req.body.active;
       if ("sort" in req.body) updates.sort = Number.isInteger(Number(req.body.sort)) ? Number(req.body.sort) : 0;
+      if ("shirtNumber" in req.body) {
+        const shirt = predictorParseInt(req.body.shirtNumber, 1, 99);
+        if (shirt !== null && typeof shirt === "object") return res.status(400).json({ message: `Shirt number: ${shirt.error}` });
+        updates.shirtNumber = shirt;
+      }
       if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to update" });
       const [row] = await db.update(predictorSquad).set(updates)
         .where(and(eq(predictorSquad.id, parseInt(String(req.params.id))), eq(predictorSquad.organizationId, orgId)))

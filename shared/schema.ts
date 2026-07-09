@@ -4094,27 +4094,37 @@ export const insertFeatureRequestSchema = createInsertSchema(featureRequests).om
 export type InsertFeatureRequest = z.infer<typeof insertFeatureRequestSchema>;
 export type FeatureRequest = typeof featureRequests.$inferSelect;
 
-// ── Play Predictor (CUFC first-team score predictions) ───────────────────────
-// Fans predict the Christchurch United first team's score + goalscorers from
-// the CUFC website, earn points (shared/predictor-scoring.ts) and climb
-// per-game + season leaderboards for prizes. Every entrant is captured as a
-// CUFC (org 1) marketing contact — the CUFC Mailer audience reads this table.
+// ── Play Predictor (CUFC first-team match predictions) ───────────────────────
+// Fans predict the Christchurch United first team's match from the CUFC
+// website across the nine Chelsea Play Predictor categories, earn points
+// (shared/predictor-scoring.ts) and climb per-game, monthly and season
+// leaderboards for prizes. Every entrant is captured as a CUFC (org 1)
+// marketing contact — the CUFC Mailer audience reads this table.
 
-// One row per first-team game. Kickoff gates predictions; entering the final
-// result (scores + actual goalscorers) flips status to 'final' and triggers
-// points recomputation for every prediction on the fixture.
+// One row per first-team game. Kickoff (minus five minutes) gates predictions;
+// entering the final result flips status to 'final' and recomputes points for
+// every prediction on the fixture.
 export const predictorFixtures = pgTable("predictor_fixtures", {
   id: serial("id").primaryKey(),
   organizationId: integer("organization_id").notNull().default(1),
   externalId: text("external_id"),                 // optional id from an external fixtures feed
+  mfMatchId: text("mf_match_id"),                  // Mainland Football match-centre id (result auto-sync)
   opponent: text("opponent").notNull(),
   homeAway: text("home_away").notNull().default("H"), // 'H' | 'A'
   kickoffAt: timestamp("kickoff_at", { withTimezone: true }).notNull(),
   venue: text("venue"),
   status: text("status").notNull().default("scheduled"), // 'scheduled' | 'final'
+  // Which of the nine scoring categories are live. NULL → the default five.
+  categories: jsonb("categories").$type<string[] | null>(),
+  // The actual result, one field per category.
   cufcScore: integer("cufc_score"),
   opponentScore: integer("opponent_score"),
-  goalscorers: jsonb("goalscorers").$type<string[] | null>(), // actual scorers (array of names)
+  goalscorers: jsonb("goalscorers").$type<string[] | null>(), // United scorers, in the order they scored
+  firstGoalMinute: integer("first_goal_minute"),
+  shots: integer("shots"),
+  shotsOnTarget: integer("shots_on_target"),
+  possession: integer("possession"),
+  corners: integer("corners"),
   prize: text("prize"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -4140,29 +4150,38 @@ export const predictorEntrants = pgTable("predictor_entrants", {
     .on(t.organizationId, sql`lower(${t.email})`),
 }));
 
-// One prediction per entrant per fixture — revisable until kickoff.
-// points_awarded is written when the fixture result is entered (and rewritten
-// if the result is corrected).
+// One prediction per entrant per fixture, locked five minutes before kickoff.
+// points_awarded + points_breakdown are written when the fixture result is
+// entered (and rewritten if the result is corrected).
 export const predictorPredictions = pgTable("predictor_predictions", {
   id: serial("id").primaryKey(),
   fixtureId: integer("fixture_id").notNull().references(() => predictorFixtures.id),
   entrantId: integer("entrant_id").notNull().references(() => predictorEntrants.id),
   cufcScore: integer("cufc_score").notNull(),
   opponentScore: integer("opponent_score").notNull(),
-  goalscorers: text("goalscorers").array().notNull().default(sql`'{}'::text[]`), // picks (max 3 distinct)
+  firstScorer: text("first_scorer"),               // a squad name, or the __NO_SCORER__ sentinel
+  firstGoalMinute: integer("first_goal_minute"),
+  shots: integer("shots"),
+  shotsOnTarget: integer("shots_on_target"),
+  possession: integer("possession"),
+  corners: integer("corners"),
   pointsAwarded: integer("points_awarded"),
+  pointsBreakdown: jsonb("points_breakdown"),      // per-category result, for the fan-facing breakdown
+  /** @deprecated the pre-Chelsea three-scorer list. Kept for column history; never written. */
+  goalscorers: text("goalscorers").array(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (t) => ({
   fixtureEntrantUnq: unique("predictor_predictions_fixture_entrant_unq").on(t.fixtureId, t.entrantId),
 }));
 
-// First-team player list behind the goalscorer picker on the public form.
+// First-team player list behind the first-goalscorer picker on the public form.
 export const predictorSquad = pgTable("predictor_squad", {
   id: serial("id").primaryKey(),
   organizationId: integer("organization_id").notNull().default(1),
   name: text("name").notNull(),
   position: text("position"),
+  shirtNumber: integer("shirt_number"),
   active: boolean("active").notNull().default(true),
   sort: integer("sort").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
