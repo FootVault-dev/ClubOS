@@ -6,10 +6,13 @@ import {
 } from "lucide-react";
 
 // ── Types (match /api/admin/market-research) ─────────────────────────────────
-interface SourceRow { source: string; status: "working" | "blocked"; detail: string }
+interface SourceRow { source: string; status: "working" | "rate_limited" | "blocked"; detail: string }
 interface SourcesPayload {
   probedAt: string;
   working: SourceRow[];
+  // Rate-limited is NOT blocked: the source works, our own fleet saturated it.
+  // Listing it as blocked would claim its data isn't in the report, when it is.
+  rate_limited?: SourceRow[];
   blocked: SourceRow[];
   note: string;
 }
@@ -238,6 +241,21 @@ export default function MarketResearch() {
                   </li>
                 ))}
               </ul>
+              {!!src.rate_limited?.length && (
+                <>
+                  <div className="text-[11px] uppercase tracking-wide text-white/35 mt-3 mb-1.5">
+                    Working, but rate-limited at probe time
+                  </div>
+                  <ul className="space-y-1">
+                    {src.rate_limited.map((s) => (
+                      <li key={s.source} className="flex gap-2 text-[12px] text-white/65">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400/70 mt-0.5 shrink-0" />
+                        <span><span className="text-white/85">{s.source}</span> — {s.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-wide text-white/35 mb-1.5">Blocked — no data in this report</div>

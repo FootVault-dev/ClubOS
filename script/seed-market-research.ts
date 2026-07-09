@@ -80,10 +80,20 @@ function collect(): Snapshot[] {
     console.warn(`⚠ no master report at ${masterPath} — seeding verticals only`);
   }
 
-  // 3. per-vertical briefs
-  if (existsSync(SYNTH)) {
-    for (const f of readdirSync(SYNTH).filter((f) => f.endsWith(".json")).sort()) {
-      const brief = readJson(join(SYNTH, f));
+  // 3. per-vertical briefs.
+  // Prefer synthesis/normalized/ — build_report.py flattens the keys the research
+  // agents drifted into (price_ladder_nzd, price_ladder_markdown, {note,rows} wrappers)
+  // back onto the schema fields the UI renders. Reading the raw briefs instead would
+  // silently drop real, sourced tables.
+  const NORM = join(SYNTH, "normalized");
+  const briefDir = existsSync(NORM) && readdirSync(NORM).some((f) => f.endsWith(".json")) ? NORM : SYNTH;
+  if (briefDir === SYNTH) {
+    console.warn("⚠ no normalized/ briefs — run: python3 scripts/market_research/build_report.py");
+  }
+
+  if (existsSync(briefDir)) {
+    for (const f of readdirSync(briefDir).filter((f) => f.endsWith(".json")).sort()) {
+      const brief = readJson(join(briefDir, f));
       const slug = basename(f, ".json");
       snapshots.push({
         slug,
