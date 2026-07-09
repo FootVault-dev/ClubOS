@@ -464,6 +464,10 @@ export interface IStorage {
     totalRegistrations: number;
     paidRegistrations: number;
     totalRevenueCents: number;
+    // Club-wide distinct registered players (all program types, not just
+    // camps) — added for the CUFC "whole club" dashboard. Additive only;
+    // existing fields/behaviour untouched.
+    registeredPlayers: number;
   }>;
 
   getSettings(): Promise<Record<string, string>>;
@@ -1388,6 +1392,7 @@ export class DatabaseStorage implements IStorage {
     totalRegistrations: number;
     paidRegistrations: number;
     totalRevenueCents: number;
+    registeredPlayers: number;
   }> {
     // With an orgId the stats are workspace-scoped (SIU vs CUFC); without it
     // the legacy all-orgs behaviour is preserved.
@@ -1424,12 +1429,30 @@ export class DatabaseStorage implements IStorage {
       const [tp] = await db.select({ count: sql<number>`count(*)` }).from(contacts).where(eq(contacts.type, "guardian"));
       totalParents = Number(tp.count);
     }
+    // Club-wide "registered players" — distinct contacts who registered for
+    // ANY program in this workspace (camps AND academy), not just camps.
+    // Only meaningful per-workspace; without an orgId fall back to the
+    // legacy totalParents figure so the all-orgs call keeps its old shape.
+    let registeredPlayers = totalParents;
+    if (orgId) {
+      const orgPrograms = await db.select({ id: programs.id }).from(programs).where(eq(programs.organizationId, orgId));
+      const orgProgramIds = orgPrograms.map(p => p.id);
+      if (orgProgramIds.length > 0) {
+        const [rp] = await db.select({ count: sql<number>`count(distinct ${registrations.contactId})` })
+          .from(registrations).where(inArray(registrations.programId, orgProgramIds));
+        registeredPlayers = Number(rp.count);
+      } else {
+        registeredPlayers = 0;
+      }
+    }
+
     return {
       totalParents,
       activeCamps: Number(ac.count),
       totalRegistrations: totalRegs,
       paidRegistrations: paidRegs,
       totalRevenueCents: totalRev,
+      registeredPlayers,
     };
   }
 

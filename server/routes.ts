@@ -2071,7 +2071,12 @@ export async function registerRoutes(
         )
         .limit(50);
 
-      const already = await db.select({ contactId: clubSquadMembers.contactId }).from(clubSquadMembers).where(eq(clubSquadMembers.squadId, squad.id));
+      // Only ACTIVE members are excluded. A player who left in August can be
+      // re-signed in September — the picker must still offer them.
+      const already = await db
+        .select({ contactId: clubSquadMembers.contactId })
+        .from(clubSquadMembers)
+        .where(and(eq(clubSquadMembers.squadId, squad.id), isNull(clubSquadMembers.leftAt)));
       const taken = new Set(already.map((a) => a.contactId));
 
       res.json(
@@ -2095,17 +2100,36 @@ export async function registerRoutes(
       const errors = validateSquadMember(req.body ?? {});
       if (errors.length) return res.status(400).json({ message: errors[0], errors });
 
+      const contactId = Number(req.body.contactId);
+      const role = String(req.body.role);
+      const values = {
+        squadNumber: req.body.squadNumber ? Number(req.body.squadNumber) : null,
+        position: req.body.position || null,
+        joinedAt: req.body.joinedAt || null,
+        notes: req.body.notes ? String(req.body.notes).trim() : null,
+      };
+
+      // A player who left and is re-signed must be REINSTATED on their existing
+      // row — the (squad, contact, role) unique index would otherwise reject the
+      // insert, and a second row would fork their history in this squad.
+      const [prior] = await db
+        .select()
+        .from(clubSquadMembers)
+        .where(and(eq(clubSquadMembers.squadId, squad.id), eq(clubSquadMembers.contactId, contactId), eq(clubSquadMembers.role, role)));
+
+      if (prior) {
+        if (!prior.leftAt) return res.status(409).json({ message: "They're already in this squad in that role." });
+        const [revived] = await db
+          .update(clubSquadMembers)
+          .set({ ...values, leftAt: null })
+          .where(eq(clubSquadMembers.id, prior.id))
+          .returning();
+        return res.status(200).json({ ...revived, reinstated: true });
+      }
+
       const [created] = await db
         .insert(clubSquadMembers)
-        .values({
-          squadId: squad.id,
-          contactId: Number(req.body.contactId),
-          role: String(req.body.role),
-          squadNumber: req.body.squadNumber ? Number(req.body.squadNumber) : null,
-          position: req.body.position || null,
-          joinedAt: req.body.joinedAt || null,
-          notes: req.body.notes ? String(req.body.notes).trim() : null,
-        } as any)
+        .values({ squadId: squad.id, contactId, role, ...values } as any)
         .returning();
       res.status(201).json(created);
     } catch (e: any) {
