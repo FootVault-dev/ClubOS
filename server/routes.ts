@@ -2030,7 +2030,7 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Programme not found" });
       }
       if (!program.registrationOpen) {
-        return res.status(409).json({ message: "Registrations for this programme aren't open yet." });
+        return res.status(409).json({ code: "not_open", waitlist: true, message: "Registrations for this programme aren't open yet." });
       }
       const section: "core" | "additional" = program.academySection === "additional" ? "additional" : "core";
 
@@ -2039,7 +2039,7 @@ export async function registerRoutes(
       if (sellable.length === 0) {
         // Somebody opened registrations without entering the fee schedule.
         console.error(`[Academy register] programme ${program.slug} is open but has no priced option`);
-        return res.status(409).json({ message: "Registrations for this programme aren't open yet." });
+        return res.status(409).json({ code: "not_open", waitlist: true, message: "Registrations for this programme aren't open yet." });
       }
 
       const option: any =
@@ -2069,12 +2069,12 @@ export async function registerRoutes(
       // ── 4. Capacity ────────────────────────────────────────────────────────
       const spots = await academySpotsRemaining(program);
       if (typeof spots === "number" && spots <= 0) {
-        return res.status(409).json({ message: "This programme is full.", full: true, waitlist: true });
+        return res.status(409).json({ code: "full", full: true, waitlist: true, message: "This programme is full." });
       }
 
       // ── 5. Price. Server-side, from the DB, never from the request body. ────
       const quote = quoteAcademyFees({ termPriceCents: option.fullPriceCents, plan, section });
-      if (quote.totalCents <= 0) return res.status(409).json({ message: "Registrations for this programme aren't open yet." });
+      if (quote.totalCents <= 0) return res.status(409).json({ code: "not_open", waitlist: true, message: "Registrations for this programme aren't open yet." });
 
       // ── 6. Guardian: find, don't duplicate. Enrich, never overwrite. ────────
       // NOT storage.findContactByEmail — that does an exact, case-sensitive match

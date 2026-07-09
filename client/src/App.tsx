@@ -30,6 +30,7 @@ import TermsPage from "@/pages/terms";
 import PrivacyPage from "@/pages/privacy";
 import BookingPage from "@/pages/booking-page";
 import ClassBookingPage from "@/pages/class-booking-page";
+import AcademyRegisterPage from "@/pages/academy-register-page";
 import BookingSuccess from "@/pages/booking-success";
 import AttributionSurvey from "@/pages/attribution-survey";
 import BookingCancel from "@/pages/booking-cancel";
@@ -557,6 +558,9 @@ function App() {
             <Route path="/league/:slug" component={MflLandingPage} />
             <Route path="/league" component={MflLandingPage} />
             <Route path="/membership" component={MembershipPage} />
+            {/* CUFC Academy registration (join.cufc.co.nz/academy/:slug) — must
+                precede /:slug/book so "academy" isn't swallowed as a venue slug. */}
+            <Route path="/academy/:slug" component={AcademyRegisterPage} />
             <Route path="/:slug/book" component={BookingPage} />
             <Route path="/:slug/class-book" component={ClassBookingPage} />
             <Route path="/:slug/checkout" component={CheckoutPage} />
