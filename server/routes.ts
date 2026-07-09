@@ -7,13 +7,14 @@ import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLi
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
-import { fromForOrg } from "@shared/org-domains";
+import { fromForOrg, workspaceDomainByOrgId } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
 import * as watch from "./watch-supabase";
 import { buildConversionAttribution } from "./attribution-stamp";
 import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
+import { resolveBehaviorRange, behaviorOverview, behaviorPageDetail, behaviorJourneys, behaviorHours } from "./behavior-reports";
 import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
@@ -1521,6 +1522,79 @@ export async function registerRoutes(
       if (!data || data.conversionCount === 0)
         return res.status(404).json({ message: "No journey for that person in this workspace" });
       res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ── Total Tracking Platform: behavior admin reporting API (T8) ─────────────
+  // Read-only over the *_daily rollup tables ONLY (never behavior_events — AGENTS.md
+  // North star). Reuses attributionScope for auth/org resolution; "site" scoping
+  // (behavior data has no org_id column) is derived from the scoped orgIds via
+  // shared/org-domains's emailDomain — the same hostname the tracker's
+  // `location.hostname` normalises to. An org with no mapped domain yields no site
+  // filter (returns all sites) rather than silently showing nothing.
+  function behaviorSitesForOrgIds(orgIds: number[]): string[] {
+    const sites = new Set<string>();
+    for (const id of orgIds) {
+      const w = workspaceDomainByOrgId(id);
+      if (w?.emailDomain) sites.add(w.emailDomain.toLowerCase());
+    }
+    return Array.from(sites);
+  }
+
+  app.get("/api/admin/behavior/overview", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const range = resolveBehaviorRange(req.query as Record<string, any>);
+      const rows = await behaviorOverview(behaviorSitesForOrgIds(scope.orgIds), range);
+      res.json({ group: scope.group, range, rows });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Per-page detail. `site`+`path` are query params (not URL segments) since a page
+  // path routinely contains slashes and Express 5's path-to-regexp needs a named
+  // wildcard for that — a query param sidesteps it entirely for a server-only API.
+  app.get("/api/admin/behavior/page", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const site = String(req.query.site || "").trim();
+      const pagePath = String(req.query.path || "").trim();
+      if (!pagePath) return res.status(400).json({ message: "path query param required" });
+      const sites = behaviorSitesForOrgIds(scope.orgIds);
+      if (sites.length && (!site || !sites.includes(site.toLowerCase()))) {
+        return res.status(400).json({ message: `site must be one of: ${sites.join(", ")}` });
+      }
+      const range = resolveBehaviorRange(req.query as Record<string, any>);
+      const data = await behaviorPageDetail(sites, range, site || sites[0] || "", pagePath);
+      res.json({ group: scope.group, range, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/behavior/journeys", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const range = resolveBehaviorRange(req.query as Record<string, any>);
+      const edges = await behaviorJourneys(behaviorSitesForOrgIds(scope.orgIds), range);
+      res.json({ group: scope.group, range, edges });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/behavior/hours", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const grid = await behaviorHours(behaviorSitesForOrgIds(scope.orgIds));
+      res.json({ group: scope.group, grid });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
