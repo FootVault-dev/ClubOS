@@ -92,6 +92,21 @@ export const contacts = pgTable("contacts", {
   teamName: text("team_name"),
   tags: text("tags"),
   notes: text("notes"),
+  // ── NZ Football / Mainland Football registration audit fields ──────────────
+  // Required by NZF's National Registration System (Sporty). Friendly Manager
+  // collects exactly these today; ClubOS could not, which would have made the
+  // annual Mainland Football database audit impossible to satisfy from ClubOS.
+  // Free text, not enums — Sporty's accepted vocabulary is not yet confirmed
+  // (validated in the app against shared/academy.ts NZF_ETHNICITIES).
+  countryOfBirth: text("country_of_birth"),
+  placeOfBirth: text("place_of_birth"),
+  ethnicity: text("ethnicity"),
+  subEthnicity: text("sub_ethnicity"),       // specific ethnic group / iwi
+  ethnicity2: text("ethnicity2"),            // optional second ethnicity
+  subEthnicity2: text("sub_ethnicity2"),
+  // Reconciliation key for the Friendly Manager historical import, so a family
+  // who registers online is not duplicated when the export lands.
+  friendlyManagerId: text("friendly_manager_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -134,8 +149,21 @@ export const programs = pgTable("programs", {
   bookingsCloseDate: date("bookings_close_date"),
   includeWeekends: boolean("include_weekends").default(false),
   capacity: integer("capacity"),
+  // Age GRADE bounds, not ages in years. NZF classifies by year of birth, so a
+  // child born 2017 is U9 for the whole 2026 season. See shared/academy.ts.
   ageMin: integer("age_min"),
   ageMax: integer("age_max"),
+  // ── Academy (2026-07-09) ───────────────────────────────────────────────────
+  // 'core' (FUNiño / Pre-Academy / Academy — the training pathway) vs
+  // 'additional' (Technification, Goalkeeper, Morning Programme). Long present
+  // in the prod DB via raw SQL in server/seed.ts but never mirrored here, which
+  // made it invisible to Drizzle and a `db:push` casualty. Now declared.
+  academySection: text("academy_section"),
+  seasonYear: integer("season_year"),
+  // Open for online self-registration. Distinct from isActive (public
+  // visibility): a programme can be described publicly while closed to signups.
+  // Defaults FALSE so a newly seeded programme can never take money by accident.
+  registrationOpen: boolean("registration_open").notNull().default(false),
   fee: decimal("fee", { precision: 10, scale: 2 }),
   fullDayCost: decimal("full_day_cost", { precision: 10, scale: 2 }),
   heroHeadline: text("hero_headline"),
@@ -361,6 +389,19 @@ export const registrations = pgTable("registrations", {
   metaCampaignId: text("meta_campaign_id"),
   metaPlatform: text("meta_platform"),
   attributionChannel: text("attribution_channel"),
+  // ── Academy (2026-07-09) ───────────────────────────────────────────────────
+  // Evidence of consent at the moment of payment: which policy, and when. A
+  // tick-box with no version is not evidence.
+  policyAcceptedAt: timestamp("policy_accepted_at", { withTimezone: true }),
+  policyVersion: text("policy_version"),
+  nzfConsentAt: timestamp("nzf_consent_at", { withTimezone: true }),
+  // 'term' | 'year'. The full-year plan earns the policy's 5% training-fee
+  // discount and is only offered on core academy programmes.
+  academyPaymentPlan: text("academy_payment_plan"),
+  seasonYear: integer("season_year"),
+  // Provenance. NULL = created in ClubOS. 'friendly_manager' = imported.
+  legacySource: text("legacy_source"),
+  legacyExternalId: text("legacy_external_id"),
   registeredAt: timestamp("registered_at").defaultNow().notNull(),
 });
 
@@ -1492,6 +1533,33 @@ export type InsertDiscount = z.infer<typeof insertDiscountSchema>;
 export type ProgramDiscount = typeof programDiscounts.$inferSelect;
 export type InsertRegistration = z.infer<typeof insertRegistrationSchema>;
 export type Registration = typeof registrations.$inferSelect;
+
+// ── Academy waitlist ────────────────────────────────────────────────────────
+// Academy programmes carry a `capacity` that the old class-registration flow
+// ignored entirely — it would happily oversell a session. When a programme is
+// full we capture the family rather than lose them. (leagueWaitlist exists but
+// is MFL-team shaped: competition + division, no child.)
+export const academyWaitlist = pgTable("academy_waitlist", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull(),
+  programId: integer("program_id").notNull().references(() => programs.id, { onDelete: "cascade" }),
+  seasonYear: integer("season_year"),
+  childFirstName: text("child_first_name").notNull(),
+  childLastName: text("child_last_name").notNull(),
+  childDob: date("child_dob"),
+  guardianName: text("guardian_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  notes: text("notes"),
+  status: text("status").notNull().default("waiting"), // waiting|offered|converted|declined
+  offeredAt: timestamp("offered_at", { withTimezone: true }),
+  convertedRegistrationId: integer("converted_registration_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const insertAcademyWaitlistSchema = createInsertSchema(academyWaitlist).omit({ id: true, createdAt: true });
+export type InsertAcademyWaitlist = z.infer<typeof insertAcademyWaitlistSchema>;
+export type AcademyWaitlist = typeof academyWaitlist.$inferSelect;
+
 export type InsertCampPricing = z.infer<typeof insertCampPricingSchema>;
 export type CampPricing = typeof campPricing.$inferSelect;
 export type InsertCampDate = z.infer<typeof insertCampDateSchema>;

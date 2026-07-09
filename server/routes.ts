@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -50,6 +50,14 @@ import {
   type PredictorActualResult,
   type PredictorPredictionInput,
 } from "@shared/predictor-scoring";
+import {
+  quoteAcademy as quoteAcademyFees,
+  checkEligibility as checkAcademyEligibility,
+  fullYearAvailable as academyFullYearAvailable,
+  validateAcademyRegistration,
+  POLICY_VERSION as ACADEMY_POLICY_VERSION,
+  NZF_ETHNICITIES as NZF_ETHNICITY_OPTIONS,
+} from "@shared/academy";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
 import { renderTrackerScript } from "@shared/tracker-script";
@@ -1663,8 +1671,13 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Weekly payment isn't available for this option" });
       }
 
-      // Create / find guardian + child contacts
-      let guardian = await storage.getContactByEmail?.(email);
+      // Create / find guardian + child contacts.
+      // NB (2026-07-09): these two calls used to read `storage.getContactByEmail?.()`
+      // and `storage.createContactRelationship?.()`. Neither method has ever existed
+      // — the optional-chaining swallowed both silently, so every enrolment minted a
+      // duplicate guardian and NO guardian→child relationship row was ever written.
+      // The real methods are findContactByEmail / createRelationship.
+      let guardian = await storage.findContactByEmail(email);
       if (!guardian) {
         guardian = await storage.createContact({
           type: "guardian",
@@ -1679,7 +1692,7 @@ export async function registerRoutes(
         dateOfBirth: dateOfBirth || null,
       } as any);
       // Link guardian → child
-      await storage.createContactRelationship?.({
+      await storage.createRelationship({
         guardianId: guardian.id,
         playerId: child.id,
         relationship: "parent",
@@ -1817,6 +1830,416 @@ export async function registerRoutes(
       res.status(500).json({ message: e.message });
     }
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ACADEMY REGISTRATIONS — "The Great Reset" (2026-07-09)
+  //
+  // CUFC's academy programmes move off Friendly Manager onto ClubOS. Every
+  // programme is a `programs` row with type='academy'; `academy_section` splits
+  // the core training pathway (FUNiño, Pre-Academy, Academy) from the paid
+  // add-ons (Technification, Goalkeeper, Morning Programme).
+  //
+  // Three guarantees this code makes, in order of how badly they'd hurt:
+  //
+  //   1. IT CANNOT CHARGE A PRICE NOBODY SET. A programme sells only when it is
+  //      active, registration_open, and has an active option with a positive
+  //      price. The 2026 fee schedule lives in the club office, not this repo.
+  //   2. THE CLIENT NEVER NAMES THE PRICE. Amounts are re-quoted server-side
+  //      from program_options and charged from that number alone.
+  //   3. THE NZF AUDIT FIELDS ARE NOT OPTIONAL. Mainland Football audit the
+  //      club's database each season; country of birth / nationality / ethnicity
+  //      are required. Letting them through empty recreates the exact gap this
+  //      migration closed.
+  //
+  // Child PII never enters attribution or Meta payloads — the tracked person is
+  // the paying parent (AGENTS.md hard rule 4).
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /** Shape a programme for the public list/detail views. Never leaks internals. */
+  function publicAcademyProgramme(p: any, options: any[], spotsRemaining: number | null) {
+    const section: "core" | "additional" = p.academySection === "additional" ? "additional" : "core";
+    const sellable = options.filter((o) => o.isActive && (o.fullPriceCents ?? 0) > 0);
+    return {
+      id: p.id,
+      name: p.name,
+      slug: p.slug,
+      section,
+      descriptionShort: p.descriptionShort,
+      description: p.description,
+      location: p.location,
+      ageMin: p.ageMin,
+      ageMax: p.ageMax,
+      seasonYear: p.seasonYear,
+      capacity: p.capacity,
+      spotsRemaining,
+      isFull: typeof spotsRemaining === "number" && spotsRemaining <= 0,
+      // The gate. `registrationOpen` is an explicit admin decision; a priced
+      // option is proof somebody entered the fee schedule.
+      registrationOpen: Boolean(p.registrationOpen) && sellable.length > 0,
+      allowFullYear: academyFullYearAvailable(section),
+      options: sellable.map((o) => ({
+        id: o.id,
+        name: o.name,
+        scheduleText: o.scheduleText,
+        termPriceCents: o.fullPriceCents,
+      })),
+    };
+  }
+
+  /** Confirmed + pending registrations against a programme's capacity.
+   *  Pending counts: a seat held mid-checkout is not a free seat. */
+  async function academySpotsRemaining(program: any): Promise<number | null> {
+    if (typeof program.capacity !== "number" || program.capacity <= 0) return null;
+    const rows = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(registrations)
+      .where(
+        and(
+          eq(registrations.programId, program.id),
+          inArray(registrations.status, ["confirmed", "pending"]),
+        ),
+      );
+    const taken = rows[0]?.n ?? 0;
+    return Math.max(0, program.capacity - taken);
+  }
+
+  // Public — every academy programme for a brand. Powers the cufc.co.nz
+  // programme pages and the registration chooser.
+  app.get("/api/public/academy/programmes", async (req, res) => {
+    try {
+      const orgSlug = String(req.query.org ?? "christchurch-united");
+      const [org] = await db.select().from(organizations).where(eq(organizations.slug, orgSlug));
+      if (!org) return res.status(404).json({ message: "Unknown organisation" });
+
+      const all = await storage.getPrograms();
+      const academy = all.filter(
+        (p: any) => p.type === "academy" && p.isActive && p.organizationId === org.id,
+      );
+
+      const out = [];
+      for (const p of academy) {
+        const options = await storage.getProgramOptions(p.id, { activeOnly: true });
+        out.push(publicAcademyProgramme(p, options, await academySpotsRemaining(p)));
+      }
+      // Core pathway first, then add-ons; youngest first inside each.
+      out.sort((a, b) =>
+        a.section === b.section ? (a.ageMin ?? 0) - (b.ageMin ?? 0) : a.section === "core" ? -1 : 1,
+      );
+      res.json({ organization: { id: org.id, name: org.name, slug: org.slug }, programmes: out });
+    } catch (e: any) {
+      console.error("[Academy programmes] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Public — one programme, with a live quote per payment plan.
+  app.get("/api/public/academy/programmes/:slug", async (req, res) => {
+    try {
+      const program: any = await storage.getProgramBySlug(String(req.params.slug));
+      if (!program || !program.isActive || program.type !== "academy") {
+        return res.status(404).json({ message: "Programme not found" });
+      }
+      const options = await storage.getProgramOptions(program.id, { activeOnly: true });
+      const shaped = publicAcademyProgramme(program, options, await academySpotsRemaining(program));
+
+      let term: any = null;
+      if (program.termId) {
+        const [t] = await db.select().from(terms).where(eq(terms.id, program.termId));
+        term = t ?? null;
+      }
+
+      // Quote every sellable option under every plan the policy permits, so the
+      // page can render real prices without ever computing money itself.
+      const quotes: any[] = [];
+      for (const o of shaped.options) {
+        for (const plan of ["term", "year"] as const) {
+          if (plan === "year" && !shaped.allowFullYear) continue;
+          try {
+            // The quote already carries `plan` — don't restate it.
+            quotes.push({
+              optionId: o.id,
+              ...quoteAcademyFees({ termPriceCents: o.termPriceCents, plan, section: shaped.section }),
+            });
+          } catch {
+            /* an unsellable combination simply isn't offered */
+          }
+        }
+      }
+
+      res.json({
+        programme: shaped,
+        quotes,
+        term: term
+          ? { name: term.name, termNumber: term.termNumber, year: term.year, startDate: term.startDate, endDate: term.endDate }
+          : null,
+        policyVersion: ACADEMY_POLICY_VERSION,
+        ethnicities: NZF_ETHNICITY_OPTIONS,
+      });
+    } catch (e: any) {
+      console.error("[Academy programme detail] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Public — the money path. Creates contacts, the registration, and the
+  // PaymentIntent whose clientSecret drives our own embedded Payment Element.
+  // The webhook (registrationType='academy') confirms and emails.
+  app.post("/api/public/academy/register", async (req, res) => {
+    try {
+      const body = req.body ?? {};
+
+      // ── 1. Shape ────────────────────────────────────────────────────────────
+      const errors = validateAcademyRegistration(body);
+      if (errors.length > 0) return res.status(400).json({ message: errors[0], errors });
+
+      const child = body.child ?? {};
+      const guardianIn = body.guardian ?? {};
+      const emergency = body.emergency ?? {};
+      const consents = body.consents ?? {};
+      const plan: "term" | "year" = body.paymentPlan;
+      const email = String(guardianIn.email).trim().toLowerCase();
+
+      // ── 2. Programme, and the gate that stops a priceless charge ────────────
+      const program: any = await storage.getProgramBySlug(String(body.programSlug));
+      if (!program || !program.isActive || program.type !== "academy") {
+        return res.status(404).json({ message: "Programme not found" });
+      }
+      if (!program.registrationOpen) {
+        return res.status(409).json({ message: "Registrations for this programme aren't open yet." });
+      }
+      const section: "core" | "additional" = program.academySection === "additional" ? "additional" : "core";
+
+      const options = await storage.getProgramOptions(program.id, { activeOnly: true });
+      const sellable = options.filter((o: any) => (o.fullPriceCents ?? 0) > 0);
+      if (sellable.length === 0) {
+        // Somebody opened registrations without entering the fee schedule.
+        console.error(`[Academy register] programme ${program.slug} is open but has no priced option`);
+        return res.status(409).json({ message: "Registrations for this programme aren't open yet." });
+      }
+
+      const option: any =
+        body.programOptionId != null
+          ? sellable.find((o: any) => o.id === Number(body.programOptionId))
+          : sellable.length === 1
+            ? sellable[0]
+            : null;
+      if (!option) return res.status(400).json({ message: "Choose which programme option you're registering for." });
+
+      if (plan === "year" && !academyFullYearAvailable(section)) {
+        return res.status(400).json({
+          message: "Full-year payment isn't available for this programme — it's charged per term.",
+        });
+      }
+
+      // ── 3. Age grade ───────────────────────────────────────────────────────
+      const seasonYear: number = program.seasonYear ?? new Date().getFullYear();
+      const eligibility = checkAcademyEligibility(
+        String(child.dateOfBirth),
+        seasonYear,
+        program.ageMin,
+        program.ageMax,
+      );
+      if (!eligibility.eligible) return res.status(400).json({ message: eligibility.reason });
+
+      // ── 4. Capacity ────────────────────────────────────────────────────────
+      const spots = await academySpotsRemaining(program);
+      if (typeof spots === "number" && spots <= 0) {
+        return res.status(409).json({ message: "This programme is full.", full: true, waitlist: true });
+      }
+
+      // ── 5. Price. Server-side, from the DB, never from the request body. ────
+      const quote = quoteAcademyFees({ termPriceCents: option.fullPriceCents, plan, section });
+      if (quote.totalCents <= 0) return res.status(409).json({ message: "Registrations for this programme aren't open yet." });
+
+      // ── 6. Guardian: find, don't duplicate. Enrich, never overwrite. ────────
+      let guardian = await storage.findContactByEmail(email);
+      if (!guardian) {
+        guardian = await storage.createContact({
+          type: "guardian",
+          firstName: String(guardianIn.firstName).trim(),
+          lastName: String(guardianIn.lastName).trim(),
+          email,
+          phone: String(guardianIn.phone).trim(),
+          alternatePhone: guardianIn.alternatePhone ? String(guardianIn.alternatePhone).trim() : null,
+          address: guardianIn.address ? String(guardianIn.address).trim() : null,
+          newsletterConsent: consents.newsletter === true,
+        } as any);
+      } else {
+        const enrich: any = {};
+        if (!guardian.phone && guardianIn.phone) enrich.phone = String(guardianIn.phone).trim();
+        if (!guardian.address && guardianIn.address) enrich.address = String(guardianIn.address).trim();
+        if (Object.keys(enrich).length > 0) await storage.updateContact(guardian.id, enrich);
+      }
+
+      // ── 7. Child: one contact per real child, not one per term. ─────────────
+      // The old class flow INSERTed a new player every registration. Re-enrolling
+      // next term would fork the child's history and break the NZF audit.
+      const childFirst = String(child.firstName).trim();
+      const childLast = String(child.lastName).trim();
+      const childDob = String(child.dateOfBirth).trim();
+
+      const existingKids = await storage.getRelationships(guardian.id);
+      let player: any =
+        existingKids
+          .map((r: any) => r.player)
+          .find(
+            (p: any) =>
+              p &&
+              p.type === "player" &&
+              p.firstName?.trim().toLowerCase() === childFirst.toLowerCase() &&
+              p.lastName?.trim().toLowerCase() === childLast.toLowerCase() &&
+              p.dateOfBirth === childDob,
+          ) ?? null;
+
+      const childFields = {
+        gender: child.gender ?? null,
+        school: child.school ? String(child.school).trim() : null,
+        countryOfBirth: String(child.countryOfBirth).trim(),
+        nationality: String(child.nationality).trim(),
+        ethnicity: String(child.ethnicity).trim(),
+        subEthnicity: child.subEthnicity ? String(child.subEthnicity).trim() : null,
+        ethnicity2: child.ethnicity2 ? String(child.ethnicity2).trim() : null,
+        subEthnicity2: child.subEthnicity2 ? String(child.subEthnicity2).trim() : null,
+        medicalNotes: child.medicalNotes ? String(child.medicalNotes).trim() : null,
+        allergies: child.allergies ? String(child.allergies).trim() : null,
+        emergencyContact: String(emergency.name).trim(),
+        emergencyPhone: String(emergency.phone).trim(),
+        photoConsent: consents.photo === true,
+        medicalConsent: consents.medical === true,
+      };
+
+      if (player) {
+        // Latest registration wins for medical/emergency/NZF data — a parent
+        // correcting an allergy must not be ignored because the row exists.
+        await storage.updateContact(player.id, childFields as any);
+      } else {
+        player = await storage.createContact({
+          type: "player",
+          firstName: childFirst,
+          lastName: childLast,
+          dateOfBirth: childDob,
+          ...childFields,
+        } as any);
+        await storage.createRelationship({
+          guardianId: guardian.id,
+          playerId: player.id,
+          relationship: String(guardianIn.relationship).trim() || "parent",
+          isPrimaryContact: true,
+        } as any);
+      }
+
+      // ── 8. Registration row (pending until Stripe says otherwise) ───────────
+      // Attribution is stamped from the PARENT only. Never the child.
+      const attribution = await buildConversionAttribution(req, {
+        email,
+        firstName: String(guardianIn.firstName).trim(),
+        lastName: String(guardianIn.lastName).trim(),
+      });
+
+      const now = new Date();
+      const reg = await storage.createRegistration({
+        programId: program.id,
+        programOptionId: option.id,
+        contactId: player.id,
+        guardianId: guardian.id,
+        status: "pending",
+        amountPaid: "0",
+        paymentMode: "upfront",
+        academyPaymentPlan: plan,
+        seasonYear,
+        subtotalCents: quote.subtotalCents,
+        discountCents: quote.discountCents,
+        totalCents: quote.totalCents,
+        currency: "NZD",
+        registrationLocation: "online",
+        policyAcceptedAt: now,
+        policyVersion: ACADEMY_POLICY_VERSION,
+        nzfConsentAt: now,
+        notes: body.notes ? String(body.notes).trim() : null,
+        ...attribution,
+      } as any);
+
+      // ── 9. Our own checkout: a PaymentIntent, never a hosted Stripe page. ───
+      const { stripe } = await import("./stripe");
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: quote.totalCents,
+        currency: "nzd",
+        receipt_email: email,
+        description: `${program.name} — ${option.name} (${plan === "year" ? `${seasonYear} full year` : "one term"})`,
+        automatic_payment_methods: { enabled: true },
+        // Deliberately no child name here: this metadata rides into Stripe and,
+        // via the Purchase event, toward Meta. The parent is the tracked person.
+        metadata: {
+          registrationId: String(reg.id),
+          registrationType: "academy",
+          programId: String(program.id),
+          programSlug: program.slug,
+          programOptionId: String(option.id),
+          academyPaymentPlan: plan,
+          seasonYear: String(seasonYear),
+          parentEmail: email,
+        },
+      });
+      await storage.updateRegistration(reg.id, { stripePaymentIntentId: paymentIntent.id } as any);
+
+      res.json({
+        registrationId: reg.id,
+        clientSecret: paymentIntent.client_secret,
+        quote,
+        programme: { name: program.name, slug: program.slug, section },
+        option: { id: option.id, name: option.name, scheduleText: option.scheduleText },
+        player: { firstName: player.firstName, grade: eligibility.grade, seasonYear },
+      });
+    } catch (e: any) {
+      console.error("[Academy register] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Public — capture the family when a programme is full.
+  app.post("/api/public/academy/waitlist", async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      const email = String(b.email ?? "").trim().toLowerCase();
+      const phone = String(b.phone ?? "").trim();
+      const childFirst = String(b.childFirstName ?? "").trim();
+      const childLast = String(b.childLastName ?? "").trim();
+      const guardianName = String(b.guardianName ?? "").trim();
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: "A valid email is required." });
+      if (phone.replace(/\D/g, "").length < 8) return res.status(400).json({ message: "A valid phone number is required." });
+      if (!childFirst || !childLast) return res.status(400).json({ message: "The player's name is required." });
+      if (!guardianName) return res.status(400).json({ message: "Your name is required." });
+
+      const program: any = await storage.getProgramBySlug(String(b.programSlug ?? ""));
+      if (!program || program.type !== "academy") return res.status(404).json({ message: "Programme not found" });
+
+      await buildConversionAttribution(req, { email, firstName: guardianName });
+
+      // The unique index makes a double-submit a no-op rather than a duplicate.
+      await db
+        .insert(academyWaitlist)
+        .values({
+          organizationId: program.organizationId,
+          programId: program.id,
+          seasonYear: program.seasonYear ?? null,
+          childFirstName: childFirst,
+          childLastName: childLast,
+          childDob: b.childDob ? String(b.childDob).trim() : null,
+          guardianName,
+          email,
+          phone,
+          notes: b.notes ? String(b.notes).trim() : null,
+        } as any)
+        .onConflictDoNothing();
+
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[Academy waitlist] failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+  // ───────────────────────── END ACADEMY REGISTRATIONS ────────────────────────
 
   // Public program quote — used by the public registration page to show
   // a live pro-rated price ('$200 → $100, 5 of 10 sessions remaining').
@@ -21084,6 +21507,65 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
   // + fire the Purchase CAPI event, then stop (skip the camp/class paths).
   if (isLeagueTeam) {
     await handleLeagueRegistrationSuccess(registrationId, metadata);
+    return;
+  }
+
+  // Academy registration (FUNiño / Pre-Academy / Academy / Technification /
+  // Goalkeeper). Same child+guardian shape as a class, but CUFC-branded and it
+  // states what was actually bought — one term, or the season at 5% off.
+  if (metadata?.registrationType === "academy") {
+    const program = await storage.getProgram(reg.programId);
+    const child = await storage.getContact(reg.contactId);
+    const guardian = reg.guardianId ? await storage.getContact(reg.guardianId) : null;
+    if (program && guardian?.email) {
+      const plan = (reg as any).academyPaymentPlan === "year" ? "year" : "term";
+      const paid = ((reg.totalCents ?? 0) / 100).toFixed(2);
+      const saved = ((reg.discountCents ?? 0) / 100).toFixed(2);
+      const row = (k: string, v: string) =>
+        `<tr><td style="color:#7a839c;font-size:12px;text-transform:uppercase;letter-spacing:.08em;padding:7px 0">${k}</td>` +
+        `<td style="padding:7px 0;text-align:right;color:#0C1640">${v}</td></tr>`;
+      try {
+        const { sendEmail } = await import("./email");
+        await sendEmail({
+          to: guardian.email,
+          from: "Christchurch United FC <noreply@cufc.co.nz>",
+          replyTo: "info@cufc.co.nz",
+          subject: `${program.name} — registration confirmed`,
+          html: `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:560px;margin:0 auto;color:#0C1640">
+            <div style="background:linear-gradient(135deg,#263996,#0C1640);padding:34px;border-radius:16px 16px 0 0;text-align:center;color:#fff">
+              <div style="font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:#D4AF37">Christchurch United FC</div>
+              <h1 style="margin:10px 0 0;font-size:23px;letter-spacing:.02em">YOU'RE IN</h1>
+              <p style="margin:6px 0 0;opacity:.8;font-size:14px">${program.name}</p>
+            </div>
+            <div style="background:#f7f8fb;padding:32px;border:1px solid #e4e7ef;border-top:0;border-radius:0 0 16px 16px">
+              <p style="font-size:16px;margin:0 0 14px">Hi ${guardian.firstName},</p>
+              <p style="font-size:14px;line-height:1.65;color:#525c73;margin:0 0 20px">
+                ${child?.firstName ?? "Your child"} is registered for ${program.name}${(reg as any).seasonYear ? ` for the ${(reg as any).seasonYear} season` : ""}.
+                We'll email you the first session details before it starts.
+              </p>
+              <div style="background:#fff;border:1px solid #e4e7ef;border-radius:12px;padding:20px;margin:0 0 20px">
+                <table style="width:100%;border-collapse:collapse">
+                  ${row("Order", String(reg.orderNumber ?? registrationId))}
+                  ${row("Player", `${child?.firstName ?? ""} ${child?.lastName ?? ""}`.trim())}
+                  ${row("Paying", plan === "year" ? "Full year — all four terms" : "One term")}
+                  ${Number(saved) > 0 ? row("Discount", `−$${saved} NZD`) : ""}
+                  <tr><td style="padding:10px 0 0;font-weight:600">Total paid</td>
+                      <td style="padding:10px 0 0;text-align:right;font-weight:600;font-size:16px">$${paid} NZD</td></tr>
+                </table>
+              </div>
+              <p style="font-size:13px;line-height:1.6;color:#7a839c;margin:0">
+                This registration is subject to the club's Membership &amp; Payment Policy.
+                Reply to this email if anything looks wrong.
+              </p>
+            </div>
+          </div>`,
+          registrationId,
+          campId: program.id,
+        });
+      } catch (e: any) {
+        console.error("[Academy confirmation email] failed:", e.message);
+      }
+    }
     return;
   }
 
