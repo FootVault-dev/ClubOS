@@ -1,18 +1,11 @@
 // Marketing Suite — Audience view: profile search + a detail drawer with
 // per-channel consent, sources, event timeline and suppress/unsuppress.
 //
-// NOTE — data gap: GET /api/admin/marketing/profiles (the list/search endpoint)
-// returns only {id, email, phoneE164, firstName, lastName, lastEventAt} — no
-// consent or suppression fields. Per-row consent badges in the table (as
-// sketched in the build brief) aren't possible without an N+1 fetch per row, so
-// this table shows identity + last activity and consent lives in the detail
-// drawer (GET /profiles/:id), which does return it in full.
-//
-// NOTE — data gap #2: GET /api/admin/marketing/profiles/:id computes
-// `suppressions` with a hardcoded `channel = 'email'` filter matched by email
-// address only (server/marketing/routes.ts ~line 417) — SMS suppressions by
-// phone_e164 are never returned, even for a profile with a suppressed phone.
-// The SMS row below falls back to a consent-based heuristic and says so.
+// GET /api/admin/marketing/profiles returns a per-channel consent summary
+// (sub_state + suppressed flag, for email and sms) alongside each row, built
+// without N+1 — see server/marketing/routes.ts. The table below renders that
+// as a small channel-chip pair per row; the detail drawer (GET /profiles/:id)
+// still carries the full consent/suppression record for the deep dive.
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -28,14 +21,40 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Search, Users, Mail, Phone, ShieldOff, ShieldCheck, Clock } from "lucide-react";
-import type { MktProfileRow, MktProfileDetail, MktChannel, SuppressionScope } from "./types";
+import type { MktProfileRow, MktProfileDetail, MktChannel, SuppressionScope, SubState } from "./types";
 import { ConsentBadge, LegalBasisBadge, EmptyState, LoadingRows, fmtDateTime } from "./ui";
+
+// Row-level consent summary from GET /profiles — {subState, suppressed} per
+// channel. A suppressed row is always shown red regardless of sub_state (a
+// bounce/complaint can suppress a technically-"subscribed" address).
+interface ProfileChannelConsent { subState: SubState | null; suppressed: boolean }
+interface MktProfileRowWithConsent extends MktProfileRow {
+  consent: { email: ProfileChannelConsent; sms: ProfileChannelConsent };
+}
+
+function ConsentChip({ label, c }: { label: string; c: ProfileChannelConsent | undefined }) {
+  if (!c || (c.subState == null && !c.suppressed)) {
+    return <Badge variant="outline" className="text-[10px] text-muted-foreground/70">{label} —</Badge>;
+  }
+  const red = c.suppressed || c.subState === "unsubscribed";
+  const green = !red && c.subState === "subscribed";
+  const className = red
+    ? "bg-red-500/15 text-red-500 border-red-500/30"
+    : green
+      ? "bg-emerald-500/15 text-emerald-500 border-emerald-500/30"
+      : "bg-muted text-muted-foreground";
+  return (
+    <Badge variant="outline" className={`text-[10px] ${className}`} title={c.suppressed ? `${label}: suppressed` : `${label}: ${c.subState ?? "never"}`}>
+      {label}
+    </Badge>
+  );
+}
 
 export default function AudienceView() {
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  const { data: profiles = [], isLoading } = useQuery<MktProfileRow[]>({
+  const { data: profiles = [], isLoading } = useQuery<MktProfileRowWithConsent[]>({
     queryKey: ["/api/admin/marketing/profiles", q],
     queryFn: async () => {
       const url = `/api/admin/marketing/profiles${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`;
@@ -73,6 +92,7 @@ export default function AudienceView() {
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Phone</TableHead>
+                <TableHead>Consent</TableHead>
                 <TableHead>Last activity</TableHead>
               </TableRow>
             </TableHeader>
@@ -82,6 +102,12 @@ export default function AudienceView() {
                   <TableCell className="font-medium">{[p.firstName, p.lastName].filter(Boolean).join(" ") || "—"}</TableCell>
                   <TableCell className="text-sm">{p.email || "—"}</TableCell>
                   <TableCell className="text-sm">{p.phoneE164 || "—"}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <ConsentChip label="Email" c={p.consent?.email} />
+                      <ConsentChip label="SMS" c={p.consent?.sms} />
+                    </div>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{fmtDateTime(p.lastEventAt)}</TableCell>
                 </TableRow>
               ))}
@@ -132,11 +158,14 @@ function ProfileDetail({ id }: { id: number }) {
   const { profile, consent, events, suppressions } = data;
   const name = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Unnamed profile";
   const sources = Array.isArray((profile.props as any)?.sources) ? ((profile.props as any).sources as string[]) : [];
-  const emailSuppressed = suppressions.some((s) => s.channel === "email");
+  // Channel-aware: /profiles/:id now returns email suppressions matched by
+  // email AND sms suppressions matched by phone_e164 (server/marketing/routes.ts),
+  // so this is a real suppression-record check, not a consent-based heuristic.
+  const isSuppressed = (channel: MktChannel) => suppressions.some((s) => s.channel === channel);
 
   const channelRow = (channel: MktChannel, icon: React.ReactNode, identifier: string | null) => {
     const c = consent.find((x) => x.channel === channel);
-    const heuristicSuppressed = channel === "email" ? emailSuppressed : (c?.legalBasis === "opted_out" || c?.subState === "unsubscribed");
+    const suppressed = isSuppressed(channel);
     return (
       <div className="rounded-lg border p-3 space-y-2" key={channel}>
         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -150,11 +179,6 @@ function ProfileDetail({ id }: { id: number }) {
             {c.source && <span className="text-muted-foreground">via {c.source}</span>}
           </div>
         )}
-        {channel === "sms" && (
-          <p className="text-[10px] text-muted-foreground/70 italic">
-            Suppression state for SMS isn't returned by this endpoint yet — badge above is a best-effort read of consent, not a confirmed suppression record.
-          </p>
-        )}
         <div className="flex gap-2 pt-1">
           <Button size="sm" variant="outline" className="text-red-500 hover:text-red-500" disabled={!identifier}
             onClick={() => setConfirm({ channel, action: "suppress" })} data-testid={`mkt-suppress-${channel}`}>
@@ -165,7 +189,7 @@ function ProfileDetail({ id }: { id: number }) {
             <ShieldCheck className="w-3.5 h-3.5 mr-1.5" /> Unsuppress
           </Button>
         </div>
-        {heuristicSuppressed && <p className="text-[10px] text-red-500/80">Currently suppressed on this channel.</p>}
+        {suppressed && <p className="text-[10px] text-red-500/80">Currently suppressed on this channel.</p>}
       </div>
     );
   };

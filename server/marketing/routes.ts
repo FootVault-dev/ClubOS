@@ -11,18 +11,18 @@
  */
 
 import type { Express, Request, Response } from "express";
-import { and, desc, eq, gte, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import { requireAuth, requireTab } from "../auth";
 import {
   organizations, mktLists, mktListMembers, mktSegments, mktCampaigns, mktProfiles,
-  mktConsent, mktSuppressions, mktEvents, mktMetrics, mktEmailMessages, mktEmailLinkClicks, mktConversions,
+  mktConsent, mktSuppressions, mktEvents, mktMetrics, mktEmailMessages, mktEmailEvents, mktEmailLinkClicks, mktConversions,
   mktTemplates,
 } from "@shared/schema";
 import { registerMarketingWebhook } from "./webhook";
 import { registerMarketingPublicRoutes } from "./public-routes";
-import { resolveAudience, previewCount, computeSegment, type CampaignAudience } from "./segments";
-import { suppress, unsuppress } from "./suppression";
+import { resolveAudience, computeSegment, evaluateDefinition, type CampaignAudience } from "./segments";
+import { suppress, unsuppress, filterSendable } from "./suppression";
 import { sendMarketingEmail } from "./resend-client";
 import { addMarketingJob } from "./worker";
 import { brandKeyForWorkspace, brandShell, publicBaseUrl } from "./brand";
@@ -153,12 +153,16 @@ export function registerMarketingRoutes(app: Express): void {
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // Live count preview — runs the evaluator on an arbitrary definition.
+  // Live count preview — runs the evaluator on an arbitrary definition, then the
+  // suppression gate (email marketing) so the builder shows both the raw match
+  // count AND what's actually sendable, matching the wizard's audience-estimate shape.
   app.post("/api/admin/marketing/segments/preview-count", ...gate, async (req, res) => {
     try {
       const org = await workspaceOrg(req);
       if (!org) return res.status(400).json({ message: "Workspace required" });
-      res.json({ count: await previewCount(req.body?.definition ?? {}, org.id) });
+      const ids = await evaluateDefinition(req.body?.definition ?? {}, org.id);
+      const gated = await filterSendable(ids, { workspaceId: org.id, channel: "email", isMarketing: true });
+      res.json({ total: ids.length, sendable: gated.sendable.length });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
@@ -387,6 +391,11 @@ export function registerMarketingRoutes(app: Express): void {
   });
 
   // ════════════════════════════ PROFILES ════════════════════════════
+  // List/search — includes a per-channel consent summary + suppressed flag per
+  // row, WITHOUT N+1: one query for the page of profiles, one grouped query for
+  // consent across those ids, and two grouped queries (email/phone,
+  // channel-aware — mirrors the /profiles/:id fix below) for suppressions,
+  // merged in JS. Always 4 queries total, never one per row.
   app.get("/api/admin/marketing/profiles", ...gate, async (req, res) => {
     try {
       const org = await workspaceOrg(req);
@@ -399,7 +408,48 @@ export function registerMarketingRoutes(app: Express): void {
         id: mktProfiles.id, email: mktProfiles.email, phoneE164: mktProfiles.phoneE164,
         firstName: mktProfiles.firstName, lastName: mktProfiles.lastName, lastEventAt: mktProfiles.lastEventAt,
       }).from(mktProfiles).where(where).orderBy(desc(mktProfiles.createdAt)).limit(100);
-      res.json(rows);
+
+      if (rows.length === 0) return res.json([]);
+
+      const lc = (s: string | null | undefined) => (s || "").trim().toLowerCase();
+      const ids = rows.map((r) => r.id);
+
+      const consentRows = await db.select({
+        profileId: mktConsent.profileId, channel: mktConsent.channel, subState: mktConsent.subState,
+      }).from(mktConsent).where(inArray(mktConsent.profileId, ids));
+      const consentByProfile = new Map<number, Record<string, string>>();
+      for (const c of consentRows) {
+        const m = consentByProfile.get(c.profileId) ?? {};
+        m[c.channel] = c.subState;
+        consentByProfile.set(c.profileId, m);
+      }
+
+      const emails = Array.from(new Set(rows.map((r) => lc(r.email)).filter(Boolean)));
+      const phones = Array.from(new Set(rows.map((r) => r.phoneE164).filter(Boolean) as string[]));
+      const notExpired = or(isNull(mktSuppressions.expiresAt), gt(mktSuppressions.expiresAt, new Date()));
+      const suppressedEmails = new Set<string>();
+      const suppressedPhones = new Set<string>();
+      if (emails.length) {
+        const sup = await db.select({ email: mktSuppressions.email }).from(mktSuppressions)
+          .where(and(eq(mktSuppressions.channel, "email"), inArray(mktSuppressions.email, emails), notExpired));
+        for (const s of sup) if (s.email) suppressedEmails.add(lc(s.email));
+      }
+      if (phones.length) {
+        const sup = await db.select({ phoneE164: mktSuppressions.phoneE164 }).from(mktSuppressions)
+          .where(and(eq(mktSuppressions.channel, "sms"), inArray(mktSuppressions.phoneE164, phones), notExpired));
+        for (const s of sup) if (s.phoneE164) suppressedPhones.add(s.phoneE164);
+      }
+
+      res.json(rows.map((r) => {
+        const c = consentByProfile.get(r.id) ?? {};
+        return {
+          ...r,
+          consent: {
+            email: { subState: c.email ?? null, suppressed: r.email ? suppressedEmails.has(lc(r.email)) : false },
+            sms: { subState: c.sms ?? null, suppressed: r.phoneE164 ? suppressedPhones.has(r.phoneE164) : false },
+          },
+        };
+      }));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -415,9 +465,16 @@ export function registerMarketingRoutes(app: Express): void {
         value: mktEvents.value, occurredAt: mktEvents.occurredAt,
       }).from(mktEvents).innerJoin(mktMetrics, eq(mktMetrics.id, mktEvents.metricId))
         .where(eq(mktEvents.profileId, id)).orderBy(desc(mktEvents.occurredAt)).limit(50);
-      const suppressions = profile.email
+      // Channel-aware: email suppressions match by email, SMS suppressions match
+      // by phone_e164 — a hardcoded channel='email'-by-email-only query would
+      // silently hide every SMS suppression (the profile's phone never checked).
+      const emailSuppressions = profile.email
         ? await db.select().from(mktSuppressions).where(and(eq(mktSuppressions.channel, "email"), sql`lower(${mktSuppressions.email}) = ${(profile.email || "").toLowerCase()}`))
         : [];
+      const smsSuppressions = profile.phoneE164
+        ? await db.select().from(mktSuppressions).where(and(eq(mktSuppressions.channel, "sms"), eq(mktSuppressions.phoneE164, profile.phoneE164)))
+        : [];
+      const suppressions = [...emailSuppressions, ...smsSuppressions];
       res.json({ profile, consent, events, suppressions });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -465,10 +522,28 @@ export function registerMarketingRoutes(app: Express): void {
         .where(and(eq(mktEmailMessages.workspaceId, org.id), inArray(mktEmailMessages.status, ["sent", "delivered"])));
       const [sends30] = await db.select({ n: sql<number>`count(*)::int` }).from(mktEmailMessages)
         .where(and(eq(mktEmailMessages.workspaceId, org.id), gte(mktEmailMessages.sentAt, since)));
-      // Revenue = conversions on this workspace's campaigns.
+      // Delivered (or sent-and-presumed-good, mirroring the per-campaign analytics
+      // fallback) among messages SENT in the last 30 days — the windowed twin of
+      // deliveredTotal above.
+      const [delivered30] = await db.select({ n: sql<number>`count(*)::int` }).from(mktEmailMessages)
+        .where(and(eq(mktEmailMessages.workspaceId, org.id), gte(mktEmailMessages.sentAt, since), inArray(mktEmailMessages.status, ["sent", "delivered"])));
+      // Human clicks in the last 30 days — read off the raw event stream (occurred_at),
+      // not off message.sentAt, so a click on an older send still counts if it
+      // happened this window. Scoped to this workspace via the message join.
+      const [humanClicks30] = await db.select({ n: sql<number>`count(*)::int` }).from(mktEmailEvents)
+        .innerJoin(mktEmailMessages, eq(mktEmailMessages.id, mktEmailEvents.messageId))
+        .where(and(
+          eq(mktEmailMessages.workspaceId, org.id), eq(mktEmailEvents.eventType, "email.clicked"),
+          eq(mktEmailEvents.isMachine, false), gte(mktEmailEvents.occurredAt, since),
+        ));
+      // Revenue = conversions on this workspace's campaigns (all-time + windowed).
       const [rev] = await db.select({ cents: sql<number>`coalesce(sum(${mktConversions.revenueCents}),0)::int` })
         .from(mktConversions).innerJoin(mktCampaigns, eq(mktCampaigns.id, mktConversions.campaignId))
         .where(eq(mktCampaigns.workspaceId, org.id));
+      const [conv30] = await db.select({
+        n: sql<number>`count(*)::int`, cents: sql<number>`coalesce(sum(${mktConversions.revenueCents}),0)::int`,
+      }).from(mktConversions).innerJoin(mktCampaigns, eq(mktCampaigns.id, mktConversions.campaignId))
+        .where(and(eq(mktCampaigns.workspaceId, org.id), gte(mktConversions.convertedAt, since)));
       const [profiles] = await db.select({ n: sql<number>`count(*)::int` }).from(mktProfiles).where(eq(mktProfiles.workspaceId, org.id));
 
       const topCampaigns = await db.select({
@@ -479,13 +554,55 @@ export function registerMarketingRoutes(app: Express): void {
 
       const deliveredN = Number(delivered?.n ?? 0);
       const revenue = Number(rev?.cents ?? 0) / 100;
+      const sends30dN = Number(sends30?.n ?? 0);
+      const delivered30dN = Number(delivered30?.n ?? 0);
+      const conversions30dCount = Number(conv30?.n ?? 0);
+      const conversions30dRevenueCents = Number(conv30?.cents ?? 0);
+      const revenue30d = conversions30dRevenueCents / 100;
       res.json({
         profiles: Number(profiles?.n ?? 0),
-        sends30d: Number(sends30?.n ?? 0),
+        sends30d: sends30dN,
         deliveredTotal: deliveredN,
         revenue,
         revenuePerRecipient: deliveredN ? revenue / deliveredN : 0,
         topCampaigns,
+        // Windowed (30d) metrics — the honest, recency-weighted view for the
+        // dashboard cards (vs the all-time totals above).
+        delivered30dPct: sends30dN ? delivered30dN / sends30dN : 0,
+        humanClicks30d: Number(humanClicks30?.n ?? 0),
+        conversions30d: { count: conversions30dCount, revenueCents: conversions30dRevenueCents },
+        rpr30d: delivered30dN ? revenue30d / delivered30dN : 0,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Webhook health (Settings) — last-received event + a 24h pulse, so Daniel can
+  // tell at a glance whether Resend is actually calling the webhook (vs "nothing
+  // sent yet" vs "misconfigured"). Scoped to this workspace via the message join
+  // (mkt_email_events itself carries no workspace_id).
+  app.get("/api/admin/marketing/webhook-health", ...gate, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      if (!org) return res.status(400).json({ message: "Workspace required" });
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const [last] = await db.select({ at: sql<string | null>`max(${mktEmailEvents.receivedAt})` })
+        .from(mktEmailEvents).innerJoin(mktEmailMessages, eq(mktEmailMessages.id, mktEmailEvents.messageId))
+        .where(eq(mktEmailMessages.workspaceId, org.id));
+
+      const [count24h] = await db.select({ n: sql<number>`count(*)::int` })
+        .from(mktEmailEvents).innerJoin(mktEmailMessages, eq(mktEmailMessages.id, mktEmailEvents.messageId))
+        .where(and(eq(mktEmailMessages.workspaceId, org.id), gte(mktEmailEvents.receivedAt, since24h)));
+
+      const byType = await db.select({ eventType: mktEmailEvents.eventType, n: sql<number>`count(*)::int` })
+        .from(mktEmailEvents).innerJoin(mktEmailMessages, eq(mktEmailMessages.id, mktEmailEvents.messageId))
+        .where(and(eq(mktEmailMessages.workspaceId, org.id), gte(mktEmailEvents.receivedAt, since24h)))
+        .groupBy(mktEmailEvents.eventType);
+
+      res.json({
+        lastEventAt: last?.at ?? null,
+        events24h: Number(count24h?.n ?? 0),
+        byType24h: Object.fromEntries(byType.map((b) => [b.eventType, Number(b.n)])),
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

@@ -1,21 +1,19 @@
 // Marketing Suite — Dashboard view (rendered inside Home.tsx).
 // Consumes GET /api/admin/marketing/dashboard (the one summary endpoint).
 //
-// NOTE — data gap: the dashboard endpoint returns only
-// { profiles, sends30d, deliveredTotal, revenue, revenuePerRecipient, topCampaigns }.
-// It does NOT return a 30-day-windowed delivered %, an aggregate human-click
-// count, or an aggregate conversions count/opens count. Those fields ARE fully
-// available per-campaign via GET /campaigns/:id/analytics (wired up in
-// CampaignDetail.tsx). Cards below show "—" with an explanatory subtitle where
-// the dashboard endpoint doesn't expose the number, rather than fabricating one.
+// Two rows of cards: a 30-day-windowed row (the honest, recency-weighted view
+// — delivered %, human clicks, conversions & revenue, revenue per recipient)
+// and an all-time row underneath. Aggregate "Opens" is still not exposed here
+// (it's MPP-inflated and only meaningful per-campaign, see CampaignDetail.tsx)
+// — that card stays an honest "—" rather than a fabricated number.
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Send, Users, TrendingUp, MousePointerClick, DollarSign, Eye, Mail } from "lucide-react";
+import { Mail } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import type { DashboardSummary } from "./types";
-import { StatCard, CampaignStatusBadge, EmptyState, LoadingRows, fmtDateTime } from "./ui";
+import { StatCard, CampaignStatusBadge, EmptyState, LoadingRows, fmtDateTime, pct } from "./ui";
 
 export default function DashboardView({ onOpenCampaigns }: { onOpenCampaigns: () => void }) {
   const [, setLocation] = useLocation();
@@ -23,39 +21,62 @@ export default function DashboardView({ onOpenCampaigns }: { onOpenCampaigns: ()
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <StatCard label="Sends (30d)" value={isLoading ? "…" : (data?.sends30d ?? 0).toLocaleString()} testId="mkt-stat-sends" />
-        <StatCard
-          label="Delivered"
-          value={isLoading ? "…" : (data?.deliveredTotal ?? 0).toLocaleString()}
-          sub="all-time total — this endpoint isn't windowed to 30d"
-          testId="mkt-stat-delivered"
-        />
-        <StatCard label="Human clicks" value="—" sub="not exposed by /dashboard yet — see a campaign's analytics" muted testId="mkt-stat-human-clicks" />
-        <StatCard
-          label="Conversions & revenue"
-          value={isLoading ? "…" : formatCurrency(data?.revenue ?? 0)}
-          sub="conversion count not exposed by /dashboard yet"
-          tone="good"
-          testId="mkt-stat-revenue"
-        />
-        <StatCard
-          label="Revenue per recipient"
-          value={isLoading ? "…" : formatCurrency(data?.revenuePerRecipient ?? 0, { decimals: 2 })}
-          testId="mkt-stat-rpr"
-        />
+      <div>
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Last 30 days</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard label="Sends" value={isLoading ? "…" : (data?.sends30d ?? 0).toLocaleString()} testId="mkt-stat-sends" />
+          <StatCard
+            label="Delivered"
+            value={isLoading ? "…" : pct(data?.delivered30dPct ?? 0)}
+            sub="of what was sent in the last 30 days"
+            testId="mkt-stat-delivered-30d"
+          />
+          <StatCard
+            label="Human clicks"
+            value={isLoading ? "…" : (data?.humanClicks30d ?? 0).toLocaleString()}
+            sub="bot/prefetch clicks excluded"
+            testId="mkt-stat-human-clicks"
+          />
+          <StatCard
+            label="Conversions & revenue"
+            value={isLoading ? "…" : `${(data?.conversions30d?.count ?? 0).toLocaleString()} · ${formatCurrency(data?.conversions30d?.revenueCents ?? 0, { fromCents: true })}`}
+            tone="good"
+            testId="mkt-stat-conversions-30d"
+          />
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <StatCard
-          label="Opens"
-          value="—"
-          sub="inflated by Apple Mail Privacy Protection — directional only. Aggregate not exposed here yet; view per-campaign."
-          muted
-          testId="mkt-stat-opens"
-        />
-        <StatCard label="Profiles in audience" value={isLoading ? "…" : (data?.profiles ?? 0).toLocaleString()} testId="mkt-stat-profiles" />
+      <div>
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">All time</p>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <StatCard label="Delivered" value={isLoading ? "…" : (data?.deliveredTotal ?? 0).toLocaleString()} testId="mkt-stat-delivered" />
+          <StatCard
+            label="Revenue"
+            value={isLoading ? "…" : formatCurrency(data?.revenue ?? 0)}
+            tone="good"
+            testId="mkt-stat-revenue"
+          />
+          <StatCard
+            label="Revenue per recipient"
+            value={isLoading ? "…" : formatCurrency(data?.revenuePerRecipient ?? 0, { decimals: 2 })}
+            testId="mkt-stat-rpr"
+          />
+          <StatCard
+            label="Revenue per recipient (30d)"
+            value={isLoading ? "…" : formatCurrency(data?.rpr30d ?? 0, { decimals: 2 })}
+            testId="mkt-stat-rpr-30d"
+          />
+          <StatCard
+            label="Opens"
+            value="—"
+            sub="inflated by Apple Mail Privacy Protection — directional only, view per-campaign"
+            muted
+            testId="mkt-stat-opens"
+          />
+        </div>
       </div>
+
+      <StatCard label="Profiles in audience" value={isLoading ? "…" : (data?.profiles ?? 0).toLocaleString()} testId="mkt-stat-profiles" />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">

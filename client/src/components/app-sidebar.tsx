@@ -64,6 +64,7 @@ import {
   FlaskConical,
   Fingerprint,
   MessageSquarePlus,
+  Megaphone,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -108,6 +109,7 @@ const campsNav = [
   { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 // South Island United shares the camps workspace type with CUFC but adds its own
@@ -131,6 +133,7 @@ const venueNav = [
   { tab: "addons", title: "Add-ons", url: "/admin/addons", icon: Puzzle },
   { tab: "people", title: "People & Access", url: "/admin/people", icon: Users },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const campsSecondary = [
@@ -153,6 +156,7 @@ const leagueNav = [
   { tab: "loyalty", title: "Loyalty", url: "/admin/loyalty", icon: Crown },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "business-plan", title: "Business Plan", url: "/admin/business-plan", icon: FileText },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const venueSecondary = [
@@ -185,6 +189,7 @@ const tournamentNav = [
   { tab: "cic-push", title: "Notifications", url: "/admin/cic-push", icon: BellRing },
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
   { tab: "cic-watch", title: "Watch", url: "/admin/cic-watch", icon: Radio },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const tournamentSecondary = [
@@ -208,6 +213,7 @@ const gymnasticsNav = [
   { tab: "cugc-free-sessions", title: "Free Sessions", url: "/admin/cugc-free-sessions", icon: CalendarCheck },
   { tab: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics", icon: BarChart3 },
   { tab: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox", icon: Inbox },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const gymnasticsSecondary = [
@@ -228,6 +234,7 @@ const groupNav = [
   { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const groupSecondary = [
@@ -248,6 +255,7 @@ const printsNav = [
   { tab: "analytics", title: "Analytics", url: "/admin/print-analytics", icon: BarChart3 },
   { tab: "landing", title: "Landing Pages", url: "/admin/print-landing", icon: FileText },
   { tab: "email", title: "Email Sender", url: "/admin/print-email", icon: Send },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const printsSecondary = [

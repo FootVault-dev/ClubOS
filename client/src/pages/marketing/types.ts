@@ -197,4 +197,18 @@ export interface DashboardSummary {
   revenue: number;
   revenuePerRecipient: number;
   topCampaigns: { id: number; name: string; status: CampaignStatus; sentAt: string | null; sentCount: number; recipientCount: number }[];
+  // Windowed (30d) metrics — the honest, recency-weighted view alongside the
+  // all-time totals above. See GET /api/admin/marketing/dashboard.
+  delivered30dPct: number;
+  humanClicks30d: number;
+  conversions30d: { count: number; revenueCents: number };
+  rpr30d: number;
+}
+
+// GET /api/admin/marketing/webhook-health (Settings) — last-received Resend
+// event + a 24h pulse, so it's obvious whether the webhook is actually firing.
+export interface WebhookHealth {
+  lastEventAt: string | null;
+  events24h: number;
+  byType24h: Record<string, number>;
 }

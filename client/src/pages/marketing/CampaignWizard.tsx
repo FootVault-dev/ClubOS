@@ -27,6 +27,8 @@ import {
 import { ChevronLeft, ChevronRight, Check, X, Loader2, Send, CalendarClock, Users, Mail, Code2 } from "lucide-react";
 import type { MktCampaign, MktList, MktSegment, AudienceRef, CampaignAudience, AudienceEstimate } from "./types";
 import { fmtDateTime } from "./ui";
+import type { EmailBuilderResult } from "@/components/marketing/EmailBuilder";
+import TemplatePicker from "@/components/marketing/TemplatePicker";
 
 // Mirrors server/marketing/brand.ts BRAND_KEY_BY_ORG — client-side copy since
 // that file lives under server/ and can't be imported from the browser bundle.
@@ -71,6 +73,14 @@ export default function CampaignWizard() {
   const [replyTo, setReplyTo] = useState("");
   const [bodyHtml, setBodyHtml] = useState("");
   const [simpleMode, setSimpleMode] = useState(true); // the Phase D builder is a contract stub today — default to a working editor
+  // Template picker (Phase D → wizard wiring): applying a template hands us a
+  // fresh Tiptap doc — the rich editor only reads `initialDoc` on mount, so a
+  // `key` bump forces a clean remount with the new content. `builderResult`
+  // mirrors whatever the editor (or plain-HTML mode) last produced, so
+  // "Save current as template" always has a real { doc, html, text } to save.
+  const [initialDoc, setInitialDoc] = useState<unknown | null>(null);
+  const [builderKey, setBuilderKey] = useState(0);
+  const [builderResult, setBuilderResult] = useState<EmailBuilderResult | null>(null);
   const [testEmail, setTestEmail] = useState("");
   const [sendMode, setSendMode] = useState<"now" | "schedule">("now");
   const [scheduleDate, setScheduleDate] = useState("");
@@ -192,6 +202,12 @@ export default function CampaignWizard() {
 
   const sendableCount = (step === 0 ? estimate.data : reviewEstimate.data)?.sendable ?? null;
   const contentOk = stripHtml(bodyHtml).length > 0;
+  // What "Save current as template" saves: the rich editor's last compiled
+  // result in that mode, or a synthetic { doc: null, html, text } built from
+  // the plain-HTML textarea in simple mode — either way, whatever's on screen.
+  const currentBuilderResult: EmailBuilderResult | null = simpleMode
+    ? (bodyHtml.trim() ? { doc: null, html: bodyHtml, text: stripHtml(bodyHtml) } : null)
+    : builderResult;
   const subjectOk = subject.trim().length > 0;
   const audienceOk = (sendableCount ?? 0) > 0;
   const reviewOk = contentOk && subjectOk && audienceOk;
@@ -287,16 +303,29 @@ export default function CampaignWizard() {
             </button>
           </div>
 
+          <TemplatePicker
+            currentResult={currentBuilderResult}
+            onApply={(result) => {
+              setBodyHtml(result.html);
+              setBuilderResult(result);
+              setInitialDoc(result.doc);
+              setBuilderKey((k) => k + 1); // force the rich editor to remount with the applied doc
+            }}
+            channel="email"
+            className="rounded-lg border p-3"
+          />
+
           {simpleMode ? (
             <Textarea value={bodyHtml} onChange={(e) => setBodyHtml(e.target.value)} rows={14} placeholder="<p>Write your email HTML here…</p>" className="font-mono text-xs" data-testid="mkt-wizard-body-html" />
           ) : (
             <BuilderBoundary fallback={<Textarea value={bodyHtml} onChange={(e) => setBodyHtml(e.target.value)} rows={14} placeholder="<p>Write your email HTML here…</p>" className="font-mono text-xs" />}>
               <Suspense fallback={<div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">Loading editor…</div>}>
                 <EmailBuilder
+                  key={builderKey}
                   workspaceId={currentOrg?.id ?? 0}
                   brandKey={brandKey}
-                  initialDoc={null}
-                  onSave={(result) => setBodyHtml(result.html)}
+                  initialDoc={initialDoc}
+                  onSave={(result) => { setBodyHtml(result.html); setBuilderResult(result); }}
                 />
               </Suspense>
             </BuilderBoundary>

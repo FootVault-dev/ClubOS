@@ -3,14 +3,11 @@
 // conditions". Mirrors the exact tree server/marketing/segments.ts evaluates
 // ({all:[{any:[...]}, ...]}), so what you build here is exactly what runs.
 //
-// NOTE — data gap: POST /segments/preview-count returns only {count} (a raw
-// profile count for the definition, no channel/isMarketing context to run the
-// suppression gate). The build brief describes a {total, sendable} preview
-// shape — that shape only exists on POST /campaigns/:id/audience-estimate,
-// which needs a saved campaign id, not a bare definition. So "Preview count"
-// here shows one honest number ("≈ N profiles match"); the total/suppressed/
-// sendable split is used correctly in the Campaign Wizard's Audience step,
-// where a draft campaign id already exists.
+// POST /segments/preview-count runs the definition through the same
+// suppression gate every send uses (channel: email, isMarketing: true) and
+// returns {total, sendable} — "1,240 match · 890 sendable" — mirroring the
+// Campaign Wizard's Audience step, which uses the equivalent
+// /campaigns/:id/audience-estimate shape once a draft campaign id exists.
 //
 // NOTE — scope: no "Lists" CRUD page exists in this phase's build brief, so
 // Lists (used by the list_membership condition + the campaign wizard) are
@@ -175,7 +172,7 @@ function SegmentBuilderDialog({
     mutationFn: async () => {
       const definition = { all: groups };
       const r = await apiRequest("POST", "/api/admin/marketing/segments/preview-count", { definition });
-      return r.json() as Promise<{ count: number }>;
+      return r.json() as Promise<{ total: number; sendable: number }>;
     },
     onError: (e: any) => toast({ title: "Couldn't preview", description: e.message, variant: "destructive" }),
   });
@@ -249,7 +246,11 @@ function SegmentBuilderDialog({
             <Button variant="outline" size="sm" onClick={() => preview.mutate()} disabled={preview.isPending} data-testid="mkt-segment-preview">
               {preview.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null} Preview count
             </Button>
-            {preview.data && <span className="text-sm">≈ <span className="font-bold">{preview.data.count.toLocaleString()}</span> profiles match</span>}
+            {preview.data && (
+              <span className="text-sm">
+                <span className="font-bold">{preview.data.total.toLocaleString()}</span> match · <span className="font-bold text-emerald-500">{preview.data.sendable.toLocaleString()}</span> sendable
+              </span>
+            )}
           </div>
         </div>
 
