@@ -21852,6 +21852,32 @@ async function confirmAndEmailVenueBookings(paymentIntentId: string) {
   const updated = await storage.confirmFacilityBookingsByPaymentIntent(paymentIntentId);
   if (updated.length === 0) return updated;
 
+  // Accounting sub-ledger (T5) — after the atomic status flip, never before.
+  // One posting per booking row (each may carry its own facility/date).
+  // postAccountingEntry never throws; the try/catch here matches the
+  // convention set in handlePaymentSuccess.
+  try {
+    const { postAccountingEntry } = await import("./accounting/hook");
+    const { nzTodayIso } = await import("@shared/academy");
+    const occurredAt = nzTodayIso();
+    for (const b of updated) {
+      await postAccountingEntry({
+        organizationId: b.organizationId,
+        sourceType: "booking",
+        sourceId: b.id,
+        idempotencyKey: `booking_${b.id}`,
+        occurredAt,
+        programId: 0,
+        optionId: null,
+        programType: "venue_booking",
+        paymentMethod: "stripe_card",
+        grossCents: b.totalCents ?? 0,
+      });
+    }
+  } catch (e: any) {
+    console.error("[Accounting] posting failed for venue bookings", paymentIntentId, e?.message);
+  }
+
   const fmtTime = (t: string) => {
     const [h, m] = t.split(":").map(Number);
     const ampm = h >= 12 ? "pm" : "am";
@@ -21999,6 +22025,28 @@ async function handlePrintPaymentSuccess(orderId: number, paymentIntentId: strin
     paidCents: printOrder.totalCents,
     stripePaymentIntentId: paymentIntentId,
   } as any);
+
+  // Accounting sub-ledger (T5) — after the atomic status flip, never before.
+  // organizationId falls back to 8 (United Print) — the same fallback this
+  // function's own lookup path above already uses (storage.getPrintOrdersByOrg(8)).
+  try {
+    const { postAccountingEntry } = await import("./accounting/hook");
+    const { nzTodayIso } = await import("@shared/academy");
+    await postAccountingEntry({
+      organizationId: printOrder.organizationId ?? 8,
+      sourceType: "print",
+      sourceId: orderId,
+      idempotencyKey: paymentIntentId || `print_${orderId}`,
+      occurredAt: nzTodayIso(),
+      programId: 0,
+      optionId: null,
+      programType: "print",
+      paymentMethod: "stripe_card",
+      grossCents: printOrder.totalCents ?? 0,
+    });
+  } catch (e: any) {
+    console.error("[Accounting] posting failed for print order", orderId, e?.message);
+  }
 
   await storage.createPrintOrderEvent({
     orderId,
