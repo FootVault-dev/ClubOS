@@ -68,6 +68,15 @@ CREATE INDEX IF NOT EXISTS contacts_player_identity_idx
   ON contacts (lower(first_name), lower(last_name), date_of_birth)
   WHERE type = 'player' AND date_of_birth IS NOT NULL;
 
+-- Guardian lookup is case-insensitive: emails have been stored with whatever
+-- casing the parent typed, across years of different flows, so an exact match
+-- silently forks a family into two contacts. NOT unique — the existing table
+-- already contains duplicates (see the class-registration bug in ACADEMY.md);
+-- a unique index here would fail to create.
+CREATE INDEX IF NOT EXISTS contacts_lower_email_idx
+  ON contacts (lower(email))
+  WHERE email IS NOT NULL;
+
 -- ── 2. Programme columns ────────────────────────────────────────────────────
 -- 'core' (FUNiño / Pre-Academy / Academy) vs 'additional' (Technification,
 -- Goalkeeper, Morning). Already present in prod; declared here for idempotency.

@@ -1895,6 +1895,18 @@ export async function registerRoutes(
    *  So pending seats are only held for ACADEMY_SEAT_HOLD_MINUTES. */
   const ACADEMY_SEAT_HOLD_MINUTES = 30;
 
+  /** Case-insensitive guardian lookup. Emails have been stored with whatever
+   *  casing the parent typed, across years of different flows, so an exact match
+   *  silently forks a family into two contacts. Backed by contacts_lower_email_idx. */
+  async function academyFindGuardianByEmail(email: string) {
+    const [c] = await db
+      .select()
+      .from(contacts)
+      .where(and(sql`lower(${contacts.email}) = ${email}`, eq(contacts.type, "guardian")))
+      .limit(1);
+    return c ?? null;
+  }
+
   async function academySpotsRemaining(program: any): Promise<number | null> {
     if (typeof program.capacity !== "number" || program.capacity <= 0) return null;
     const rows = await db
@@ -2065,7 +2077,11 @@ export async function registerRoutes(
       if (quote.totalCents <= 0) return res.status(409).json({ message: "Registrations for this programme aren't open yet." });
 
       // ── 6. Guardian: find, don't duplicate. Enrich, never overwrite. ────────
-      let guardian = await storage.findContactByEmail(email);
+      // NOT storage.findContactByEmail — that does an exact, case-sensitive match
+      // on any contact type. A parent stored as "Daniel@CUFC.co.nz" by an older
+      // flow would never match our lowercased address, and we'd mint exactly the
+      // duplicate guardian this endpoint exists to avoid.
+      let guardian: any = await academyFindGuardianByEmail(email);
       if (!guardian) {
         guardian = await storage.createContact({
           type: "guardian",
