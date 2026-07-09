@@ -1,19 +1,20 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
-import { fromForOrg } from "@shared/org-domains";
+import { fromForOrg, workspaceDomainByOrgId } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
 import * as watch from "./watch-supabase";
 import { buildConversionAttribution } from "./attribution-stamp";
 import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
+import { resolveBehaviorRange, behaviorOverview, behaviorPageDetail, behaviorJourneys, behaviorHours } from "./behavior-reports";
 import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
@@ -71,8 +72,9 @@ import {
   NZF_ETHNICITIES as NZF_ETHNICITY_OPTIONS,
 } from "@shared/academy";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
+import { behaviorEventsToInsert } from "@shared/behavior";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
-import { renderTrackerScript } from "@shared/tracker-script";
+import { renderTrackerScript, renderBehaviorScript } from "@shared/tracker-script";
 import { CID_COOKIE, CID_MAX_AGE_SECONDS, VID_COOKIE, VID_MAX_AGE_SECONDS, serializeSetCookie, isValidVisitorId, isValidClickId, parseCookieHeader } from "./attribution-cookies";
 import crypto from "crypto";
 import { ObjectStorageService, ObjectNotFoundError, setObjectAclPolicy } from "./replit_integrations/object_storage";
@@ -218,6 +220,29 @@ export async function registerRoutes(
       const proto = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
       const collectorBase = `${proto}://${String(req.headers.host || "")}`;
       const js = renderTrackerScript({ collectorBase, domains: CLUB_ROOT_DOMAINS });
+      res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      const origin = String(req.headers.origin || "");
+      if (origin && isOurOrigin(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+      }
+      res.send(js);
+    } catch {
+      res.status(500).type("application/javascript").send("/* tracker unavailable */");
+    }
+  });
+
+  // `GET /t2.js` — lazy-loaded Phase 1 (Behavioral Depth) collector (T6). The boot
+  // script (/t.js) sets window.__usgB={base,vid,sid} then injects this as a second
+  // <script> tag once a visitor id exists, so it never re-derives cookies itself.
+  // Same headers/CORS pattern as /t.js. Registered before the SPA catch-all.
+  app.get("/t2.js", (req, res) => {
+    try {
+      const proto = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+      const collectorBase = `${proto}://${String(req.headers.host || "")}`;
+      const js = renderBehaviorScript({ collectorBase });
       res.setHeader("Content-Type", "application/javascript; charset=utf-8");
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("X-Content-Type-Options", "nosniff");
@@ -1498,6 +1523,79 @@ export async function registerRoutes(
       if (!data || data.conversionCount === 0)
         return res.status(404).json({ message: "No journey for that person in this workspace" });
       res.json({ group: scope.group, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ── Total Tracking Platform: behavior admin reporting API (T8) ─────────────
+  // Read-only over the *_daily rollup tables ONLY (never behavior_events — AGENTS.md
+  // North star). Reuses attributionScope for auth/org resolution; "site" scoping
+  // (behavior data has no org_id column) is derived from the scoped orgIds via
+  // shared/org-domains's emailDomain — the same hostname the tracker's
+  // `location.hostname` normalises to. An org with no mapped domain yields no site
+  // filter (returns all sites) rather than silently showing nothing.
+  function behaviorSitesForOrgIds(orgIds: number[]): string[] {
+    const sites = new Set<string>();
+    for (const id of orgIds) {
+      const w = workspaceDomainByOrgId(id);
+      if (w?.emailDomain) sites.add(w.emailDomain.toLowerCase());
+    }
+    return Array.from(sites);
+  }
+
+  app.get("/api/admin/behavior/overview", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const range = resolveBehaviorRange(req.query as Record<string, any>);
+      const rows = await behaviorOverview(behaviorSitesForOrgIds(scope.orgIds), range);
+      res.json({ group: scope.group, range, rows });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Per-page detail. `site`+`path` are query params (not URL segments) since a page
+  // path routinely contains slashes and Express 5's path-to-regexp needs a named
+  // wildcard for that — a query param sidesteps it entirely for a server-only API.
+  app.get("/api/admin/behavior/page", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const site = String(req.query.site || "").trim();
+      const pagePath = String(req.query.path || "").trim();
+      if (!pagePath) return res.status(400).json({ message: "path query param required" });
+      const sites = behaviorSitesForOrgIds(scope.orgIds);
+      if (sites.length && (!site || !sites.includes(site.toLowerCase()))) {
+        return res.status(400).json({ message: `site must be one of: ${sites.join(", ")}` });
+      }
+      const range = resolveBehaviorRange(req.query as Record<string, any>);
+      const data = await behaviorPageDetail(sites, range, site || sites[0] || "", pagePath);
+      res.json({ group: scope.group, range, ...data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/behavior/journeys", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const range = resolveBehaviorRange(req.query as Record<string, any>);
+      const edges = await behaviorJourneys(behaviorSitesForOrgIds(scope.orgIds), range);
+      res.json({ group: scope.group, range, edges });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/behavior/hours", requireAuth, async (req, res) => {
+    try {
+      const scope = await attributionScope(req);
+      if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+      const grid = await behaviorHours(behaviorSitesForOrgIds(scope.orgIds));
+      res.json({ group: scope.group, grid });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -8218,6 +8316,29 @@ export async function registerRoutes(
       res.json({ ok: true, count: shaped.length });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Phase 1 behavioral collector (T5) — a SEPARATE pipeline from the attribution
+  // touch path above (rule 4: never touch /hello, /event, /batch). Writes the new
+  // v2 taxonomy (scroll/section/click/rage_click/route_change/form_*/vitals/
+  // page_leave) into `behavior_events`. Bot-flagged rows are dropped at ingest —
+  // unlike analytics_events, this table has no attribution/audit need to keep them.
+  // Fail-silent by design (rule 5): a malformed batch or a DB hiccup NEVER
+  // surfaces a non-200 to the client, so the tracker never retries/blocks on it.
+  app.options("/api/public/analytics/behavior", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/analytics/behavior", async (req, res) => {
+    setTrackerCors(req, res);
+    try {
+      const { events } = req.body || {};
+      const toInsert = behaviorEventsToInsert(events, { userAgent: req.headers["user-agent"] }, 50);
+      if (toInsert.length > 0) {
+        await db.insert(behaviorEvents).values(toInsert);
+      }
+      res.json({ ok: true, count: toInsert.length });
+    } catch (error: any) {
+      console.error("Behavior collector error:", error?.message || error);
+      res.json({ ok: false });
     }
   });
 
