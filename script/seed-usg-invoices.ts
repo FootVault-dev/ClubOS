@@ -41,6 +41,14 @@ const BRAND = "siu" as const;
 const TOKEN = "dr-9f4c2a7e6b1d84035ec7";
 const NUMBER = "CUFC-2026-002";
 
+// Confirmed by Daniel 2026-07-10 (thedrifter.com 403s automated clients).
+const RECIPIENT_ADDRESS = [
+  "96 Lichfield Street",
+  "Christchurch Central City",
+  "Christchurch 8011",
+  "New Zealand",
+];
+
 // ── Figures, verbatim from apps/invoices/src/data/drifter.ts ────────────────
 const accommodationCents = 1_284_415; // "12,844.15"
 const foodBeverageCents = 497_232; // "4,972.32"
@@ -54,12 +62,11 @@ const gstCents = Math.round((rebateCents * 3) / 23); // 11,619
 const subtotalCents = rebateCents - gstCents; // 77,463
 const totalCents = rebateCents; // 89,082 — GST-inclusive total is the line total
 
-const DRAFT_REASONS = [
-  "GST treatment unconfirmed. Presented as GST-inclusive ($774.63 + $116.19 GST). Victor to confirm whether this rebate is a taxable supply from us at all, or an adjustment to the original supply that The Drifter credit-notes.",
-  "Invoice number CUFC-2026-002 assumes this continues the CUFC Inc sequence after CUFC-2026-001 (New Zealand Football). Unconfirmed.",
-  "The Drifter's registered postal address is not on file — only nicky.m@thedrifter.com.",
-  "Card payments are disabled. No Stripe account is wired to this app and nothing has been charged.",
-];
+// Daniel cleared the draft banner on 2026-07-10. The open questions did not go
+// away, they moved into outputs/invoices/2026-07-10-drifter-rebate/00-READ-FIRST.md:
+// (1) is this a taxable supply from us at all, or a rebate The Drifter credit-notes,
+// and (2) GST-inclusive vs plus-GST. Victor's call before this is sent.
+const DRAFT_REASONS: string[] = [];
 
 const SPEND_SUMMARY = {
   label: "Eligible spend",
@@ -152,13 +159,13 @@ const NOTES = [
      RETURNING id`,
     [
       org.id, TOKEN, NUMBER, "draft", "siu",
-      "The Drifter", "nicky.m@thedrifter.com", JSON.stringify([]),
+      "The Drifter", "nicky.m@thedrifter.com", JSON.stringify(RECIPIENT_ADDRESS),
       "Partnership rebate",
       "Covering South Island United's accommodation and hospitality spend with The Drifter, rebated at the agreed 5% of eligible spend.",
       JSON.stringify(SPEND_SUMMARY), JSON.stringify(LINES), JSON.stringify(NOTES),
       "inclusive", subtotalCents, gstCents, totalCents,
       "2026-07-10", "2026-07-17", "Payment due within 7 days of invoice date", false,
-      true, JSON.stringify(DRAFT_REASONS),
+      false, JSON.stringify(DRAFT_REASONS), // is_draft
       "Christchurch United Football Club Incorporated", "01-0635-0374823-00", NUMBER, "The Drifter", "Rebate",
     ],
   );

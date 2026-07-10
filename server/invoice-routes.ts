@@ -77,7 +77,8 @@ import {
 // narrowed to our project's own preview URLs. (CORS is not the security boundary
 // here — the unguessable token is — but there is no reason to be loose.)
 const INVOICE_SITE_ORIGINS = [
-  "https://pay.southislandunited.com",
+  "https://invoice.southislandunited.com", // canonical
+  "https://pay.southislandunited.com",     // legacy alias, 307s to the above
   "https://usg-invoices.vercel.app",
 ];
 const INVOICE_PREVIEW_ORIGIN = /^https:\/\/usg-invoices-[a-z0-9-]+\.vercel\.app$/;

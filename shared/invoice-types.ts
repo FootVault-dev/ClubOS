@@ -141,14 +141,15 @@ export const SUPPLIER_BY_BRAND: Record<InvoiceBrand, Party> = {
  *
  * ONLY list a domain here once it is actually attached and serving. An unattached
  * host produces a dead link on a page asking someone for money, which is worse
- * than a vercel.app URL. `pay.cufc.co.nz` is NOT attached yet — cufc deliberately
- * falls back.
+ * than a vercel.app URL. `invoice.cufc.co.nz` is NOT attached yet — cufc deliberately
+ * falls back. `pay.southislandunited.com` remains attached and 307s to the
+ * canonical `invoice.` host, because links were already shared on it.
  */
 export const INVOICE_SITE_FALLBACK = "https://usg-invoices.vercel.app";
 
 export const INVOICE_SITE_BASE_BY_BRAND: Record<InvoiceBrand, string> = {
-  siu: "https://pay.southislandunited.com", // live 2026-07-10
-  cufc: INVOICE_SITE_FALLBACK,              // pay.cufc.co.nz not yet attached
+  siu: "https://invoice.southislandunited.com", // live 2026-07-10 (pay.* 307s here)
+  cufc: INVOICE_SITE_FALLBACK,                  // invoice.cufc.co.nz not yet attached
 };
 
 export function invoiceUrl(brand: InvoiceBrand, token: string): string {
