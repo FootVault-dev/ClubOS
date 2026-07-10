@@ -11826,10 +11826,47 @@ export async function registerRoutes(
           lastRank = rank;
           return { ...e, rank };
         });
-        categories.push({ challenge, ageGroup, entries: ranked, registeredCount: all.length, scoredCount: scored.length });
+        // `lineup` is every contestant, scored or not — the public results page
+        // shows who is competing before anyone has a score. `entries` stays
+        // scored-only because the CIC Youth app reads it as a leaderboard.
+        const rankById = new Map(ranked.map(r => [r.id, r.rank]));
+        const lineup = all
+          .map(e => ({
+            id: e.id,
+            playerName: e.playerName,
+            clubName: e.clubName,
+            score: e.score == null ? null : Number(e.score),
+            rank: rankById.get(e.id) ?? null,
+          }))
+          .sort((a, b) => {
+            if (a.rank != null && b.rank != null) return a.rank - b.rank;
+            if (a.rank != null) return -1;
+            if (b.rank != null) return 1;
+            return a.playerName.localeCompare(b.playerName);
+          });
+        categories.push({ challenge, ageGroup, entries: ranked, lineup, registeredCount: all.length, scoredCount: scored.length });
       }
     }
     return categories;
+  }
+
+  // cicyouth.com/skills-challenge flips from the registration form to the live
+  // results board at 12:00 NZST on Saturday 11 July 2026 — the managers' meeting
+  // runs that morning, so last-minute entries stay open until noon. New Zealand
+  // has no daylight saving in July, so 12:00 NZST is exactly 00:00 UTC.
+  //
+  // The instant is decided HERE, not in the browser: a phone with a wrong clock
+  // would otherwise show the wrong page. Move it without a deploy:
+  //     fly secrets set SKILLS_RESULTS_FROM=2026-07-11T02:00:00Z -a clubos
+  const SKILLS_RESULTS_FROM_DEFAULT = "2026-07-11T00:00:00Z";
+  function skillsResultsFrom(): Date {
+    const raw = (process.env.SKILLS_RESULTS_FROM || "").trim();
+    if (raw) {
+      const d = new Date(raw);
+      if (!Number.isNaN(d.getTime())) return d;
+      console.warn(`[skills] SKILLS_RESULTS_FROM="${raw}" is not a valid date — falling back to ${SKILLS_RESULTS_FROM_DEFAULT}`);
+    }
+    return new Date(SKILLS_RESULTS_FROM_DEFAULT);
   }
 
   // Bearer tokens for the mobile app — `userId.expiry.hmac`, signed with the
@@ -12004,7 +12041,18 @@ export async function registerRoutes(
     setSkillsCors(req, res);
     try {
       const entries = await skillsListEntries();
-      res.json({ categories: skillsLeaderboards(entries) });
+      const from = skillsResultsFrom();
+      const now = new Date();
+      // A live scoreboard must never be served from a cache, and the phase flip
+      // must not be pinned by one either.
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      res.json({
+        categories: skillsLeaderboards(entries),
+        // The website obeys this rather than the visitor's device clock.
+        phase: now.getTime() >= from.getTime() ? "results" : "registration",
+        resultsLiveFrom: from.toISOString(),
+        serverTime: now.toISOString(),
+      });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
