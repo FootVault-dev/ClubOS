@@ -1,10 +1,32 @@
+# ── Build context hygiene ─────────────────────────────────────────────────────
+# `fly deploy` uploads this whole directory before the image is built, and the
+# Dockerfile does `COPY . .`. Two things were wrong here until 2026-07-10:
+#
+#  1. `.worktrees/` (nine full checkouts, each with its own node_modules) is 4.2GB.
+#     Every deploy shipped a 2.76GB context and took >10 minutes, which is what the
+#     "Fly's depot builder hangs" folklore in deploy.sh was actually describing.
+#
+#  2. A bare `.env` line matches ONLY the root .env — NOT `.worktrees/*/.env`.
+#     Six worktree .env files (live Stripe keys, prod DATABASE_URL, Fly + GoDaddy
+#     tokens) were therefore baked into every production image. Patterns for
+#     secrets must be `**/.env`, never `.env`.
+#
+# Keep this file honest: anything not needed to run `npm run build` should be here.
+.worktrees
+**/node_modules
 node_modules
 dist
+.git
+.gitignore
+
+# Secrets — `**/` matters. See note 2 above.
+**/.env
+**/.env.local
+**/.env.*.local
 .env
 .env.local
 .env.*.local
-.git
-.gitignore
+
 .DS_Store
 *.log
 *.dump
