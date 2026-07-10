@@ -84,6 +84,8 @@ const venueTabs: TabDef[] = [
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "facilities", title: "Facilities", url: "/admin/facilities" },
   { slug: "addons", title: "Add-ons", url: "/admin/addons" },
+  // The residency houses: rooms, tenants, rent and the power/wifi bills.
+  { slug: "housing", title: "Housing", url: "/admin/housing" },
   { slug: "people", title: "People & Access", url: "/admin/people" },
   { slug: "payments", title: "Payments", url: "/admin/payments" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
@@ -257,6 +259,12 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "club-dossier", // Sandbox — first-party people intelligence (PII across all programs). Daniel only.
   "market-research", // Sandbox — competitor & category intelligence. Daniel only while it's shaped.
   "vehicles", // Fleet — names a staff member against an insurance policy and an FBT private-use position. Daniel only. Remove to open to admins/managers.
+  // Residency housing: tenants' names, phone numbers, rent arrears and bond.
+  // Without this lock, every *admin* of the venue workspace (socials@, info@cugc,
+  // grassroots@, support@) would see it — the tabs whitelist does not restrain a
+  // workspace admin. Same class of data as budget/cashflow. Remove this line to
+  // open Housing to venue admins and managers.
+  "housing",
 ]);
 
 /**

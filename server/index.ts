@@ -104,6 +104,12 @@ app.use(attributionCookieMiddleware);
   const { registerVehicleRoutes } = await import("./vehicles-routes");
   registerVehicleRoutes(app);
 
+  // Housing — the residency houses at the United Sports Centre: rooms, tenants,
+  // rent and utility bills. Admin-only, gated by requireTab("housing") to the
+  // venue workspace. No public surface: rent arrears are not a public fact.
+  const { registerHousingRoutes } = await import("./housing-routes");
+  registerHousingRoutes(app);
+
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
   // gated by requireTab("cic-content-marketplace") to the CIC workspace.

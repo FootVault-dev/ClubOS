@@ -17,6 +17,7 @@ import {
   Tent,
   ClipboardCheck,
   ListChecks,
+  Home,
   Users,
   Mail,
   Settings,
@@ -139,6 +140,7 @@ const venueNav = [
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "facilities", title: "Facilities", url: "/admin/facilities", icon: Shield },
   { tab: "addons", title: "Add-ons", url: "/admin/addons", icon: Puzzle },
+  { tab: "housing", title: "Housing", url: "/admin/housing", icon: Home },
   { tab: "people", title: "People & Access", url: "/admin/people", icon: Users },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
 ];

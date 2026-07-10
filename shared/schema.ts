@@ -5,7 +5,10 @@ import { z } from "zod";
 import type { HiringQuestion } from "./hiring";
 
 export const roleEnum = pgEnum("role_type", ["super_admin", "admin", "team_member", "manager", "coach", "finance", "marketing", "registrar"]);
-export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor"]);
+// "tenant" is for someone who exists in ClubOS only because they rent a room in
+// the residency houses. A player or staff member who also rents keeps their own
+// type — the tenancy links to the contact, not to its type.
+export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor", "tenant"]);
 export const genderEnum = pgEnum("gender_type", ["male", "female", "other"]);
 export const programTypeEnum = pgEnum("program_type", ["holiday_camp", "academy", "trials", "event", "open_training", "league_team"]);
 export const registrationStatusEnum = pgEnum("registration_status", ["pending", "confirmed", "waitlisted", "cancelled", "refunded", "partially_refunded"]);
@@ -4642,3 +4645,139 @@ export const fleetCosts = pgTable("fleet_costs", {
 export const insertFleetCostSchema = createInsertSchema(fleetCosts).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertFleetCost = z.infer<typeof insertFleetCostSchema>;
 export type FleetCost = typeof fleetCosts.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOUSING — residency houses, rooms, tenants, rent and utilities (USC, org 4).
+//
+// See migrations/2026-07-10_usc_housing.sql for the reasoning. Two things are
+// deliberately absent as columns because they are DERIVED on read:
+//   * a charge's `overdue` state  (paid_on IS NULL AND due_on < today-in-NZ)
+//   * a room's occupancy          (does it have an active tenancy today?)
+// Kinds/frequencies are validated TEXT (shared/housing.ts), never pg enums.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const housingHouses = pgTable("housing_houses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  address: text("address"),
+  notes: text("notes"),
+  // Archive, never delete — a house with tenancy history is a financial record.
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("housing_houses_org_idx").on(t.organizationId),
+}));
+
+export const housingRooms = pgTable("housing_rooms", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  houseId: integer("house_id").notNull().references(() => housingHouses.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  roomType: text("room_type").notNull().default("single"),
+  // The room's ASKING rent. The tenancy carries the rent actually agreed, so a
+  // later price rise never rewrites what a sitting tenant owes.
+  defaultRentCents: integer("default_rent_cents").notNull().default(0),
+  defaultRentFrequency: text("default_rent_frequency").notNull().default("weekly"),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  houseIdx: index("housing_rooms_house_idx").on(t.houseId),
+  orgIdx: index("housing_rooms_org_idx").on(t.organizationId),
+}));
+
+export const housingTenancies = pgTable("housing_tenancies", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  roomId: integer("room_id").notNull().references(() => housingRooms.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // RESTRICT: deleting a person must never silently erase the rent they owed.
+  contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+  rentCents: integer("rent_cents").notNull().default(0),
+  rentFrequency: text("rent_frequency").notNull().default("weekly"),
+  startDate: date("start_date").notNull(),
+  /** NULL = ongoing. INCLUSIVE — the tenant's last night. */
+  endDate: date("end_date"),
+  bondCents: integer("bond_cents").notNull().default(0),
+  bondReturnedOn: date("bond_returned_on"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  roomIdx: index("housing_tenancies_room_idx").on(t.roomId),
+  contactIdx: index("housing_tenancies_contact_idx").on(t.contactId),
+  orgIdx: index("housing_tenancies_org_idx").on(t.organizationId),
+  // NB: the real guarantee is the `housing_tenancies_no_overlap` EXCLUDE
+  // constraint in the migration — drizzle cannot express it, so it is not here.
+}));
+
+export const housingRentCharges = pgTable("housing_rent_charges", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenancyId: integer("tenancy_id").notNull().references(() => housingTenancies.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  periodStart: date("period_start").notNull(),
+  periodEnd: date("period_end").notNull(),
+  /** Rent in advance: the first day of the period it covers. */
+  dueOn: date("due_on").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  paidOn: date("paid_on"),
+  paidAmountCents: integer("paid_amount_cents"),
+  method: text("method"),
+  reference: text("reference"),
+  waived: boolean("waived").notNull().default(false),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // Makes re-running the charge generator idempotent instead of double-charging.
+  tenancyDueUnq: uniqueIndex("housing_rent_charges_tenancy_due_unq").on(t.tenancyId, t.dueOn),
+  orgDueIdx: index("housing_rent_charges_org_due_idx").on(t.organizationId, t.dueOn),
+}));
+
+export const housingUtilityAccounts = pgTable("housing_utility_accounts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  houseId: integer("house_id").notNull().references(() => housingHouses.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),                 // power | internet | water | gas | rates | insurance | waste | other
+  provider: text("provider"),
+  accountNumber: text("account_number"),
+  billingFrequency: text("billing_frequency").notNull().default("monthly"),
+  /** A budgeting hint only — never what actually gets paid. */
+  expectedAmountCents: integer("expected_amount_cents").notNull().default(0),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  houseIdx: index("housing_utility_accounts_house_idx").on(t.houseId),
+  orgIdx: index("housing_utility_accounts_org_idx").on(t.organizationId),
+}));
+
+export const housingUtilityBills = pgTable("housing_utility_bills", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  utilityAccountId: integer("utility_account_id").notNull().references(() => housingUtilityAccounts.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  periodLabel: text("period_label"),
+  dueOn: date("due_on").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  paidOn: date("paid_on"),
+  paidAmountCents: integer("paid_amount_cents"),
+  method: text("method"),
+  reference: text("reference"),
+  waived: boolean("waived").notNull().default(false),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  accountIdx: index("housing_utility_bills_account_idx").on(t.utilityAccountId),
+  orgDueIdx: index("housing_utility_bills_org_due_idx").on(t.organizationId, t.dueOn),
+}));
+
+export type HousingHouse = typeof housingHouses.$inferSelect;
+export type HousingRoom = typeof housingRooms.$inferSelect;
+export type HousingTenancy = typeof housingTenancies.$inferSelect;
+export type HousingRentCharge = typeof housingRentCharges.$inferSelect;
+export type HousingUtilityAccount = typeof housingUtilityAccounts.$inferSelect;
+export type HousingUtilityBill = typeof housingUtilityBills.$inferSelect;
