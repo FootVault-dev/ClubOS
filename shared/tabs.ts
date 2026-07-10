@@ -171,6 +171,7 @@ const groupTabs: TabDef[] = [
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
   { slug: "proposals", title: "Proposals", url: "/admin/proposals" },
   { slug: "grants", title: "Grants", url: "/admin/grants" },
+  { slug: "invoices", title: "Invoices", url: "/admin/invoices" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
   { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
@@ -255,6 +256,7 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "cic-watch", // OTT streaming platform control (watch.cicyouth.com) — launched dark to Daniel. Remove to open to Isaac/managers.
   "club-dossier", // Sandbox — first-party people intelligence (PII across all programs). Daniel only.
   "market-research", // Sandbox — competitor & category intelligence. Daniel only while it's shaped.
+  "invoices", // Tracked invoices — carries bank details. Daniel only while it's shaped.
 ]);
 
 /**

@@ -3,6 +3,7 @@ import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, deci
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import type { HiringQuestion } from "./hiring";
+import type { InvoiceLine, InvoiceSpendSummary } from "./invoice-types";
 
 export const roleEnum = pgEnum("role_type", ["super_admin", "admin", "team_member", "manager", "coach", "finance", "marketing", "registrar"]);
 export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor"]);
@@ -4427,3 +4428,104 @@ export type HiringJob = typeof hiringJobs.$inferSelect;
 export const insertHiringApplicationSchema = createInsertSchema(hiringApplications).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertHiringApplication = z.infer<typeof insertHiringApplicationSchema>;
 export type HiringApplication = typeof hiringApplications.$inferSelect;
+
+// ── USG Invoices — tracked, payable invoices (United Sports Group, org 7) ────
+// The public payable page (apps/invoices, a separate Vercel app) calls
+// /api/public/invoices/:token* here; ClubOS is the system of record. Named
+// usg_* (not bare `invoices`) to dodge this schema's documented naming-
+// collision history — see the hiring_* comment above for the same reasoning.
+//
+// Deliberately NO 'overdue' status: overdue is DERIVED at read time from
+// dueOn (see shared/invoice-types.ts deriveInvoiceStatus) — a stored
+// "overdue" goes stale the moment a scheduled job doesn't run, and pushing a
+// due date out would need its own reversal logic. status is one of
+// draft | sent | paid | void, validated in the app — no pg enum (this schema
+// has documented enum drift in prod; do NOT reuse the orphaned
+// invoiceStatusEnum above, which has a DIFFERENT vocabulary and is unused).
+//
+// token is the public identifier — unguessable (an invoice carries bank
+// details, so it must never be enumerable). id/organizationId never leave
+// the admin surface; the public GET response is hand-shaped in
+// server/invoice-routes.ts, never `res.json(row)`.
+export const usgInvoices = pgTable("usg_invoices", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  token: text("token").notNull().unique(),
+  number: text("number").notNull().unique(),
+  status: text("status").notNull().default("draft"),        // draft | sent | paid | void
+
+  brand: text("brand").notNull().default("siu"),             // siu | cufc — see SUPPLIER_BY_BRAND
+
+  recipientName: text("recipient_name").notNull(),
+  recipientEmail: text("recipient_email"),
+  recipientAddress: jsonb("recipient_address").$type<string[]>(),
+
+  title: text("title").notNull(),
+  intro: text("intro"),
+
+  spendSummary: jsonb("spend_summary").$type<InvoiceSpendSummary>(),
+  lines: jsonb("lines").$type<InvoiceLine[]>().notNull(),
+  notes: jsonb("notes").$type<string[]>(),
+
+  gstTreatment: text("gst_treatment").notNull().default("inclusive"), // inclusive | exclusive
+
+  // Server-computed from lines + gstTreatment on every create/update — NEVER
+  // trusted from the client. See shared/invoice-money.ts.
+  subtotalCents: integer("subtotal_cents").notNull(),
+  gstCents: integer("gst_cents").notNull(),
+  totalCents: integer("total_cents").notNull(),
+
+  issuedOn: date("issued_on").notNull(),
+  dueOn: date("due_on").notNull(),
+  termsLabel: text("terms_label"),
+
+  cardEnabled: boolean("card_enabled").notNull().default(false),
+
+  isDraft: boolean("is_draft").notNull().default(true),
+  draftReasons: jsonb("draft_reasons").$type<string[]>(),
+
+  bankAccountName: text("bank_account_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankReference: text("bank_reference"),
+  bankParticulars: text("bank_particulars"),
+  bankCode: text("bank_code"),
+
+  paidAt: timestamp("paid_at"),
+  paidMethod: text("paid_method"),                            // card | bank
+  paidAmountCents: integer("paid_amount_cents"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  tokenUnq: uniqueIndex("usg_invoices_token_unq").on(t.token),
+  orgStatusIdx: index("usg_invoices_org_status_idx").on(t.organizationId, t.status),
+}));
+
+// Append-only audit/tracking log behind the admin timeline (created → sent →
+// opened ×N → reminder_sent → paid/voided). Same shape as the Proposal
+// Tracker's proposal_events.
+export const usgInvoiceEvents = pgTable("usg_invoice_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  invoiceId: integer("invoice_id").notNull().references(() => usgInvoices.id, { onDelete: "cascade" }),
+
+  kind: text("kind").notNull(),                               // opened | sent | reminder_sent | paid | voided | created
+  at: timestamp("at").defaultNow().notNull(),
+
+  ipHash: text("ip_hash"),                                    // sha256(ip + salt) — never the raw IP
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  isStaff: boolean("is_staff").notNull().default(false),      // our own opens don't pollute the count
+  meta: jsonb("meta"),
+}, (t) => ({
+  invoiceAtIdx: index("usg_invoice_events_invoice_at_idx").on(t.invoiceId, t.at),
+}));
+
+export const insertUsgInvoiceSchema = createInsertSchema(usgInvoices).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertUsgInvoice = z.infer<typeof insertUsgInvoiceSchema>;
+export type UsgInvoice = typeof usgInvoices.$inferSelect;
+
+export const insertUsgInvoiceEventSchema = createInsertSchema(usgInvoiceEvents).omit({ id: true, at: true });
+export type InsertUsgInvoiceEvent = z.infer<typeof insertUsgInvoiceEventSchema>;
+export type UsgInvoiceEvent = typeof usgInvoiceEvents.$inferSelect;

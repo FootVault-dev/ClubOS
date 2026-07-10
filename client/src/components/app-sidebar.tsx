@@ -68,6 +68,7 @@ import {
   MessageSquarePlus,
   Link2,
   Target,
+  Receipt,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -247,6 +248,7 @@ const groupNav = [
   { tab: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship", icon: Handshake },
   { tab: "proposals", title: "Proposals", url: "/admin/proposals", icon: Send },
   { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
+  { tab: "invoices", title: "Invoices", url: "/admin/invoices", icon: Receipt },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
 ];

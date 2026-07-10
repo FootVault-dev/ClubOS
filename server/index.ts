@@ -97,6 +97,12 @@ app.use(attributionCookieMiddleware);
   const { registerHiringRoutes } = await import("./hiring-routes");
   registerHiringRoutes(app);
 
+  // USG Invoices — tracked, payable invoices (org 7, super-admin only). Admin
+  // side is gated by requireTab("invoices"); public endpoints are CORS-allow-
+  // listed to usg-invoices.vercel.app and carry no session.
+  const { registerInvoiceRoutes } = await import("./invoice-routes");
+  registerInvoiceRoutes(app);
+
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
   // gated by requireTab("cic-content-marketplace") to the CIC workspace.

@@ -25,6 +25,7 @@ import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNot
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
+import { markInvoicePaidByPaymentIntent } from "./invoice-routes";
 import * as rewards from "./rewards";
 import * as loyalty from "./loyalty";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -15297,6 +15298,10 @@ export async function registerRoutes(
           // without this guard the generic registrationId branch below would treat
           // a membership payment as a camp registration. Idempotent.
           await finalizeMembershipPayment(Number(paymentIntent.metadata.memberId), paymentIntent.id);
+        } else if (paymentIntent.metadata?.kind === "invoice" && paymentIntent.metadata?.invoiceToken) {
+          // USG Invoices — card payment on a tracked invoice. Idempotent
+          // (atomic status-flip guard inside), so a webhook retry is a no-op.
+          await markInvoicePaidByPaymentIntent(paymentIntent);
         } else if (regType === "league_balance" && registrationId) {
           // MFL instalment balance collected.
           await handleLeagueBalanceSuccess(registrationId, paymentIntent.id);
