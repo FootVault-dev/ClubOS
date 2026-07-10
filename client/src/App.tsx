@@ -138,6 +138,7 @@ import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
 import PrintsCRM from "@/pages/prints-crm";
+import PrintsSales from "@/pages/prints-sales";
 import PrintsOrders from "@/pages/prints-orders";
 import PrintsProjects from "@/pages/prints-projects";
 import PrintsAnalytics from "@/pages/prints-analytics";
@@ -223,6 +224,7 @@ function AdminRouter() {
         <Route path="/admin/print-orders" component={PrintsOrders} />
         <Route path="/admin/print-materials" component={PrintsMaterials} />
         <Route path="/admin/print-crm" component={PrintsCRM} />
+        <Route path="/admin/print-sales" component={PrintsSales} />
         <Route path="/admin/print-projects" component={PrintsProjects} />
         <Route path="/admin/print-analytics" component={PrintsAnalytics} />
         <Route path="/admin/print-landing" component={PrintsLanding} />

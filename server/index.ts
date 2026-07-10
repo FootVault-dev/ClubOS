@@ -115,6 +115,12 @@ app.use(attributionCookieMiddleware);
   const { registerHousingRoutes } = await import("./housing-routes");
   registerHousingRoutes(app);
 
+  // Sales — the United Print prospect database + pipeline (prints workspace).
+  // Gated by requireTab("sales"), which is in SUPER_ADMIN_ONLY_TABS while
+  // Daniel shapes it. No public surface: a prospect list is a sales asset.
+  const { registerSalesRoutes } = await import("./sales-routes");
+  registerSalesRoutes(app);
+
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
   // gated by requireTab("cic-content-marketplace") to the CIC workspace.

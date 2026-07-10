@@ -71,6 +71,7 @@ import {
   Target,
   Receipt,
   Car,
+  PhoneCall,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -274,6 +275,7 @@ const printsNav = [
   { tab: "orders", title: "Orders", url: "/admin/print-orders", icon: ShoppingCart },
   { tab: "materials", title: "Materials", url: "/admin/print-materials", icon: FileText },
   { tab: "crm", title: "CRM", url: "/admin/print-crm", icon: Users },
+  { tab: "sales", title: "Sales", url: "/admin/print-sales", icon: PhoneCall },
   { tab: "print-livechat", title: "Live Chat", url: "/admin/print-livechat", icon: MessageCircle },
   { tab: "projects", title: "Projects", url: "/admin/print-projects", icon: FolderKanban },
   { tab: "analytics", title: "Analytics", url: "/admin/print-analytics", icon: BarChart3 },

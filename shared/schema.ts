@@ -4882,3 +4882,94 @@ export type HousingTenancy = typeof housingTenancies.$inferSelect;
 export type HousingRentCharge = typeof housingRentCharges.$inferSelect;
 export type HousingUtilityAccount = typeof housingUtilityAccounts.$inferSelect;
 export type HousingUtilityBill = typeof housingUtilityBills.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SALES — United Print prospect database + sales pipeline (prints workspace).
+//
+// A prospect is a researched company that could buy what United Print sells
+// (merch, trophies/medals, banners/signage, design). Rows arrive from the
+// grounded research fleet (evidence_url + fetched_at on every row — provenance
+// is the product, same rule as market_research_snapshots) or by hand.
+//
+// The pipeline stage lives on the prospect and only moves through the server's
+// moveStage(), which always writes a sales_activities trail and promotes a won
+// deal into print_contacts (the CRM tab) exactly once. Stage/tier/region are
+// validated app-side in shared/sales.ts — deliberately NO DB CHECK, a stale
+// CHECK is how the MFL checkout 500'd. "Follow-up due" is DERIVED from
+// next_follow_up_on vs today, never stored.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const salesProspects = pgTable("sales_prospects", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  name: text("name").notNull(),
+  website: text("website"),
+  city: text("city"),
+  region: text("region"),
+  category: text("category"),
+  subcategory: text("subcategory"),
+  whyFit: text("why_fit"),
+  servicesMatch: jsonb("services_match"),
+
+  contactName: text("contact_name"),
+  contactRole: text("contact_role"),
+  email: text("email"),
+  phone: text("phone"),
+
+  evidenceUrl: text("evidence_url"),
+  fetchedAt: date("fetched_at"),
+  linkStatus: text("link_status"),
+
+  fitScore: integer("fit_score"),
+  volumeScore: integer("volume_score"),
+  accessScore: integer("access_score"),
+  localityScore: integer("locality_score"),
+  totalScore: integer("total_score"),
+  tier: text("tier"),
+  rank: integer("rank"),
+
+  source: text("source").notNull().default("manual"),
+  stage: text("stage").notNull().default("new"),
+  stageChangedAt: timestamp("stage_changed_at", { withTimezone: true }),
+  nextFollowUpOn: date("next_follow_up_on"),
+  declinedReason: text("declined_reason"),
+  dealValueCents: integer("deal_value_cents"),
+  promotedContactId: integer("promoted_contact_id").references(() => printContacts.id, { onDelete: "set null" }),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgStageIdx: index("sales_prospects_org_stage_idx").on(t.organizationId, t.stage),
+  orgTierIdx: index("sales_prospects_org_tier_idx").on(t.organizationId, t.tier),
+  orgFollowupIdx: index("sales_prospects_org_followup_idx").on(t.organizationId, t.nextFollowUpOn),
+  orgScoreIdx: index("sales_prospects_org_score_idx").on(t.organizationId, t.totalScore),
+  // The dedupe unique index (organization_id, lower(website)) WHERE website IS
+  // NOT NULL lives in the SQL migration only — drizzle can't express lower().
+}));
+
+export const salesActivities = pgTable("sales_activities", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  prospectId: integer("prospect_id").notNull().references(() => salesProspects.id, { onDelete: "cascade" }),
+
+  type: text("type").notNull(),
+  outcome: text("outcome"),
+  note: text("note"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  prospectIdx: index("sales_activities_prospect_idx").on(t.prospectId, t.occurredAt),
+  orgIdx: index("sales_activities_org_idx").on(t.organizationId, t.occurredAt),
+}));
+
+export const insertSalesProspectSchema = createInsertSchema(salesProspects).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSalesProspect = z.infer<typeof insertSalesProspectSchema>;
+export type SalesProspect = typeof salesProspects.$inferSelect;
+export const insertSalesActivitySchema = createInsertSchema(salesActivities).omit({ id: true, createdAt: true });
+export type InsertSalesActivity = z.infer<typeof insertSalesActivitySchema>;
+export type SalesActivity = typeof salesActivities.$inferSelect;
