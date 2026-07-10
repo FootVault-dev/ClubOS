@@ -12,3 +12,4 @@ vite.config.ts.*
 clubos_backup.sql
 sync-output.log
 .worktrees/
+preview/
