@@ -6,7 +6,10 @@ import type { HiringQuestion } from "./hiring";
 import type { InvoiceLine, InvoiceSpendSummary } from "./invoice-types";
 
 export const roleEnum = pgEnum("role_type", ["super_admin", "admin", "team_member", "manager", "coach", "finance", "marketing", "registrar"]);
-export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor"]);
+// "tenant" is for someone who exists in ClubOS only because they rent a room in
+// the residency houses. A player or staff member who also rents keeps their own
+// type — the tenancy links to the contact, not to its type.
+export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor", "tenant"]);
 export const genderEnum = pgEnum("gender_type", ["male", "female", "other"]);
 export const programTypeEnum = pgEnum("program_type", ["holiday_camp", "academy", "trials", "event", "open_training", "league_team"]);
 export const registrationStatusEnum = pgEnum("registration_status", ["pending", "confirmed", "waitlisted", "cancelled", "refunded", "partially_refunded"]);
@@ -4529,3 +4532,353 @@ export type UsgInvoice = typeof usgInvoices.$inferSelect;
 export const insertUsgInvoiceEventSchema = createInsertSchema(usgInvoiceEvents).omit({ id: true, at: true });
 export type InsertUsgInvoiceEvent = z.infer<typeof insertUsgInvoiceEventSchema>;
 export type UsgInvoiceEvent = typeof usgInvoiceEvents.$inferSelect;
+// ─────────────────────────────────────────────────────────────────────────────
+// FLEET — company vehicles (USG workspace, super-admin only).
+//
+// Prefixed `fleet_` for the same reason Hiring took `hiring_jobs`: bare
+// `assignments`, `costs` and `service_records` are names a future feature will
+// want, and bare `vehicles` reads like it could be anything.
+//
+// Derived, never stored: compliance status (expired / due soon) is computed
+// from the dates on read by `vehicleCompliance()` in shared/vehicles.ts. A
+// stored `is_expired` flag is only true until the day nobody runs the job —
+// the same rule the invoice pages follow for `overdue`.
+//
+// Retire, never delete: a vehicle is `disposed` and an assignment gets a
+// `returned_on`. Who was driving the van in March is a question the club will
+// eventually need to answer — an insurance claim, a speeding ticket, an FBT
+// review — and a DELETE destroys the only record of it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const fleetVehicles = pgTable("fleet_vehicles", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // Identity
+  plate: text("plate").notNull(),                       // NZ registration plate, stored upper-cased
+  make: text("make").notNull(),
+  model: text("model").notNull(),
+  variant: text("variant"),
+  year: integer("year"),
+  colour: text("colour"),
+  vin: text("vin"),
+  engineNumber: text("engine_number"),
+  vehicleType: text("vehicle_type").notNull().default("car"),   // car|van|minibus|ute|truck|trailer|other (validated app-side, no pg enum)
+  fuelType: text("fuel_type").notNull().default("petrol"),      // petrol|diesel|hybrid|plug_in_hybrid|electric|lpg|other
+  transmission: text("transmission"),
+  seats: integer("seats"),
+
+  // An odometer reading is a fact about a moment, not a property of the vehicle,
+  // so the reading carries the date it was taken. RUC status is untrustworthy
+  // without it.
+  odometerKm: integer("odometer_km"),
+  odometerAt: date("odometer_at"),
+
+  // Compliance. A vehicle carries a WOF or a COF, never both.
+  complianceType: text("compliance_type").notNull().default("wof"), // wof|cof
+  wofExpiresOn: date("wof_expires_on"),
+  cofExpiresOn: date("cof_expires_on"),
+  regoExpiresOn: date("rego_expires_on"),
+
+  // RUC expires at an odometer reading, not a date. `ruc_required` is seeded
+  // from fuel type but a human owns it — the rules change and we are not NZTA.
+  rucRequired: boolean("ruc_required").notNull().default(false),
+  rucValidToKm: integer("ruc_valid_to_km"),
+
+  // Ownership
+  ownership: text("ownership").notNull().default("owned"),       // owned|leased|financed
+  lessor: text("lessor"),
+  leaseEndsOn: date("lease_ends_on"),
+  leaseMonthlyCents: integer("lease_monthly_cents"),
+  purchasedOn: date("purchased_on"),
+  purchasePriceCents: integer("purchase_price_cents"),
+  supplier: text("supplier"),
+  disposedOn: date("disposed_on"),
+  disposalPriceCents: integer("disposal_price_cents"),
+
+  status: text("status").notNull().default("active"),            // active|in_workshop|off_road|disposed
+
+  // Servicing — the NEXT due is set by a human (you can know a van is due in
+  // October before you've ever logged a service), and updated when one is logged.
+  nextServiceDueOn: date("next_service_due_on"),
+  nextServiceDueKm: integer("next_service_due_km"),
+
+  // FBT. In NZ a vehicle *available* for private use attracts Fringe Benefit
+  // Tax — availability, not use, is the test. We record the position; the
+  // accountant rules on it.
+  fbtPrivateUse: boolean("fbt_private_use").notNull().default(false),
+  fbtExemption: text("fbt_exemption").notNull().default("none"), // none|work_related_vehicle|emergency_call|other
+  fbtNotes: text("fbt_notes"),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // A plate is unique in New Zealand, but it can be transferred off a disposed
+  // vehicle onto a new one — so the uniqueness is among LIVE vehicles only.
+  // That partial index can't be expressed here; it lives in the migration.
+  orgStatusIdx: index("fleet_vehicles_org_status_idx").on(t.organizationId, t.status),
+  orgPlateIdx: index("fleet_vehicles_org_plate_idx").on(t.organizationId, t.plate),
+}));
+export const insertFleetVehicleSchema = createInsertSchema(fleetVehicles).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetVehicle = z.infer<typeof insertFleetVehicleSchema>;
+export type FleetVehicle = typeof fleetVehicles.$inferSelect;
+
+/** Who has the vehicle, and who had it. `holder_user_id` links a ClubOS login
+ *  where one exists, but `holder_name` is the authority — part-time coaches and
+ *  contractors drive club vans without ever having an account. */
+export const fleetAssignments = pgTable("fleet_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  holderUserId: integer("holder_user_id").references(() => users.id, { onDelete: "set null" }),
+  holderName: text("holder_name").notNull(),
+  holderEmail: text("holder_email"),
+  holderPhone: text("holder_phone"),
+  licenceClass: text("licence_class"),
+  licenceExpiresOn: date("licence_expires_on"),
+
+  assignedOn: date("assigned_on").notNull(),
+  returnedOn: date("returned_on"),                     // NULL = they still have it
+  odometerStartKm: integer("odometer_start_km"),
+  odometerEndKm: integer("odometer_end_km"),
+
+  purpose: text("purpose"),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // One OPEN assignment per vehicle is enforced by a partial unique index in
+  // the migration — two people cannot hold the same van at once, and the
+  // database says so rather than the application hoping so.
+  vehicleIdx: index("fleet_assignments_vehicle_idx").on(t.vehicleId, t.assignedOn),
+  orgIdx: index("fleet_assignments_org_idx").on(t.organizationId),
+}));
+export const insertFleetAssignmentSchema = createInsertSchema(fleetAssignments).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetAssignment = z.infer<typeof insertFleetAssignmentSchema>;
+export type FleetAssignment = typeof fleetAssignments.$inferSelect;
+
+/** One row per vehicle per policy period. A fleet-wide policy is simply the
+ *  same `policy_number` across several vehicles — which keeps the "is this van
+ *  insured today" query a single indexed lookup instead of a union. */
+export const fleetInsurancePolicies = pgTable("fleet_insurance_policies", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  insurer: text("insurer").notNull(),
+  policyNumber: text("policy_number").notNull(),
+  coverType: text("cover_type").notNull().default("comprehensive"), // comprehensive|third_party_fire_theft|third_party|mechanical_breakdown|other
+  startsOn: date("starts_on").notNull(),
+  expiresOn: date("expires_on").notNull(),
+  excessCents: integer("excess_cents"),
+  premiumCents: integer("premium_cents"),
+  agreedValueCents: integer("agreed_value_cents"),
+  contactName: text("contact_name"),
+  contactPhone: text("contact_phone"),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  vehicleExpiryIdx: index("fleet_insurance_vehicle_expiry_idx").on(t.vehicleId, t.expiresOn),
+  orgIdx: index("fleet_insurance_org_idx").on(t.organizationId),
+}));
+export const insertFleetInsurancePolicySchema = createInsertSchema(fleetInsurancePolicies).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetInsurancePolicy = z.infer<typeof insertFleetInsurancePolicySchema>;
+export type FleetInsurancePolicy = typeof fleetInsurancePolicies.$inferSelect;
+
+export const fleetServiceRecords = pgTable("fleet_service_records", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  servicedOn: date("serviced_on").notNull(),
+  serviceType: text("service_type").notNull().default("service"), // service|repair|wof_check|cof_check|tyres|recall|other
+  provider: text("provider"),
+  odometerKm: integer("odometer_km"),
+  description: text("description"),
+  costCents: integer("cost_cents"),
+  invoiceRef: text("invoice_ref"),
+  nextServiceDueOn: date("next_service_due_on"),
+  nextServiceDueKm: integer("next_service_due_km"),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  vehicleIdx: index("fleet_service_vehicle_idx").on(t.vehicleId, t.servicedOn),
+  orgIdx: index("fleet_service_org_idx").on(t.organizationId),
+}));
+export const insertFleetServiceRecordSchema = createInsertSchema(fleetServiceRecords).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetServiceRecord = z.infer<typeof insertFleetServiceRecordSchema>;
+export type FleetServiceRecord = typeof fleetServiceRecords.$inferSelect;
+
+/** Running costs. `amount_cents` is GST-inclusive, as it appears on the docket —
+ *  the coding of GST is Xero's job, not this tab's. Litres is a real number
+ *  (never money), so it can be a float without the cents discipline. */
+export const fleetCosts = pgTable("fleet_costs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  incurredOn: date("incurred_on").notNull(),
+  category: text("category").notNull(),                 // fuel|ruc|rego|wof|cof|insurance|service|repair|tyres|cleaning|fine|toll|parking|lease|other
+  amountCents: integer("amount_cents").notNull(),
+  supplier: text("supplier"),
+  reference: text("reference"),
+  odometerKm: integer("odometer_km"),
+  litres: doublePrecision("litres"),                    // fuel only; enables c/km and L/100km
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  vehicleIdx: index("fleet_costs_vehicle_idx").on(t.vehicleId, t.incurredOn),
+  orgCategoryIdx: index("fleet_costs_org_category_idx").on(t.organizationId, t.category),
+}));
+export const insertFleetCostSchema = createInsertSchema(fleetCosts).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetCost = z.infer<typeof insertFleetCostSchema>;
+export type FleetCost = typeof fleetCosts.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOUSING — residency houses, rooms, tenants, rent and utilities (USC, org 4).
+//
+// See migrations/2026-07-10_usc_housing.sql for the reasoning. Two things are
+// deliberately absent as columns because they are DERIVED on read:
+//   * a charge's `overdue` state  (paid_on IS NULL AND due_on < today-in-NZ)
+//   * a room's occupancy          (does it have an active tenancy today?)
+// Kinds/frequencies are validated TEXT (shared/housing.ts), never pg enums.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const housingHouses = pgTable("housing_houses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  address: text("address"),
+  notes: text("notes"),
+  // Archive, never delete — a house with tenancy history is a financial record.
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("housing_houses_org_idx").on(t.organizationId),
+}));
+
+export const housingRooms = pgTable("housing_rooms", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  houseId: integer("house_id").notNull().references(() => housingHouses.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  roomType: text("room_type").notNull().default("single"),
+  // The room's ASKING rent. The tenancy carries the rent actually agreed, so a
+  // later price rise never rewrites what a sitting tenant owes.
+  defaultRentCents: integer("default_rent_cents").notNull().default(0),
+  defaultRentFrequency: text("default_rent_frequency").notNull().default("weekly"),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  houseIdx: index("housing_rooms_house_idx").on(t.houseId),
+  orgIdx: index("housing_rooms_org_idx").on(t.organizationId),
+}));
+
+export const housingTenancies = pgTable("housing_tenancies", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  roomId: integer("room_id").notNull().references(() => housingRooms.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // RESTRICT: deleting a person must never silently erase the rent they owed.
+  contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+  rentCents: integer("rent_cents").notNull().default(0),
+  rentFrequency: text("rent_frequency").notNull().default("weekly"),
+  startDate: date("start_date").notNull(),
+  /** NULL = ongoing. INCLUSIVE — the tenant's last night. */
+  endDate: date("end_date"),
+  bondCents: integer("bond_cents").notNull().default(0),
+  bondReturnedOn: date("bond_returned_on"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  roomIdx: index("housing_tenancies_room_idx").on(t.roomId),
+  contactIdx: index("housing_tenancies_contact_idx").on(t.contactId),
+  orgIdx: index("housing_tenancies_org_idx").on(t.organizationId),
+  // NB: the real guarantee is the `housing_tenancies_no_overlap` EXCLUDE
+  // constraint in the migration — drizzle cannot express it, so it is not here.
+}));
+
+export const housingRentCharges = pgTable("housing_rent_charges", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenancyId: integer("tenancy_id").notNull().references(() => housingTenancies.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  periodStart: date("period_start").notNull(),
+  periodEnd: date("period_end").notNull(),
+  /** Rent in advance: the first day of the period it covers. */
+  dueOn: date("due_on").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  paidOn: date("paid_on"),
+  paidAmountCents: integer("paid_amount_cents"),
+  method: text("method"),
+  reference: text("reference"),
+  waived: boolean("waived").notNull().default(false),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // Makes re-running the charge generator idempotent instead of double-charging.
+  tenancyDueUnq: uniqueIndex("housing_rent_charges_tenancy_due_unq").on(t.tenancyId, t.dueOn),
+  orgDueIdx: index("housing_rent_charges_org_due_idx").on(t.organizationId, t.dueOn),
+}));
+
+export const housingUtilityAccounts = pgTable("housing_utility_accounts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  houseId: integer("house_id").notNull().references(() => housingHouses.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),                 // power | internet | water | gas | rates | insurance | waste | other
+  provider: text("provider"),
+  accountNumber: text("account_number"),
+  billingFrequency: text("billing_frequency").notNull().default("monthly"),
+  /** A budgeting hint only — never what actually gets paid. */
+  expectedAmountCents: integer("expected_amount_cents").notNull().default(0),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  houseIdx: index("housing_utility_accounts_house_idx").on(t.houseId),
+  orgIdx: index("housing_utility_accounts_org_idx").on(t.organizationId),
+}));
+
+export const housingUtilityBills = pgTable("housing_utility_bills", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  utilityAccountId: integer("utility_account_id").notNull().references(() => housingUtilityAccounts.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  periodLabel: text("period_label"),
+  dueOn: date("due_on").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  paidOn: date("paid_on"),
+  paidAmountCents: integer("paid_amount_cents"),
+  method: text("method"),
+  reference: text("reference"),
+  waived: boolean("waived").notNull().default(false),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  accountIdx: index("housing_utility_bills_account_idx").on(t.utilityAccountId),
+  orgDueIdx: index("housing_utility_bills_org_due_idx").on(t.organizationId, t.dueOn),
+}));
+
+export type HousingHouse = typeof housingHouses.$inferSelect;
+export type HousingRoom = typeof housingRooms.$inferSelect;
+export type HousingTenancy = typeof housingTenancies.$inferSelect;
+export type HousingRentCharge = typeof housingRentCharges.$inferSelect;
+export type HousingUtilityAccount = typeof housingUtilityAccounts.$inferSelect;
+export type HousingUtilityBill = typeof housingUtilityBills.$inferSelect;

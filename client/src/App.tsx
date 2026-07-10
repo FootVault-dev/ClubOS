@@ -64,6 +64,7 @@ import AdminDeclarations from "@/pages/admin-declarations";
 import GroupProjects from "@/pages/group-projects";
 import GroupContent from "@/pages/group-content";
 import GroupHiring from "@/pages/group-hiring";
+import GroupVehicles from "@/pages/group-vehicles";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
@@ -74,6 +75,7 @@ import LinksPage from "@/pages/links";
 import AttributionPage from "@/pages/attribution";
 import VenueFacilities from "@/pages/venue-facilities";
 import VenueAddons from "@/pages/venue-addons";
+import VenueHousing from "@/pages/venue-housing";
 import VenuePeople from "@/pages/venue-people";
 import VenuePayments from "@/pages/venue-payments";
 import VenueSettings from "@/pages/venue-settings";
@@ -257,6 +259,7 @@ function AdminRouter() {
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
         <Route path="/admin/cashflow" component={GroupCashflow} />
+        <Route path="/admin/vehicles" component={GroupVehicles} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -383,6 +386,7 @@ function AdminRouter() {
         <Route path="/admin/analytics" component={VenueAnalytics} />
         <Route path="/admin/facilities" component={VenueFacilities} />
         <Route path="/admin/addons" component={VenueAddons} />
+        <Route path="/admin/housing" component={VenueHousing} />
         <Route path="/admin/people" component={VenuePeople} />
         <Route path="/admin/payments" component={VenuePayments} />
         <Route path="/admin/venue-settings" component={VenueSettings} />

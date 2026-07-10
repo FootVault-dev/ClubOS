@@ -35,3 +35,6 @@ clubos_backup.sql
 sync-output.log
 .fly
 fly.toml.bak
+
+# Local-only preview harness for group-vehicles.tsx (no runtime role).
+preview

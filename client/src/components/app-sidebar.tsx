@@ -17,6 +17,7 @@ import {
   Tent,
   ClipboardCheck,
   ListChecks,
+  Home,
   Users,
   Mail,
   Settings,
@@ -69,6 +70,7 @@ import {
   Link2,
   Target,
   Receipt,
+  Car,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -139,6 +141,7 @@ const venueNav = [
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "facilities", title: "Facilities", url: "/admin/facilities", icon: Shield },
   { tab: "addons", title: "Add-ons", url: "/admin/addons", icon: Puzzle },
+  { tab: "housing", title: "Housing", url: "/admin/housing", icon: Home },
   { tab: "people", title: "People & Access", url: "/admin/people", icon: Users },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
 ];
@@ -251,6 +254,8 @@ const groupNav = [
   { tab: "invoices", title: "Invoices", url: "/admin/invoices", icon: Receipt },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
+  // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
+  { tab: "vehicles", title: "Vehicles", url: "/admin/vehicles", icon: Car },
 ];
 
 const groupSecondary = [

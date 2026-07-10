@@ -102,6 +102,18 @@ app.use(attributionCookieMiddleware);
   // listed to usg-invoices.vercel.app and carry no session.
   const { registerInvoiceRoutes } = await import("./invoice-routes");
   registerInvoiceRoutes(app);
+  // Fleet — company vehicles, assignments, insurance, servicing, running costs.
+  // Gated by requireTab("vehicles"), which is in SUPER_ADMIN_ONLY_TABS: the
+  // records tie a named staff member to an insurance policy and an FBT
+  // private-use position, so it is Daniel-only until he says otherwise.
+  const { registerVehicleRoutes } = await import("./vehicles-routes");
+  registerVehicleRoutes(app);
+
+  // Housing — the residency houses at the United Sports Centre: rooms, tenants,
+  // rent and utility bills. Admin-only, gated by requireTab("housing") to the
+  // venue workspace. No public surface: rent arrears are not a public fact.
+  const { registerHousingRoutes } = await import("./housing-routes");
+  registerHousingRoutes(app);
 
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
