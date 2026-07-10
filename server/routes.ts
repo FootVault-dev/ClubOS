@@ -12029,6 +12029,15 @@ export async function registerRoutes(
   app.post("/api/public/skills-challenge/register", async (req, res) => {
     setSkillsCors(req, res);
     try {
+      // Entries close the moment the board goes live. This is not cosmetic: a
+      // stale tab submitting at 3pm would push registeredCount above
+      // scoredCount, and a category that had already crowned its champion would
+      // silently un-crown them. Staff can still add walk-ups from ClubOS.
+      if (Date.now() >= skillsResultsFrom().getTime()) {
+        return res.status(403).json({
+          message: "Entries for the Skills Challenge have closed. Live scores are at cicyouth.com/skills-challenge.",
+        });
+      }
       const result = await skillsCreateEntry(req.body, "public", null);
       if ("error" in result) return res.status(400).json({ message: result.error });
       res.json({ ok: true, id: result.entry.id, alreadyRegistered: result.alreadyRegistered });
