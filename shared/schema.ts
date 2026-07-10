@@ -3126,6 +3126,10 @@ export const skillsChallengeEntries = pgTable("skills_challenge_entries", {
   ageGroup: text("age_group").notNull(), // "U10" | "U11"
   challenge: text("challenge").notNull(), // "juggling" | "dribble_pass_finish"
   score: decimal("score", { precision: 8, scale: 2 }),
+  // Terminal, no-score outcomes (Olympic convention): "dns" | "dnf" | "dsq".
+  // Mutually exclusive with `score` — an entry is pending, scored, or one of
+  // these. Null for a normal entry.
+  status: text("status"),
   scoredByUserId: integer("scored_by_user_id").references(() => users.id, { onDelete: "set null" }),
   scoredAt: timestamp("scored_at"),
   source: text("source").notNull().default("public"), // "public" | "admin"
