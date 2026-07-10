@@ -73,6 +73,7 @@ import LinksPage from "@/pages/links";
 import AttributionPage from "@/pages/attribution";
 import VenueFacilities from "@/pages/venue-facilities";
 import VenueAddons from "@/pages/venue-addons";
+import VenueHousing from "@/pages/venue-housing";
 import VenuePeople from "@/pages/venue-people";
 import VenuePayments from "@/pages/venue-payments";
 import VenueSettings from "@/pages/venue-settings";
@@ -381,6 +382,7 @@ function AdminRouter() {
         <Route path="/admin/analytics" component={VenueAnalytics} />
         <Route path="/admin/facilities" component={VenueFacilities} />
         <Route path="/admin/addons" component={VenueAddons} />
+        <Route path="/admin/housing" component={VenueHousing} />
         <Route path="/admin/people" component={VenuePeople} />
         <Route path="/admin/payments" component={VenuePayments} />
         <Route path="/admin/venue-settings" component={VenueSettings} />
