@@ -59,9 +59,24 @@ function cents(v: any, { allowNull = false } = {}): number | null | undefined {
   return n;
 }
 
-/** Accept only a bare `YYYY-MM-DD`. A timestamp here is how dates slip a day. */
+/** Accept only a bare `YYYY-MM-DD`. A timestamp here is how dates slip a day.
+ *  With `allowNull`, an empty string clears the field — which is what an empty
+ *  `<input type="date">` sends for "no end date". */
 function isoDate(v: any, { allowNull = false } = {}): string | null | undefined {
   if (v === null || v === undefined || v === "") return allowNull ? null : undefined;
+  const raw = s(v, 10);
+  return parseIso(raw) ? raw : undefined;
+}
+
+/** A payment date is NOT the same kind of field.
+ *
+ *  🔴 Only a literal `null` un-marks a payment. An empty string is a bug in the
+ *  caller — a half-loaded page sending `paidOn: ""` must never be read as "this
+ *  charge was never paid" and silently wipe a recorded payment. Returns
+ *  `undefined` for anything that is neither a real date nor `null`. */
+function paidDate(v: any): string | null | undefined {
+  if (v === null) return null;
+  if (v === undefined) return undefined;
   const raw = s(v, 10);
   return parseIso(raw) ? raw : undefined;
 }
@@ -693,8 +708,8 @@ export function registerHousingRoutes(app: Express) {
       const patch: Record<string, any> = { updatedAt: new Date() };
 
       if (req.body?.paidOn !== undefined) {
-        const v = isoDate(req.body.paidOn, { allowNull: true });
-        if (v === undefined) return res.status(400).json({ message: "Paid date must be YYYY-MM-DD" });
+        const v = paidDate(req.body.paidOn);
+        if (v === undefined) return res.status(400).json({ message: "Paid date must be YYYY-MM-DD, or null to un-mark" });
         patch.paidOn = v;
         // Marking paid with no explicit amount means paid in full. Un-marking
         // clears the amount too, so a cleared charge can't keep a phantom credit.
@@ -903,8 +918,8 @@ export function registerHousingRoutes(app: Express) {
 
       const patch: Record<string, any> = { updatedAt: new Date() };
       if (req.body?.paidOn !== undefined) {
-        const v = isoDate(req.body.paidOn, { allowNull: true });
-        if (v === undefined) return res.status(400).json({ message: "Paid date must be YYYY-MM-DD" });
+        const v = paidDate(req.body.paidOn);
+        if (v === undefined) return res.status(400).json({ message: "Paid date must be YYYY-MM-DD, or null to un-mark" });
         patch.paidOn = v;
         if (v === null) { patch.paidAmountCents = null; patch.method = null; patch.reference = null; }
         else if (req.body.paidAmountCents === undefined) patch.paidAmountCents = current.amountCents;
