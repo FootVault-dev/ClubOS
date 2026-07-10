@@ -13,3 +13,8 @@ clubos_backup.sql
 sync-output.log
 .worktrees/
 preview/
+
+# Local preview harnesses for the Skills Challenge page — never deploy
+vite.preflight.skills.config.mts
+client/preflight-skills.html
+client/src/preflight-skills.tsx

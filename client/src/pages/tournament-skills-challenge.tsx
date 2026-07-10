@@ -1,15 +1,24 @@
-// Skills Challenge tab — CIC workspace. Manages the four side-competition
-// categories ({U10, U11} × {90s Juggling, Dribble Pass & Finish}): see
-// registrations as they come in from join.cicyouth.com, enter/edit scores,
-// add walk-ups, and watch the live leaderboards the mobile app shows.
-import { useMemo, useState } from "react";
+// Skills Challenge tab — CIC workspace. Built for one job: on tournament day a
+// single scorer takes paper slips from five juggling counters and types them in
+// while the standings update live behind them.
+//
+// So the page is the four categories ({U10, U11} × {90s Juggling, Dribble, Pass
+// & Finish}), each holding its own players. Inside a category the scored players
+// sit at the top as a live leaderboard; everyone still waiting sits underneath.
+// Enter a score, press Enter, and focus jumps to the next unscored player — the
+// scorer never reaches for the mouse.
+//
+// Adding a walk-up runs club → age → player, because the club narrows everything
+// after it and almost every walk-up is already in the database under a club that
+// registered online.
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Zap, Plus, Search, Trash2, X, Trophy, Users, ClipboardCheck, Timer } from "lucide-react";
+import { Zap, Plus, Search, Trash2, X, Users, ClipboardCheck, Clock, Check, ChevronDown, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { canonicalClub } from "@/lib/skills-clubs";
 
 type ChallengeKey = "juggling" | "dribble_pass_finish";
 type AgeGroup = "U10" | "U11";
@@ -26,14 +35,6 @@ interface SkillsEntry {
   createdAt: string;
 }
 
-interface LeaderboardCategory {
-  challenge: ChallengeKey;
-  ageGroup: AgeGroup;
-  entries: { id: number; playerName: string; clubName: string; score: number; rank: number }[];
-  registeredCount: number;
-  scoredCount: number;
-}
-
 const CHALLENGE_LABELS: Record<ChallengeKey, string> = {
   juggling: "90s Juggling",
   dribble_pass_finish: "Dribble, Pass & Finish",
@@ -44,20 +45,304 @@ const CHALLENGE_SCORE_UNIT: Record<ChallengeKey, string> = {
   dribble_pass_finish: "seconds",
 };
 
+// The four panels, in the order Daniel reads them out.
+const CATEGORIES: { challenge: ChallengeKey; ageGroup: AgeGroup }[] = [
+  { ageGroup: "U10", challenge: "juggling" },
+  { ageGroup: "U10", challenge: "dribble_pass_finish" },
+  { ageGroup: "U11", challenge: "juggling" },
+  { ageGroup: "U11", challenge: "dribble_pass_finish" },
+];
+
+const AGE_GROUPS: AgeGroup[] = ["U10", "U11"];
+
 function formatScore(challenge: ChallengeKey, score: number | null): string {
   if (score == null) return "—";
   return challenge === "juggling" ? `${Math.round(score)}` : `${score.toFixed(2)}s`;
 }
 
-function AddEntryModal({ onClose }: { onClose: () => void }) {
-  const { toast } = useToast();
-  const [form, setForm] = useState({
-    playerName: "",
-    clubName: "",
-    ageGroup: "U10",
-    challenge: "juggling",
-    score: "",
+/** A fat-fingered score poisons a live leaderboard, so ask before taking an
+ *  outlier. 90 seconds of juggling tops out well under 300; the dribble course
+ *  is a sprint, not a marathon. */
+function implausible(challenge: ChallengeKey, n: number): string | null {
+  if (challenge === "juggling") {
+    if (!Number.isInteger(n)) return `${n} juggles isn't a whole number.`;
+    if (n > 300) return `${n} juggles in 90 seconds is over three a second.`;
+  } else {
+    if (n < 5) return `${n} seconds is faster than anyone can run the course.`;
+    if (n > 300) return `${n} seconds is over five minutes.`;
+  }
+  return null;
+}
+
+/** The same child, entered twice in one category under two spellings of their
+ *  club. The server's dedupe compares the club string exactly, so "Nomads
+ *  united" and "Nomads United AFC" slipped past it and Arlo Pitman is in the
+ *  U10 juggling twice. Flag them; never delete a registration automatically. */
+function findDuplicates(entries: SkillsEntry[]): { ids: Set<number>; players: number } {
+  const groups = new Map<string, number[]>();
+  for (const e of entries) {
+    const key = [
+      e.playerName.trim().toLowerCase().replace(/\s+/g, " "),
+      canonicalClub(e.clubName).toLowerCase(),
+      e.ageGroup,
+      e.challenge,
+    ].join("|");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(e.id);
+  }
+  const ids = new Set<number>();
+  let players = 0;
+  for (const group of Array.from(groups.values())) {
+    if (group.length > 1) {
+      players++;
+      group.forEach((id) => ids.add(id));
+    }
+  }
+  return { ids, players };
+}
+
+/** Standard competition ranking — equal scores share a rank (1,2,2,4).
+ *  Mirrors skillsLeaderboards() on the server so the page and the app agree. */
+function rankScored(challenge: ChallengeKey, entries: SkillsEntry[]) {
+  const scored = entries.filter((e) => e.score != null);
+  scored.sort((a, b) => (challenge === "juggling" ? b.score! - a.score! : a.score! - b.score!));
+  let lastScore: number | null = null;
+  let lastRank = 0;
+  return scored.map((e, i) => {
+    const rank = e.score === lastScore ? lastRank : i + 1;
+    lastScore = e.score;
+    lastRank = rank;
+    return { entry: e, rank };
   });
+}
+
+// ─────────────────────────────── Combobox ────────────────────────────────────
+// Type to filter, arrow keys to move, Enter to take the highlighted option.
+// Anything typed that doesn't match is still accepted — a club or a player who
+// never registered online has to be enterable in three seconds flat.
+
+interface ComboOption {
+  value: string;
+  hint?: string;
+}
+
+function ComboBox({
+  value,
+  onChange,
+  options,
+  placeholder,
+  disabled,
+  emptyHint,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: ComboOption[];
+  placeholder: string;
+  disabled?: boolean;
+  emptyHint?: string;
+  autoFocus?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const matches = useMemo(() => {
+    const q = value.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.value.toLowerCase().includes(q));
+  }, [options, value]);
+
+  const exact = options.some((o) => o.value.toLowerCase() === value.trim().toLowerCase());
+
+  useEffect(() => setHighlight(0), [value]);
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const take = (v: string) => {
+    onChange(v);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <Input
+        value={value}
+        disabled={disabled}
+        autoFocus={autoFocus}
+        placeholder={placeholder}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) return setOpen(true);
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setHighlight((h) => Math.min(h + 1, matches.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setHighlight((h) => Math.max(h - 1, 0));
+          } else if (e.key === "Enter" && open && matches[highlight]) {
+            e.preventDefault();
+            take(matches[highlight].value);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        className="pr-8"
+      />
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/25" />
+
+      {open && !disabled && (matches.length > 0 || (value.trim() && !exact)) && (
+        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-white/10 bg-[#0d1220] py-1 shadow-2xl">
+          {matches.map((o, i) => (
+            <button
+              key={o.value}
+              type="button"
+              onMouseEnter={() => setHighlight(i)}
+              onClick={() => take(o.value)}
+              className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm ${
+                i === highlight ? "bg-white/[0.07] text-white" : "text-white/75"
+              }`}
+            >
+              <span className="truncate">{o.value}</span>
+              {o.hint && <span className="shrink-0 text-xs text-white/30">{o.hint}</span>}
+            </button>
+          ))}
+          {value.trim() && !exact && (
+            <button
+              type="button"
+              onClick={() => take(value.trim())}
+              className={`flex w-full items-center gap-2 border-t border-white/5 px-3 py-2.5 text-left text-sm ${
+                matches.length === 0 ? "text-white" : "text-amber-300/90"
+              }`}
+            >
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">
+                Add “{value.trim()}” {emptyHint ? <span className="text-white/30">— {emptyHint}</span> : null}
+              </span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div className="flex gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={`min-h-[44px] flex-1 rounded-xl border px-3 text-sm font-semibold transition-colors ${
+            value === o.value
+              ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+              : "border-white/10 bg-white/[0.02] text-white/50 hover:text-white/80"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ────────────────────────────── Add entry ────────────────────────────────────
+
+function AddEntryModal({
+  entries,
+  initial,
+  onClose,
+}: {
+  entries: SkillsEntry[];
+  initial: { ageGroup: AgeGroup; challenge: ChallengeKey } | null;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [clubName, setClubName] = useState("");
+  const [ageGroup, setAgeGroup] = useState<AgeGroup>(initial?.ageGroup ?? "U10");
+  const [playerName, setPlayerName] = useState("");
+  const [challenge, setChallenge] = useState<ChallengeKey>(initial?.challenge ?? "juggling");
+  const [score, setScore] = useState("");
+
+  // Clubs, grouped across their spellings. Display the canonical name; count
+  // players across every spelling of it.
+  const clubOptions = useMemo<ComboOption[]>(() => {
+    const groups = new Map<string, { display: string; players: Set<string> }>();
+    for (const e of entries) {
+      const display = canonicalClub(e.clubName);
+      const key = display.toLowerCase();
+      if (!groups.has(key)) groups.set(key, { display, players: new Set() });
+      groups.get(key)!.players.add(e.playerName.toLowerCase());
+    }
+    return Array.from(groups.values())
+      .sort((a, b) => a.display.localeCompare(b.display))
+      .map((g) => ({ value: g.display, hint: `${g.players.size} player${g.players.size === 1 ? "" : "s"}` }));
+  }, [entries]);
+
+  // Players already known at this club + age, whatever challenge they signed up
+  // for. A kid who registered for juggling and turns up for the dribble course
+  // is the common case, and the scorer shouldn't retype his name.
+  const playerOptions = useMemo<ComboOption[]>(() => {
+    if (!clubName.trim()) return [];
+    const wanted = canonicalClub(clubName).toLowerCase();
+    // Key on the lowercased name so "yino dong" and "Yino Dong" are one person.
+    const seen = new Map<string, { display: string; challenges: Set<ChallengeKey> }>();
+    for (const e of entries) {
+      if (canonicalClub(e.clubName).toLowerCase() !== wanted) continue;
+      if (e.ageGroup !== ageGroup) continue;
+      const key = e.playerName.trim().toLowerCase();
+      if (!seen.has(key)) seen.set(key, { display: e.playerName.trim(), challenges: new Set() });
+      seen.get(key)!.challenges.add(e.challenge);
+    }
+    return Array.from(seen.values())
+      .sort((a, b) => a.display.localeCompare(b.display))
+      .map(({ display, challenges }) => ({
+        value: display,
+        hint: challenges.has(challenge)
+          ? "already in this challenge"
+          : `entered in ${challenges.size} other`,
+      }));
+  }, [entries, clubName, ageGroup, challenge]);
+
+  // Only true once they've actually landed on a club we know — otherwise the
+  // "no players registered" hint fires on every keystroke of a half-typed name.
+  const clubKnown = useMemo(
+    () => clubOptions.some((o) => o.value.toLowerCase() === canonicalClub(clubName).toLowerCase()),
+    [clubOptions, clubName],
+  );
+
+  // Exactly the server's soft-dedupe rule, checked up front so the scorer isn't
+  // told "already registered" only after committing.
+  const duplicate = useMemo(() => {
+    if (!playerName.trim() || !clubName.trim()) return false;
+    return entries.some(
+      (e) =>
+        e.challenge === challenge &&
+        e.ageGroup === ageGroup &&
+        e.playerName.trim().toLowerCase() === playerName.trim().toLowerCase() &&
+        canonicalClub(e.clubName).toLowerCase() === canonicalClub(clubName).toLowerCase(),
+    );
+  }, [entries, playerName, clubName, ageGroup, challenge]);
 
   const createMut = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/admin/skills-challenge/entries", data),
@@ -65,69 +350,147 @@ function AddEntryModal({ onClose }: { onClose: () => void }) {
       const body = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/entries"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/leaderboard"] });
-      toast({ title: body.alreadyRegistered ? "Player already registered in this category" : "Entry added" });
+      toast({
+        title: body.alreadyRegistered ? "Already registered — no duplicate created" : "Player added",
+        description: `${playerName.trim()} · ${CHALLENGE_LABELS[challenge]} ${ageGroup}`,
+      });
       onClose();
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't add player", description: e.message, variant: "destructive" }),
   });
 
+  const submit = () => {
+    const raw = score.trim();
+    if (raw !== "") {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        return toast({ title: "Score must be a positive number", variant: "destructive" });
+      }
+      const warn = implausible(challenge, n);
+      if (warn && !confirm(`${warn}\n\nSave it anyway?`)) return;
+    }
+    createMut.mutate({
+      playerName: playerName.trim(),
+      // Store the canonical spelling so the picker doesn't fragment further.
+      clubName: canonicalClub(clubName),
+      ageGroup,
+      challenge,
+      score: raw === "" ? null : raw,
+    });
+  };
+
+  const step = (n: number, label: string, done: boolean) => (
+    <div className="mb-1.5 flex items-center gap-2">
+      <span
+        className={`flex h-[18px] w-[18px] items-center justify-center rounded-full text-[10px] font-bold ${
+          done ? "bg-amber-400/20 text-amber-300" : "bg-white/5 text-white/30"
+        }`}
+      >
+        {done ? <Check className="h-2.5 w-2.5" /> : n}
+      </span>
+      <label className="text-xs font-medium text-white/50">{label}</label>
+    </div>
+  );
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-[#0a0e1a] border border-blue-500/15 rounded-2xl w-full max-w-md shadow-2xl">
-        <div className="flex items-center justify-between p-5 border-b border-white/5">
-          <h2 className="text-lg font-semibold text-white">Add Entry</h2>
-          <button onClick={onClose} className="text-white/30 hover:text-white/60"><X className="w-5 h-5" /></button>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center">
+      <div className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-blue-500/15 bg-[#0a0e1a] shadow-2xl sm:rounded-2xl">
+        <div className="sticky top-0 flex items-center justify-between border-b border-white/5 bg-[#0a0e1a] p-5">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Add a player</h2>
+            <p className="mt-0.5 text-xs text-white/35">Walk-ups and anyone who didn't register online</p>
+          </div>
+          <button onClick={onClose} className="text-white/30 hover:text-white/60" aria-label="Close">
+            <X className="h-5 w-5" />
+          </button>
         </div>
-        <div className="p-5 space-y-4">
+
+        <div className="space-y-4 p-5">
           <div>
-            <label className="text-xs text-white/50 mb-1.5 block">Player full name</label>
-            <Input value={form.playerName} onChange={(e) => setForm({ ...form, playerName: e.target.value })} placeholder="e.g. Charlie Smith" />
+            {step(1, "Club", !!clubName.trim())}
+            <ComboBox
+              autoFocus
+              value={clubName}
+              onChange={(v) => {
+                setClubName(v);
+                setPlayerName("");
+              }}
+              options={clubOptions}
+              placeholder="Start typing a club…"
+              emptyHint="new club"
+            />
           </div>
+
           <div>
-            <label className="text-xs text-white/50 mb-1.5 block">Club name</label>
-            <Input value={form.clubName} onChange={(e) => setForm({ ...form, clubName: e.target.value })} placeholder="e.g. Christchurch United" />
+            {step(2, "Age group", true)}
+            <Segmented
+              value={ageGroup}
+              onChange={(v) => {
+                setAgeGroup(v);
+                setPlayerName("");
+              }}
+              options={AGE_GROUPS.map((a) => ({ value: a, label: a }))}
+            />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-white/50 mb-1.5 block">Age group</label>
-              <Select value={form.ageGroup} onValueChange={(v) => setForm({ ...form, ageGroup: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="U10">U10</SelectItem>
-                  <SelectItem value="U11">U11</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-xs text-white/50 mb-1.5 block">Challenge</label>
-              <Select value={form.challenge} onValueChange={(v) => setForm({ ...form, challenge: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="juggling">90s Juggling</SelectItem>
-                  <SelectItem value="dribble_pass_finish">Dribble, Pass & Finish</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+
           <div>
-            <label className="text-xs text-white/50 mb-1.5 block">
-              Score ({CHALLENGE_SCORE_UNIT[form.challenge as ChallengeKey]}) — optional
+            {step(3, "Player", !!playerName.trim())}
+            <ComboBox
+              value={playerName}
+              onChange={setPlayerName}
+              options={playerOptions}
+              disabled={!clubName.trim()}
+              placeholder={clubName.trim() ? "Start typing a name…" : "Pick a club first"}
+              emptyHint="not registered online"
+            />
+            {clubKnown && playerOptions.length === 0 && (
+              <p className="mt-1.5 text-xs text-white/30">
+                No {ageGroup} players registered under {canonicalClub(clubName)} — type the full name.
+              </p>
+            )}
+          </div>
+
+          <div>
+            {step(4, "Challenge", true)}
+            <Segmented
+              value={challenge}
+              onChange={setChallenge}
+              options={[
+                { value: "juggling" as const, label: "90s Juggling" },
+                { value: "dribble_pass_finish" as const, label: "Dribble, Pass & Finish" },
+              ]}
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs text-white/50">
+              Score ({CHALLENGE_SCORE_UNIT[challenge]}) — optional
             </label>
             <Input
-              value={form.score}
-              onChange={(e) => setForm({ ...form, score: e.target.value })}
-              placeholder={form.challenge === "juggling" ? "e.g. 42" : "e.g. 34.52"}
+              value={score}
+              onChange={(e) => setScore(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && playerName.trim() && clubName.trim()) submit();
+              }}
+              placeholder={challenge === "juggling" ? "e.g. 42" : "e.g. 34.52"}
               inputMode="decimal"
             />
           </div>
+
+          {duplicate && (
+            <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2.5 text-xs text-amber-200/80">
+              {playerName.trim()} is already entered in {CHALLENGE_LABELS[challenge]} {ageGroup}. Adding won't create a
+              duplicate — score them from the {ageGroup} panel instead.
+            </div>
+          )}
         </div>
-        <div className="flex justify-end gap-2 p-5 border-t border-white/5">
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={() => createMut.mutate({ ...form, score: form.score.trim() === "" ? null : form.score })}
-            disabled={!form.playerName.trim() || !form.clubName.trim() || createMut.isPending}
-          >
-            {createMut.isPending ? "Adding..." : "Add Entry"}
+
+        <div className="sticky bottom-0 flex justify-end gap-2 border-t border-white/5 bg-[#0a0e1a] p-5">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!playerName.trim() || !clubName.trim() || createMut.isPending}>
+            {createMut.isPending ? "Adding…" : "Add player"}
           </Button>
         </div>
       </div>
@@ -135,34 +498,39 @@ function AddEntryModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ScoreCell({ entry }: { entry: SkillsEntry }) {
-  const { toast } = useToast();
-  const [editing, setEditing] = useState(false);
+// ──────────────────────────── Category panel ─────────────────────────────────
+
+function ScoreButton({
+  entry,
+  editing,
+  onStartEdit,
+  onCancel,
+  onSave,
+  saving,
+}: {
+  entry: SkillsEntry;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancel: () => void;
+  onSave: (raw: string) => void;
+  saving: boolean;
+}) {
   const [value, setValue] = useState("");
 
-  const scoreMut = useMutation({
-    mutationFn: (score: string | null) => apiRequest("PATCH", `/api/admin/skills-challenge/entries/${entry.id}`, { score }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/entries"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/leaderboard"] });
-      setEditing(false);
-    },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
+  useEffect(() => {
+    if (editing) setValue(entry.score == null ? "" : String(entry.score));
+  }, [editing, entry.score]);
 
   if (!editing) {
     return (
       <button
-        onClick={() => {
-          setValue(entry.score == null ? "" : String(entry.score));
-          setEditing(true);
-        }}
-        className={`px-2.5 py-1 rounded-lg text-sm font-semibold transition-colors ${
+        onClick={onStartEdit}
+        className={`min-h-[44px] min-w-[84px] rounded-lg px-2.5 text-sm font-semibold transition-colors sm:min-h-[38px] ${
           entry.score == null
-            ? "text-white/30 border border-dashed border-white/15 hover:border-blue-400/40 hover:text-blue-300"
-            : "text-white bg-white/5 hover:bg-white/10"
+            ? "border border-dashed border-white/15 text-white/30 hover:border-amber-400/40 hover:text-amber-300"
+            : "bg-white/5 text-white hover:bg-white/10"
         }`}
-        title="Click to edit score"
+        title="Click to enter or edit the score"
       >
         {entry.score == null ? "Enter score" : formatScore(entry.challenge, entry.score)}
       </button>
@@ -176,34 +544,146 @@ function ScoreCell({ entry }: { entry: SkillsEntry }) {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") scoreMut.mutate(value.trim() === "" ? null : value.trim());
-          if (e.key === "Escape") setEditing(false);
+          if (e.key === "Enter") onSave(value);
+          if (e.key === "Escape") onCancel();
         }}
+        onFocus={(e) => e.currentTarget.select()}
         placeholder={entry.challenge === "juggling" ? "juggles" : "seconds"}
         inputMode="decimal"
-        className="h-8 w-24 text-sm"
+        className="h-9 w-[88px] text-sm"
       />
-      <Button size="sm" className="h-8" disabled={scoreMut.isPending} onClick={() => scoreMut.mutate(value.trim() === "" ? null : value.trim())}>
-        Save
+      <Button size="sm" className="h-9" disabled={saving} onClick={() => onSave(value)}>
+        {saving ? "…" : "Save"}
       </Button>
-      <button onClick={() => setEditing(false)} className="text-white/30 hover:text-white/60"><X className="w-4 h-4" /></button>
+      <button onClick={onCancel} className="text-white/30 hover:text-white/60" aria-label="Cancel">
+        <X className="h-4 w-4" />
+      </button>
     </div>
   );
 }
 
-export default function TournamentSkillsChallenge() {
+const RANK_STYLES: Record<number, string> = {
+  1: "bg-amber-400/15 text-amber-300 border-amber-400/30",
+  2: "bg-white/10 text-white/70 border-white/20",
+  3: "bg-orange-800/25 text-orange-300/80 border-orange-700/30",
+};
+
+function PlayerRow({
+  entry,
+  rank,
+  editing,
+  saving,
+  isDuplicate,
+  onStartEdit,
+  onCancel,
+  onSave,
+  onDelete,
+}: {
+  entry: SkillsEntry;
+  rank?: number;
+  editing: boolean;
+  saving: boolean;
+  isDuplicate: boolean;
+  onStartEdit: () => void;
+  onCancel: () => void;
+  onSave: (raw: string) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className={`group flex items-center gap-2.5 rounded-xl px-2 py-2 hover:bg-white/[0.02] ${
+        isDuplicate ? "bg-amber-400/[0.04] ring-1 ring-inset ring-amber-400/15" : ""
+      }`}
+    >
+      {rank ? (
+        <span
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-xs font-bold ${
+            RANK_STYLES[rank] ?? "border-white/5 bg-white/[0.03] text-white/40"
+          }`}
+        >
+          {rank}
+        </span>
+      ) : (
+        <span className="h-6 w-6 shrink-0" />
+      )}
+
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-1.5">
+          <span className="truncate text-sm font-medium text-white">{entry.playerName}</span>
+          {entry.source === "admin" && (
+            <span className="shrink-0 rounded bg-white/5 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-white/30">
+              walk-up
+            </span>
+          )}
+          {isDuplicate && (
+            <span
+              className="shrink-0 rounded bg-amber-400/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-300"
+              title="This player is entered twice in this category under two spellings of their club. Score one, delete the other."
+            >
+              duplicate
+            </span>
+          )}
+        </div>
+        <div className="truncate text-xs text-white/35">{entry.clubName}</div>
+      </div>
+
+      <ScoreButton
+        entry={entry}
+        editing={editing}
+        saving={saving}
+        onStartEdit={onStartEdit}
+        onCancel={onCancel}
+        onSave={onSave}
+      />
+
+      <button
+        onClick={onDelete}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/10 transition-colors hover:bg-red-500/10 hover:text-red-400 group-hover:text-white/25"
+        title="Delete entry"
+        aria-label={`Delete ${entry.playerName}`}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function CategoryPanel({
+  challenge,
+  ageGroup,
+  entries,
+  dupIds,
+  onAdd,
+}: {
+  challenge: ChallengeKey;
+  ageGroup: AgeGroup;
+  entries: SkillsEntry[];
+  dupIds: Set<number>;
+  onAdd: () => void;
+}) {
   const { toast } = useToast();
-  const [search, setSearch] = useState("");
-  const [challengeFilter, setChallengeFilter] = useState<string>("all");
-  const [ageFilter, setAgeFilter] = useState<string>("all");
-  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
-  const { data: entries = [], isLoading } = useQuery<SkillsEntry[]>({
-    queryKey: ["/api/admin/skills-challenge/entries"],
-  });
+  const ranked = useMemo(() => rankScored(challenge, entries), [challenge, entries]);
+  const unscored = useMemo(
+    () =>
+      entries
+        .filter((e) => e.score == null)
+        .sort((a, b) => a.playerName.localeCompare(b.playerName)),
+    [entries],
+  );
 
-  const { data: leaderboard } = useQuery<{ categories: LeaderboardCategory[] }>({
-    queryKey: ["/api/admin/skills-challenge/leaderboard"],
+  const scoreMut = useMutation({
+    mutationFn: ({ id, score }: { id: number; score: string | null; advanceTo: number | null }) =>
+      apiRequest("PATCH", `/api/admin/skills-challenge/entries/${id}`, { score }),
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/entries"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/leaderboard"] });
+      // Jump to the next player still waiting. Correcting an already-scored
+      // player just closes the editor — the scorer went there deliberately.
+      setEditingId(vars.advanceTo);
+    },
+    onError: (e: any) => toast({ title: "Score not saved", description: e.message, variant: "destructive" }),
   });
 
   const deleteMut = useMutation({
@@ -216,155 +696,236 @@ export default function TournamentSkillsChallenge() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const filtered = useMemo(() => {
-    return entries.filter((e) => {
-      if (challengeFilter !== "all" && e.challenge !== challengeFilter) return false;
-      if (ageFilter !== "all" && e.ageGroup !== ageFilter) return false;
-      if (search.trim()) {
-        const q = search.trim().toLowerCase();
-        if (!e.playerName.toLowerCase().includes(q) && !e.clubName.toLowerCase().includes(q)) return false;
-      }
-      return true;
-    });
-  }, [entries, challengeFilter, ageFilter, search]);
+  const save = (entry: SkillsEntry, raw: string) => {
+    const trimmed = raw.trim();
+    // Where focus lands next: the player after this one in the waiting list.
+    const idx = unscored.findIndex((e) => e.id === entry.id);
+    const advanceTo = entry.score == null && trimmed !== "" && idx >= 0 ? (unscored[idx + 1]?.id ?? null) : null;
 
-  const scoredCount = entries.filter((e) => e.score != null).length;
+    if (trimmed === "") return scoreMut.mutate({ id: entry.id, score: null, advanceTo: null });
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0) {
+      return toast({ title: "Score must be a positive number", variant: "destructive" });
+    }
+    const warn = implausible(challenge, n);
+    if (warn && !confirm(`${warn}\n\nSave it anyway?`)) return;
+    scoreMut.mutate({ id: entry.id, score: trimmed, advanceTo });
+  };
+
+  const total = entries.length;
+  const done = ranked.length;
+  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <section className="flex flex-col rounded-2xl border border-white/5 bg-white/[0.02]">
+      <header className="border-b border-white/5 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-base font-semibold text-white">{CHALLENGE_LABELS[challenge]}</h2>
+              <span className="shrink-0 rounded-md border border-amber-400/25 bg-amber-400/10 px-1.5 py-px text-xs font-bold text-amber-300">
+                {ageGroup}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-white/35">
+              {done} of {total} scored
+              {challenge === "juggling" ? " · most juggles wins" : " · fastest time wins"}
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" className="shrink-0 text-white/50 hover:text-white" onClick={onAdd}>
+            <Plus className="mr-1 h-3.5 w-3.5" /> Add
+          </Button>
+        </div>
+        <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/5">
+          <div
+            className="h-full rounded-full bg-amber-400/60 transition-[width] duration-500"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </header>
+
+      <div className="flex-1 p-2">
+        {total === 0 ? (
+          <p className="px-2 py-8 text-center text-sm text-white/25">No players in this category.</p>
+        ) : (
+          <>
+            {ranked.length > 0 && (
+              <div className="mb-1">
+                {ranked.map(({ entry, rank }) => (
+                  <PlayerRow
+                    key={entry.id}
+                    entry={entry}
+                    rank={rank}
+                    editing={editingId === entry.id}
+                    isDuplicate={dupIds.has(entry.id)}
+                    saving={scoreMut.isPending && scoreMut.variables?.id === entry.id}
+                    onStartEdit={() => setEditingId(entry.id)}
+                    onCancel={() => setEditingId(null)}
+                    onSave={(raw) => save(entry, raw)}
+                    onDelete={() => {
+                      if (confirm(`Delete ${entry.playerName}'s entry?`)) deleteMut.mutate(entry.id);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {unscored.length > 0 && (
+              <>
+                {ranked.length > 0 && (
+                  <div className="my-2 flex items-center gap-2 px-2">
+                    <Clock className="h-3 w-3 text-white/20" />
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-white/25">
+                      Awaiting score ({unscored.length})
+                    </span>
+                    <div className="h-px flex-1 bg-white/5" />
+                  </div>
+                )}
+                {unscored.map((entry) => (
+                  <PlayerRow
+                    key={entry.id}
+                    entry={entry}
+                    editing={editingId === entry.id}
+                    isDuplicate={dupIds.has(entry.id)}
+                    saving={scoreMut.isPending && scoreMut.variables?.id === entry.id}
+                    onStartEdit={() => setEditingId(entry.id)}
+                    onCancel={() => setEditingId(null)}
+                    onSave={(raw) => save(entry, raw)}
+                    onDelete={() => {
+                      if (confirm(`Delete ${entry.playerName}'s entry?`)) deleteMut.mutate(entry.id);
+                    }}
+                  />
+                ))}
+              </>
+            )}
+
+            {unscored.length === 0 && ranked.length > 0 && (
+              <p className="px-2 py-3 text-center text-xs text-amber-300/50">Every player scored.</p>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ──────────────────────────────── Page ───────────────────────────────────────
+
+export default function TournamentSkillsChallenge() {
+  const [search, setSearch] = useState("");
+  const [dupOnly, setDupOnly] = useState(false);
+  const [addFor, setAddFor] = useState<{ ageGroup: AgeGroup; challenge: ChallengeKey } | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+
+  const { data: entries = [], isLoading } = useQuery<SkillsEntry[]>({
+    queryKey: ["/api/admin/skills-challenge/entries"],
+    // Tournament day: a second screen showing the standings must not go stale,
+    // and the mobile app writes to this same table.
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { ids: dupIds, players: dupPlayers } = useMemo(() => findDuplicates(entries), [entries]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return entries.filter((e) => {
+      if (dupOnly && !dupIds.has(e.id)) return false;
+      if (!q) return true;
+      return e.playerName.toLowerCase().includes(q) || e.clubName.toLowerCase().includes(q);
+    });
+  }, [entries, search, dupOnly, dupIds]);
+
+  const scoredCount = entries.filter((e) => e.score != null).length;
+  const remaining = entries.length - scoredCount;
+
+  const openAdd = (cat: { ageGroup: AgeGroup; challenge: ChallengeKey } | null) => {
+    setAddFor(cat);
+    setAddOpen(true);
+  };
+
+  return (
+    <div className="space-y-5 p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2.5">
-            <Zap className="w-6 h-6 text-amber-400" />
+          <h1 className="flex items-center gap-2.5 text-2xl font-bold text-white">
+            <Zap className="h-6 w-6 text-amber-400" />
             Skills Challenge
           </h1>
-          <p className="text-sm text-white/40 mt-1">
-            90s Juggling + Dribble, Pass &amp; Finish — U10 &amp; U11. Registrations land here from join.cicyouth.com.
+          <p className="mt-1 text-sm text-white/40">
+            Enter a score and press Enter — it saves and jumps to the next player. Standings update live.
           </p>
         </div>
-        <Button onClick={() => setShowAdd(true)}>
-          <Plus className="w-4 h-4 mr-1.5" /> Add Entry
+        <Button onClick={() => openAdd(null)}>
+          <Plus className="mr-1.5 h-4 w-4" /> Add a player
         </Button>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {dupPlayers > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.05] p-3 sm:p-4">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+          <p className="min-w-0 flex-1 text-sm text-amber-100/80">
+            <span className="font-semibold text-amber-200">
+              {dupPlayers} player{dupPlayers === 1 ? " is" : "s are"} entered twice
+            </span>{" "}
+            — the same child registered under two spellings of their club. Score one row and delete the other, or
+            they'll appear twice in the standings.
+          </p>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0 text-amber-200 hover:bg-amber-400/10 hover:text-amber-100"
+            onClick={() => setDupOnly((v) => !v)}
+          >
+            {dupOnly ? "Show everyone" : "Show me"}
+          </Button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-3">
         {[
           { label: "Registered", value: entries.length, icon: Users },
           { label: "Scored", value: scoredCount, icon: ClipboardCheck },
-          { label: "Juggling entries", value: entries.filter((e) => e.challenge === "juggling").length, icon: Trophy },
-          { label: "Dribble, Pass & Finish entries", value: entries.filter((e) => e.challenge === "dribble_pass_finish").length, icon: Timer },
+          { label: "To score", value: remaining, icon: Clock },
         ].map((s) => (
-          <div key={s.label} className="bg-white/[0.03] border border-white/5 rounded-2xl p-4">
-            <div className="flex items-center gap-2 text-white/40 text-xs mb-1.5">
-              <s.icon className="w-3.5 h-3.5" /> {s.label}
+          <div key={s.label} className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 sm:p-4">
+            <div className="mb-1 flex items-center gap-1.5 text-xs text-white/40">
+              <s.icon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{s.label}</span>
             </div>
             <div className="text-2xl font-bold text-white">{s.value}</div>
           </div>
         ))}
       </div>
 
-      {/* Leaderboards — the four categories, exactly what the app shows */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        {(leaderboard?.categories ?? []).map((cat) => (
-          <div key={`${cat.challenge}-${cat.ageGroup}`} className="bg-white/[0.03] border border-white/5 rounded-2xl p-4">
-            <div className="flex items-baseline justify-between mb-3">
-              <div>
-                <div className="text-sm font-semibold text-white">{CHALLENGE_LABELS[cat.challenge]}</div>
-                <div className="text-xs text-amber-400/80 font-semibold mt-0.5">{cat.ageGroup}</div>
-              </div>
-              <div className="text-[11px] text-white/30">{cat.scoredCount}/{cat.registeredCount} scored</div>
-            </div>
-            {cat.entries.length === 0 ? (
-              <div className="text-xs text-white/25 py-3">No scores yet</div>
-            ) : (
-              <div className="space-y-1.5">
-                {cat.entries.slice(0, 5).map((e) => (
-                  <div key={e.id} className="flex items-center gap-2 text-sm">
-                    <span className={`w-5 text-center font-bold ${e.rank === 1 ? "text-amber-400" : "text-white/40"}`}>{e.rank}</span>
-                    <span className="flex-1 text-white/80 truncate">{e.playerName}</span>
-                    <span className="text-white font-semibold">{formatScore(cat.challenge, e.score)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Find a player or club…"
+          className="pl-9"
+        />
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search player or club..." className="pl-9" />
+      {isLoading ? (
+        <div className="py-20 text-center text-white/30">Loading players…</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {CATEGORIES.map((cat) => (
+            <CategoryPanel
+              key={`${cat.challenge}-${cat.ageGroup}`}
+              challenge={cat.challenge}
+              ageGroup={cat.ageGroup}
+              entries={visible.filter((e) => e.challenge === cat.challenge && e.ageGroup === cat.ageGroup)}
+              dupIds={dupIds}
+              onAdd={() => openAdd(cat)}
+            />
+          ))}
         </div>
-        <Select value={challengeFilter} onValueChange={setChallengeFilter}>
-          <SelectTrigger className="w-[210px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All challenges</SelectItem>
-            <SelectItem value="juggling">90s Juggling</SelectItem>
-            <SelectItem value="dribble_pass_finish">Dribble, Pass &amp; Finish</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={ageFilter} onValueChange={setAgeFilter}>
-          <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All ages</SelectItem>
-            <SelectItem value="U10">U10</SelectItem>
-            <SelectItem value="U11">U11</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      )}
 
-      {/* Entries table */}
-      <div className="bg-white/[0.02] border border-white/5 rounded-2xl overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-white/35 border-b border-white/5">
-              <th className="px-4 py-3 font-medium">Player</th>
-              <th className="px-4 py-3 font-medium">Club</th>
-              <th className="px-4 py-3 font-medium">Age</th>
-              <th className="px-4 py-3 font-medium">Challenge</th>
-              <th className="px-4 py-3 font-medium">Score</th>
-              <th className="px-4 py-3 font-medium">Source</th>
-              <th className="px-4 py-3 font-medium w-12"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
-              <tr><td colSpan={7} className="px-4 py-10 text-center text-white/30">Loading entries...</td></tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-white/30">
-                  {entries.length === 0 ? "No registrations yet — they'll appear here as players sign up." : "No entries match the filters."}
-                </td>
-              </tr>
-            ) : (
-              filtered.map((e) => (
-                <tr key={e.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                  <td className="px-4 py-3 text-white font-medium">{e.playerName}</td>
-                  <td className="px-4 py-3 text-white/60">{e.clubName}</td>
-                  <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-md bg-white/5 text-white/70 text-xs font-semibold">{e.ageGroup}</span></td>
-                  <td className="px-4 py-3 text-white/60 text-xs">{CHALLENGE_LABELS[e.challenge]}</td>
-                  <td className="px-4 py-3"><ScoreCell entry={e} /></td>
-                  <td className="px-4 py-3 text-white/30 text-xs">{e.source === "public" ? "Online" : "Admin"}</td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => { if (confirm(`Delete ${e.playerName}'s entry?`)) deleteMut.mutate(e.id); }}
-                      className="text-white/20 hover:text-red-400 transition-colors"
-                      title="Delete entry"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {showAdd && <AddEntryModal onClose={() => setShowAdd(false)} />}
+      {addOpen && <AddEntryModal entries={entries} initial={addFor} onClose={() => setAddOpen(false)} />}
     </div>
   );
 }

@@ -643,6 +643,24 @@ export default function AcademyRegisterPage() {
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Campaign parameters, read off this page's own URL and sent in the body.
+      //
+      // The server's attribution stamp reads cookies and the request body — it
+      // never looks at the query string. cufc.co.nz forwards these onto the
+      // checkout URL precisely so that they can be picked up here. Without this
+      // block every academy registration is recorded as "direct", however it was
+      // tagged, and a campaign report shows nothing.
+      const sp = new URLSearchParams(window.location.search);
+      const utm = {
+        source: sp.get("utm_source"),
+        medium: sp.get("utm_medium"),
+        campaign: sp.get("utm_campaign"),
+        content: sp.get("utm_content"),
+        term: sp.get("utm_term"),
+        fbclid: sp.get("fbclid"),
+        gclid: sp.get("gclid"),
+      };
+
       const res = await fetch("/api/public/academy/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -651,6 +669,8 @@ export default function AcademyRegisterPage() {
           programOptionId: selectedOption.id,
           paymentPlan: plan,
           discountCode: promo ? promo.code : undefined,
+          utm,
+          source: sp.get("source") || undefined,
           child: {
             firstName: child.firstName.trim(),
             lastName: child.lastName.trim(),
