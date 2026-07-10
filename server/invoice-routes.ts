@@ -58,6 +58,7 @@ import {
   isInvoiceStatus,
   isGstTreatment,
   deriveInvoiceStatus,
+  invoiceUrl,
   type PublicInvoice,
   type InvoiceLine,
   type InvoiceSpendRow,
@@ -66,14 +67,24 @@ import {
   type GstTreatment,
 } from "@shared/invoice-types";
 
-const INVOICE_SITE_BASE = "https://usg-invoices.vercel.app";
-const invoiceUrl = (token: string) => `${INVOICE_SITE_BASE}/i/${token}`;
+// invoiceUrl() is brand-aware and lives in shared/invoice-types.ts — an SIU
+// invoice links to pay.southislandunited.com, a CUFC one falls back until its
+// domain is attached.
 
 // ── CORS (mirrors setMflCors / setCic7sCors in server/routes.ts) ────────────
-const INVOICE_SITE_ORIGINS = ["https://usg-invoices.vercel.app"];
+// The real brand domains, plus this app's own preview deploys. The old
+// /\.vercel\.app$/ catch-all let ANY Vercel-hosted site call these endpoints;
+// narrowed to our project's own preview URLs. (CORS is not the security boundary
+// here — the unguessable token is — but there is no reason to be loose.)
+const INVOICE_SITE_ORIGINS = [
+  "https://pay.southislandunited.com",
+  "https://usg-invoices.vercel.app",
+];
+const INVOICE_PREVIEW_ORIGIN = /^https:\/\/usg-invoices-[a-z0-9-]+\.vercel\.app$/;
+
 function setInvoiceCors(req: Request, res: Response) {
   const origin = (req.headers.origin as string) || "";
-  if (INVOICE_SITE_ORIGINS.includes(origin) || /\.vercel\.app$/.test(origin)) {
+  if (INVOICE_SITE_ORIGINS.includes(origin) || INVOICE_PREVIEW_ORIGIN.test(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
   }
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -464,7 +475,7 @@ export function registerInvoiceRoutes(app: Express) {
             body: `${inv.title} — please find the details below. You can view, download and pay it online.`,
             number: inv.number,
             amountLabel: formatNZD(inv.totalCents),
-            url: invoiceUrl(inv.token),
+            url: invoiceUrl(isInvoiceBrand(inv.brand) ? inv.brand : "siu", inv.token),
           }),
         });
       } catch (e) {
@@ -505,7 +516,7 @@ export function registerInvoiceRoutes(app: Express) {
             body: `${inv.title} is still outstanding. You can view, download and pay it online.`,
             number: inv.number,
             amountLabel: formatNZD(inv.totalCents),
-            url: invoiceUrl(inv.token),
+            url: invoiceUrl(isInvoiceBrand(inv.brand) ? inv.brand : "siu", inv.token),
           }),
         });
       } catch (e) {
@@ -636,16 +647,25 @@ export function registerInvoiceRoutes(app: Express) {
       }
 
       const breakdown = cardBreakdown(inv.totalCents, "domestic");
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: breakdown.totalCents,
-        currency: "nzd",
-        automatic_payment_methods: { enabled: true },
-        receipt_email: inv.recipientEmail || undefined,
-        description: `Invoice ${inv.number} — ${inv.title}`,
-        // NEVER set printOrderId here — that metadata key is the sole trigger
-        // for pushPaidOrderToXero() and must never fire from an invoice.
-        metadata: { invoiceToken: inv.token, kind: "invoice" },
-      });
+      const paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: breakdown.totalCents,
+          currency: "nzd",
+          automatic_payment_methods: { enabled: true },
+          receipt_email: inv.recipientEmail || undefined,
+          description: `Invoice ${inv.number} — ${inv.title}`,
+          // NEVER set printOrderId here — that metadata key is the sole trigger
+          // for pushPaidOrderToXero() and must never fire from an invoice.
+          metadata: { invoiceToken: inv.token, kind: "invoice" },
+        },
+        {
+          // A reload or double-click must not mint a second PaymentIntent for the
+          // same invoice. Keyed on token + amount so that if the invoice is edited
+          // and re-sent, a genuinely new intent is created rather than the stale one
+          // being replayed at the old price. Same discipline as server/stripe.ts.
+          idempotencyKey: `invoice-${inv.token}-${breakdown.totalCents}`,
+        },
+      );
 
       res.json({ clientSecret: paymentIntent.client_secret, amountCents: breakdown.totalCents });
     } catch (e: any) {

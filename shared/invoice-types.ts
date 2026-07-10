@@ -131,6 +131,30 @@ export const SUPPLIER_BY_BRAND: Record<InvoiceBrand, Party> = {
   },
 };
 
+/**
+ * Where an invoice of each brand is served from.
+ *
+ * One Vercel app (`apps/invoices`) serves every invoice, with a per-brand domain
+ * attached to it — the same shape as the partner proposal pages. Send an invoice
+ * on the domain matching its brand, so the payer sees a hostname they recognise
+ * next to a bank account number.
+ *
+ * ONLY list a domain here once it is actually attached and serving. An unattached
+ * host produces a dead link on a page asking someone for money, which is worse
+ * than a vercel.app URL. `pay.cufc.co.nz` is NOT attached yet — cufc deliberately
+ * falls back.
+ */
+export const INVOICE_SITE_FALLBACK = "https://usg-invoices.vercel.app";
+
+export const INVOICE_SITE_BASE_BY_BRAND: Record<InvoiceBrand, string> = {
+  siu: "https://pay.southislandunited.com", // live 2026-07-10
+  cufc: INVOICE_SITE_FALLBACK,              // pay.cufc.co.nz not yet attached
+};
+
+export function invoiceUrl(brand: InvoiceBrand, token: string): string {
+  return `${INVOICE_SITE_BASE_BY_BRAND[brand] ?? INVOICE_SITE_FALLBACK}/i/${token}`;
+}
+
 /** Passed to the payer verbatim on every invoice — not a per-row column because
  *  it never varies (the surcharge policy is fixed, not negotiated per invoice). */
 export const DEFAULT_SURCHARGE_NOTE =

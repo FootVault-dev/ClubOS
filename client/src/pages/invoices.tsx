@@ -4,12 +4,12 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { formatCurrency, dollarInputToCents, centsToDollarInput } from "@/lib/format";
+import { invoiceUrl, type InvoiceBrand } from "@shared/invoice-types";
 import {
   Receipt, Plus, Copy, Send, Ban, CircleDollarSign, Clock, Eye,
   CheckCircle2, FileText, MailWarning, Trash2,
 } from "lucide-react";
 
-const INVOICE_SITE_BASE = "https://usg-invoices.vercel.app";
 
 // ── Types (mirror server/invoice-routes.ts + shared/invoice-types.ts) ───────
 interface AdminInvoice {
@@ -145,8 +145,8 @@ export default function GroupInvoices() {
     onError: (e: any) => toast({ title: "Couldn't void", description: e.message, variant: "destructive" }),
   });
 
-  const copyLink = (token: string) => {
-    navigator.clipboard.writeText(`${INVOICE_SITE_BASE}/i/${token}`);
+  const copyLink = (brandKey: InvoiceBrand, token: string) => {
+    navigator.clipboard.writeText(invoiceUrl(brandKey, token));
     toast({ title: "Link copied" });
   };
 
@@ -274,10 +274,10 @@ export default function GroupInvoices() {
               {/* Tracked link */}
               <div className="mt-4 flex items-center gap-2 rounded-lg bg-white/[0.03] border border-white/10 px-3 py-2">
                 <span className="text-[12px] font-mono text-white/60 truncate flex-1">
-                  {INVOICE_SITE_BASE}/i/{selectedInvoice.token}
+                  {invoiceUrl(selectedInvoice.brand as InvoiceBrand, selectedInvoice.token)}
                 </span>
                 <button
-                  onClick={() => copyLink(selectedInvoice.token)}
+                  onClick={() => copyLink(selectedInvoice.brand as InvoiceBrand, selectedInvoice.token)}
                   data-testid="button-copy-link"
                   className="inline-flex items-center gap-1 text-[12px] text-blue-300 hover:text-blue-200 shrink-0"
                 >

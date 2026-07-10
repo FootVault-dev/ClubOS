@@ -28,6 +28,7 @@
  */
 
 import { Pool } from "pg";
+import { invoiceUrl } from "../shared/invoice-types";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set");
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -36,6 +37,7 @@ const COMMIT = process.argv.includes("--commit");
 
 const ORG_SLUG = "united-sports-group";
 
+const BRAND = "siu" as const;
 const TOKEN = "dr-9f4c2a7e6b1d84035ec7";
 const NUMBER = "CUFC-2026-002";
 
@@ -171,7 +173,7 @@ const NOTES = [
   }
 
   console.log(`\n✅ Seeded usg_invoices id ${invoiceId}.`);
-  console.log(`   Tracked link: https://usg-invoices.vercel.app/i/${TOKEN}`);
+  console.log(`   Tracked link: ${invoiceUrl(BRAND, TOKEN)}`);
   console.log("   It is a DRAFT — not sent, not payable by card. Review in ClubOS → United Sports Group → Invoices.");
   await pool.end();
 })().catch((e) => {
