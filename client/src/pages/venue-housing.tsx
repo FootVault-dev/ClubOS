@@ -1739,11 +1739,17 @@ export default function VenueHousing() {
       </div>
 
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="w-full sm:w-auto justify-start overflow-x-auto" data-testid="housing-tabs">
-          <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
-          <TabsTrigger value="houses" data-testid="tab-houses">Houses &amp; rooms</TabsTrigger>
-          <TabsTrigger value="tenants" data-testid="tab-tenants">Tenants</TabsTrigger>
-          <TabsTrigger value="utilities" data-testid="tab-utilities">Utilities</TabsTrigger>
+        {/* Four labels do not fit on a 390px phone in one row — the fourth was
+            being clipped at the screen edge with no hint that it was there. Two
+            rows on a phone, one row from `sm` up. */}
+        <TabsList
+          className="grid h-auto w-full grid-cols-2 gap-1 sm:inline-flex sm:h-10 sm:w-auto sm:justify-start sm:gap-0"
+          data-testid="housing-tabs"
+        >
+          <TabsTrigger value="overview" className="min-h-[44px] sm:min-h-0" data-testid="tab-overview">Overview</TabsTrigger>
+          <TabsTrigger value="houses" className="min-h-[44px] sm:min-h-0" data-testid="tab-houses">Houses &amp; rooms</TabsTrigger>
+          <TabsTrigger value="tenants" className="min-h-[44px] sm:min-h-0" data-testid="tab-tenants">Tenants</TabsTrigger>
+          <TabsTrigger value="utilities" className="min-h-[44px] sm:min-h-0" data-testid="tab-utilities">Utilities</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewTab /></TabsContent>
         <TabsContent value="houses"><HousesTab /></TabsContent>
