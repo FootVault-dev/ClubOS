@@ -23,6 +23,11 @@ import { canonicalClub } from "@/lib/skills-clubs";
 type ChallengeKey = "juggling" | "dribble_pass_finish";
 type AgeGroup = "U10" | "U11";
 
+// Terminal, no-score outcomes (Olympic convention). A player who didn't start,
+// didn't finish, or was disqualified still needs recording — you can't leave
+// them "awaiting a score" forever, and they must not rank.
+type SkillsStatus = "dns" | "dnf" | "dsq";
+
 interface SkillsEntry {
   id: number;
   playerName: string;
@@ -30,6 +35,7 @@ interface SkillsEntry {
   ageGroup: AgeGroup;
   challenge: ChallengeKey;
   score: number | null;
+  status: SkillsStatus | null;
   scoredAt: string | null;
   source: string;
   createdAt: string;
@@ -44,6 +50,19 @@ const CHALLENGE_SCORE_UNIT: Record<ChallengeKey, string> = {
   juggling: "juggles",
   dribble_pass_finish: "seconds",
 };
+
+const STATUSES: SkillsStatus[] = ["dns", "dnf", "dsq"];
+const STATUS_LABEL: Record<SkillsStatus, string> = { dns: "DNS", dnf: "DNF", dsq: "DSQ" };
+const STATUS_FULL: Record<SkillsStatus, string> = {
+  dns: "Did not start",
+  dnf: "Did not finish",
+  dsq: "Disqualified",
+};
+
+/** A contestant is resolved once they have a score or a terminal status. */
+function isResolved(e: SkillsEntry): boolean {
+  return e.score != null || e.status != null;
+}
 
 // The four panels, in the order Daniel reads them out.
 const CATEGORIES: { challenge: ChallengeKey; ageGroup: AgeGroup }[] = [
@@ -506,6 +525,7 @@ function ScoreButton({
   onStartEdit,
   onCancel,
   onSave,
+  onSetStatus,
   saving,
 }: {
   entry: SkillsEntry;
@@ -513,6 +533,7 @@ function ScoreButton({
   onStartEdit: () => void;
   onCancel: () => void;
   onSave: (raw: string) => void;
+  onSetStatus: (status: SkillsStatus | null) => void;
   saving: boolean;
 }) {
   const [value, setValue] = useState("");
@@ -522,6 +543,17 @@ function ScoreButton({
   }, [editing, entry.score]);
 
   if (!editing) {
+    if (entry.status) {
+      return (
+        <button
+          onClick={onStartEdit}
+          className="min-h-[44px] min-w-[84px] rounded-lg border border-white/15 bg-white/[0.04] px-2.5 text-sm font-bold text-white/60 transition-colors hover:border-white/25 sm:min-h-[38px]"
+          title={`${STATUS_FULL[entry.status]} — click to change`}
+        >
+          {STATUS_LABEL[entry.status]}
+        </button>
+      );
+    }
     return (
       <button
         onClick={onStartEdit}
@@ -538,26 +570,49 @@ function ScoreButton({
   }
 
   return (
-    <div className="flex items-center gap-1.5">
-      <Input
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") onSave(value);
-          if (e.key === "Escape") onCancel();
-        }}
-        onFocus={(e) => e.currentTarget.select()}
-        placeholder={entry.challenge === "juggling" ? "juggles" : "seconds"}
-        inputMode="decimal"
-        className="h-9 w-[88px] text-sm"
-      />
-      <Button size="sm" className="h-9" disabled={saving} onClick={() => onSave(value)}>
-        {saving ? "…" : "Save"}
-      </Button>
-      <button onClick={onCancel} className="text-white/30 hover:text-white/60" aria-label="Cancel">
-        <X className="h-4 w-4" />
-      </button>
+    <div className="flex flex-col items-end gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <Input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onSave(value);
+            if (e.key === "Escape") onCancel();
+          }}
+          onFocus={(e) => e.currentTarget.select()}
+          placeholder={entry.challenge === "juggling" ? "juggles" : "seconds"}
+          inputMode="decimal"
+          className="h-9 w-[88px] text-sm"
+        />
+        <Button size="sm" className="h-9" disabled={saving} onClick={() => onSave(value)}>
+          {saving ? "…" : "Save"}
+        </Button>
+        <button onClick={onCancel} className="text-white/30 hover:text-white/60" aria-label="Cancel">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      {/* No valid score? Record why. Olympic convention — DNS/DNF/DSQ. */}
+      <div className="flex items-center gap-1">
+        {STATUSES.map((s) => {
+          const active = entry.status === s;
+          return (
+            <button
+              key={s}
+              disabled={saving}
+              onClick={() => onSetStatus(active ? null : s)}
+              title={STATUS_FULL[s]}
+              className={`min-h-[30px] rounded-md px-2 text-[11px] font-bold transition-colors ${
+                active
+                  ? "bg-white/15 text-white"
+                  : "border border-white/10 text-white/40 hover:border-white/25 hover:text-white/70"
+              }`}
+            >
+              {STATUS_LABEL[s]}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -577,6 +632,7 @@ function PlayerRow({
   onStartEdit,
   onCancel,
   onSave,
+  onSetStatus,
   onDelete,
 }: {
   entry: SkillsEntry;
@@ -587,6 +643,7 @@ function PlayerRow({
   onStartEdit: () => void;
   onCancel: () => void;
   onSave: (raw: string) => void;
+  onSetStatus: (status: SkillsStatus | null) => void;
   onDelete: () => void;
 }) {
   return (
@@ -634,6 +691,7 @@ function PlayerRow({
         onStartEdit={onStartEdit}
         onCancel={onCancel}
         onSave={onSave}
+        onSetStatus={onSetStatus}
       />
 
       <button
@@ -665,25 +723,29 @@ function CategoryPanel({
   const [editingId, setEditingId] = useState<number | null>(null);
 
   const ranked = useMemo(() => rankScored(challenge, entries), [challenge, entries]);
-  const unscored = useMemo(
-    () =>
-      entries
-        .filter((e) => e.score == null)
-        .sort((a, b) => a.playerName.localeCompare(b.playerName)),
+  // Terminal outcomes (DNS/DNF/DSQ) — resolved, but not ranked. Shown between
+  // the ranked players and those still waiting.
+  const terminal = useMemo(
+    () => entries.filter((e) => e.score == null && e.status != null).sort((a, b) => a.playerName.localeCompare(b.playerName)),
+    [entries],
+  );
+  // Genuinely still to compete — no score AND no terminal status.
+  const pending = useMemo(
+    () => entries.filter((e) => e.score == null && e.status == null).sort((a, b) => a.playerName.localeCompare(b.playerName)),
     [entries],
   );
 
   const scoreMut = useMutation({
-    mutationFn: ({ id, score }: { id: number; score: string | null; advanceTo: number | null }) =>
-      apiRequest("PATCH", `/api/admin/skills-challenge/entries/${id}`, { score }),
+    mutationFn: ({ id, body }: { id: number; body: { score?: string | null; status?: SkillsStatus | null }; advanceTo: number | null }) =>
+      apiRequest("PATCH", `/api/admin/skills-challenge/entries/${id}`, body),
     onSuccess: (_res, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/entries"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/skills-challenge/leaderboard"] });
-      // Jump to the next player still waiting. Correcting an already-scored
+      // Jump to the next player still waiting. Correcting an already-resolved
       // player just closes the editor — the scorer went there deliberately.
       setEditingId(vars.advanceTo);
     },
-    onError: (e: any) => toast({ title: "Score not saved", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Not saved", description: e.message, variant: "destructive" }),
   });
 
   const deleteMut = useMutation({
@@ -696,25 +758,34 @@ function CategoryPanel({
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // After resolving a still-pending player, jump to the next one waiting.
+  const nextPendingAfter = (entry: SkillsEntry): number | null => {
+    if (entry.score != null || entry.status != null) return null; // was a correction, not a fresh entry
+    const idx = pending.findIndex((e) => e.id === entry.id);
+    return idx >= 0 ? (pending[idx + 1]?.id ?? null) : null;
+  };
+
   const save = (entry: SkillsEntry, raw: string) => {
     const trimmed = raw.trim();
-    // Where focus lands next: the player after this one in the waiting list.
-    const idx = unscored.findIndex((e) => e.id === entry.id);
-    const advanceTo = entry.score == null && trimmed !== "" && idx >= 0 ? (unscored[idx + 1]?.id ?? null) : null;
-
-    if (trimmed === "") return scoreMut.mutate({ id: entry.id, score: null, advanceTo: null });
+    const advanceTo = nextPendingAfter(entry);
+    if (trimmed === "") return scoreMut.mutate({ id: entry.id, body: { score: null }, advanceTo: null });
     const n = Number(trimmed);
     if (!Number.isFinite(n) || n < 0) {
       return toast({ title: "Score must be a positive number", variant: "destructive" });
     }
     const warn = implausible(challenge, n);
     if (warn && !confirm(`${warn}\n\nSave it anyway?`)) return;
-    scoreMut.mutate({ id: entry.id, score: trimmed, advanceTo });
+    scoreMut.mutate({ id: entry.id, body: { score: trimmed }, advanceTo });
+  };
+
+  const setStatus = (entry: SkillsEntry, status: SkillsStatus | null) => {
+    const advanceTo = status == null ? null : nextPendingAfter(entry);
+    scoreMut.mutate({ id: entry.id, body: { status }, advanceTo });
   };
 
   const total = entries.length;
-  const done = ranked.length;
-  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+  const resolved = ranked.length + terminal.length;
+  const pct = total === 0 ? 0 : Math.round((resolved / total) * 100);
 
   return (
     <section className="flex flex-col rounded-2xl border border-white/5 bg-white/[0.02]">
@@ -728,7 +799,8 @@ function CategoryPanel({
               </span>
             </div>
             <p className="mt-1 text-xs text-white/35">
-              {done} of {total} scored
+              {resolved} of {total} done
+              {terminal.length > 0 ? ` · ${terminal.length} DNS/DNF/DSQ` : ""}
               {challenge === "juggling" ? " · most juggles wins" : " · fastest time wins"}
             </p>
           </div>
@@ -749,59 +821,67 @@ function CategoryPanel({
           <p className="px-2 py-8 text-center text-sm text-white/25">No players in this category.</p>
         ) : (
           <>
-            {ranked.length > 0 && (
-              <div className="mb-1">
-                {ranked.map(({ entry, rank }) => (
-                  <PlayerRow
-                    key={entry.id}
-                    entry={entry}
-                    rank={rank}
-                    editing={editingId === entry.id}
-                    isDuplicate={dupIds.has(entry.id)}
-                    saving={scoreMut.isPending && scoreMut.variables?.id === entry.id}
-                    onStartEdit={() => setEditingId(entry.id)}
-                    onCancel={() => setEditingId(null)}
-                    onSave={(raw) => save(entry, raw)}
-                    onDelete={() => {
-                      if (confirm(`Delete ${entry.playerName}'s entry?`)) deleteMut.mutate(entry.id);
-                    }}
-                  />
-                ))}
-              </div>
-            )}
+            {(() => {
+              const rowProps = (entry: SkillsEntry) => ({
+                entry,
+                editing: editingId === entry.id,
+                isDuplicate: dupIds.has(entry.id),
+                saving: scoreMut.isPending && scoreMut.variables?.id === entry.id,
+                onStartEdit: () => setEditingId(entry.id),
+                onCancel: () => setEditingId(null),
+                onSave: (raw: string) => save(entry, raw),
+                onSetStatus: (s: SkillsStatus | null) => setStatus(entry, s),
+                onDelete: () => {
+                  if (confirm(`Delete ${entry.playerName}'s entry?`)) deleteMut.mutate(entry.id);
+                },
+              });
+              return (
+                <>
+                  {ranked.length > 0 && (
+                    <div className="mb-1">
+                      {ranked.map(({ entry, rank }) => (
+                        <PlayerRow key={entry.id} rank={rank} {...rowProps(entry)} />
+                      ))}
+                    </div>
+                  )}
 
-            {unscored.length > 0 && (
-              <>
-                {ranked.length > 0 && (
-                  <div className="my-2 flex items-center gap-2 px-2">
-                    <Clock className="h-3 w-3 text-white/20" />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-white/25">
-                      Awaiting score ({unscored.length})
-                    </span>
-                    <div className="h-px flex-1 bg-white/5" />
-                  </div>
-                )}
-                {unscored.map((entry) => (
-                  <PlayerRow
-                    key={entry.id}
-                    entry={entry}
-                    editing={editingId === entry.id}
-                    isDuplicate={dupIds.has(entry.id)}
-                    saving={scoreMut.isPending && scoreMut.variables?.id === entry.id}
-                    onStartEdit={() => setEditingId(entry.id)}
-                    onCancel={() => setEditingId(null)}
-                    onSave={(raw) => save(entry, raw)}
-                    onDelete={() => {
-                      if (confirm(`Delete ${entry.playerName}'s entry?`)) deleteMut.mutate(entry.id);
-                    }}
-                  />
-                ))}
-              </>
-            )}
+                  {terminal.length > 0 && (
+                    <>
+                      <div className="my-2 flex items-center gap-2 px-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/25">
+                          No score ({terminal.length})
+                        </span>
+                        <div className="h-px flex-1 bg-white/5" />
+                      </div>
+                      {terminal.map((entry) => (
+                        <PlayerRow key={entry.id} {...rowProps(entry)} />
+                      ))}
+                    </>
+                  )}
 
-            {unscored.length === 0 && ranked.length > 0 && (
-              <p className="px-2 py-3 text-center text-xs text-amber-300/50">Every player scored.</p>
-            )}
+                  {pending.length > 0 && (
+                    <>
+                      {(ranked.length > 0 || terminal.length > 0) && (
+                        <div className="my-2 flex items-center gap-2 px-2">
+                          <Clock className="h-3 w-3 text-white/20" />
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-white/25">
+                            Awaiting score ({pending.length})
+                          </span>
+                          <div className="h-px flex-1 bg-white/5" />
+                        </div>
+                      )}
+                      {pending.map((entry) => (
+                        <PlayerRow key={entry.id} {...rowProps(entry)} />
+                      ))}
+                    </>
+                  )}
+
+                  {pending.length === 0 && total > 0 && (
+                    <p className="px-2 py-3 text-center text-xs text-amber-300/50">Every player done.</p>
+                  )}
+                </>
+              );
+            })()}
           </>
         )}
       </div>
@@ -837,7 +917,8 @@ export default function TournamentSkillsChallenge() {
   }, [entries, search, dupOnly, dupIds]);
 
   const scoredCount = entries.filter((e) => e.score != null).length;
-  const remaining = entries.length - scoredCount;
+  // "To score" is genuinely pending — a DNS/DNF/DSQ is dealt with, not waiting.
+  const remaining = entries.filter((e) => e.score == null && e.status == null).length;
 
   const openAdd = (cat: { ageGroup: AgeGroup; challenge: ChallengeKey } | null) => {
     setAddFor(cat);

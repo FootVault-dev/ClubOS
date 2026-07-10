@@ -11835,6 +11835,9 @@ export async function registerRoutes(
   const SKILLS_ORG_SLUG = "christchurch-international-cup";
   const SKILLS_AGE_GROUPS = ["U10", "U11"] as const;
   const SKILLS_CHALLENGES = ["juggling", "dribble_pass_finish"] as const;
+  // Terminal, no-score outcomes (Olympic convention). Mutually exclusive with a
+  // numeric score: an entry is pending, scored, or one of these.
+  const SKILLS_STATUSES = ["dns", "dnf", "dsq"] as const;
 
   let skillsOrgIdCache: number | null = null;
   async function skillsOrgId(): Promise<number> {
@@ -11865,6 +11868,7 @@ export async function registerRoutes(
       ageGroup: e.ageGroup,
       challenge: e.challenge,
       score: e.score == null ? null : Number(e.score),
+      status: e.status ?? null,
       scoredAt: e.scoredAt,
       source: e.source,
       createdAt: e.createdAt,
@@ -11900,6 +11904,7 @@ export async function registerRoutes(
             playerName: e.playerName,
             clubName: e.clubName,
             score: e.score == null ? null : Number(e.score),
+            status: e.status ?? null, // "dns" | "dnf" | "dsq" | null
             rank: rankById.get(e.id) ?? null,
           }))
           .sort((a, b) => {
@@ -11908,7 +11913,11 @@ export async function registerRoutes(
             if (b.rank != null) return 1;
             return a.playerName.localeCompare(b.playerName);
           });
-        categories.push({ challenge, ageGroup, entries: ranked, lineup, registeredCount: all.length, scoredCount: scored.length });
+        // A contestant is "resolved" once they have a score OR a terminal status
+        // (DNS/DNF/DSQ). The category is decided when everyone is resolved —
+        // scoredCount alone would never reach registered when someone DNF'd.
+        const resolvedCount = all.filter(e => e.score != null || e.status).length;
+        categories.push({ challenge, ageGroup, entries: ranked, lineup, registeredCount: all.length, scoredCount: scored.length, resolvedCount });
       }
     }
     return categories;
@@ -12038,18 +12047,29 @@ export async function registerRoutes(
       if (!(SKILLS_CHALLENGES as readonly string[]).includes(v)) return { error: "Unknown challenge" };
       updates.challenge = v;
     }
-    if ("score" in body) {
-      if (body.score == null || body.score === "") {
-        updates.score = null;
-        updates.scoredByUserId = null;
-        updates.scoredAt = null;
-      } else {
-        const n = Number(body.score);
-        if (!Number.isFinite(n) || n < 0 || n > 999999) return { error: "Score must be a positive number" };
-        updates.score = n.toFixed(2);
-        updates.scoredByUserId = userId;
-        updates.scoredAt = new Date();
-      }
+    // Score and status are mutually exclusive: an entry is pending, scored, or
+    // one of DNS/DNF/DSQ, and setting either clears the other. A terminal status
+    // is checked first so that {score, status} can never persist both.
+    if ("status" in body && body.status != null && body.status !== "") {
+      const st = String(body.status).trim().toLowerCase();
+      if (!(SKILLS_STATUSES as readonly string[]).includes(st)) return { error: "Status must be DNS, DNF or DSQ" };
+      updates.status = st;
+      updates.score = null;
+      updates.scoredByUserId = userId; // who marked it, and when
+      updates.scoredAt = new Date();
+    } else if ("score" in body && body.score != null && body.score !== "") {
+      const n = Number(body.score);
+      if (!Number.isFinite(n) || n < 0 || n > 999999) return { error: "Score must be a positive number" };
+      updates.score = n.toFixed(2);
+      updates.status = null; // a real score overrides any prior DNS/DNF/DSQ
+      updates.scoredByUserId = userId;
+      updates.scoredAt = new Date();
+    } else if ("score" in body || "status" in body) {
+      // An empty score or empty status clears the entry back to pending.
+      updates.score = null;
+      updates.status = null;
+      updates.scoredByUserId = null;
+      updates.scoredAt = null;
     }
     if (Object.keys(updates).length === 0) return { error: "Nothing to update" };
     const orgId = await skillsOrgId();
