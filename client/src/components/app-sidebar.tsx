@@ -68,6 +68,7 @@ import {
   MessageSquarePlus,
   Link2,
   Target,
+  Car,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -249,6 +250,8 @@ const groupNav = [
   { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
+  // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
+  { tab: "vehicles", title: "Vehicles", url: "/admin/vehicles", icon: Car },
 ];
 
 const groupSecondary = [

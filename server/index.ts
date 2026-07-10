@@ -97,6 +97,13 @@ app.use(attributionCookieMiddleware);
   const { registerHiringRoutes } = await import("./hiring-routes");
   registerHiringRoutes(app);
 
+  // Fleet — company vehicles, assignments, insurance, servicing, running costs.
+  // Gated by requireTab("vehicles"), which is in SUPER_ADMIN_ONLY_TABS: the
+  // records tie a named staff member to an insurance policy and an FBT
+  // private-use position, so it is Daniel-only until he says otherwise.
+  const { registerVehicleRoutes } = await import("./vehicles-routes");
+  registerVehicleRoutes(app);
+
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
   // gated by requireTab("cic-content-marketplace") to the CIC workspace.
