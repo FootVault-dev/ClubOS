@@ -41,10 +41,11 @@ const ORG_SLUG = "united-sports-group";
 const BRAND = "cufc";
 const SLUG = "club-commentator";
 
-// Applications close at 23:59 NZ on Sunday 19 July — thirteen days before
-// kickoff, which leaves a week for the shortlist, the live trial, and the
-// briefing pack. NZST is UTC+12 in August.
-const CLOSES_AT = "2026-07-19T23:59:00+12:00";
+// Applications close at 23:59 NZ on FRIDAY 24 JULY — the end of the first week
+// of Term 3 (Mon 20 – Fri 24 July). Deliberately not the holidays: teachers can
+// promote it during the school week. That leaves the shortlist, the live trial
+// and the briefing pack for the week before kickoff. NZST is UTC+12.
+const CLOSES_AT = "2026-07-24T23:59:00+12:00";
 
 const QUESTIONS = [
   {
