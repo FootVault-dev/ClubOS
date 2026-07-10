@@ -2649,11 +2649,26 @@ export async function registerRoutes(
 
       // ── 8. Registration row (pending until Stripe says otherwise) ───────────
       // Attribution is stamped from the PARENT only. Never the child.
+      //
+      // `buildConversionAttribution` reads cookies and the BODY — never the
+      // query string — so `body.utm` is what lets it classify the channel at
+      // all. The raw values are also persisted below: the cookie tells us WHO,
+      // the utm tells us WHICH MESSAGE, and comparing two creatives needs the
+      // second. Capped, because these are strings from a URL a stranger controls.
       const attribution = await buildConversionAttribution(req, {
         email,
         firstName: String(guardianIn.firstName).trim(),
         lastName: String(guardianIn.lastName).trim(),
       });
+
+      const utmIn = body.utm && typeof body.utm === "object" ? (body.utm as Record<string, unknown>) : null;
+      const utmVal = (k: string) => {
+        const v = utmIn?.[k];
+        return typeof v === "string" && v.trim() ? v.trim().slice(0, 200) : null;
+      };
+      const sourceIn = typeof body.source === "string" && body.source.trim()
+        ? body.source.trim().slice(0, 100)
+        : null;
 
       const now = new Date();
       const reg = await storage.createRegistration({
@@ -2677,6 +2692,13 @@ export async function registerRoutes(
         policyVersion: ACADEMY_POLICY_VERSION,
         nzfConsentAt: now,
         notes: body.notes ? String(body.notes).trim() : null,
+        source: sourceIn,
+        utmSource: utmVal("source"),
+        utmMedium: utmVal("medium"),
+        utmCampaign: utmVal("campaign"),
+        utmContent: utmVal("content"),
+        fbclid: utmVal("fbclid"),
+        gclid: utmVal("gclid"),
         ...attribution,
       } as any);
 
