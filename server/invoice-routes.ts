@@ -701,6 +701,23 @@ export async function markInvoicePaidByPaymentIntent(paymentIntent: {
       : typeof paymentIntent.amount === "number" ? paymentIntent.amount
       : null;
 
+    // apps/invoices (api/pay-intent.ts) grosses the card charge up by a surcharge
+    // equal to Stripe's own fee, so amountCents here is the SURCHARGED total, not
+    // the invoice total — e.g. an $890.82 invoice is charged $915.38. paidAmountCents
+    // still records that surcharged figure verbatim (it is the truth of what the
+    // card was charged), but it must never be read as an overpayment: the club
+    // still banks exactly the invoice total, and Stripe keeps the surcharge. The
+    // 'paid' event meta below carries invoiceTotalCents + surchargeCents (read off
+    // the PaymentIntent's own metadata, set at creation time) so the admin UI can
+    // show that split rather than imply the club received $24.56 more than owed.
+    const parseMetaCents = (v: string | undefined): number | null => {
+      if (!v) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const invoiceTotalCents = parseMetaCents(paymentIntent.metadata?.invoiceTotalCents);
+    const surchargeCents = parseMetaCents(paymentIntent.metadata?.surchargeCents);
+
     const [row] = await db.update(usgInvoices)
       .set({
         status: "paid",
@@ -718,7 +735,13 @@ export async function markInvoicePaidByPaymentIntent(paymentIntent: {
       invoiceId: inv.id,
       kind: "paid",
       isStaff: false,
-      meta: { method: "card", paymentIntentId: paymentIntent.id, amountCents },
+      meta: {
+        method: "card",
+        paymentIntentId: paymentIntent.id,
+        amountCents,
+        invoiceTotalCents,
+        surchargeCents,
+      },
     });
   } catch (e) {
     console.error("[invoices] markInvoicePaidByPaymentIntent failed:", e);

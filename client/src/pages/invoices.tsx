@@ -60,6 +60,22 @@ const fmtDate = (iso: string | null | undefined) =>
 const fmtDateTime = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString("en-NZ", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "—";
 
+/**
+ * A card payment is charged the invoice total PLUS a surcharge equal to
+ * Stripe's own fee (see shared/invoice-money.ts cardBreakdown), so
+ * paidAmountCents lands ABOVE totalCents by exactly that fee. This is not an
+ * overpayment — the club still banks the invoice total, Stripe keeps the
+ * fee — so never show the raw charged amount as if it were revenue. Returns
+ * null for anything that wasn't paid by card over the total (bank transfers,
+ * or invoices marked paid manually at the exact total).
+ */
+function cardFeeLine(inv: Pick<AdminInvoice, "status" | "paidAmountCents" | "totalCents">): string | null {
+  if (inv.status !== "paid" || inv.paidAmountCents == null) return null;
+  if (inv.paidAmountCents <= inv.totalCents) return null;
+  const feeCents = inv.paidAmountCents - inv.totalCents;
+  return `Charged ${formatCurrency(inv.paidAmountCents, { fromCents: true })} (incl. ${formatCurrency(feeCents, { fromCents: true })} card fee) · banked ${formatCurrency(inv.totalCents, { fromCents: true })}`;
+}
+
 function Badge({ label, color }: { label: string; color: string }) {
   return (
     <span
@@ -98,7 +114,11 @@ export default function GroupInvoices() {
     return {
       outstandingCents: outstanding.reduce((s, i) => s + i.totalCents, 0),
       overdueCents: overdue.reduce((s, i) => s + i.totalCents, 0),
-      paidThisMonthCents: paidThisMonth.reduce((s, i) => s + (i.paidAmountCents ?? i.totalCents), 0),
+      // The club's revenue is the INVOICE TOTAL, never the charged amount — a
+      // card payment is charged the total plus a surcharge that Stripe takes,
+      // never the club. Summing paidAmountCents here would overstate revenue
+      // by exactly the card fees collected on behalf of Stripe.
+      paidThisMonthCents: paidThisMonth.reduce((s, i) => s + i.totalCents, 0),
       awaitingCount: outstanding.length,
     };
   }, [invoices]);
@@ -217,7 +237,12 @@ export default function GroupInvoices() {
                     >
                       <td className="px-4 py-2.5 font-mono text-[13px]">{inv.number}</td>
                       <td className="px-4 py-2.5">{inv.recipientName}</td>
-                      <td className="px-4 py-2.5 font-medium">{formatCurrency(inv.totalCents, { fromCents: true })}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="font-medium">{formatCurrency(inv.totalCents, { fromCents: true })}</div>
+                        {cardFeeLine(inv) && (
+                          <div className="text-[10px] text-white/35 mt-0.5 whitespace-nowrap">{cardFeeLine(inv)}</div>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-white/50">{fmtDate(inv.issuedOn)}</td>
                       <td className="px-4 py-2.5 text-white/50">{fmtDate(inv.dueOn)}</td>
                       <td className="px-4 py-2.5"><Badge label={sc.label} color={sc.color} /></td>
@@ -260,6 +285,9 @@ export default function GroupInvoices() {
                   <div className="text-white/40">
                     {formatCurrency(selectedInvoice.subtotalCents, { fromCents: true })} + {formatCurrency(selectedInvoice.gstCents, { fromCents: true })} GST
                   </div>
+                  {cardFeeLine(selectedInvoice) && (
+                    <div className="text-white/40 mt-0.5">{cardFeeLine(selectedInvoice)}</div>
+                  )}
                 </div>
                 <div>
                   <div className="text-white/35 text-[11px] uppercase tracking-wide">Issued / due</div>
@@ -268,6 +296,9 @@ export default function GroupInvoices() {
                 <div>
                   <div className="text-white/35 text-[11px] uppercase tracking-wide">Card payments</div>
                   <div className="mt-0.5">{selectedInvoice.cardEnabled ? "Enabled" : "Off — bank transfer only"}</div>
+                  {selectedInvoice.cardEnabled && (
+                    <div className="text-white/30 text-[11px] mt-0.5">Card fee passed to payer</div>
+                  )}
                 </div>
               </div>
 
