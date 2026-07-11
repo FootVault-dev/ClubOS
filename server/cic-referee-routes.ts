@@ -640,6 +640,10 @@ export function registerCicRefereeRoutes(app: Express) {
   // Approve referees and assign them to games. Gated by the "cic-referees" tab
   // and scoped to the caller's workspace org (which is the CIC workspace).
   const tab = requireTab("cic-referees");
+  // Assigning refs to games + the Game Feed live on the Tournaments page, so they
+  // are gated by the "tournaments" tab (Isaac/Rolof schedule there), not the
+  // referee-approvals tab. Approving/removing referees stays on "cic-referees".
+  const schedTab = requireTab("tournaments");
 
   async function workspaceOrg(req: Request): Promise<{ id: number; slug: string } | null> {
     const slug = String(req.headers["x-workspace-slug"] || "").trim();
@@ -647,6 +651,83 @@ export function registerCicRefereeRoutes(app: Express) {
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug));
     return org ? { id: org.id, slug: org.slug } : null;
   }
+
+  // Approved referees only — the pick-list for assigning a ref to a game in the
+  // Schedule tab (type-to-search). Gated by the tournaments tab, not referees.
+  app.get("/api/admin/cic/approved-referees", requireAuth, schedTab, async (_req, res) => {
+    try {
+      const orgId = await cicOrgId();
+      const rows = await db.select({ id: cicReferees.id, fullName: cicReferees.fullName, phone: cicReferees.phone })
+        .from(cicReferees)
+        .where(and(eq(cicReferees.organizationId, orgId), eq(cicReferees.status, "approved")))
+        .orderBy(cicReferees.fullName);
+      res.json({ referees: rows });
+    } catch (e: any) {
+      console.error("[cic-ref] approved list failed", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // The live Game Feed — every game across the active CIC tournaments as one flat
+  // feed with team names, status/score, assigned referee(s) and who last scored.
+  // Powers the "Game Feed" tab on the Tournaments page (Isaac/Rolof's overview).
+  app.get("/api/admin/cic/game-feed", requireAuth, schedTab, async (_req, res) => {
+    try {
+      const orgId = await cicOrgId();
+      const tourns = await db.select().from(tournaments)
+        .where(and(eq(tournaments.organizationId, orgId), eq(tournaments.active, true), eq(tournaments.archived, false)));
+      const tids = tourns.map((t) => t.id);
+      if (!tids.length) return res.json({ games: [] });
+      const tById = new Map(tourns.map((t) => [t.id, t]));
+
+      const [games, teamRows, assignRows, refRows] = await Promise.all([
+        db.select().from(tournamentGames).where(inArray(tournamentGames.tournamentId, tids)),
+        db.select({ id: tournamentTeams.id, name: tournamentTeams.name }).from(tournamentTeams).where(inArray(tournamentTeams.tournamentId, tids)),
+        db.select().from(cicRefereeAssignments),
+        db.select({ id: cicReferees.id, fullName: cicReferees.fullName }).from(cicReferees).where(eq(cicReferees.organizationId, orgId)),
+      ]);
+      const teamName = new Map(teamRows.map((t) => [t.id, t.name]));
+      const refName = new Map(refRows.map((r) => [r.id, r.fullName]));
+      const byGame = new Map<number, { id: number; fullName: string }[]>();
+      for (const a of assignRows) {
+        const nm = refName.get(a.refereeId);
+        if (!nm) continue;
+        const arr = byGame.get(a.gameId) ?? [];
+        arr.push({ id: a.refereeId, fullName: nm });
+        byGame.set(a.gameId, arr);
+      }
+
+      const feed = games.map((g) => ({
+        id: g.id,
+        tournamentId: g.tournamentId,
+        tournamentName: tById.get(g.tournamentId)?.name ?? "",
+        ageGroup: tById.get(g.tournamentId)?.ageGroup ?? null,
+        gameNumber: g.gameNumber,
+        stage: g.stage,
+        stageDetail: g.stageDetail,
+        gameDate: g.gameDate,
+        startTime: g.startTime,
+        field: g.field,
+        status: g.status,
+        isLive: g.isLive,
+        homeTeamName: g.homeTeamId ? (teamName.get(g.homeTeamId) ?? null) : (g.homeTeamPlaceholder ?? null),
+        awayTeamName: g.awayTeamId ? (teamName.get(g.awayTeamId) ?? null) : (g.awayTeamPlaceholder ?? null),
+        homeScore: g.homeScore,
+        awayScore: g.awayScore,
+        homePenalties: g.homePenalties,
+        awayPenalties: g.awayPenalties,
+        assignedReferees: byGame.get(g.id) ?? [],
+        lastScoredByRefereeId: g.lastScoredByRefereeId ?? null,
+        lastScoredByName: g.lastScoredByRefereeId ? (refName.get(g.lastScoredByRefereeId) ?? null) : null,
+        lastScoredAt: g.lastScoredAt ?? null,
+      }));
+      feed.sort((a, b) => (`${a.gameDate ?? ""}${a.startTime ?? ""}`).localeCompare(`${b.gameDate ?? ""}${b.startTime ?? ""}`) || a.id - b.id);
+      res.json({ games: feed });
+    } catch (e: any) {
+      console.error("[cic-ref] game feed failed", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
 
   app.get("/api/admin/cic-referees", requireAuth, tab, async (req, res) => {
     try {
@@ -726,7 +807,7 @@ export function registerCicRefereeRoutes(app: Express) {
   });
 
   // Assignments (referee ↔ game). Games are validated to be CIC games.
-  app.get("/api/admin/cic-referees/assignments", requireAuth, tab, async (req, res) => {
+  app.get("/api/admin/cic-referees/assignments", requireAuth, schedTab, async (req, res) => {
     try {
       const org = await workspaceOrg(req);
       if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
@@ -741,7 +822,7 @@ export function registerCicRefereeRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/cic-referees/assignments", requireAuth, tab, async (req, res) => {
+  app.post("/api/admin/cic-referees/assignments", requireAuth, schedTab, async (req, res) => {
     try {
       const org = await workspaceOrg(req);
       if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
@@ -763,7 +844,7 @@ export function registerCicRefereeRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/admin/cic-referees/assignments", requireAuth, tab, async (req, res) => {
+  app.delete("/api/admin/cic-referees/assignments", requireAuth, schedTab, async (req, res) => {
     try {
       const org = await workspaceOrg(req);
       if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });

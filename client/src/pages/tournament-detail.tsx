@@ -3,12 +3,13 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Award, Users, Calendar, LayoutGrid, Settings2, Plus, Trash2, GripVertical, X, Shield, Clock, MapPin, Pencil, Check, ChevronDown, Goal, RefreshCw, Square, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Award, Users, Calendar, LayoutGrid, Settings2, Plus, Trash2, GripVertical, X, Shield, Clock, MapPin, Pencil, Check, ChevronDown, Goal, RefreshCw, Square, AlertTriangle, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TimePickerInput } from "@/components/ui/time-picker-input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Tournament, TournamentGroup, TournamentTeam, TournamentGame, TournamentPlayer, TournamentGoal, TournamentCard, TournamentPenaltyKick } from "@shared/schema";
 
 // A player at or above this many yellow cards should sit out a game. CIC's
@@ -796,6 +797,128 @@ function GameGoalsModal({ game, onClose }: { game: GameWithRelations; onClose: (
   );
 }
 
+// ── Referee assignment (Schedule tab) ───────────────────────────────────────
+// Mirror the response shapes from server/cic-referee-routes.ts —
+// GET /api/admin/cic/approved-referees and GET /api/admin/cic-referees/assignments.
+interface ApprovedReferee {
+  id: number;
+  fullName: string;
+  phone: string;
+}
+interface RefereeAssignment {
+  id: number;
+  refereeId: number;
+  gameId: number;
+  assignedBy: number | null;
+  createdAt: string;
+}
+
+// Per-game cell: chips for who's assigned (× to unassign) + a type-to-search
+// "Assign ref" popover over the approved-referees list. The referee list and
+// all assignments are fetched ONCE at the ScheduleTab level and passed down —
+// this cell does no fetching of its own, just renders + fires mutations.
+function RefereeAssignCell({
+  referees,
+  assignedRefIds,
+  onAssign,
+  onUnassign,
+  isAssigning,
+  isUnassigning,
+}: {
+  referees: ApprovedReferee[];
+  assignedRefIds: number[];
+  onAssign: (refereeId: number) => void;
+  onUnassign: (refereeId: number) => void;
+  isAssigning: boolean;
+  isUnassigning: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const assignedSet = useMemo(() => new Set(assignedRefIds), [assignedRefIds]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? referees.filter(r => r.fullName.toLowerCase().includes(q)) : referees;
+  }, [referees, search]);
+
+  return (
+    <div className="flex flex-col items-start gap-1 min-w-[110px]">
+      <div className="flex flex-wrap gap-1">
+        {assignedRefIds.length === 0 && (
+          <span className="text-[10px] text-white/20">No ref assigned</span>
+        )}
+        {assignedRefIds.map(id => {
+          const ref = referees.find(r => r.id === id);
+          return (
+            <span
+              key={id}
+              className="inline-flex items-center gap-1 text-[10px] pl-1.5 pr-1 py-0.5 rounded-full bg-blue-500/15 text-blue-300 whitespace-nowrap"
+              data-testid={`chip-referee-${id}`}
+            >
+              {ref?.fullName ?? "Referee"}
+              <button
+                type="button"
+                onClick={() => onUnassign(id)}
+                disabled={isUnassigning}
+                className="text-blue-300/50 hover:text-red-400 disabled:opacity-40"
+                title="Remove referee"
+                data-testid={`button-unassign-referee-${id}`}
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </span>
+          );
+        })}
+      </div>
+      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch(""); }}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md text-white/25 hover:text-blue-300 hover:bg-blue-500/10 transition-colors"
+            data-testid="button-assign-referee"
+          >
+            <UserPlus className="w-3 h-3" /> Assign ref
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-56 p-2 bg-[#15171c] border-white/10" align="start">
+          <input
+            autoFocus
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search referees…"
+            className="w-full h-7 text-xs premium-input text-white px-2 rounded-md mb-1.5"
+            data-testid="input-referee-search"
+          />
+          <div className="max-h-48 overflow-y-auto space-y-0.5">
+            {!referees.length ? (
+              <p className="text-[11px] text-white/25 px-1 py-2">No approved referees yet.</p>
+            ) : !filtered.length ? (
+              <p className="text-[11px] text-white/25 px-1 py-2">No match.</p>
+            ) : (
+              filtered.map(r => {
+                const already = assignedSet.has(r.id);
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    disabled={already || isAssigning}
+                    onClick={() => { onAssign(r.id); setSearch(""); }}
+                    className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-left text-xs hover:bg-white/5 disabled:hover:bg-transparent ${already ? "opacity-40 cursor-default" : "text-white/80"}`}
+                    data-testid={`option-referee-${r.id}`}
+                  >
+                    <span className="truncate">{r.fullName}</span>
+                    {already && <Check className="w-3 h-3 text-emerald-400 shrink-0" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 function ScheduleTab({ tournament }: { tournament: Tournament }) {
   const { toast } = useToast();
   const tournamentId = tournament.id;
@@ -825,6 +948,50 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId, "games"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tournament/tournaments", tournamentId, "standings"] });
     },
+  });
+
+  // Referee assignment — the approved-referee pick-list and every assignment for
+  // this workspace, both fetched ONCE here (not per-row) and passed down into
+  // each game row via RefereeAssignCell. Both routes are gated by the
+  // "tournaments" tab and scoped by the X-Workspace-Slug header the default
+  // queryFn already attaches (see client/src/lib/queryClient.ts).
+  const { data: refereesData } = useQuery<{ referees: ApprovedReferee[] }>({
+    queryKey: ["/api/admin/cic/approved-referees"],
+  });
+  const approvedReferees = refereesData?.referees ?? [];
+
+  const refAssignmentsQueryKey = ["/api/admin/cic-referees/assignments"];
+  const { data: refAssignData } = useQuery<{ assignments: RefereeAssignment[] }>({
+    queryKey: refAssignmentsQueryKey,
+  });
+  const refAssignments = refAssignData?.assignments ?? [];
+
+  // Group once per render into a gameId -> assignments map so each row is an
+  // O(1) lookup instead of filtering the full assignments array per game.
+  const refAssignmentsByGame = useMemo(() => {
+    const map = new Map<number, RefereeAssignment[]>();
+    for (const a of refAssignments) {
+      const arr = map.get(a.gameId) ?? [];
+      arr.push(a);
+      map.set(a.gameId, arr);
+    }
+    return map;
+  }, [refAssignments]);
+
+  const assignRefMut = useMutation({
+    mutationFn: ({ refereeId, gameId }: { refereeId: number; gameId: number }) =>
+      apiRequest("POST", "/api/admin/cic-referees/assignments", { refereeId, gameId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: refAssignmentsQueryKey }),
+    onError: (e: any) => toast({ title: "Couldn't assign referee", description: e.message, variant: "destructive" }),
+  });
+
+  // DELETE with a JSON body — apiRequest(method, url, data) attaches a JSON
+  // body regardless of method, and fetch()/express.json() both support it.
+  const unassignRefMut = useMutation({
+    mutationFn: ({ refereeId, gameId }: { refereeId: number; gameId: number }) =>
+      apiRequest("DELETE", "/api/admin/cic-referees/assignments", { refereeId, gameId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: refAssignmentsQueryKey }),
+    onError: (e: any) => toast({ title: "Couldn't unassign referee", description: e.message, variant: "destructive" }),
   });
 
   // Bulk pitch move — e.g. a pitch floods: move EVERY game on one field to another
@@ -995,6 +1162,7 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
             <th className="text-right px-3 py-2 text-[10px] text-white/25 uppercase tracking-wider font-semibold">Home Team</th>
             <th className="text-center px-1 py-2 text-[10px] text-white/25 uppercase tracking-wider font-semibold w-20">Score</th>
             <th className="text-left px-3 py-2 text-[10px] text-white/25 uppercase tracking-wider font-semibold">Away Team</th>
+            <th className="text-left px-2 py-2 text-[10px] text-white/25 uppercase tracking-wider font-semibold">Ref</th>
             <th className="w-20 px-2 py-2"></th>
           </tr>
         </thead>
@@ -1126,6 +1294,16 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                   ) : (
                     <span className="text-sm text-white/70 font-medium">{awayName}</span>
                   )}
+                </td>
+                <td className="px-2 py-2.5">
+                  <RefereeAssignCell
+                    referees={approvedReferees}
+                    assignedRefIds={(refAssignmentsByGame.get(game.id) ?? []).map(a => a.refereeId)}
+                    onAssign={refereeId => assignRefMut.mutate({ refereeId, gameId: game.id })}
+                    onUnassign={refereeId => unassignRefMut.mutate({ refereeId, gameId: game.id })}
+                    isAssigning={assignRefMut.isPending}
+                    isUnassigning={unassignRefMut.isPending}
+                  />
                 </td>
                 <td className="px-2 py-2.5">
                   <div className="flex items-center gap-1 justify-end">

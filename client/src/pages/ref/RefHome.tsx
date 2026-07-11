@@ -7,7 +7,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Clock, Loader2, LogOut, MapPin, ShieldCheck } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, Clock, Loader2, LogOut, MapPin, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -248,13 +248,14 @@ function GameListScreen({
   onSignOut: () => void;
   onOpenGame: (id: number) => void;
 }) {
-  const [scope, setScope] = useState<"mine" | "all">("mine");
   const [day, setDay] = useState<string>(nzTodayIso());
   const [showAllDays, setShowAllDays] = useState(false);
 
+  // A referee only ever sees their own assigned games — scope is always
+  // "mine", never "all". Deliberate: a clean, assignment-only feed.
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["ref-games", scope],
-    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=${scope}`),
+    queryKey: ["ref-games", "mine"],
+    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=mine`),
   });
 
   const games = data?.games ?? [];
@@ -279,21 +280,12 @@ function GameListScreen({
       </div>
 
       <div className="px-5">
-        <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl" style={{ background: "rgba(255,255,255,0.04)" }}>
-          {(["mine", "all"] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setScope(s)}
-              className="h-11 rounded-lg text-sm font-bold transition"
-              style={scope === s ? { background: GOLD, color: INK } : { color: "rgba(255,255,255,0.5)" }}
-            >
-              {s === "mine" ? "My games" : "All games"}
-            </button>
-          ))}
+        <div className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: GOLD }}>
+          Your Games
         </div>
       </div>
 
-      <div className="px-5 mt-4 flex items-center justify-between gap-2">
+      <div className="px-5 mt-3 flex items-center justify-between gap-2">
         <button
           onClick={() => setDay(shiftIso(day, -1))}
           disabled={showAllDays}
@@ -347,10 +339,34 @@ function GameListScreen({
             </button>
           </div>
         )}
-        {!isLoading && !isError && dayGames.length === 0 && (
+        {!isLoading && !isError && games.length === 0 && (
+          <div className="text-center py-16 px-4">
+            <div
+              className="mx-auto mb-4 h-14 w-14 rounded-2xl flex items-center justify-center"
+              style={{ background: "rgba(201,164,62,0.1)", border: "1px solid rgba(201,164,62,0.3)" }}
+            >
+              <CalendarClock className="h-6 w-6" style={{ color: GOLD }} />
+            </div>
+            <div className="cic-ref-display text-base font-bold text-white mb-1.5">No games assigned yet</div>
+            <p
+              className="text-sm leading-relaxed max-w-xs mx-auto"
+              style={{ color: "rgba(255,255,255,0.4)" }}
+            >
+              Your referee coordinator will assign your matches. Check back closer to kickoff.
+            </p>
+          </div>
+        )}
+        {!isLoading && !isError && games.length > 0 && dayGames.length === 0 && (
           <div className="text-center py-14 text-sm" style={{ color: "rgba(255,255,255,0.35)" }}>
-            No games {showAllDays ? "" : "on this day"}
-            {scope === "mine" ? " assigned to you" : ""}.
+            No games assigned to you {showAllDays ? "" : "on this day"}.
+            {!showAllDays && (
+              <>
+                {" "}
+                <button onClick={() => setShowAllDays(true)} className="underline font-semibold" style={{ color: GOLD }}>
+                  View all your games
+                </button>
+              </>
+            )}
           </div>
         )}
         {dayGames.map((g) => (
@@ -379,14 +395,6 @@ function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => voi
           {game.stageDetail && <span className="truncate">{game.stageDetail}</span>}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {game.assigned && (
-            <span
-              className="text-[9px] font-bold px-2 py-0.5 rounded-full"
-              style={{ background: "rgba(201,164,62,0.15)", color: GOLD, border: "1px solid rgba(201,164,62,0.4)" }}
-            >
-              ASSIGNED
-            </span>
-          )}
           {game.isLive && (
             <span
               className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
