@@ -173,6 +173,12 @@ export interface RefShootoutKick {
   playerId: number | null;
 }
 
+// Timer phases: pre → first_half → half_time → second_half → finished.
+// See server/cic-referee-routes.ts applyTimerAction() — the clock is always
+// DERIVED from timerRunning/timerStartedAt/timerBaseSeconds, never stored ticking.
+export type RefTimerPhase = "pre" | "first_half" | "half_time" | "second_half" | "finished";
+export type RefTimerAction = "start_1h" | "pause" | "resume" | "finish_1h" | "start_2h" | "finish_game" | "reset";
+
 export interface RefGameFull {
   id: number;
   tournamentId: number;
@@ -191,6 +197,10 @@ export interface RefGameFull {
   awayScore: number | null;
   homePenalties: number | null;
   awayPenalties: number | null;
+  timerPhase: RefTimerPhase;
+  timerRunning: boolean;
+  timerStartedAt: string | null;
+  timerBaseSeconds: number;
   [key: string]: any;
 }
 
@@ -203,4 +213,6 @@ export interface RefGameDetailResponse {
   gkRatings: RefGkRating[];
   shootout: RefShootoutKick[];
   players: RefPlayer[];
+  halfLengthMinutes: number;
+  breakMinutes: number;
 }

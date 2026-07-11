@@ -7,7 +7,17 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { CalendarClock, ChevronLeft, ChevronRight, Clock, Loader2, LogOut, MapPin, ShieldCheck } from "lucide-react";
+import {
+  BadgeCheck,
+  CalendarClock,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Loader2,
+  LogOut,
+  MapPin,
+  ShieldCheck,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,6 +30,7 @@ import {
   type Referee,
   type RefGameListItem,
 } from "./ref-api";
+import { useCicBrand } from "./useCicBrand";
 import { nzTodayIso } from "@shared/academy";
 
 const GOLD = "#C9A43E";
@@ -59,6 +70,7 @@ function dayLabel(iso: string): string {
 }
 
 export default function RefHome() {
+  useCicBrand();
   const [, navigate] = useLocation();
   const [phase, setPhase] = useState<"checking" | "login" | "games">(() => (getRefToken() ? "checking" : "login"));
   const [authError, setAuthError] = useState<string | null>(null);
@@ -239,6 +251,8 @@ function LoginScreen({
 }
 
 // ── Game list ────────────────────────────────────────────────────────────
+type FeedTab = "upcoming" | "past";
+
 function GameListScreen({
   referee,
   onSignOut,
@@ -248,18 +262,31 @@ function GameListScreen({
   onSignOut: () => void;
   onOpenGame: (id: number) => void;
 }) {
+  const [tab, setTab] = useState<FeedTab>("upcoming");
   const [day, setDay] = useState<string>(nzTodayIso());
+  // Upcoming defaults to today with day-by-day nav; Past defaults to "all
+  // days" since results can span the whole draw — but the day filter still
+  // works if a ref wants one specific day's results.
   const [showAllDays, setShowAllDays] = useState(false);
+  const switchTab = (t: FeedTab) => {
+    setTab(t);
+    setShowAllDays(t === "past");
+  };
 
-  // A referee only ever sees their own assigned games — scope is always
-  // "mine", never "all". Deliberate: a clean, assignment-only feed.
+  // Daniel wants the WHOLE tournament feed visible, not just this referee's
+  // assignments — scope=all. The API still tells us which games are theirs
+  // via `assigned`, so those get highlighted rather than filtered down to.
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["ref-games", "mine"],
-    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=mine`),
+    queryKey: ["ref-games", "all"],
+    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=all`),
   });
 
   const games = data?.games ?? [];
-  const dayGames = showAllDays ? games : games.filter((g) => g.gameDate === day);
+  const tabGames = games.filter((g) => (tab === "upcoming" ? g.status !== "final" : g.status === "final"));
+  // API sorts ascending by date/time. Upcoming stays soonest-first; Past is
+  // flipped so the most recent result shows first.
+  const orderedTabGames = tab === "past" ? [...tabGames].reverse() : tabGames;
+  const dayGames = showAllDays ? orderedTabGames : orderedTabGames.filter((g) => g.gameDate === day);
 
   return (
     <div className="min-h-screen pb-10">
@@ -279,10 +306,29 @@ function GameListScreen({
         </button>
       </div>
 
-      <div className="px-5">
-        <div className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: GOLD }}>
-          Your Games
-        </div>
+      <div className="px-5 grid grid-cols-2 gap-2">
+        <button
+          onClick={() => switchTab("upcoming")}
+          className="h-11 rounded-xl text-sm font-bold"
+          style={
+            tab === "upcoming"
+              ? { background: GOLD, color: INK }
+              : { background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.1)" }
+          }
+        >
+          Upcoming
+        </button>
+        <button
+          onClick={() => switchTab("past")}
+          className="h-11 rounded-xl text-sm font-bold"
+          style={
+            tab === "past"
+              ? { background: GOLD, color: INK }
+              : { background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.1)" }
+          }
+        >
+          Past
+        </button>
       </div>
 
       <div className="px-5 mt-3 flex items-center justify-between gap-2">
@@ -347,23 +393,25 @@ function GameListScreen({
             >
               <CalendarClock className="h-6 w-6" style={{ color: GOLD }} />
             </div>
-            <div className="cic-ref-display text-base font-bold text-white mb-1.5">No games assigned yet</div>
-            <p
-              className="text-sm leading-relaxed max-w-xs mx-auto"
-              style={{ color: "rgba(255,255,255,0.4)" }}
-            >
-              Your referee coordinator will assign your matches. Check back closer to kickoff.
+            <div className="cic-ref-display text-base font-bold text-white mb-1.5">No games in the draw yet</div>
+            <p className="text-sm leading-relaxed max-w-xs mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+              Check back once the tournament schedule is published.
             </p>
           </div>
         )}
-        {!isLoading && !isError && games.length > 0 && dayGames.length === 0 && (
+        {!isLoading && !isError && games.length > 0 && tabGames.length === 0 && (
           <div className="text-center py-14 text-sm" style={{ color: "rgba(255,255,255,0.35)" }}>
-            No games assigned to you {showAllDays ? "" : "on this day"}.
+            {tab === "upcoming" ? "No upcoming games." : "No results yet."}
+          </div>
+        )}
+        {!isLoading && !isError && tabGames.length > 0 && dayGames.length === 0 && (
+          <div className="text-center py-14 text-sm" style={{ color: "rgba(255,255,255,0.35)" }}>
+            No {tab === "upcoming" ? "upcoming games" : "results"} on this day.
             {!showAllDays && (
               <>
                 {" "}
                 <button onClick={() => setShowAllDays(true)} className="underline font-semibold" style={{ color: GOLD }}>
-                  View all your games
+                  View all days
                 </button>
               </>
             )}
@@ -379,11 +427,15 @@ function GameListScreen({
 
 function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => void }) {
   const hasScore = game.homeScore != null && game.awayScore != null;
+  const assigned = game.assigned;
   return (
-    <button
-      onClick={onClick}
-      className="w-full text-left rounded-2xl p-4 active:scale-[0.98] transition"
-      style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}
+    <div
+      className="rounded-2xl p-4"
+      style={
+        assigned
+          ? { background: "rgba(201,164,62,0.07)", border: "1.5px solid rgba(201,164,62,0.5)" }
+          : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }
+      }
     >
       <div className="flex items-center justify-between mb-2 gap-2">
         <div
@@ -395,6 +447,14 @@ function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => voi
           {game.stageDetail && <span className="truncate">{game.stageDetail}</span>}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          {assigned && (
+            <span
+              className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+              style={{ background: "rgba(201,164,62,0.18)", color: GOLD, border: "1px solid rgba(201,164,62,0.45)" }}
+            >
+              <BadgeCheck className="h-3 w-3" /> You're reffing
+            </span>
+          )}
           {game.isLive && (
             <span
               className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
@@ -415,8 +475,12 @@ function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => voi
       </div>
       <div className="flex items-center justify-between gap-3">
         <div className="flex-1 min-w-0 space-y-0.5">
-          <div className="cic-ref-display text-base font-bold text-white truncate">{game.homeTeamName ?? "TBD"}</div>
-          <div className="cic-ref-display text-base font-bold text-white truncate">{game.awayTeamName ?? "TBD"}</div>
+          <div className={`cic-ref-display text-base font-bold truncate ${assigned ? "text-white" : "text-white/80"}`}>
+            {game.homeTeamName ?? "TBD"}
+          </div>
+          <div className={`cic-ref-display text-base font-bold truncate ${assigned ? "text-white" : "text-white/80"}`}>
+            {game.awayTeamName ?? "TBD"}
+          </div>
         </div>
         <div className="text-right shrink-0">
           {hasScore ? (
@@ -446,6 +510,13 @@ function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => voi
           </span>
         )}
       </div>
-    </button>
+      <button
+        onClick={onClick}
+        className="mt-3 w-full h-12 rounded-xl text-sm font-bold active:scale-[0.98] transition"
+        style={{ background: GOLD, color: INK }}
+      >
+        Score Game
+      </button>
+    </div>
   );
 }

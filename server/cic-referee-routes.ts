@@ -144,6 +144,62 @@ async function stampScored(gameId: number, refereeId: number) {
 
 const isTeamOf = (game: any, teamId: number) => teamId === game.homeTeamId || teamId === game.awayTeamId;
 
+// ── Match timer state machine (Score Game) ───────────────────────────────────
+// Phases: pre → first_half → half_time → second_half → finished. The clock is
+// DERIVED from these fields (never stored ticking): first_half/second_half count
+// UP to the half length (tournament game_duration_minutes); half_time counts DOWN
+// from break_between_minutes. Forgiving on purpose — each action sets a defined
+// target state, so a mis-tap pitch-side is recoverable. finish_game is the ONLY
+// thing that flips status→final + re-resolves the bracket (knockout placements
+// never derive from an in-progress game).
+const TIMER_ACTIONS = ["start_1h", "pause", "resume", "finish_1h", "start_2h", "finish_game", "reset"] as const;
+
+async function applyTimerAction(
+  gameId: number,
+  action: string,
+  refereeId: number | null,
+): Promise<{ error?: string; status?: number; game?: any }> {
+  const found = await loadCicGame(gameId);
+  if (!found) return { error: "Game not found.", status: 404 };
+  const g = found.game;
+  const now = new Date();
+  const ran = g.timerRunning && g.timerStartedAt
+    ? Math.max(0, Math.floor((now.getTime() - new Date(g.timerStartedAt).getTime()) / 1000))
+    : 0;
+  const patch: Record<string, any> = {};
+  switch (action) {
+    case "start_1h":
+      Object.assign(patch, { timerPhase: "first_half", timerRunning: true, timerStartedAt: now, timerBaseSeconds: 0, isLive: true, status: "scheduled" });
+      break;
+    case "pause":
+      Object.assign(patch, { timerRunning: false, timerStartedAt: null, timerBaseSeconds: (g.timerBaseSeconds || 0) + ran });
+      break;
+    case "resume":
+      Object.assign(patch, { timerRunning: true, timerStartedAt: now });
+      break;
+    case "finish_1h":
+      Object.assign(patch, { timerPhase: "half_time", timerRunning: true, timerStartedAt: now, timerBaseSeconds: 0, isLive: true });
+      break;
+    case "start_2h":
+      Object.assign(patch, { timerPhase: "second_half", timerRunning: true, timerStartedAt: now, timerBaseSeconds: 0, isLive: true });
+      break;
+    case "finish_game":
+      Object.assign(patch, { timerPhase: "finished", timerRunning: false, timerStartedAt: null, isLive: false, status: "final" });
+      break;
+    case "reset":
+      Object.assign(patch, { timerPhase: "pre", timerRunning: false, timerStartedAt: null, timerBaseSeconds: 0, isLive: false, status: "scheduled" });
+      break;
+    default:
+      return { error: `Unknown timer action. One of: ${TIMER_ACTIONS.join(", ")}`, status: 400 };
+  }
+  const updated = await storage.updateTournamentGame(gameId, patch);
+  if (action === "finish_game" || action === "reset") {
+    try { await resolveTournamentBrackets(g.tournamentId); } catch (e) { console.error("[cic-ref] timer bracket resolve failed", e); }
+  }
+  if (refereeId) await stampScored(gameId, refereeId);
+  return { game: updated };
+}
+
 // ── In-memory throttles (per Fly machine — enough to stop a script) ──────────
 const HOUR = 60 * 60 * 1000;
 const signupHits = new Map<string, number[]>();
@@ -343,7 +399,12 @@ export function registerCicRefereeRoutes(app: Express) {
         teamIds.length ? db.select().from(tournamentPlayers).where(inArray(tournamentPlayers.teamId, teamIds)) : Promise.resolve([]),
       ]);
 
-      res.json({ game, teams, goals, cards, mvpVotes, gkRatings, shootout, players });
+      res.json({
+        game, teams, goals, cards, mvpVotes, gkRatings, shootout, players,
+        // Timer needs the half length + break from the tournament, not the game.
+        halfLengthMinutes: found.tournament.gameDurationMinutes ?? 20,
+        breakMinutes: found.tournament.breakBetweenMinutes ?? 5,
+      });
     } catch (e: any) {
       console.error("[cic-ref] game detail failed", e);
       res.status(500).json({ message: "Couldn't load that game right now." });
@@ -636,6 +697,19 @@ export function registerCicRefereeRoutes(app: Express) {
     }
   });
 
+  // Match timer — Score Game state machine, run live by the referee.
+  // Body: { action: start_1h | pause | resume | finish_1h | start_2h | finish_game | reset }.
+  app.post("/api/public/cic-referees/games/:id/timer", requireRefereeToken, async (req, res) => {
+    try {
+      const r = await applyTimerAction(parseInt(String(req.params.id), 10), String(req.body?.action || ""), (req as any).referee.id);
+      if (r.error) return res.status(r.status || 400).json({ message: r.error });
+      res.json(r.game);
+    } catch (e: any) {
+      console.error("[cic-ref] timer failed", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // ═══════════════════════ ADMIN (staff session + tab) ══════════════════════
   // Approve referees and assign them to games. Gated by the "cic-referees" tab
   // and scoped to the caller's workspace org (which is the CIC workspace).
@@ -716,6 +790,10 @@ export function registerCicRefereeRoutes(app: Express) {
         awayScore: g.awayScore,
         homePenalties: g.homePenalties,
         awayPenalties: g.awayPenalties,
+        timerPhase: g.timerPhase ?? "pre",
+        timerRunning: g.timerRunning ?? false,
+        timerStartedAt: g.timerStartedAt ?? null,
+        timerBaseSeconds: g.timerBaseSeconds ?? 0,
         assignedReferees: byGame.get(g.id) ?? [],
         lastScoredByRefereeId: g.lastScoredByRefereeId ?? null,
         lastScoredByName: g.lastScoredByRefereeId ? (refName.get(g.lastScoredByRefereeId) ?? null) : null,
@@ -726,6 +804,19 @@ export function registerCicRefereeRoutes(app: Express) {
     } catch (e: any) {
       console.error("[cic-ref] game feed failed", e);
       res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Match timer — admin/office (Isaac/Rolof from the Game Feed's Score Game).
+  // Same state machine, session + tournaments tab instead of the referee token.
+  app.post("/api/admin/cic/games/:id/timer", requireAuth, schedTab, async (req, res) => {
+    try {
+      const r = await applyTimerAction(parseInt(String(req.params.id), 10), String(req.body?.action || ""), null);
+      if (r.error) return res.status(r.status || 400).json({ message: r.error });
+      res.json(r.game);
+    } catch (e: any) {
+      console.error("[cic-ref] admin timer failed", e);
+      res.status(400).json({ message: e.message });
     }
   });
 

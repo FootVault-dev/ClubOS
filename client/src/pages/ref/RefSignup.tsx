@@ -11,6 +11,7 @@ import { Award, CheckCircle2, Flag, Goal, Loader2, ShieldCheck, Smartphone, Spar
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { refPost, RefApiError } from "./ref-api";
+import { useCicBrand } from "./useCicBrand";
 
 const GOLD = "#C9A43E";
 const INK = "#0E0E10";
@@ -58,6 +59,7 @@ const WHAT_YOU_DO: { icon: typeof Flag; title: string; body: string }[] = [
 ];
 
 export default function RefSignup() {
+  useCicBrand();
   const [, navigate] = useLocation();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");

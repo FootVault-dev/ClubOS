@@ -14,17 +14,16 @@ import {
   ArrowLeft,
   Award,
   Check,
-  Flag,
   Loader2,
   Minus,
   Plus,
-  Radio,
   Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import MatchTimer from "@/components/match-timer";
 import {
   refDelete,
   refGameQueryKey,
@@ -41,7 +40,9 @@ import {
   type RefMvpVote,
   type RefPlayer,
   type RefShootoutKick,
+  type RefTimerAction,
 } from "./ref-api";
+import { useCicBrand } from "./useCicBrand";
 
 const GOLD = "#C9A43E";
 const INK = "#141511";
@@ -60,6 +61,7 @@ function errDesc(e: any): string {
 
 // ═══════════════════════════ Page ══════════════════════════════════════════
 export default function RefGameDetail() {
+  useCicBrand();
   const [, params] = useRoute("/ref/game/:id");
   const [, navigate] = useLocation();
   const id = params?.id ? parseInt(params.id, 10) : NaN;
@@ -76,7 +78,7 @@ export default function RefGameDetail() {
   if (isLoading) return <StatusScreen loading />;
   if (isError || !data) return <StatusScreen message={(error as any)?.message || "Couldn't load this game."} onBack={goBack} />;
 
-  const { game, teams, goals, cards, mvpVotes, gkRatings, shootout, players } = data;
+  const { game, teams, goals, cards, mvpVotes, gkRatings, shootout, players, halfLengthMinutes, breakMinutes } = data;
   const homeTeam = teams.find((t) => t.id === game.homeTeamId);
   const awayTeam = teams.find((t) => t.id === game.awayTeamId);
   const homeName = homeTeam?.name || game.homeTeamPlaceholder || "Home";
@@ -90,6 +92,7 @@ export default function RefGameDetail() {
       <style>{FONT_STYLE}</style>
       <TopBar game={game} homeName={homeName} awayName={awayName} onBack={goBack} />
       <div className="px-4 pt-4 space-y-4">
+        <TimerSection game={game} halfLengthMinutes={halfLengthMinutes} breakMinutes={breakMinutes} gameId={id} />
         <ScoreCard game={game} homeName={homeName} awayName={awayName} gameId={id} gameFetching={isFetching} />
         <GoalsCard
           game={game}
@@ -156,6 +159,39 @@ function StatusScreen({ loading, message, onBack }: { loading?: boolean; message
         </>
       )}
     </div>
+  );
+}
+
+// ── Live match timer ("Score Game") — owns starting/pausing/finishing the
+// game; ScoreCard below keeps only the score steppers. ─────────────────────
+function TimerSection({
+  game,
+  halfLengthMinutes,
+  breakMinutes,
+  gameId,
+}: {
+  game: RefGameFull;
+  halfLengthMinutes: number;
+  breakMinutes: number;
+  gameId: number;
+}) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const key = refGameQueryKey(gameId);
+
+  const timerMut = useMutation({
+    mutationFn: (action: RefTimerAction) => refPost(`/api/public/cic-referees/games/${gameId}/timer`, { action }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: key }),
+    onError: (e: any) => toast({ title: "Couldn't update the timer", description: errDesc(e), variant: "destructive" }),
+  });
+
+  return (
+    <MatchTimer
+      game={game}
+      halfLengthMinutes={halfLengthMinutes}
+      breakMinutes={breakMinutes}
+      onAction={(action) => timerMut.mutate(action)}
+    />
   );
 }
 
@@ -371,18 +407,11 @@ function ScoreCard({
   });
 
   const busy = patchMut.isPending || gameFetching;
-  const bothSet = game.homeScore != null && game.awayScore != null;
 
   const bump = (side: "home" | "away", delta: number) => {
     const current = (side === "home" ? game.homeScore : game.awayScore) ?? 0;
     const next = Math.max(0, current + delta);
     patchMut.mutate(side === "home" ? { homeScore: next } : { awayScore: next });
-  };
-
-  const markFinal = () => {
-    if (!bothSet) return;
-    if (!window.confirm(`Mark this game FINAL — ${homeName} ${game.homeScore} – ${game.awayScore} ${awayName}? This locks the result in.`)) return;
-    patchMut.mutate({ status: "final" });
   };
 
   return (
@@ -405,45 +434,6 @@ function ScoreCard({
           );
         })}
       </div>
-
-      <button
-        type="button"
-        role="switch"
-        aria-checked={game.isLive}
-        onClick={() => patchMut.mutate({ isLive: !game.isLive })}
-        disabled={busy}
-        className="mt-4 w-full h-11 rounded-xl flex items-center justify-center gap-2 text-sm font-bold disabled:opacity-50"
-        style={
-          game.isLive
-            ? { background: "rgba(239,68,68,0.15)", color: "#f87171", border: "1px solid rgba(239,68,68,0.4)" }
-            : { background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.1)" }
-        }
-      >
-        <Radio className="h-4 w-4" /> {game.isLive ? "Live now — tap to stop" : "Go live"}
-      </button>
-
-      <Button
-        onClick={markFinal}
-        disabled={!bothSet || game.status === "final" || busy}
-        className="mt-2.5 w-full h-11 rounded-xl text-sm font-bold border-none"
-        style={{
-          background: game.status === "final" ? "rgba(255,255,255,0.06)" : GOLD,
-          color: game.status === "final" ? "rgba(255,255,255,0.4)" : INK,
-        }}
-      >
-        {game.status === "final" ? (
-          <span className="flex items-center gap-1.5">
-            <Flag className="h-4 w-4" /> Final
-          </span>
-        ) : (
-          "Mark final"
-        )}
-      </Button>
-      {!bothSet && game.status !== "final" && (
-        <p className="mt-2 text-[11px] text-center" style={{ color: "rgba(255,255,255,0.35)" }}>
-          Set both scores before marking final.
-        </p>
-      )}
     </section>
   );
 }

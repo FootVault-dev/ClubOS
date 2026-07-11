@@ -1311,6 +1311,13 @@ export const tournamentGames = pgTable("tournament_games", {
   // game. FK ON DELETE SET NULL — removing a referee never erases the history.
   lastScoredByRefereeId: integer("last_scored_by_referee_id").references(() => cicReferees.id, { onDelete: "set null" }),
   lastScoredAt: timestamp("last_scored_at"),
+  // Live match timer (Score Game). Phase machine; the clock is DERIVED, never
+  // stored ticking. first_half/second_half count UP to the half length
+  // (tournament game_duration_minutes); half_time counts DOWN from the break.
+  timerPhase: text("timer_phase").notNull().default("pre"), // pre|first_half|half_time|second_half|finished
+  timerRunning: boolean("timer_running").notNull().default(false),
+  timerStartedAt: timestamp("timer_started_at"),
+  timerBaseSeconds: integer("timer_base_seconds").notNull().default(0),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
