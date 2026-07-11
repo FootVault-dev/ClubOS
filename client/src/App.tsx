@@ -529,10 +529,16 @@ function App() {
                 const isVenueHost = host.startsWith("book.");
                 const isPrintHost = host.startsWith("order.") || host.includes("unitedprints.co.nz");
                 const isMflHost = host.includes("minifootball");
+                // ref.cicyouth.com = the referee platform (login/signup/dashboard).
+                // MUST come before the cicyouth check below — otherwise the
+                // "cicyouth" substring sends ref.cicyouth.com to the Skills
+                // Challenge page. join.cicyouth.com stays Skills Challenge.
+                const isRefHost = host.startsWith("ref.");
                 const isCicHost = host.includes("cicyouth");
                 if (isVenueHost) return <VenueBookPage />;
                 if (isPrintHost) return <PrintHub />;
                 if (isMflHost) return <Redirect to="/league" />;
+                if (isRefHost) return <Redirect to="/ref" />;
                 if (isCicHost) return <Redirect to="/skills" />;
                 return <Redirect to={isAdminHost ? "/admin/login" : "/fundamentals-camp"} />;
               })()}
