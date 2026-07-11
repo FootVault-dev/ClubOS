@@ -1073,7 +1073,11 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                   )}
                 </td>
                 <td className="px-1 py-2.5">
-                  {game.status === "final" ? (
+                  {/* A confirmed (final) score is read-only until the row is put in edit
+                      mode via the pencil — then the inputs reappear so an admin can
+                      correct a mis-entered score. Fixing it stays 'final' and re-runs
+                      bracket resolution on save (server PATCH is unguarded by design). */}
+                  {game.status === "final" && !isEditing ? (
                     <div className="flex flex-col items-center">
                       <div className="flex items-center justify-center gap-1">
                         <span className="text-sm font-bold text-white/90 w-6 text-right">{game.homeScore}</span>
@@ -1140,7 +1144,8 @@ function ScheduleTab({ tournament }: { tournament: Tournament }) {
                     ) : (
                       <button
                         onClick={() => startEditing(game)}
-                        className="w-6 h-6 flex items-center justify-center rounded-md text-white/15 hover:text-white/40 hover:bg-white/5"
+                        className={`w-6 h-6 flex items-center justify-center rounded-md hover:bg-white/5 ${game.status === "final" ? "text-blue-400/40 hover:text-blue-400/80" : "text-white/15 hover:text-white/40"}`}
+                        title={game.status === "final" ? "Edit time, field & correct the score" : "Edit time, field & score"}
                         data-testid={`button-edit-game-${game.id}`}
                       >
                         <Pencil className="w-3 h-3" />
