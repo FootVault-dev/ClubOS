@@ -116,6 +116,13 @@ app.use(attributionCookieMiddleware);
   const { registerContentMarketplaceRoutes } = await import("./content-marketplace-routes");
   registerContentMarketplaceRoutes(app);
 
+  // CIC referee scoring — referees score their CIC games from their phones.
+  // Public referee sign-up/login + token-scoped scoring endpoints (resolve CIC
+  // org 5 server-side, never a staff session); admin approval + assignment gated
+  // by requireTab("cic-referees") in the CIC workspace.
+  const { registerCicRefereeRoutes } = await import("./cic-referee-routes");
+  registerCicRefereeRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).

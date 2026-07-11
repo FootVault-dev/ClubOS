@@ -136,6 +136,9 @@ const tournamentTabs: TabDef[] = [
   // Content Marketplace — live sales + engagement analytics for the CIC photo
   // store (content.cicyouth.com). Read-only dashboard; data in usg-meet.
   { slug: "cic-content-marketplace", title: "Content Marketplace", url: "/admin/cic-content-marketplace" },
+  // Referees — approve referee sign-ups + assign them to games. NOT super-admin
+  // locked: CIC tournament staff approve refs during the event.
+  { slug: "cic-referees", title: "Referees", url: "/admin/cic-referees" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },

@@ -1305,6 +1305,11 @@ export const tournamentGames = pgTable("tournament_games", {
   awayScore: integer("away_score"),
   homePenalties: integer("home_penalties"),
   awayPenalties: integer("away_penalties"),
+  // Referee scoring app: which referee last saved a score here, and when. Set
+  // server-side on every referee write so the office always knows who touched a
+  // game. FK ON DELETE SET NULL — removing a referee never erases the history.
+  lastScoredByRefereeId: integer("last_scored_by_referee_id").references(() => cicReferees.id, { onDelete: "set null" }),
+  lastScoredAt: timestamp("last_scored_at"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -1373,6 +1378,41 @@ export const tournamentPenaltyKicks = pgTable("tournament_penalty_kicks", {
   playerId: integer("player_id").references(() => tournamentPlayers.id, { onDelete: "set null" }), // optional taker
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ── CIC referee accounts (match scoring) ──────────────────────────────────────
+// Referees are a SEPARATE identity from ClubOS staff `users`: they must never
+// hold a staff session, because many /api/admin/* routes carry no org check. A
+// referee credential (an HMAC token carrying a referee id, see
+// server/cic-referee-routes.ts) only ever reaches the CIC referee scoring
+// endpoints. Public signup writes a 'pending' row; a CIC staffer approves it
+// before it can log in. Statuses validated in shared/referees.ts (no DB enum).
+export const cicReferees = pgTable("cic_referees", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  status: text("status").notNull().default("pending"), // pending | approved | suspended | declined
+  approvedBy: integer("approved_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at"),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Soft assignment of a referee to a game — drives the ref's default "My games"
+// view. Any approved ref can still score any CIC game (flexibility as fixtures
+// shift); assignment is organisation + accountability, not a hard lock. The
+// case-insensitive one-account-per-email index lives in the migration SQL.
+export const cicRefereeAssignments = pgTable("cic_referee_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  refereeId: integer("referee_id").notNull().references(() => cicReferees.id, { onDelete: "cascade" }),
+  gameId: integer("game_id").notNull().references(() => tournamentGames.id, { onDelete: "cascade" }),
+  assignedBy: integer("assigned_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqAssignment: unique().on(t.refereeId, t.gameId),
+}));
 
 export const analyticsEvents = pgTable("analytics_events", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),

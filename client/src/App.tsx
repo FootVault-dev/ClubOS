@@ -105,6 +105,10 @@ import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
 import CicWatch from "@/pages/cic-watch";
 import ContentMarketplace from "@/pages/content-marketplace";
+import CicReferees from "@/pages/cic-referees";
+import RefHome from "@/pages/ref/RefHome";
+import RefSignup from "@/pages/ref/RefSignup";
+import RefGameDetail from "@/pages/ref/RefGameDetail";
 import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
 import CugcFreeSessions from "@/pages/cugc-free-sessions";
@@ -327,6 +331,7 @@ function AdminRouter() {
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/cic-watch" component={CicWatch} />
         <Route path="/admin/cic-content-marketplace" component={ContentMarketplace} />
+        <Route path="/admin/cic-referees" component={CicReferees} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -540,6 +545,11 @@ function App() {
                 precede the 2-segment /:slug/* and 1-segment /:slug routes. */}
             <Route path="/p/:token" component={StudioPublicPage} />
             <Route path="/studio-preview" component={StudioPreviewPage} />
+            {/* CIC referee scoring — the mobile app referees use to score their
+                games. Referee token-auth (never a staff session); same-origin. */}
+            <Route path="/ref/signup" component={RefSignup} />
+            <Route path="/ref/game/:id" component={RefGameDetail} />
+            <Route path="/ref" component={RefHome} />
             <Route path="/book" component={VenueBookPage} />
             <Route path="/book/success" component={VenueBookSuccess} />
             <Route path="/book/split/:code" component={VenueSplitPage} />

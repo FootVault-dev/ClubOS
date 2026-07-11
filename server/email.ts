@@ -1925,3 +1925,70 @@ export async function sendHiringApplicationNotification(params: {
     html,
   });
 }
+
+// ── CIC referee accounts ──────────────────────────────────────────────────────
+const REFEREE_NOTIFY_TO = process.env.CIC_REFEREE_NOTIFY_EMAIL || "info@cicyouth.com";
+const REFEREE_APP_BASE = (process.env.REFEREE_APP_URL || "https://app.usg.co.nz").replace(/\/+$/, "");
+
+// Heads-up to CIC staff that someone signed up to referee — so they can approve
+// them promptly in the ClubOS Referees tab. Best-effort; never blocks signup.
+export async function sendRefereeSignupNotification(params: {
+  orgId: number;
+  refereeName: string;
+  email: string;
+  phone: string;
+}): Promise<boolean> {
+  const link = `${REFEREE_APP_BASE}/admin/cic-referees`;
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width:600px; margin:0 auto; background:#ffffff;">
+    <div style="background:#0e0e10; padding:26px 28px;">
+      <div style="color:#c9a43e; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;">New referee sign-up</div>
+      <div style="color:#ffffff; font-size:22px; font-weight:700; margin-top:6px;">${hiringEscape(params.refereeName)}</div>
+    </div>
+    <div style="padding:24px 28px;">
+      <table style="width:100%; border-collapse:collapse;">
+        <tr><td style="color:#8a8a8a; font-size:13px; padding:6px 0;">Email</td><td style="color:#0c0c0c; font-size:14px; padding:6px 0;"><a href="mailto:${hiringEscape(params.email)}" style="color:#946a00;">${hiringEscape(params.email)}</a></td></tr>
+        <tr><td style="color:#8a8a8a; font-size:13px; padding:6px 0;">Phone</td><td style="color:#0c0c0c; font-size:14px; padding:6px 0;"><a href="tel:${hiringEscape(params.phone)}" style="color:#946a00;">${hiringEscape(params.phone)}</a></td></tr>
+      </table>
+      <div style="color:#5b5b5b; font-size:13px; margin-top:16px;">They can't score anything until you approve them.</div>
+      <div style="margin-top:22px;">
+        <a href="${link}" style="display:inline-block; background:#c9a43e; color:#0e0e10; text-decoration:none; font-weight:700; font-size:14px; padding:12px 22px; border-radius:999px;">Review in ClubOS</a>
+      </div>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: REFEREE_NOTIFY_TO,
+    from: fromForOrg(params.orgId, "Christchurch International Cup"),
+    replyTo: params.email,
+    subject: `New CIC referee sign-up — ${params.refereeName}`,
+    html,
+  });
+}
+
+// Tell an approved referee they're in, with the link to sign in and score.
+export async function sendRefereeApprovedEmail(params: {
+  orgId: number;
+  to: string;
+  refereeName: string;
+}): Promise<boolean> {
+  const link = `${REFEREE_APP_BASE}/ref`;
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width:600px; margin:0 auto; background:#ffffff;">
+    <div style="background:#0e0e10; padding:26px 28px;">
+      <div style="color:#c9a43e; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;">You're approved</div>
+      <div style="color:#ffffff; font-size:22px; font-weight:700; margin-top:6px;">CIC Referee Scoring</div>
+    </div>
+    <div style="padding:24px 28px;">
+      <div style="color:#0c0c0c; font-size:15px; line-height:1.6;">Hi ${hiringEscape(params.refereeName)},</div>
+      <div style="color:#3a3a3a; font-size:14px; line-height:1.7; margin-top:10px;">Your referee account is active. You can now sign in and score your Christchurch International Cup games from your phone — score, goalscorers, cards, MVP, golden glove and penalty shootouts, all in one place.</div>
+      <div style="margin-top:22px;">
+        <a href="${link}" style="display:inline-block; background:#c9a43e; color:#0e0e10; text-decoration:none; font-weight:700; font-size:15px; padding:13px 26px; border-radius:999px;">Open referee scoring</a>
+      </div>
+      <div style="color:#8a8a8a; font-size:12px; margin-top:18px;">Sign in with the email and password you used to sign up. Tip: add the page to your home screen for one-tap access.</div>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: fromForOrg(params.orgId, "Christchurch International Cup"),
+    subject: "You're approved — CIC referee scoring",
+    html,
+  });
+}
