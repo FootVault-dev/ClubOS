@@ -6,7 +6,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { tabsForOrgSlug, canAccessTab } from "@shared/tabs";
 import {
   Search, Send, Building2, Landmark, FileSignature, Crown, ClipboardCheck, UsersRound,
-  Trophy, Printer, Inbox, Sparkles, Calendar, MapPin, Tag, Users, GraduationCap,
+  Trophy, Printer, Inbox, Sparkles, Calendar, MapPin, Tag, Users, User, GraduationCap,
   CornerDownLeft, ArrowUp, ArrowDown, LayoutDashboard,
 } from "lucide-react";
 
@@ -26,6 +26,7 @@ const TYPE_META: Record<string, TypeMeta> = {
   task:             { label: "Tasks",                icon: ClipboardCheck, ws: "united-sports-group", url: () => `/admin/projects` },
   league_team:      { label: "League teams",         icon: UsersRound,     ws: "mini-football-leagues", url: () => `/admin/teams` },
   tournament_team:  { label: "Tournament teams",     icon: Trophy,         ws: "christchurch-international-cup", url: r => r.meta ? `/admin/tournaments/${r.meta}` : `/admin/tournaments` },
+  tournament_player:{ label: "Players",              icon: User,           ws: "christchurch-international-cup", url: r => { const [tid, teamId] = (r.meta || "").split(":"); return tid && teamId ? `/admin/tournaments/${tid}/teams/${teamId}` : `/admin/tournaments`; } },
   club:             { label: "Clubs",                icon: Trophy,         ws: "christchurch-international-cup", url: r => `/admin/clubs/${r.id}` },
   print_order:      { label: "Print orders",         icon: Printer,        ws: "united-prints",       url: r => `/admin/print-orders/${r.id}` },
   print_contact:    { label: "Print CRM",            icon: Printer,        ws: "united-prints",       url: () => `/admin/print-crm` },
@@ -41,7 +42,7 @@ const TYPE_META: Record<string, TypeMeta> = {
   registration:     { label: "Registrations",        icon: ClipboardCheck, ws: "christchurch-united", url: () => `/admin/registrations` },
 };
 
-type SearchItem = { type: string; id: string; label: string; sublabel: string | null; meta: string | null; orgId: number | null; orgSlug: string | null; score: number };
+type SearchItem = { type: string; id: string; label: string; sublabel: string | null; meta: string | null; image?: string | null; orgId: number | null; orgSlug: string | null; score: number };
 type SearchGroup = { type: string; items: SearchItem[]; best: number };
 type NavItem = { title: string; url: string };
 
@@ -186,7 +187,7 @@ export function CommandPalette() {
                   const i = idx;
                   return (
                     <Row key={`${it.type}-${it.id}`} active={i === active} onClick={() => activate(i)} onHover={() => setActive(i)}
-                      icon={<Icon className="w-4 h-4 text-blue-400/70" />} label={it.label} sublabel={it.sublabel}
+                      icon={<Icon className="w-4 h-4 text-blue-400/70" />} image={it.image} label={it.label} sublabel={it.sublabel}
                       badge={it.orgSlug && it.orgSlug !== currentOrg?.slug ? shortWs(it.orgSlug) : undefined} />
                   );
                 })}
@@ -217,17 +218,24 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     </div>
   );
 }
-function Row({ active, onClick, onHover, icon, label, sublabel, badge }: {
+function Row({ active, onClick, onHover, icon, image, label, sublabel, badge }: {
   active: boolean; onClick: () => void; onHover: () => void; icon: React.ReactNode;
-  label: string; sublabel?: string | null; badge?: string;
+  image?: string | null; label: string; sublabel?: string | null; badge?: string;
 }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImg = !!image && !imgFailed;
   return (
     <button
       onClick={onClick}
       onMouseMove={onHover}
       className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${active ? "bg-blue-600/25" : "hover:bg-white/[0.04]"}`}
     >
-      <span className="shrink-0">{icon}</span>
+      <span className="shrink-0">
+        {showImg
+          ? <img src={image!} alt="" width={20} height={20} loading="lazy" onError={() => setImgFailed(true)}
+              className="w-5 h-5 rounded object-cover ring-1 ring-white/10 bg-white/5" />
+          : icon}
+      </span>
       <span className="min-w-0 flex-1">
         <span className="block text-[13px] text-white/90 truncate">{label}</span>
         {sublabel && <span className="block text-[11px] text-white/35 truncate">{sublabel}</span>}
