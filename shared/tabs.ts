@@ -176,6 +176,7 @@ const groupTabs: TabDef[] = [
   { slug: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship" },
   { slug: "proposals", title: "Proposals", url: "/admin/proposals" },
   { slug: "grants", title: "Grants", url: "/admin/grants" },
+  { slug: "invoices", title: "Invoices", url: "/admin/invoices" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
   { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
   { slug: "vehicles", title: "Vehicles", url: "/admin/vehicles" },
@@ -194,6 +195,7 @@ const printsTabs: TabDef[] = [
   { slug: "orders", title: "Orders", url: "/admin/print-orders" },
   { slug: "materials", title: "Materials", url: "/admin/print-materials" },
   { slug: "crm", title: "CRM", url: "/admin/print-crm" },
+  { slug: "sales", title: "Sales", url: "/admin/print-sales" },
   { slug: "print-livechat", title: "Live Chat", url: "/admin/print-livechat" },
   { slug: "projects", title: "Projects", url: "/admin/print-projects" },
   { slug: "analytics", title: "Analytics", url: "/admin/print-analytics" },
@@ -261,7 +263,13 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "cic-watch", // OTT streaming platform control (watch.cicyouth.com) — launched dark to Daniel. Remove to open to Isaac/managers.
   "club-dossier", // Sandbox — first-party people intelligence (PII across all programs). Daniel only.
   "market-research", // Sandbox — competitor & category intelligence. Daniel only while it's shaped.
+  "invoices", // Tracked invoices — carries bank details. Daniel only while it's shaped.
   "vehicles", // Fleet — names a staff member against an insurance policy and an FBT private-use position. Daniel only. Remove to open to admins/managers.
+  // The United Print prospect database + sales pipeline: 400+ researched
+  // companies with contact details, call notes and deal values. Daniel's
+  // sales-training ground — launched dark while he shapes it. Remove this
+  // line to open Sales to the Print workspace's admins/managers.
+  "sales",
   // Residency housing: tenants' names, phone numbers, rent arrears and bond.
   // Without this lock, every *admin* of the venue workspace (socials@, info@cugc,
   // grassroots@, support@) would see it — the tabs whitelist does not restrain a

@@ -97,6 +97,11 @@ app.use(attributionCookieMiddleware);
   const { registerHiringRoutes } = await import("./hiring-routes");
   registerHiringRoutes(app);
 
+  // USG Invoices — tracked, payable invoices (org 7, super-admin only). Admin
+  // side is gated by requireTab("invoices"); public endpoints are CORS-allow-
+  // listed to usg-invoices.vercel.app and carry no session.
+  const { registerInvoiceRoutes } = await import("./invoice-routes");
+  registerInvoiceRoutes(app);
   // Fleet — company vehicles, assignments, insurance, servicing, running costs.
   // Gated by requireTab("vehicles"), which is in SUPER_ADMIN_ONLY_TABS: the
   // records tie a named staff member to an insurance policy and an FBT
@@ -109,6 +114,12 @@ app.use(attributionCookieMiddleware);
   // venue workspace. No public surface: rent arrears are not a public fact.
   const { registerHousingRoutes } = await import("./housing-routes");
   registerHousingRoutes(app);
+
+  // Sales — the United Print prospect database + pipeline (prints workspace).
+  // Gated by requireTab("sales"), which is in SUPER_ADMIN_ONLY_TABS while
+  // Daniel shapes it. No public surface: a prospect list is a sales asset.
+  const { registerSalesRoutes } = await import("./sales-routes");
+  registerSalesRoutes(app);
 
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;

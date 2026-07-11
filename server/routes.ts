@@ -25,6 +25,7 @@ import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNot
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
+import { markInvoicePaidByPaymentIntent } from "./invoice-routes";
 import * as rewards from "./rewards";
 import * as loyalty from "./loyalty";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -4427,6 +4428,40 @@ export async function registerRoutes(
     return result.rows as any[];
   };
 
+  // Tournament players. Not in SEARCH_ENTITIES because a useful result needs a
+  // join (team → club → tournament) for the club logo + age group + team name,
+  // and org-scoping goes through the tournament's org, not a column on the player.
+  // Child PII → never leadership-global: only members of the tournament's
+  // workspace (and super admins) can surface a player. Deep-links to the team
+  // roster via meta = "{tournamentId}:{teamId}".
+  const runPlayerSearch = async (q: string, like: string, orgIds: number[], isSuperAdmin: boolean, perLimit: number) => {
+    if (!isSuperAdmin && orgIds.length === 0) return [];
+    const fullName = sql`(p.first_name || ' ' || p.last_name)`;
+    const score = sql`GREATEST(
+      similarity(lower(p.first_name), lower(${q})),
+      similarity(lower(p.last_name), lower(${q})),
+      similarity(lower(${fullName}), lower(${q})))`;
+    let where = sql`(p.first_name ILIKE ${like} OR p.last_name ILIKE ${like} OR ${fullName} ILIKE ${like} OR (${score}) >= 0.2)`;
+    if (!isSuperAdmin) where = sql`${where} AND t.organization_id IN (${sql.join(orgIds.map(i => sql`${i}`), sql`, `)})`;
+    const query = sql`
+      SELECT 'tournament_player'::text AS type, p.id::text AS id,
+             (${fullName})::text AS label,
+             (COALESCE(NULLIF(t.age_group, ''), t.name) || ' · ' || tt.name)::text AS sublabel,
+             (t.id::text || ':' || tt.id::text) AS meta,
+             t.organization_id AS org_id,
+             COALESCE(NULLIF(tt.logo_url, ''), NULLIF(c.logo_url, '')) AS image,
+             (${score}) AS score
+      FROM tournament_players p
+      JOIN tournament_teams tt ON tt.id = p.team_id
+      JOIN tournaments t ON t.id = tt.tournament_id
+      LEFT JOIN clubs c ON c.id = tt.club_id
+      WHERE ${where}
+      ORDER BY score DESC NULLS LAST
+      LIMIT ${perLimit}`;
+    const result = await db.execute(query);
+    return result.rows as any[];
+  };
+
   app.get("/api/search", requireAuth, async (req, res) => {
     try {
       const q = String(req.query.q || "").trim();
@@ -4446,14 +4481,21 @@ export async function registerRoutes(
         for (const o of allOrgs) orgSlugById[o.id] = o.slug;
       }
       const entities = SEARCH_ENTITIES.filter(e => (e.leadershipOnly ? isLeadership : true));
-      const settled = await Promise.allSettled(entities.map(e => runEntitySearch(e, q, like, orgIds, isSuperAdmin, 6)));
+      // Generic single-table entities + the join-backed tournament-player search,
+      // run together. `label` per task so a rejection logs which one failed.
+      const tasks: Array<{ label: string; run: Promise<any[]> }> = [
+        ...entities.map(e => ({ label: e.type, run: runEntitySearch(e, q, like, orgIds, isSuperAdmin, 6) })),
+        { label: "tournament_player", run: runPlayerSearch(q, like, orgIds, isSuperAdmin, 6) },
+      ];
+      const settled = await Promise.allSettled(tasks.map(t => t.run));
       const byType: Record<string, any[]> = {};
       settled.forEach((s, i) => {
-        if (s.status === "rejected") { console.error("[search]", entities[i].type, s.reason?.message); return; }
+        if (s.status === "rejected") { console.error("[search]", tasks[i].label, s.reason?.message); return; }
         for (const r of s.value) {
           (byType[r.type] ||= []).push({
             type: r.type, id: r.id, label: r.label || "(untitled)", sublabel: r.sublabel || null,
             meta: r.meta || null,
+            image: r.image || null,
             orgId: r.org_id != null ? Number(r.org_id) : null,
             orgSlug: r.org_id != null ? (orgSlugById[Number(r.org_id)] || null) : null,
             score: r.score == null ? 0 : Number(r.score),
@@ -15396,6 +15438,10 @@ export async function registerRoutes(
           // without this guard the generic registrationId branch below would treat
           // a membership payment as a camp registration. Idempotent.
           await finalizeMembershipPayment(Number(paymentIntent.metadata.memberId), paymentIntent.id);
+        } else if (paymentIntent.metadata?.kind === "invoice" && paymentIntent.metadata?.invoiceToken) {
+          // USG Invoices — card payment on a tracked invoice. Idempotent
+          // (atomic status-flip guard inside), so a webhook retry is a no-op.
+          await markInvoicePaidByPaymentIntent(paymentIntent);
         } else if (regType === "league_balance" && registrationId) {
           // MFL instalment balance collected.
           await handleLeagueBalanceSuccess(registrationId, paymentIntent.id);

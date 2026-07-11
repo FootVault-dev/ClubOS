@@ -56,6 +56,7 @@ import GroupCalendar from "@/pages/group-calendar";
 import GroupSponsorship from "@/pages/group-sponsorship";
 import GroupProposals from "@/pages/group-proposals";
 import GroupGrants from "@/pages/group-grants";
+import GroupInvoices from "@/pages/invoices";
 import AdminLicensing from "@/pages/admin-licensing";
 import AdminEvents from "@/pages/admin-events";
 import AdminMembership from "@/pages/admin-membership";
@@ -141,6 +142,7 @@ import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
 import PrintsCRM from "@/pages/prints-crm";
+import PrintsSales from "@/pages/prints-sales";
 import PrintsOrders from "@/pages/prints-orders";
 import PrintsProjects from "@/pages/prints-projects";
 import PrintsAnalytics from "@/pages/prints-analytics";
@@ -226,6 +228,7 @@ function AdminRouter() {
         <Route path="/admin/print-orders" component={PrintsOrders} />
         <Route path="/admin/print-materials" component={PrintsMaterials} />
         <Route path="/admin/print-crm" component={PrintsCRM} />
+        <Route path="/admin/print-sales" component={PrintsSales} />
         <Route path="/admin/print-projects" component={PrintsProjects} />
         <Route path="/admin/print-analytics" component={PrintsAnalytics} />
         <Route path="/admin/print-landing" component={PrintsLanding} />
@@ -257,6 +260,7 @@ function AdminRouter() {
         <Route path="/admin/sponsorship" component={GroupSponsorship} />
         <Route path="/admin/proposals" component={GroupProposals} />
         <Route path="/admin/grants" component={GroupGrants} />
+        <Route path="/admin/invoices" component={GroupInvoices} />
         <Route path="/admin/budget/cost-centres/:slug" component={GroupBudgetCostCentre} />
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
