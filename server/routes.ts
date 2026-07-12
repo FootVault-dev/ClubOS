@@ -86,6 +86,8 @@ import { mountMcpServer } from "./mcp";
 import { CURRENT_LOGO_LICENCE, canonicalConsentText } from "./logo-licence";
 import { buildLogoLicencePdf } from "./logo-licence-pdf";
 import { PDFDocument as PdfLibDocument } from "pdf-lib";
+import { registerShopRoutes, finalizeShopOrderPaid, finalizeShopSharePaid } from "./shop-routes";
+import { registerMediaRoutes } from "./media-routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -15485,6 +15487,28 @@ export async function registerRoutes(
             console.error("[Stripe Webhook] Print order handler failed:", e);
           }
         }
+        // Shop order branch (MFL Store) — detected by metadata.shopOrderId,
+        // mirroring the print-orders branch above. Finalize is idempotent
+        // (atomic pending→paid gate), so webhook retries and the client
+        // confirm fallback can't double-fire stock/emails/Purchase.
+        const shopOrderId = parseInt(pi.metadata?.shopOrderId);
+        const shopShareId = parseInt(pi.metadata?.shopShareId);
+        if (shopShareId) {
+          // Player Pay share (shopOrderId is also in the metadata, so check
+          // the share FIRST) — finalize is idempotent; the last share paid
+          // flips the whole order awaiting_players → paid.
+          try {
+            await finalizeShopSharePaid(shopShareId, pi.id);
+          } catch (e) {
+            console.error("[Stripe Webhook] Shop share handler failed:", e);
+          }
+        } else if (shopOrderId) {
+          try {
+            await finalizeShopOrderPaid(shopOrderId, pi.id);
+          } catch (e) {
+            console.error("[Stripe Webhook] Shop order handler failed:", e);
+          }
+        }
       } else if (event.type === "invoice.paid") {
         // Weekly subscription invoice succeeded. Advance the next pending
         // booking for that subscription → 'paid'.
@@ -21780,6 +21804,14 @@ export async function registerRoutes(
       res.json(buildCashflowInsight());
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+
+  // Shop — native e-commerce module (MFL Store pilot). All routes live in
+  // server/shop-routes.ts; the only other touchpoint is the webhook branch above.
+  registerShopRoutes(app);
+
+  // CIC Media Library — staff photo/video uploads + public catalog API. All
+  // routes live in server/media-routes.ts.
+  registerMediaRoutes(app);
 
   return httpServer;
 }
