@@ -180,6 +180,10 @@ const groupTabs: TabDef[] = [
   { slug: "budget", title: "Budget", url: "/admin/budget" },
   { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
   { slug: "vehicles", title: "Vehicles", url: "/admin/vehicles" },
+  // How much website traffic we send sponsors via tracked /s/{code} redirects,
+  // plus a sponsor-site health check. Launched dark (SUPER_ADMIN_ONLY_TABS)
+  // while Daniel shapes it.
+  { slug: "sponsor-traffic", title: "Sponsor Traffic", url: "/admin/sponsor-traffic" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },
@@ -276,6 +280,10 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // workspace admin. Same class of data as budget/cashflow. Remove this line to
   // open Housing to venue admins and managers.
   "housing",
+  // Sponsor Traffic — launched dark while Daniel shapes it, matching how
+  // vehicles/housing/market-research were launched. Remove this line to open
+  // it to the Group workspace's admins/managers.
+  "sponsor-traffic",
 ]);
 
 /**

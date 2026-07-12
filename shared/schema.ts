@@ -4159,6 +4159,69 @@ export const insertProposalEventSchema = createInsertSchema(proposalEvents).omit
 export type InsertProposalEvent = z.infer<typeof insertProposalEventSchema>;
 export type ProposalEvent = typeof proposalEvents.$inferSelect;
 
+// ── Sponsor Traffic (group / USG workspace) ───────────────────────────────────
+// Tracks how much website traffic the club sends to its sponsors' sites via
+// tracked redirect links (app.usg.co.nz/s/{shortCode}), plus a sponsor-site
+// health check — born because a sponsor's site went down and we only found out
+// when a friend mentioned it. One row = one PLACEMENT (a sponsor on one brand
+// site) — a shared sponsor (e.g. Moana Skies on both CUFC and SIU) gets a row
+// per brand because the destination URL and tracked link differ per brand.
+export const sponsors = pgTable("sponsors", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  brand: text("brand").notNull(),                 // cufc | siu | mfl | cic | …
+  websiteUrl: text("website_url").notNull(),       // their real destination
+  shortCode: text("short_code").notNull().unique(), // tracked-link code → /s/{shortCode}
+  logoUrl: text("logo_url"),
+  tier: text("tier"),                              // partner | Principal partner | …
+  // Sponsor-site health check — button-triggered (POST .../:id/check or
+  // .../check-all). No cron yet; a daily scheduled sweep is a natural future
+  // enhancement once this proves useful.
+  siteStatus: text("site_status").notNull().default("unknown"), // ok | down | unknown
+  siteStatusCode: integer("site_status_code"),
+  siteCheckedAt: timestamp("site_checked_at"),
+  active: boolean("active").notNull().default(true),
+  notes: text("notes"),
+  openCount: integer("open_count").notNull().default(0), // denormalised (non-internal clicks)
+  lastOpenedAt: timestamp("last_opened_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("sponsors_org_idx").on(t.organizationId),
+  brandIdx: index("sponsors_brand_idx").on(t.brand),
+}));
+
+export const insertSponsorSchema = createInsertSchema(sponsors).omit({ id: true, createdAt: true, updatedAt: true, openCount: true, lastOpenedAt: true });
+export type InsertSponsor = z.infer<typeof insertSponsorSchema>;
+export type Sponsor = typeof sponsors.$inferSelect;
+
+// One row per tracked-link touch on a sponsor's link. Same shape as
+// proposal_events plus `source` — the optional `?src=` query param, so a click
+// can be attributed to the page/section that sent it even if the referrer
+// header is stripped (common on mobile / in-app browsers).
+export const sponsorLinkEvents = pgTable("sponsor_link_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  sponsorId: integer("sponsor_id").notNull().references(() => sponsors.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull().default("click"),
+  visitorId: text("visitor_id"),
+  device: text("device"),                          // mobile | tablet | desktop
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  source: text("source"),                          // from ?src= — which page/section sent it
+  country: text("country"),                         // coarse geo only — no raw IP
+  isInternal: boolean("is_internal").notNull().default(false),
+  metaJson: jsonb("meta_json").$type<Record<string, any> | null>(),
+  occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+}, (t) => ({
+  sponsorOccurredIdx: index("sponsor_link_events_sponsor_idx").on(t.sponsorId, t.occurredAt),
+  sponsorKindIdx: index("sponsor_link_events_kind_idx").on(t.sponsorId, t.kind),
+}));
+
+export const insertSponsorLinkEventSchema = createInsertSchema(sponsorLinkEvents).omit({ id: true, occurredAt: true });
+export type InsertSponsorLinkEvent = z.infer<typeof insertSponsorLinkEventSchema>;
+export type SponsorLinkEvent = typeof sponsorLinkEvents.$inferSelect;
+
 // ── Content Calendar / Media Production (group / USG workspace) ───────────────
 // The media & marketing team's Monday.com-style home. Each content_item runs a
 // production pipeline (idea → scripting → to_shoot → editing → review →
