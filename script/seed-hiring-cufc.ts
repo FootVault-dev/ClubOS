@@ -289,7 +289,83 @@ const CONTENT_CREATOR: Job = {
   ],
 };
 
-const JOBS = [ACADEMY_COACH, PHOTOGRAPHER, CONTENT_CREATOR];
+// ── Club Commentator ─────────────────────────────────────────────────────────
+// Was a one-off campaign advert (two $50 seats, CUFC v Cashmere Technical,
+// 1 Aug 2026, closing 24 Jul — seed-hiring-club-commentator.ts). Daniel,
+// 2026-07-13: hide the pay and drop the fixture — make it a standing "we're
+// building a commentary bench" advert. This upsert replaces that row (same
+// brand+slug); it had ZERO applications at the time, so the question ids were
+// free to change. The FI advert page now redirects here.
+const COMMENTATOR: Job = {
+  slug: "club-commentator",
+  title: "Club Commentator",
+  tagline: "Call Christchurch United's home matches at the United Sports Centre — play-by-play or analysis.",
+  employmentType: "Casual — per match",
+  payLabel: "Discussed at interview",
+  location: "United Sports Centre, Christchurch",
+  positions: 1,
+  closesAt: null,
+  status: OPEN ? "open" : "draft",
+  description: [
+    "Christchurch United broadcasts home matches, and we're building a bench of commentators — people who can call the play, and people who can read the game and analyse it.",
+    "You don't need broadcast experience. You need to know football, hold an audience, and keep talking when the game goes quiet. Teachers, students, coaches, superfans — if you can hold a room, you can learn the booth.",
+    "Selection is by audition, not CV: sixty to ninety seconds of you commentating, one take, unedited. A phone recording is fine.",
+    "When a broadcast is coming up, we offer seats to the bench — you take the ones that suit you.",
+  ].join("\n\n"),
+  questions: [
+    {
+      id: "audition",
+      label: "Your audition — 60 to 90 seconds of commentary",
+      type: "file-or-url",
+      required: true,
+      accept: "audio/*,video/*",
+      help: "Pick any football clip and commentate over it, or record yourself calling a passage of play. One take, unedited. Paste a link or upload audio/video (under 60MB).",
+    },
+    {
+      id: "opening",
+      label: "Write the 30 seconds you'd open a Christchurch United home broadcast with.",
+      type: "textarea",
+      required: true,
+      minLength: 80,
+      maxLength: 800,
+      help: "The teams are walking out at the United Sports Centre. Set the scene.",
+    },
+    {
+      id: "seat",
+      label: "Which seat do you want?",
+      type: "select",
+      required: true,
+      options: ["Play-by-play — calling the action", "Analysis — reading the game", "Either — happy in both"],
+    },
+    {
+      id: "football_background",
+      label: "What's your football background?",
+      type: "textarea",
+      required: true,
+      minLength: 20,
+      maxLength: 800,
+      help: "Playing, coaching, watching obsessively. Anything that means you know the game.",
+    },
+    {
+      id: "experience",
+      label: "Have you commentated or presented before?",
+      type: "textarea",
+      maxLength: 800,
+      help: "Podcasts, school sport, streaming, radio — or nothing yet. Not a dealbreaker.",
+    },
+    {
+      id: "availability",
+      label: "Home matches are mostly Saturdays — how's your availability?",
+      type: "textarea",
+      required: true,
+      minLength: 10,
+      maxLength: 600,
+    },
+    { id: "links", label: "Anything else we should listen to or watch?", type: "url" },
+  ],
+};
+
+const JOBS = [ACADEMY_COACH, PHOTOGRAPHER, CONTENT_CREATOR, COMMENTATOR];
 
 (async () => {
   const { rows: orgs } = await pool.query("SELECT id, name FROM organizations WHERE slug = $1", [ORG_SLUG]);
