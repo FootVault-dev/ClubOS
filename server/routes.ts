@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -4360,6 +4360,273 @@ export async function registerRoutes(
       res.redirect(302, target);
     } catch (error: any) {
       console.error("[/r/:code] error", error);
+      res.status(500).type("html").send("Something went wrong.");
+    }
+  });
+
+  // ============ SPONSOR TRAFFIC (group / USG workspace) ============
+  // Tracks how much website traffic the club sends to its sponsors' sites via
+  // tracked redirect links (app.usg.co.nz/s/{shortCode}), with a per-sponsor
+  // traffic report and a sponsor-site health check. Built because a sponsor's
+  // site went down and we only found out because a friend told us.
+  //
+  // One `sponsors` row = one PLACEMENT (a sponsor on one brand site) — a shared
+  // sponsor (e.g. Moana Skies on both CUFC and SIU) gets a row per brand
+  // because the destination URL and tracked link differ per brand.
+
+  const withProtocol = (url: string): string => {
+    const u = url.trim();
+    return /^https?:\/\//i.test(u) ? u : `https://${u}`;
+  };
+
+  // Deterministic-ish short code for sponsors created from the UI: {brand}-{slug}.
+  // (Seeded sponsors carry their own curated codes straight from the manifest.)
+  const genSponsorCode = (brand: string, name: string): string => {
+    const brandSlug = String(brand || "sponsor").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "sponsor";
+    const nameSlug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 24) || "sponsor";
+    return `${brandSlug}-${nameSlug}`;
+  };
+
+  // Whitelist + coerce the mutable sponsor fields.
+  const pickSponsorFields = (b: any) => {
+    const out: any = {};
+    for (const f of ["name", "brand", "websiteUrl"]) {
+      if (b[f] !== undefined && String(b[f]).trim() !== "") out[f] = String(b[f]).trim();
+    }
+    for (const f of ["tier", "logoUrl", "notes"]) {
+      if (b[f] !== undefined) out[f] = b[f] === null || b[f] === "" ? null : String(b[f]);
+    }
+    if (b.active !== undefined) out.active = !!b.active;
+    return out;
+  };
+
+  // List sponsors for a workspace, each with real click stats (staff/self
+  // clicks excluded) — a 30-day aggregate + all-time total (open_count) + a
+  // 30-day daily breakdown for the leaderboard sparkline.
+  app.get("/api/admin/sponsor-traffic", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(sponsors)
+        .where(eq(sponsors.organizationId, orgId))
+        .orderBy(desc(sponsors.openCount));
+      const ids = rows.map(r => r.id);
+      const statsById: Record<number, any> = {};
+      const byDayBySponsor: Record<number, { day: string; clicks: number }[]> = {};
+      if (ids.length) {
+        const agg = await db.execute(sql`
+          SELECT sponsor_id,
+                 COUNT(*) FILTER (WHERE occurred_at > now() - interval '30 days') AS clicks_30d,
+                 COUNT(DISTINCT COALESCE(visitor_id, 'e'||id::text)) FILTER (WHERE occurred_at > now() - interval '30 days') AS unique_30d,
+                 MAX(occurred_at) AS last_click
+          FROM sponsor_link_events
+          WHERE sponsor_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND is_internal = false
+          GROUP BY sponsor_id`);
+        for (const r of (agg.rows as any[])) statsById[r.sponsor_id] = r;
+
+        const days = await db.execute(sql`
+          SELECT sponsor_id, to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, COUNT(*) AS clicks
+          FROM sponsor_link_events
+          WHERE sponsor_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND is_internal = false
+            AND occurred_at > now() - interval '30 days'
+          GROUP BY sponsor_id, day ORDER BY day`);
+        for (const r of (days.rows as any[])) {
+          const sid = Number(r.sponsor_id);
+          (byDayBySponsor[sid] ||= []).push({ day: r.day, clicks: Number(r.clicks) });
+        }
+      }
+      res.json(rows.map(r => ({
+        ...r,
+        stats: {
+          clicks30d: Number(statsById[r.id]?.clicks_30d ?? 0),
+          unique30d: Number(statsById[r.id]?.unique_30d ?? 0),
+          totalClicks: r.openCount,
+          lastClick: statsById[r.id]?.last_click ?? r.lastOpenedAt ?? null,
+          byDay: byDayBySponsor[r.id] ?? [],
+        },
+      })));
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/sponsor-traffic", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const name = String(req.body.name || "").trim();
+      const brand = String(req.body.brand || "").trim();
+      const websiteUrl = String(req.body.websiteUrl || "").trim();
+      if (!name || !brand || !websiteUrl) return res.status(400).json({ message: "name, brand and websiteUrl are required" });
+      let shortCode = genSponsorCode(brand, name);
+      for (let i = 0; i < 5; i++) {
+        const dupe = await db.select({ id: sponsors.id }).from(sponsors).where(eq(sponsors.shortCode, shortCode)).limit(1);
+        if (!dupe.length) break;
+        shortCode = `${genSponsorCode(brand, name)}-${crypto.randomBytes(2).toString("hex")}`;
+      }
+      const fields = pickSponsorFields(req.body);
+      const [row] = await db.insert(sponsors).values({
+        organizationId: orgId,
+        name, brand, websiteUrl,
+        tier: fields.tier ?? null,
+        logoUrl: fields.logoUrl ?? null,
+        notes: fields.notes ?? null,
+        active: fields.active ?? true,
+        shortCode,
+        updatedAt: new Date(),
+      }).returning();
+      res.status(201).json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/sponsor-traffic/:id", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const fields = pickSponsorFields(req.body);
+      const [row] = await db.update(sponsors).set({ ...fields, updatedAt: new Date() }).where(eq(sponsors.id, id)).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/sponsor-traffic/:id", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(sponsors).where(eq(sponsors.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Per-sponsor link analytics — clicks, unique visitors, device split, which
+  // of our pages sent them (referrer + source), and a 30-day sparkline.
+  app.get("/api/admin/sponsor-traffic/:id/analytics", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [s] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!s) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, s.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const internalFilter = req.query.includeInternal === "1" ? sql`` : sql` AND is_internal = false`;
+      const summary = await db.execute(sql`
+        SELECT COUNT(*) AS clicks,
+               COUNT(DISTINCT COALESCE(visitor_id,'e'||id::text)) AS unique_visitors,
+               MIN(occurred_at) AS first_click,
+               MAX(occurred_at) AS last_click
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}`);
+      const byDay = await db.execute(sql`
+        SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, COUNT(*) AS clicks
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter} AND occurred_at > now() - interval '30 days'
+        GROUP BY day ORDER BY day`);
+      const byDevice = await db.execute(sql`
+        SELECT COALESCE(device,'unknown') AS device, COUNT(*) AS n
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        GROUP BY device ORDER BY n DESC`);
+      const byReferrer = await db.execute(sql`
+        SELECT COALESCE(NULLIF(referrer,''),'direct') AS referrer, COUNT(*) AS n
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        GROUP BY referrer ORDER BY n DESC LIMIT 8`);
+      const bySource = await db.execute(sql`
+        SELECT COALESCE(NULLIF(source,''),'(none)') AS source, COUNT(*) AS n
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        GROUP BY source ORDER BY n DESC LIMIT 8`);
+      const timeline = await db.execute(sql`
+        SELECT kind, occurred_at, device, referrer, source, country, is_internal
+        FROM sponsor_link_events WHERE sponsor_id = ${id}
+        ORDER BY occurred_at DESC LIMIT 100`);
+      res.json({
+        summary: (summary.rows as any[])[0] ?? {},
+        byDay: byDay.rows, byDevice: byDevice.rows, byReferrer: byReferrer.rows, bySource: bySource.rows,
+        timeline: timeline.rows,
+      });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // ── Sponsor site health check ────────────────────────────────────────────
+  // GET (not HEAD — many sites 405 HEAD), short timeout, wrapped so one bad
+  // URL never throws the batch. No cron yet — button-triggered is enough for
+  // now; a daily scheduled sweep is a natural future enhancement.
+  const checkSponsorSite = async (s: { id: number; websiteUrl: string }) => {
+    let status: "ok" | "down" = "down";
+    let statusCode: number | null = null;
+    try {
+      const resp = await fetch(withProtocol(s.websiteUrl), {
+        method: "GET",
+        redirect: "follow",
+        signal: AbortSignal.timeout(8000),
+      });
+      statusCode = resp.status;
+      status = resp.status < 400 ? "ok" : "down";
+    } catch {
+      status = "down";
+      statusCode = null;
+    }
+    const [row] = await db.update(sponsors)
+      .set({ siteStatus: status, siteStatusCode: statusCode, siteCheckedAt: new Date(), updatedAt: new Date() })
+      .where(eq(sponsors.id, s.id)).returning();
+    return row;
+  };
+
+  app.post("/api/admin/sponsor-traffic/:id/check", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const row = await checkSponsorSite(existing);
+      res.json(row);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/sponsor-traffic/check-all", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(sponsors).where(eq(sponsors.organizationId, orgId));
+      const results = await Promise.allSettled(rows.map(s => checkSponsorSite(s)));
+      const updated = results.map(r => r.status === "fulfilled" ? r.value : null).filter(Boolean) as (typeof rows)[number][];
+      const okCount = updated.filter((r: any) => r.siteStatus === "ok").length;
+      const downCount = updated.filter((r: any) => r.siteStatus === "down").length;
+      res.json({ checked: updated.length, ok: okCount, down: downCount, sponsors: updated });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Public tracked sponsor link — logs the click, then 302s to the sponsor's
+  // real site. Same cookie/device/internal logic as /r/:code, plus an optional
+  // ?src= query param so a click can be attributed to the page/section that
+  // sent it even if the referrer header gets stripped (common in-app/mobile).
+  app.get("/s/:code", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim();
+      const [s] = await db.select().from(sponsors).where(eq(sponsors.shortCode, code)).limit(1);
+      if (!s || !s.websiteUrl) return res.status(404).type("html").send("<h1>Link not found</h1><p>This tracked link is no longer active.</p>");
+      const target = withProtocol(s.websiteUrl);
+      let vid = readReqCookie(req, "usg_pv");
+      if (!vid) {
+        vid = "pv_" + crypto.randomBytes(12).toString("hex");
+        res.cookie("usg_pv", vid, { httpOnly: true, sameSite: "lax", maxAge: 1000 * 60 * 60 * 24 * 365, path: "/" });
+      }
+      const isInternal = !!req.session?.userId || req.query.preview === "1";
+      await db.insert(sponsorLinkEvents).values({
+        sponsorId: s.id, kind: "click", visitorId: vid,
+        device: deviceFromUA(req.headers["user-agent"] as string),
+        userAgent: String(req.headers["user-agent"] || "").slice(0, 400),
+        referrer: String(req.headers["referer"] || "").slice(0, 400),
+        source: req.query.src ? String(req.query.src).slice(0, 120) : null,
+        country: coarseGeo(req), isInternal,
+      });
+      if (!isInternal) {
+        await db.update(sponsors)
+          .set({ openCount: sql`${sponsors.openCount} + 1`, lastOpenedAt: new Date() })
+          .where(eq(sponsors.id, s.id));
+      }
+      res.redirect(302, target);
+    } catch (error: any) {
+      console.error("[/s/:code] error", error);
       res.status(500).type("html").send("Something went wrong.");
     }
   });

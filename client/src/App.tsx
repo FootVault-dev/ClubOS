@@ -65,6 +65,7 @@ import GroupProjects from "@/pages/group-projects";
 import GroupContent from "@/pages/group-content";
 import GroupHiring from "@/pages/group-hiring";
 import GroupVehicles from "@/pages/group-vehicles";
+import GroupSponsors from "@/pages/group-sponsors";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
@@ -274,6 +275,7 @@ function AdminRouter() {
         <Route path="/admin/budget" component={GroupBudget} />
         <Route path="/admin/cashflow" component={GroupCashflow} />
         <Route path="/admin/vehicles" component={GroupVehicles} />
+        <Route path="/admin/sponsor-traffic" component={GroupSponsors} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
