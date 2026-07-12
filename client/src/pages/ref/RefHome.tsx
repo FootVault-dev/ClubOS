@@ -262,13 +262,19 @@ function GameListScreen({
   onOpenGame: (id: number) => void;
 }) {
   const [tab, setTab] = useState<FeedTab>("upcoming");
+  const [scope, setScope] = useState<"mine" | "all">("mine");
   const switchTab = (t: FeedTab) => setTab(t);
 
-  // Referees see ONLY their assigned games, all in ONE continuous feed (no
-  // day-by-day paging to scroll) — scope=mine. Upcoming = not final; Past = final.
+  // Referees default to ONLY their assigned games (scope=mine) in one continuous
+  // feed (no day-by-day paging). But a live tournament shifts fast — no-shows,
+  // injuries, pull-outs — so "All Games" (scope=all) lets a ref pick up ANY CIC
+  // game as a contingency; any approved ref may score any CIC game (the server's
+  // loadCicGame gates on CIC-org, not on assignment), and assignments can be
+  // recorded during/after a game for post-tournament referee-payment tracking.
+  // Upcoming = not final; Past = final.
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["ref-games", "mine"],
-    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=mine`),
+    queryKey: ["ref-games", scope],
+    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=${scope}`),
   });
 
   const games = data?.games ?? [];
@@ -299,6 +305,39 @@ function GameListScreen({
         >
           <LogOut className="h-3.5 w-3.5" /> Sign out
         </button>
+      </div>
+
+      {/* Which games — My Games (assigned, default) vs All Games (every CIC game,
+          the contingency for last-minute referee changes). */}
+      <div className="px-5 mb-2.5">
+        <div
+          className="flex rounded-xl p-1 gap-1"
+          style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+        >
+          {([
+            { key: "mine", label: "My Games" },
+            { key: "all", label: "All Games" },
+          ] as const).map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => setScope(opt.key)}
+              className="flex-1 h-9 rounded-lg text-[13px] font-bold transition"
+              style={
+                scope === opt.key
+                  ? { background: GOLD, color: INK }
+                  : { background: "transparent", color: "rgba(255,255,255,0.55)" }
+              }
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        {scope === "all" && (
+          <p className="text-[11px] mt-1.5 px-1 leading-snug" style={{ color: "rgba(255,255,255,0.4)" }}>
+            Every CIC game — pick up any match if a ref can't make it. Your assigned games are marked{" "}
+            <span className="font-bold" style={{ color: GOLD }}>YOURS</span>.
+          </p>
+        )}
       </div>
 
       <div className="px-5 grid grid-cols-2 gap-2">
@@ -351,9 +390,13 @@ function GameListScreen({
             >
               <CalendarClock className="h-6 w-6" style={{ color: GOLD }} />
             </div>
-            <div className="cic-ref-display text-base font-bold text-white mb-1.5">No games assigned to you yet</div>
+            <div className="cic-ref-display text-base font-bold text-white mb-1.5">
+              {scope === "mine" ? "No games assigned to you yet" : "No games scheduled yet"}
+            </div>
             <p className="text-sm leading-relaxed max-w-xs mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
-              Your referee coordinator will assign your matches — check back closer to kickoff.
+              {scope === "mine"
+                ? "Your referee coordinator will assign your matches — or tap All Games to pick one up."
+                : "Games will appear here once the tournament schedule is loaded."}
             </p>
           </div>
         )}
@@ -368,7 +411,7 @@ function GameListScreen({
               {grp.date ? dayLabel(grp.date) : "Date TBC"}
             </div>
             {grp.games.map((g) => (
-              <GameCard key={g.id} game={g} onClick={() => onOpenGame(g.id)} />
+              <GameCard key={g.id} game={g} showAssignedBadge={scope === "all"} onClick={() => onOpenGame(g.id)} />
             ))}
           </div>
         ))}
@@ -377,7 +420,15 @@ function GameListScreen({
   );
 }
 
-function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => void }) {
+function GameCard({
+  game,
+  onClick,
+  showAssignedBadge,
+}: {
+  game: RefGameListItem;
+  onClick: () => void;
+  showAssignedBadge?: boolean;
+}) {
   const hasScore = game.homeScore != null && game.awayScore != null;
   const assigned = game.assigned;
   return (
@@ -395,6 +446,14 @@ function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => voi
           {game.stageDetail && <span className="truncate">{game.stageDetail}</span>}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          {showAssignedBadge && assigned && (
+            <span
+              className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+              style={{ background: "rgba(201,164,62,0.15)", color: GOLD, border: "1px solid rgba(201,164,62,0.4)" }}
+            >
+              YOURS
+            </span>
+          )}
           {game.isLive && (
             <span
               className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
