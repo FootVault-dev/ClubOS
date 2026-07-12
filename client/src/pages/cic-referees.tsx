@@ -24,7 +24,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
   ShieldCheck, UserCheck, CalendarCheck, Search, Trash2, Mail, Phone,
-  Check, Ban, RotateCcw, XCircle, LogIn, MapPin, CalendarDays,
+  Check, Ban, RotateCcw, XCircle, LogIn, MapPin, CalendarDays, Copy, Link2,
 } from "lucide-react";
 import { REFEREE_STATUSES, type RefereeStatus } from "@shared/referees";
 
@@ -183,7 +183,43 @@ export default function CicReferees() {
         </div>
       </div>
 
+      <div className="mb-5 rounded-xl border border-[#C9A43E]/25 bg-[#C9A43E]/[0.04] p-3">
+        <div className="text-[12px] font-semibold text-[#C9A43E] mb-2 flex items-center gap-1.5">
+          <Link2 className="w-3.5 h-3.5" /> Share these with new referees
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <ShareRow label="Sign-up — refs register here" url="https://ref.cicyouth.com/signup" />
+          <ShareRow label="Login — for approved refs" url="https://ref.cicyouth.com" />
+        </div>
+      </div>
+
       {view === "approvals" ? <ApprovalsView /> : <AssignmentsView />}
+    </div>
+  );
+}
+
+function ShareRow({ label, url }: { label: string; url: string }) {
+  const { toast } = useToast();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({ title: "Link copied", description: url });
+    } catch {
+      toast({ title: "Couldn't copy", description: url, variant: "destructive" });
+    }
+  };
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] uppercase tracking-wide text-white/35">{label}</div>
+        <a href={url} target="_blank" rel="noreferrer" className="block truncate text-[13px] text-white/80 hover:text-[#C9A43E]">{url}</a>
+      </div>
+      <button
+        onClick={copy}
+        className="shrink-0 inline-flex items-center gap-1 rounded-md border border-[#C9A43E]/40 bg-[#C9A43E]/10 px-2.5 py-1.5 text-[12px] font-semibold text-[#C9A43E] hover:bg-[#C9A43E]/20"
+      >
+        <Copy className="w-3.5 h-3.5" /> Copy
+      </button>
     </div>
   );
 }

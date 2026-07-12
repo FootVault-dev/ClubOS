@@ -11754,6 +11754,14 @@ export async function registerRoutes(
         awayScore: g.awayScore,
         homePenalties: g.homePenalties,
         awayPenalties: g.awayPenalties,
+        // Live match clock (Score Game). The website derives MM:SS from these +
+        // the half length / break below (never a stored ticking value).
+        timerPhase: g.timerPhase ?? "pre",
+        timerRunning: g.timerRunning ?? false,
+        timerStartedAt: g.timerStartedAt ?? null,
+        timerBaseSeconds: g.timerBaseSeconds ?? 0,
+        halfLengthMinutes: t.gameDurationMinutes ?? 20,
+        breakMinutes: t.breakBetweenMinutes ?? 5,
         groupId: g.groupId,
         groupName: g.group?.name || null,
       })));

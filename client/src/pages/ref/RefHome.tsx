@@ -1,4 +1,4 @@
-// CIC referee scoring app — /ref. Maps to a single route that internally
+// CIC referee scoring app — /login (old /ref redirects here). Maps to a single route that internally
 // decides between two screens: no token (or a rejected token) shows the
 // LOGIN screen; a valid, approved referee sees their GAME LIST. Standalone
 // mobile-first experience — no admin shell, no sidebar. Brand: CIC near-
@@ -8,7 +8,6 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BadgeCheck,
   CalendarClock,
   ChevronLeft,
   ChevronRight,
@@ -122,14 +121,14 @@ export default function RefHome() {
         <LoginScreen
           initialError={authError}
           onLoggedIn={handleLoggedIn}
-          onGoSignup={() => navigate("/ref/signup")}
+          onGoSignup={() => navigate("/signup")}
         />
       )}
       {phase === "games" && referee && (
         <GameListScreen
           referee={referee}
           onSignOut={handleSignOut}
-          onOpenGame={(id) => navigate(`/ref/game/${id}`)}
+          onOpenGame={(id) => navigate(`/game/${id}`)}
         />
       )}
     </RefShell>
@@ -263,30 +262,26 @@ function GameListScreen({
   onOpenGame: (id: number) => void;
 }) {
   const [tab, setTab] = useState<FeedTab>("upcoming");
-  const [day, setDay] = useState<string>(nzTodayIso());
-  // Upcoming defaults to today with day-by-day nav; Past defaults to "all
-  // days" since results can span the whole draw — but the day filter still
-  // works if a ref wants one specific day's results.
-  const [showAllDays, setShowAllDays] = useState(false);
-  const switchTab = (t: FeedTab) => {
-    setTab(t);
-    setShowAllDays(t === "past");
-  };
+  const switchTab = (t: FeedTab) => setTab(t);
 
-  // Daniel wants the WHOLE tournament feed visible, not just this referee's
-  // assignments — scope=all. The API still tells us which games are theirs
-  // via `assigned`, so those get highlighted rather than filtered down to.
+  // Referees see ONLY their assigned games, all in ONE continuous feed (no
+  // day-by-day paging to scroll) — scope=mine. Upcoming = not final; Past = final.
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["ref-games", "all"],
-    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=all`),
+    queryKey: ["ref-games", "mine"],
+    queryFn: () => refGet<{ games: RefGameListItem[] }>(`/api/public/cic-referees/games?scope=mine`),
   });
 
   const games = data?.games ?? [];
   const tabGames = games.filter((g) => (tab === "upcoming" ? g.status !== "final" : g.status === "final"));
-  // API sorts ascending by date/time. Upcoming stays soonest-first; Past is
-  // flipped so the most recent result shows first.
+  // Soonest-first for upcoming; most-recent-first for past. No day filter.
   const orderedTabGames = tab === "past" ? [...tabGames].reverse() : tabGames;
-  const dayGames = showAllDays ? orderedTabGames : orderedTabGames.filter((g) => g.gameDate === day);
+  // Group by day so the single feed still has date headers (all visible at once).
+  const byDay: { date: string | null; games: RefGameListItem[] }[] = [];
+  for (const g of orderedTabGames) {
+    const last = byDay[byDay.length - 1];
+    if (last && last.date === g.gameDate) last.games.push(g);
+    else byDay.push({ date: g.gameDate, games: [g] });
+  }
 
   return (
     <div className="min-h-screen pb-10">
@@ -331,44 +326,7 @@ function GameListScreen({
         </button>
       </div>
 
-      <div className="px-5 mt-3 flex items-center justify-between gap-2">
-        <button
-          onClick={() => setDay(shiftIso(day, -1))}
-          disabled={showAllDays}
-          className="h-11 w-11 flex items-center justify-center rounded-lg disabled:opacity-30 shrink-0"
-          style={{ background: "rgba(255,255,255,0.05)", color: "white" }}
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-        <button
-          onClick={() => setShowAllDays((v) => !v)}
-          className="flex-1 h-11 rounded-lg text-sm font-semibold"
-          style={
-            showAllDays
-              ? { background: "rgba(201,164,62,0.15)", color: GOLD, border: "1px solid rgba(201,164,62,0.4)" }
-              : { background: "rgba(255,255,255,0.05)", color: "white" }
-          }
-        >
-          {showAllDays ? "All days — tap for today" : dayLabel(day)}
-        </button>
-        <button
-          onClick={() => setDay(shiftIso(day, 1))}
-          disabled={showAllDays}
-          className="h-11 w-11 flex items-center justify-center rounded-lg disabled:opacity-30 shrink-0"
-          style={{ background: "rgba(255,255,255,0.05)", color: "white" }}
-        >
-          <ChevronRight className="h-5 w-5" />
-        </button>
-      </div>
-      {!showAllDays && day !== nzTodayIso() && (
-        <div className="px-5 mt-2 text-center">
-          <button onClick={() => setDay(nzTodayIso())} className="text-[11px] font-semibold" style={{ color: GOLD }}>
-            Jump to today
-          </button>
-        </div>
-      )}
-
-      <div className="px-5 mt-4 space-y-2.5">
+      <div className="px-5 mt-4 space-y-3">
         {isLoading && (
           <div className="flex justify-center py-14">
             <Loader2 className="h-6 w-6 animate-spin" style={{ color: GOLD }} />
@@ -393,9 +351,9 @@ function GameListScreen({
             >
               <CalendarClock className="h-6 w-6" style={{ color: GOLD }} />
             </div>
-            <div className="cic-ref-display text-base font-bold text-white mb-1.5">No games in the draw yet</div>
+            <div className="cic-ref-display text-base font-bold text-white mb-1.5">No games assigned to you yet</div>
             <p className="text-sm leading-relaxed max-w-xs mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
-              Check back once the tournament schedule is published.
+              Your referee coordinator will assign your matches — check back closer to kickoff.
             </p>
           </div>
         )}
@@ -404,21 +362,15 @@ function GameListScreen({
             {tab === "upcoming" ? "No upcoming games." : "No results yet."}
           </div>
         )}
-        {!isLoading && !isError && tabGames.length > 0 && dayGames.length === 0 && (
-          <div className="text-center py-14 text-sm" style={{ color: "rgba(255,255,255,0.35)" }}>
-            No {tab === "upcoming" ? "upcoming games" : "results"} on this day.
-            {!showAllDays && (
-              <>
-                {" "}
-                <button onClick={() => setShowAllDays(true)} className="underline font-semibold" style={{ color: GOLD }}>
-                  View all days
-                </button>
-              </>
-            )}
+        {!isLoading && !isError && byDay.map((grp) => (
+          <div key={grp.date ?? "nodate"} className="space-y-2.5">
+            <div className="text-[11px] uppercase tracking-[0.15em] font-semibold pt-1" style={{ color: "rgba(255,255,255,0.35)" }}>
+              {grp.date ? dayLabel(grp.date) : "Date TBC"}
+            </div>
+            {grp.games.map((g) => (
+              <GameCard key={g.id} game={g} onClick={() => onOpenGame(g.id)} />
+            ))}
           </div>
-        )}
-        {dayGames.map((g) => (
-          <GameCard key={g.id} game={g} onClick={() => onOpenGame(g.id)} />
         ))}
       </div>
     </div>
@@ -431,11 +383,7 @@ function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => voi
   return (
     <div
       className="rounded-2xl p-4"
-      style={
-        assigned
-          ? { background: "rgba(201,164,62,0.07)", border: "1.5px solid rgba(201,164,62,0.5)" }
-          : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }
-      }
+      style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}
     >
       <div className="flex items-center justify-between mb-2 gap-2">
         <div
@@ -447,14 +395,6 @@ function GameCard({ game, onClick }: { game: RefGameListItem; onClick: () => voi
           {game.stageDetail && <span className="truncate">{game.stageDetail}</span>}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {assigned && (
-            <span
-              className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
-              style={{ background: "rgba(201,164,62,0.18)", color: GOLD, border: "1px solid rgba(201,164,62,0.45)" }}
-            >
-              <BadgeCheck className="h-3 w-3" /> You're reffing
-            </span>
-          )}
           {game.isLive && (
             <span
               className="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"

@@ -1,12 +1,19 @@
-// CIC referee match-day scoring screen — /game/:id (old /ref/game/:id redirects here).
+// CIC office "Score Game" screen — /admin/cic-score/:id.
 //
-// Mirrors the admin GameGoalsModal UX (client/src/pages/tournament-detail.tsx,
-// ~lines 382-797) 1:1 — including the own-goal team-flip rule and the
-// MVP/Golden-Glove/shootout flows — but rebuilt mobile-first: big tap
-// targets (44px+), high contrast for sunlight, one-handed operation. Every
-// write goes through the referee-scoped API (server/cic-referee-routes.ts)
-// via the Bearer-token helper in ./ref-api — never the admin
-// apiRequest/queryClient.
+// Session-authed twin of the referee scoring screen
+// (client/src/pages/ref/RefGameDetail.tsx), reached from the Game Feed
+// (client/src/components/cic-game-feed.tsx) so Isaac/Rolof can run the same
+// live match timer + score/goals/cards/MVP/Golden-Glove/shootout flows from
+// the office exactly like a referee does from the sideline — including the
+// own-goal team-flip rule. The layout, MatchTimer component and hardcoded
+// CIC gold-on-black look are all reused so it feels identical.
+//
+// The one real difference: every write here goes through the ADMIN session
+// (apiRequest — cookie + X-Workspace-Slug, client/src/lib/queryClient.ts),
+// never the referee Bearer-token helpers in ./ref/ref-api.ts. Types are
+// imported `type`-only from ref-api (erased at compile time — no runtime
+// coupling to the referee token logic) since the admin detail endpoint
+// returns the same underlying DB shapes.
 import { useMemo, useState, type ReactNode } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,56 +30,59 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import MatchTimer from "@/components/match-timer";
-import {
-  refDelete,
-  refGameQueryKey,
-  refGet,
-  refPatch,
-  refPost,
-  refPut,
-  RefApiError,
-  type RefCard,
-  type RefGameDetailResponse,
-  type RefGameFull,
-  type RefGkRating,
-  type RefGoal,
-  type RefMvpVote,
-  type RefPlayer,
-  type RefShootoutKick,
-  type RefTimerAction,
-} from "./ref-api";
-import { useCicBrand } from "./useCicBrand";
+import type {
+  RefCard,
+  RefGameFull,
+  RefGkRating,
+  RefGoal,
+  RefMvpVote,
+  RefPlayer,
+  RefShootoutKick,
+  RefTeam,
+  RefTimerAction,
+} from "@/pages/ref/ref-api";
 
 const GOLD = "#C9A43E";
 const INK = "#141511";
 
 const FONT_STYLE = `
   @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap');
-  .cic-ref-display { font-family: 'Kanit', 'Inter', sans-serif; }
-  .cic-ref-body { font-family: 'Inter', sans-serif; }
+  .cic-score-display { font-family: 'Kanit', 'Inter', sans-serif; }
+  .cic-score-body { font-family: 'Inter', sans-serif; }
 `;
 
 const rowStyle: React.CSSProperties = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" };
 
-function errDesc(e: any): string {
-  return e instanceof RefApiError ? e.message : "Something went wrong — try again.";
+interface ScoreGameDetailResponse {
+  game: RefGameFull;
+  teams: RefTeam[];
+  goals: RefGoal[];
+  cards: RefCard[];
+  mvpVotes: RefMvpVote[];
+  gkRatings: RefGkRating[];
+  shootout: RefShootoutKick[];
+  players: RefPlayer[];
+  halfLengthMinutes: number;
+  breakMinutes: number;
 }
 
+const scoreGameQueryKey = (id: number) => ["/api/admin/cic/games", id, "detail"] as const;
+
 // ═══════════════════════════ Page ══════════════════════════════════════════
-export default function RefGameDetail() {
-  useCicBrand();
-  const [, params] = useRoute("/game/:id");
+export default function CicScoreGame() {
+  const [, params] = useRoute("/admin/cic-score/:id");
   const [, navigate] = useLocation();
   const id = params?.id ? parseInt(params.id, 10) : NaN;
 
   const { data, isLoading, isError, error, isFetching } = useQuery({
-    queryKey: Number.isFinite(id) ? refGameQueryKey(id) : ["ref-game", "invalid"],
-    queryFn: () => refGet<RefGameDetailResponse>(`/api/public/cic-referees/games/${id}`),
+    queryKey: Number.isFinite(id) ? scoreGameQueryKey(id) : ["cic-score-game", "invalid"],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/cic/games/${id}/detail`)).json() as Promise<ScoreGameDetailResponse>,
     enabled: Number.isFinite(id),
   });
 
-  const goBack = () => navigate("/login");
+  const goBack = () => navigate("/admin/tournaments");
 
   if (!Number.isFinite(id)) return <StatusScreen message="Invalid game." onBack={goBack} />;
   if (isLoading) return <StatusScreen loading />;
@@ -88,7 +98,7 @@ export default function RefGameDetail() {
   const bothTeamsSet = !!(game.homeTeamId && game.awayTeamId);
 
   return (
-    <div className="cic-ref-body min-h-screen w-full pb-16" style={{ background: INK }}>
+    <div className="cic-score-body min-h-screen w-full pb-16" style={{ background: INK }}>
       <style>{FONT_STYLE}</style>
       <TopBar game={game} homeName={homeName} awayName={awayName} onBack={goBack} />
       <div className="px-4 pt-4 space-y-4">
@@ -144,7 +154,7 @@ export default function RefGameDetail() {
 
 function StatusScreen({ loading, message, onBack }: { loading?: boolean; message?: string; onBack?: () => void }) {
   return (
-    <div className="cic-ref-body min-h-screen w-full flex flex-col items-center justify-center px-6 text-center" style={{ background: INK }}>
+    <div className="cic-score-body min-h-screen w-full flex flex-col items-center justify-center px-6 text-center" style={{ background: INK }}>
       <style>{FONT_STYLE}</style>
       {loading ? (
         <Loader2 className="h-8 w-8 animate-spin" style={{ color: GOLD }} />
@@ -153,7 +163,7 @@ function StatusScreen({ loading, message, onBack }: { loading?: boolean; message
           <p className="text-sm mb-4" style={{ color: "rgba(255,255,255,0.6)" }}>{message}</p>
           {onBack && (
             <button onClick={onBack} className="text-sm font-semibold" style={{ color: GOLD }}>
-              ← Back to games
+              ← Back to Game Feed
             </button>
           )}
         </>
@@ -177,12 +187,12 @@ function TimerSection({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const key = refGameQueryKey(gameId);
+  const key = scoreGameQueryKey(gameId);
 
   const timerMut = useMutation({
-    mutationFn: (action: RefTimerAction) => refPost(`/api/public/cic-referees/games/${gameId}/timer`, { action }),
+    mutationFn: (action: RefTimerAction) => apiRequest("POST", `/api/admin/cic/games/${gameId}/timer`, { action }),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't update the timer", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't update the timer", description: e.message, variant: "destructive" }),
   });
 
   return (
@@ -237,7 +247,7 @@ function TopBar({
           </div>
           <div className="flex items-center gap-2 text-sm font-bold text-white">
             <span className="truncate min-w-0">{homeName}</span>
-            <span className="cic-ref-display tabular-nums shrink-0" style={{ color: GOLD }}>
+            <span className="cic-score-display tabular-nums shrink-0" style={{ color: GOLD }}>
               {game.homeScore ?? "–"}–{game.awayScore ?? "–"}
             </span>
             <span className="truncate min-w-0">{awayName}</span>
@@ -398,12 +408,12 @@ function ScoreCard({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const key = refGameQueryKey(gameId);
+  const key = scoreGameQueryKey(gameId);
 
   const patchMut = useMutation({
-    mutationFn: (body: Record<string, any>) => refPatch(`/api/public/cic-referees/games/${gameId}`, body),
+    mutationFn: (body: Record<string, any>) => apiRequest("PATCH", `/api/admin/tournament/games/${gameId}`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't update the game", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't update the game", description: e.message, variant: "destructive" }),
   });
 
   const busy = patchMut.isPending || gameFetching;
@@ -427,7 +437,7 @@ function ScoreCard({
               </div>
               <div className="flex items-center justify-center gap-2">
                 <StepperButton icon={<Minus className="h-5 w-5" />} onClick={() => bump(side, -1)} disabled={busy} />
-                <div className="cic-ref-display text-6xl font-black tabular-nums w-16 text-center text-white">{value ?? 0}</div>
+                <div className="cic-score-display text-6xl font-black tabular-nums w-16 text-center text-white">{value ?? 0}</div>
                 <StepperButton icon={<Plus className="h-5 w-5" />} onClick={() => bump(side, 1)} disabled={busy} />
               </div>
             </div>
@@ -472,7 +482,7 @@ function GoalsCard({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const key = refGameQueryKey(gameId);
+  const key = scoreGameQueryKey(gameId);
   const playerById = useMemo(() => {
     const m = new Map<number, RefPlayer>();
     for (const p of [...homePlayers, ...awayPlayers]) m.set(p.id, p);
@@ -486,7 +496,7 @@ function GoalsCard({
   const [type, setType] = useState<"goal" | "penalty" | "own_goal">("goal");
 
   const addMut = useMutation({
-    mutationFn: (body: any) => refPost(`/api/public/cic-referees/games/${gameId}/goals`, body),
+    mutationFn: (body: any) => apiRequest("POST", "/api/admin/tournament/goals", { gameId, ...body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: key });
       setSide(null);
@@ -495,12 +505,12 @@ function GoalsCard({
       setMinute("");
       setType("goal");
     },
-    onError: (e: any) => toast({ title: "Couldn't add goal", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't add goal", description: e.message, variant: "destructive" }),
   });
   const delMut = useMutation({
-    mutationFn: (goalId: number) => refDelete(`/api/public/cic-referees/games/${gameId}/goals/${goalId}`),
+    mutationFn: (goalId: number) => apiRequest("DELETE", `/api/admin/tournament/goals/${goalId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't remove goal", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't remove goal", description: e.message, variant: "destructive" }),
   });
 
   const submit = () => {
@@ -511,7 +521,8 @@ function GoalsCard({
     const scorerTeamId = side === "home" ? game.homeTeamId : game.awayTeamId;
     if (!scorerTeamId) return;
     // Own-goal team-flip: the goal is CREDITED to the opponent of the
-    // scorer's own team — mirrors GameGoalsModal.submit() exactly.
+    // scorer's own team — mirrors RefGameDetail.submit() (and, before it,
+    // the admin GameGoalsModal) exactly.
     const common = {
       teamId: isOwnGoal ? (side === "home" ? game.awayTeamId : game.homeTeamId) : scorerTeamId,
       minute: minute ? parseInt(minute, 10) : null,
@@ -610,7 +621,7 @@ function CardsCard({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const key = refGameQueryKey(gameId);
+  const key = scoreGameQueryKey(gameId);
   const playerById = useMemo(() => {
     const m = new Map<number, RefPlayer>();
     for (const p of [...homePlayers, ...awayPlayers]) m.set(p.id, p);
@@ -623,19 +634,19 @@ function CardsCard({
   const [minute, setMinute] = useState("");
 
   const addMut = useMutation({
-    mutationFn: (body: any) => refPost(`/api/public/cic-referees/games/${gameId}/cards`, body),
+    mutationFn: (body: any) => apiRequest("POST", "/api/admin/tournament/cards", { gameId, ...body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: key });
       setPickedId("");
       setTyped("");
       setMinute("");
     },
-    onError: (e: any) => toast({ title: "Couldn't add card", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't add card", description: e.message, variant: "destructive" }),
   });
   const delMut = useMutation({
-    mutationFn: (cardId: number) => refDelete(`/api/public/cic-referees/games/${gameId}/cards/${cardId}`),
+    mutationFn: (cardId: number) => apiRequest("DELETE", `/api/admin/tournament/cards/${cardId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't remove card", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't remove card", description: e.message, variant: "destructive" }),
   });
 
   const addCard = (cardType: "yellow" | "red") => {
@@ -735,7 +746,7 @@ function MvpCard({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const key = refGameQueryKey(gameId);
+  const key = scoreGameQueryKey(gameId);
   const playerById = useMemo(() => {
     const m = new Map<number, RefPlayer>();
     for (const p of [...homePlayers, ...awayPlayers]) m.set(p.id, p);
@@ -749,14 +760,14 @@ function MvpCard({
 
   const setMut = useMutation({
     mutationFn: (body: { voterTeamId: number; playerId?: number; playerName?: string }) =>
-      refPut(`/api/public/cic-referees/games/${gameId}/mvp-vote`, body),
+      apiRequest("PUT", `/api/admin/tournament/games/${gameId}/mvp-vote`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't save MVP vote", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't save MVP vote", description: e.message, variant: "destructive" }),
   });
   const clearMut = useMutation({
-    mutationFn: (voterTeamId: number) => refDelete(`/api/public/cic-referees/games/${gameId}/mvp-vote/${voterTeamId}`),
+    mutationFn: (voterTeamId: number) => apiRequest("DELETE", `/api/admin/tournament/games/${gameId}/mvp-vote/${voterTeamId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't clear MVP vote", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't clear MVP vote", description: e.message, variant: "destructive" }),
   });
 
   const homeId = game.homeTeamId!;
@@ -866,7 +877,7 @@ function GkCard({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const key = refGameQueryKey(gameId);
+  const key = scoreGameQueryKey(gameId);
   const playerById = useMemo(() => {
     const m = new Map<number, RefPlayer>();
     for (const p of [...homePlayers, ...awayPlayers]) m.set(p.id, p);
@@ -880,14 +891,14 @@ function GkCard({
 
   const setMut = useMutation({
     mutationFn: (body: { teamId: number; playerId?: number; playerName?: string; rating: number }) =>
-      refPut(`/api/public/cic-referees/games/${gameId}/gk-rating`, body),
+      apiRequest("PUT", `/api/admin/tournament/games/${gameId}/gk-rating`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't save keeper rating", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't save keeper rating", description: e.message, variant: "destructive" }),
   });
   const clearMut = useMutation({
-    mutationFn: (teamId: number) => refDelete(`/api/public/cic-referees/games/${gameId}/gk-rating/${teamId}`),
+    mutationFn: (teamId: number) => apiRequest("DELETE", `/api/admin/tournament/games/${gameId}/gk-rating/${teamId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't clear keeper rating", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't clear keeper rating", description: e.message, variant: "destructive" }),
   });
 
   const homeId = game.homeTeamId!;
@@ -1012,23 +1023,23 @@ function ShootoutCard({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const key = refGameQueryKey(gameId);
+  const key = scoreGameQueryKey(gameId);
   const [takerHome, setTakerHome] = useState("");
   const [takerAway, setTakerAway] = useState("");
 
   const addMut = useMutation({
-    mutationFn: (body: any) => refPost(`/api/public/cic-referees/games/${gameId}/shootout`, body),
+    mutationFn: (body: any) => apiRequest("POST", "/api/admin/tournament/shootout", { gameId, ...body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: key });
       setTakerHome("");
       setTakerAway("");
     },
-    onError: (e: any) => toast({ title: "Couldn't log penalty", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't log penalty", description: e.message, variant: "destructive" }),
   });
   const delMut = useMutation({
-    mutationFn: (kickId: number) => refDelete(`/api/public/cic-referees/games/${gameId}/shootout/${kickId}`),
+    mutationFn: (kickId: number) => apiRequest("DELETE", `/api/admin/tournament/shootout/${kickId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => toast({ title: "Couldn't undo that kick", description: errDesc(e), variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't undo that kick", description: e.message, variant: "destructive" }),
   });
 
   const sorted = [...shootout].sort((a, b) => a.kickNumber - b.kickNumber);

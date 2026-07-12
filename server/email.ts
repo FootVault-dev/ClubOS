@@ -1970,7 +1970,7 @@ export async function sendRefereeApprovedEmail(params: {
   to: string;
   refereeName: string;
 }): Promise<boolean> {
-  const link = `${REFEREE_APP_BASE}/ref`;
+  const link = `${REFEREE_APP_BASE}/login`;
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width:600px; margin:0 auto; background:#ffffff;">
     <div style="background:#0e0e10; padding:26px 28px;">
       <div style="color:#c9a43e; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;">You're approved</div>

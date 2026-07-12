@@ -820,6 +820,35 @@ export function registerCicRefereeRoutes(app: Express) {
     }
   });
 
+  // Full game bundle for the staff "Score Game" screen (from the Game Feed) —
+  // mirrors the referee game-detail, but session + tournaments tab.
+  app.get("/api/admin/cic/games/:id/detail", requireAuth, schedTab, async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      const found = await loadCicGame(id);
+      if (!found) return res.status(404).json({ message: "Game not found." });
+      const { game } = found;
+      const teamIds = [game.homeTeamId, game.awayTeamId].filter((x): x is number => !!x);
+      const [teams, goals, cards, mvpVotes, gkRatings, shootout, players] = await Promise.all([
+        teamIds.length ? db.select().from(tournamentTeams).where(inArray(tournamentTeams.id, teamIds)) : Promise.resolve([]),
+        storage.getTournamentGoalsByGame(id),
+        storage.getTournamentCardsByGame(id),
+        storage.getTournamentMvpVotesByGame(id),
+        storage.getTournamentGkRatingsByGame(id),
+        storage.getPenaltyKicksByGame(id),
+        teamIds.length ? db.select().from(tournamentPlayers).where(inArray(tournamentPlayers.teamId, teamIds)) : Promise.resolve([]),
+      ]);
+      res.json({
+        game, teams, goals, cards, mvpVotes, gkRatings, shootout, players,
+        halfLengthMinutes: found.tournament.gameDurationMinutes ?? 20,
+        breakMinutes: found.tournament.breakBetweenMinutes ?? 5,
+      });
+    } catch (e: any) {
+      console.error("[cic-ref] admin game detail failed", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/admin/cic-referees", requireAuth, tab, async (req, res) => {
     try {
       const org = await workspaceOrg(req);

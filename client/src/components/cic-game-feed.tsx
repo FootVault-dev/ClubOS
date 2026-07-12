@@ -8,16 +8,25 @@
 // server/cic-referee-routes.ts). No scoring here — that happens in the
 // referee app (/ref) or the tournament detail page.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { nzTodayIso } from "@shared/academy";
 import { Clock, Goal, MapPin, RefreshCw, Users } from "lucide-react";
+
+const GOLD = "#C9A43E";
 
 interface GameFeedReferee {
   id: number;
   fullName: string;
 }
+
+// Timer phases mirror server/cic-referee-routes.ts applyTimerAction() and
+// client/src/components/match-timer.tsx — pre → first_half → half_time →
+// second_half → finished. Included on every feed row so LiveClock below can
+// show a running match clock without a second fetch per game.
+type FeedTimerPhase = "pre" | "first_half" | "half_time" | "second_half" | "finished";
 
 interface GameFeedItem {
   id: number;
@@ -38,9 +47,64 @@ interface GameFeedItem {
   awayScore: number | null;
   homePenalties: number | null;
   awayPenalties: number | null;
+  timerPhase: FeedTimerPhase;
+  timerRunning: boolean;
+  timerStartedAt: string | null;
+  timerBaseSeconds: number;
   assignedReferees: GameFeedReferee[];
   lastScoredByName: string | null;
   lastScoredAt: string | null;
+}
+
+function fmtClock(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+// The tournament's actual breakMinutes isn't in this feed payload (it's a
+// per-tournament setting that only comes down on the game-detail bundle) —
+// 5 is the CIC standard used across the draw; it only affects the half-time
+// countdown text, never the running first/second-half clock.
+const FEED_BREAK_MINUTES = 5;
+
+// A tiny self-ticking clock for a live game's row — mirrors MatchTimer's
+// derive-from-server-fields approach (client/src/components/match-timer.tsx)
+// so it stays correct across a stale tab or a slow refetch: it never owns a
+// running counter, it just re-renders every 500ms and recomputes from
+// whatever timer fields this row was last given.
+function LiveClock({ game }: { game: GameFeedItem }) {
+  const phase = game.timerPhase ?? "pre";
+  const running = !!game.timerRunning;
+
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const iv = setInterval(() => setTick((t) => t + 1), 500);
+    return () => clearInterval(iv);
+  }, [running, game.timerStartedAt]);
+
+  if (!game.isLive) return null;
+  if (phase !== "first_half" && phase !== "second_half" && phase !== "half_time") return null;
+
+  let clockText: string;
+  if (phase === "half_time") {
+    const started = game.timerStartedAt ? new Date(game.timerStartedAt).getTime() : null;
+    const remaining = started ? FEED_BREAK_MINUTES * 60 - (Date.now() - started) / 1000 : FEED_BREAK_MINUTES * 60;
+    clockText = `HT ${fmtClock(Math.max(0, remaining))}`;
+  } else {
+    const base = game.timerBaseSeconds ?? 0;
+    const started = game.timerStartedAt ? new Date(game.timerStartedAt).getTime() : null;
+    const elapsed = running && started ? base + (Date.now() - started) / 1000 : base;
+    clockText = fmtClock(Math.max(0, elapsed));
+  }
+
+  return (
+    <span className="text-[10px] font-bold tabular-nums text-red-400/90 whitespace-nowrap" data-testid={`text-live-clock-${game.id}`}>
+      {clockText}
+    </span>
+  );
 }
 
 // Calendar-date label without a UTC round-trip — mirrors the same helper in
@@ -104,6 +168,7 @@ function ScoreLine({ game }: { game: GameFeedItem }) {
 }
 
 function GameRow({ game }: { game: GameFeedItem }) {
+  const [, navigate] = useLocation();
   const refNames = game.assignedReferees.map((r) => r.fullName).join(", ");
   return (
     <div
@@ -122,7 +187,10 @@ function GameRow({ game }: { game: GameFeedItem }) {
             {game.gameNumber != null ? ` · #${game.gameNumber}` : ""}
           </span>
         </div>
-        <StatusPill status={game.status} isLive={game.isLive} />
+        <div className="flex items-center gap-1.5 shrink-0">
+          <LiveClock game={game} />
+          <StatusPill status={game.status} isLive={game.isLive} />
+        </div>
       </div>
 
       <ScoreLine game={game} />
@@ -147,6 +215,15 @@ function GameRow({ game }: { game: GameFeedItem }) {
             ` · ${new Date(game.lastScoredAt).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}`}
         </div>
       )}
+
+      <button
+        onClick={() => navigate(`/admin/cic-score/${game.id}`)}
+        className="w-full h-10 rounded-lg text-xs font-bold active:scale-[0.98] transition-transform"
+        style={{ background: GOLD, color: "#141511" }}
+        data-testid={`button-score-game-${game.id}`}
+      >
+        Score Game
+      </button>
     </div>
   );
 }

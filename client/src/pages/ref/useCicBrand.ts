@@ -1,6 +1,7 @@
-// Tiny CIC branding hook for the referee pages ONLY (/ref, /ref/signup,
-// /ref/game/:id). These routes are a standalone mobile experience — not the
-// ClubOS admin shell — so they get their own tab title + favicon: "CIC
+// Tiny CIC branding hook for the referee pages ONLY (/login, /signup,
+// /game/:id — old /ref* paths redirect here). These routes are a standalone
+// mobile experience — not the ClubOS admin shell — so they get their own
+// tab title + favicon: "CIC
 // Referees" and the CIC black-and-white roundel. Sets it on mount and leaves
 // it; nothing restores app.usg.co.nz's branding because a referee never
 // navigates from these pages into the admin app in the same tab.

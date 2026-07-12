@@ -107,6 +107,7 @@ import CicPush from "@/pages/cic-push";
 import CicWatch from "@/pages/cic-watch";
 import ContentMarketplace from "@/pages/content-marketplace";
 import CicReferees from "@/pages/cic-referees";
+import CicScoreGame from "@/pages/cic-score-game";
 import RefHome from "@/pages/ref/RefHome";
 import RefSignup from "@/pages/ref/RefSignup";
 import RefGameDetail from "@/pages/ref/RefGameDetail";
@@ -336,6 +337,7 @@ function AdminRouter() {
         <Route path="/admin/cic-watch" component={CicWatch} />
         <Route path="/admin/cic-content-marketplace" component={ContentMarketplace} />
         <Route path="/admin/cic-referees" component={CicReferees} />
+        <Route path="/admin/cic-score/:id" component={CicScoreGame} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -538,7 +540,7 @@ function App() {
                 if (isVenueHost) return <VenueBookPage />;
                 if (isPrintHost) return <PrintHub />;
                 if (isMflHost) return <Redirect to="/league" />;
-                if (isRefHost) return <Redirect to="/ref" />;
+                if (isRefHost) return <Redirect to="/login" />;
                 if (isCicHost) return <Redirect to="/skills" />;
                 return <Redirect to={isAdminHost ? "/admin/login" : "/fundamentals-camp"} />;
               })()}
@@ -556,10 +558,15 @@ function App() {
             <Route path="/p/:token" component={StudioPublicPage} />
             <Route path="/studio-preview" component={StudioPreviewPage} />
             {/* CIC referee scoring — the mobile app referees use to score their
-                games. Referee token-auth (never a staff session); same-origin. */}
-            <Route path="/ref/signup" component={RefSignup} />
-            <Route path="/ref/game/:id" component={RefGameDetail} />
-            <Route path="/ref" component={RefHome} />
+                games. Referee token-auth (never a staff session); same-origin.
+                Clean URLs on ref.cicyouth.com (/login, /signup, /game/:id) —
+                old /ref* paths kept as redirects since links were already shared. */}
+            <Route path="/login" component={RefHome} />
+            <Route path="/signup" component={RefSignup} />
+            <Route path="/game/:id" component={RefGameDetail} />
+            <Route path="/ref/signup"><Redirect to="/signup" /></Route>
+            <Route path="/ref/game/:id">{(params) => <Redirect to={`/game/${params.id}`} />}</Route>
+            <Route path="/ref"><Redirect to="/login" /></Route>
             <Route path="/book" component={VenueBookPage} />
             <Route path="/book/success" component={VenueBookSuccess} />
             <Route path="/book/split/:code" component={VenueSplitPage} />

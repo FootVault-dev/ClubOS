@@ -1,4 +1,4 @@
-// CIC referee sign-up — /ref/signup. A proper, shareable LANDING PAGE for
+// CIC referee sign-up — /signup (old /ref/signup redirects here). A proper, shareable LANDING PAGE for
 // prospective referees (Daniel sends this link directly), not just a bare
 // form: hero → what the role involves → trust bullets → sign-up card →
 // footer note on approval. The submit flow itself is unchanged — a CIC
@@ -115,7 +115,7 @@ export default function RefSignup() {
               Your referee account is pending approval. The CIC team reviews every sign-up — we'll email you as
               soon as yours is active.
             </p>
-            <button onClick={() => navigate("/ref")} className="mt-6 text-sm font-semibold" style={{ color: GOLD }}>
+            <button onClick={() => navigate("/login")} className="mt-6 text-sm font-semibold" style={{ color: GOLD }}>
               ← Back to sign in
             </button>
           </div>
@@ -272,7 +272,7 @@ export default function RefSignup() {
 
               <div className="mt-6 text-center">
                 <button
-                  onClick={() => navigate("/ref")}
+                  onClick={() => navigate("/login")}
                   className="text-sm font-medium"
                   style={{ color: "rgba(255,255,255,0.5)" }}
                 >
