@@ -1992,3 +1992,63 @@ export async function sendRefereeApprovedEmail(params: {
     html,
   });
 }
+
+// ── MFL referee accounts (Mini Football Leagues) ──────────────────────────────
+// Clone of the two CIC referee emails above, for the league's own referee
+// scoring system (server/league-referee-routes.ts). MFL-branded (black + gold,
+// reuses the mflShell/mflRow helpers already defined in this file) rather than
+// the CIC one-off HTML, and sent from org 3's verified domain via fromForOrg.
+const MFL_REFEREE_NOTIFY_TO = process.env.MFL_REFEREE_NOTIFY_EMAIL || "info@minifootball.co.nz";
+// A dedicated ref.minifootball.co.nz host is coming; today's login lives on
+// the shared ClubOS app domain, same as the CIC referee login.
+const MFL_REFEREE_LOGIN_URL = "https://app.usg.co.nz/mfl-ref";
+
+// Heads-up to MFL staff that someone signed up to referee — so they can
+// approve them promptly in the ClubOS Referees tab. Best-effort; never blocks
+// signup.
+export async function sendMflRefereeSignupNotification(params: {
+  orgId: number;
+  refereeName: string;
+  email: string;
+  phone: string;
+}): Promise<boolean> {
+  const link = `${REFEREE_APP_BASE}/admin/mfl-referees`;
+  const body = `
+    <table style="width:100%; border-collapse:collapse;">
+      ${mflRow("Name", hiringEscape(params.refereeName))}
+      ${mflRow("Email", `<a href="mailto:${hiringEscape(params.email)}" style="color:#d1b96e;">${hiringEscape(params.email)}</a>`)}
+      ${mflRow("Phone", `<a href="tel:${hiringEscape(params.phone)}" style="color:#d1b96e;">${hiringEscape(params.phone)}</a>`)}
+    </table>
+    <div style="color:#9a9a9a; font-size:13px; margin-top:16px;">They can't score anything until you approve them.</div>
+    <div style="margin-top:22px;">
+      <a href="${link}" style="display:inline-block; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">Review in ClubOS</a>
+    </div>`;
+  return sendEmail({
+    to: MFL_REFEREE_NOTIFY_TO,
+    from: fromForOrg(params.orgId, "Mini Football Leagues"),
+    replyTo: params.email,
+    subject: `New MFL referee sign-up — ${params.refereeName}`,
+    html: mflShell({ heading: "New referee sign-up", bodyHtml: body }),
+  });
+}
+
+// Tell an approved referee they're in, with the link to sign in and score.
+export async function sendMflRefereeApprovedEmail(params: {
+  orgId: number;
+  to: string;
+  refereeName: string;
+}): Promise<boolean> {
+  const body = `
+    <div style="color:#e6e6e6; font-size:15px; line-height:1.6;">Hi ${hiringEscape(params.refereeName)},</div>
+    <div style="color:#b7b7b7; font-size:14px; line-height:1.7; margin-top:10px;">Your referee account is active. You can now sign in and score your Mini Football Leagues games from your phone — score, goalscorers and cards, all in one place.</div>
+    <div style="margin-top:22px;">
+      <a href="${MFL_REFEREE_LOGIN_URL}" style="display:inline-block; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:15px; padding:13px 26px; border-radius:999px;">Open referee scoring</a>
+    </div>
+    <div style="color:#7d7d7d; font-size:12px; margin-top:18px;">Sign in with the email and password you used to sign up. A dedicated ref.minifootball.co.nz address is coming — this link works today. Tip: add the page to your home screen for one-tap access.</div>`;
+  return sendEmail({
+    to: params.to,
+    from: fromForOrg(params.orgId, "Mini Football Leagues"),
+    subject: "You're approved — MFL referee scoring",
+    html: mflShell({ heading: "You're approved", bodyHtml: body }),
+  });
+}

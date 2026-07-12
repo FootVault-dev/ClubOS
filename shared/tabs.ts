@@ -101,6 +101,11 @@ const leagueTabs: TabDef[] = [
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "competitions", title: "Terms", url: "/admin/competitions" },
   { slug: "teams", title: "Teams", url: "/admin/teams" },
+  // Referee scoring app (mobile) + admin approvals/assignments/live feed.
+  // Isaac (the MFL coordinator) needs both, so neither is super-admin-only.
+  { slug: "mfl-referees", title: "Referees", url: "/admin/mfl-referees" },
+  { slug: "mfl-game-feed", title: "Game Feed", url: "/admin/mfl-game-feed" },
+  { slug: "mfl-media", title: "Photos", url: "/admin/mfl-media" },
   { slug: "payments", title: "Payments", url: "/admin/payments" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },

@@ -937,6 +937,10 @@ export const leagueCompetitions = pgTable("league_competitions", {
   contactWebsite: text("contact_website"),
   bannerImageUrl: text("banner_image_url"),
   active: boolean("active").notNull().default(true),
+  // Referee scoring app (clone of tournaments.gameDurationMinutes /
+  // breakBetweenMinutes) — leagues run their own match lengths.
+  halfLengthMinutes: integer("half_length_minutes").notNull().default(20),
+  breakMinutes: integer("break_minutes").notNull().default(5),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1114,6 +1118,18 @@ export const leagueGames = pgTable("league_games", {
   status: text("status").notNull().default("scheduled"),
   homeScore: integer("home_score"),
   awayScore: integer("away_score"),
+  // Referee scoring app: accountability stamp (mirrors tournament_games) — which
+  // referee last saved a score, and when. FK ON DELETE SET NULL: removing a
+  // referee must never erase the history that a game was scored.
+  lastScoredByRefereeId: integer("last_scored_by_referee_id").references(() => leagueReferees.id, { onDelete: "set null" }),
+  lastScoredAt: timestamp("last_scored_at"),
+  // Live match timer (Score Game) — same phase machine as tournament_games, but
+  // leagues have no brackets and no isLive column: status='in_progress' plays
+  // the "is this game live right now" role instead.
+  timerPhase: text("timer_phase").notNull().default("pre"), // pre|first_half|half_time|second_half|finished
+  timerRunning: boolean("timer_running").notNull().default(false),
+  timerStartedAt: timestamp("timer_started_at"),
+  timerBaseSeconds: integer("timer_base_seconds").notNull().default(0),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -1130,6 +1146,86 @@ export const leagueCoupons = pgTable("league_coupons", {
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ── MFL referee scoring (clone of the CIC referee system, shared/schema.ts
+// `cicReferees` / `cicRefereeAssignments`) ──────────────────────────────────
+// Referees are a SEPARATE identity from ClubOS staff `users` AND from
+// `leagueGameReferees` (a ClubOS user assigned as ref, used by the older
+// session-based /api/league/games/:id/score path) — see
+// server/league-referee-routes.ts for the full reasoning. Public signup writes
+// a 'pending' row; an MFL staffer approves it before it can log in. Statuses
+// validated app-side in shared/league-referees.ts (no DB enum).
+export const leagueReferees = pgTable("league_referees", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  status: text("status").notNull().default("pending"), // pending | approved | suspended | declined
+  approvedBy: integer("approved_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at"),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Soft assignment of a referee to a game — drives the ref's default "My games"
+// view. Any approved ref can still score any MFL game (flexibility as fixtures
+// shift); assignment is organisation + accountability, not a hard lock.
+export const leagueRefereeAssignments = pgTable("league_referee_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  refereeId: integer("referee_id").notNull().references(() => leagueReferees.id, { onDelete: "cascade" }),
+  gameId: integer("game_id").notNull().references(() => leagueGames.id, { onDelete: "cascade" }),
+  assignedBy: integer("assigned_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqAssignment: unique().on(t.refereeId, t.gameId),
+}));
+
+// Goals — unlike CIC's tournamentGoals, MFL has no player-roster table
+// (tournamentPlayers), so the scorer is free text. teamId is the CREDITED team
+// (an own goal sends the opponent's teamId — the client computes the flip).
+export const leagueGoals = pgTable("league_goals", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => leagueGames.id, { onDelete: "cascade" }),
+  teamId: integer("team_id").references(() => leagueTeams.id, { onDelete: "set null" }),
+  playerName: text("player_name").notNull(),
+  minute: integer("minute"),
+  isOwnGoal: boolean("is_own_goal").notNull().default(false),
+  isPenalty: boolean("is_penalty").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  gameIdx: index("league_goals_game_idx").on(t.gameId),
+}));
+
+// Disciplinary cards — same free-text-player shape as leagueGoals.
+export const leagueCards = pgTable("league_cards", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => leagueGames.id, { onDelete: "cascade" }),
+  teamId: integer("team_id").references(() => leagueTeams.id, { onDelete: "set null" }),
+  playerName: text("player_name").notNull(),
+  cardType: text("card_type").notNull(), // 'yellow' | 'red'
+  minute: integer("minute"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  gameIdx: index("league_cards_game_idx").on(t.gameId),
+}));
+
+// Photos/highlights for an MFL competition — a staged gallery (unpublished rows
+// let an admin queue images before they go live).
+export const leagueMedia = pgTable("league_media", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  competitionId: integer("competition_id").references(() => leagueCompetitions.id, { onDelete: "set null" }),
+  url: text("url").notNull(),
+  caption: text("caption"),
+  takenAt: date("taken_at"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  published: boolean("published").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgPublishedIdx: index("league_media_org_published_idx").on(t.organizationId, t.published),
+}));
 
 export const tournaments = pgTable("tournaments", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -1527,6 +1623,11 @@ export const insertLeagueTeamSchema = createInsertSchema(leagueTeams).omit({ id:
 export const insertLeagueGameSchema = createInsertSchema(leagueGames).omit({ id: true, createdAt: true });
 export const insertLeagueCouponSchema = createInsertSchema(leagueCoupons).omit({ id: true, createdAt: true });
 export const insertLeagueWaitlistSchema = createInsertSchema(leagueWaitlist).omit({ id: true, createdAt: true });
+export const insertLeagueRefereeSchema = createInsertSchema(leagueReferees).omit({ id: true, createdAt: true });
+export const insertLeagueRefereeAssignmentSchema = createInsertSchema(leagueRefereeAssignments).omit({ id: true, createdAt: true });
+export const insertLeagueGoalSchema = createInsertSchema(leagueGoals).omit({ id: true, createdAt: true });
+export const insertLeagueCardSchema = createInsertSchema(leagueCards).omit({ id: true, createdAt: true });
+export const insertLeagueMediaSchema = createInsertSchema(leagueMedia).omit({ id: true, createdAt: true });
 export const insertSplitSessionSchema = createInsertSchema(splitSessions).omit({ id: true, createdAt: true });
 export const insertSplitMemberSchema = createInsertSchema(splitMembers).omit({ id: true, joinedAt: true });
 
@@ -1706,6 +1807,16 @@ export type InsertLeagueCoupon = z.infer<typeof insertLeagueCouponSchema>;
 export type LeagueCoupon = typeof leagueCoupons.$inferSelect;
 export type InsertLeagueWaitlist = z.infer<typeof insertLeagueWaitlistSchema>;
 export type LeagueWaitlistEntry = typeof leagueWaitlist.$inferSelect;
+export type InsertLeagueReferee = z.infer<typeof insertLeagueRefereeSchema>;
+export type LeagueReferee = typeof leagueReferees.$inferSelect;
+export type InsertLeagueRefereeAssignment = z.infer<typeof insertLeagueRefereeAssignmentSchema>;
+export type LeagueRefereeAssignment = typeof leagueRefereeAssignments.$inferSelect;
+export type InsertLeagueGoal = z.infer<typeof insertLeagueGoalSchema>;
+export type LeagueGoal = typeof leagueGoals.$inferSelect;
+export type InsertLeagueCard = z.infer<typeof insertLeagueCardSchema>;
+export type LeagueCard = typeof leagueCards.$inferSelect;
+export type InsertLeagueMedia = z.infer<typeof insertLeagueMediaSchema>;
+export type LeagueMedia = typeof leagueMedia.$inferSelect;
 export type InsertSplitSession = z.infer<typeof insertSplitSessionSchema>;
 export type SplitSession = typeof splitSessions.$inferSelect;
 export type InsertSplitMember = z.infer<typeof insertSplitMemberSchema>;

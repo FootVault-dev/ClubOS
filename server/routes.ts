@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -18436,20 +18436,35 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // Derived "is this game live right now" — leagues have no isLive column
+  // (unlike tournament_games): the timer phase or an in_progress status plays
+  // that role instead. Referee scoring app: server/league-referee-routes.ts.
+  const leagueGameIsLive = (g: { timerPhase: string; status: string }): boolean =>
+    g.timerPhase === "first_half" || g.timerPhase === "half_time" || g.timerPhase === "second_half" || g.status === "in_progress";
+
   app.get("/api/public/league/competitions/:id/games", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      const [comp] = await db.select().from(leagueCompetitions).where(eq(leagueCompetitions.id, id));
+      const halfLengthMinutes = comp?.halfLengthMinutes ?? 20;
+      const breakMinutes = comp?.breakMinutes ?? 5;
+      const withTimer = (g: typeof leagueGames.$inferSelect) => ({
+        ...g,
+        halfLengthMinutes,
+        breakMinutes,
+        isLive: leagueGameIsLive(g),
+      });
       const filters: any[] = [eq(leagueGames.competitionId, id)];
       if (req.query.divisionId) filters.push(eq(leagueGames.divisionId, parseInt(req.query.divisionId as string)));
       if (req.query.teamId) {
         const teamId = parseInt(req.query.teamId as string);
         const all = await db.select().from(leagueGames).where(and(...filters)).orderBy(asc(leagueGames.gameDate), asc(leagueGames.startTime));
-        return res.json(all.filter(g => g.homeTeamId === teamId || g.awayTeamId === teamId));
+        return res.json(all.filter(g => g.homeTeamId === teamId || g.awayTeamId === teamId).map(withTimer));
       }
       const rows = await db.select().from(leagueGames)
         .where(and(...filters))
         .orderBy(asc(leagueGames.gameDate), asc(leagueGames.startTime));
-      res.json(rows);
+      res.json(rows.map(withTimer));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -18491,6 +18506,7 @@ export async function registerRoutes(
       const id = parseInt(req.params.id);
       const [game] = await db.select().from(leagueGames).where(eq(leagueGames.id, id));
       if (!game) return res.status(404).json({ message: "Not found" });
+      const [comp] = await db.select().from(leagueCompetitions).where(eq(leagueCompetitions.id, game.competitionId));
       const teamIds = [game.homeTeamId, game.awayTeamId].filter((x): x is number => x != null);
       const teams = teamIds.length > 0
         ? await db.select().from(leagueTeams).where(inArray(leagueTeams.id, teamIds))
@@ -18500,7 +18516,43 @@ export async function registerRoutes(
         ...game,
         homeTeam: game.homeTeamId ? byId.get(game.homeTeamId) ?? null : null,
         awayTeam: game.awayTeamId ? byId.get(game.awayTeamId) ?? null : null,
+        halfLengthMinutes: comp?.halfLengthMinutes ?? 20,
+        breakMinutes: comp?.breakMinutes ?? 5,
+        isLive: leagueGameIsLive(game),
       });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Goals for a single game — public, read-only (mirrors the game/standings
+  // endpoints above). Gated to MFL games via the game's competition, same as
+  // every other public league route in this block.
+  app.get("/api/public/league/games/:id/goals", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [game] = await db.select().from(leagueGames).where(eq(leagueGames.id, id));
+      if (!game) return res.status(404).json({ message: "Not found" });
+      const [comp] = await db.select().from(leagueCompetitions).where(eq(leagueCompetitions.id, game.competitionId));
+      if (!comp || comp.organizationId !== MFL_ORG_ID) return res.status(404).json({ message: "Not found" });
+      const rows = await db.select().from(leagueGoals)
+        .where(eq(leagueGoals.gameId, id))
+        // Nulls-last on minute (a goal without a recorded minute still shows,
+        // just at the end), then insertion order.
+        .orderBy(sql`${leagueGoals.minute} IS NULL`, asc(leagueGoals.minute), asc(leagueGoals.createdAt));
+      res.json({ goals: rows });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Photo/highlight gallery for an MFL competition — published only.
+  app.get("/api/public/league/media", async (req, res) => {
+    try {
+      const orgId = req.query.organizationId ? parseInt(req.query.organizationId as string) : MFL_ORG_ID;
+      const filters: any[] = [eq(leagueMedia.organizationId, orgId), eq(leagueMedia.published, true)];
+      if (req.query.competitionId) filters.push(eq(leagueMedia.competitionId, parseInt(req.query.competitionId as string)));
+      const rows = await db.select().from(leagueMedia)
+        .where(and(...filters))
+        .orderBy(asc(leagueMedia.sortOrder), desc(leagueMedia.takenAt))
+        .limit(200);
+      res.json({ media: rows });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

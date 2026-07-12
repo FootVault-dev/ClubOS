@@ -1,0 +1,364 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// MFL GAME FEED — the "Game Feed" admin tab, Mini Football Leagues workspace.
+// Cloned from client/src/components/cic-game-feed.tsx. A read-only,
+// auto-refreshing live board of every MFL league game — so Isaac/the MFL
+// coordinator can watch scores, referee assignments and live status roll in
+// from referees' phones without opening each competition individually. Data:
+// GET /api/admin/mfl/game-feed — server-scoped to the MFL org regardless of
+// X-Workspace-Slug (mirrors server/cic-referee-routes.ts). No scoring here —
+// that happens in the referee app (/mfl-ref) or the Score Game admin twin.
+// ─────────────────────────────────────────────────────────────────────────────
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
+import { apiRequest } from "@/lib/queryClient";
+import { nzTodayIso } from "@shared/academy";
+import { Goal, MapPin, RefreshCw, Users } from "lucide-react";
+
+const GOLD = "#d1b96e";
+const INK = "#000000";
+
+interface GameFeedReferee {
+  id: number;
+  fullName: string;
+}
+
+// Timer phases mirror server/mfl-referee-routes.ts applyTimerAction() and
+// client/src/components/match-timer.tsx — pre → first_half → half_time →
+// second_half → finished. Included on every feed row so LiveClock below can
+// show a running match clock without a second fetch per game.
+type FeedTimerPhase = "pre" | "first_half" | "half_time" | "second_half" | "finished";
+
+interface GameFeedItem {
+  id: number;
+  competitionId: number;
+  competitionName: string;
+  divisionId: number | null;
+  divisionName: string | null;
+  gameNumber: number | null;
+  gameDate: string | null;
+  startTime: string | null;
+  location: string | null;
+  status: "scheduled" | "in_progress" | "final" | "cancelled" | "forfeit";
+  homeTeamName: string | null;
+  awayTeamName: string | null;
+  homeScore: number | null;
+  awayScore: number | null;
+  timerPhase: FeedTimerPhase;
+  timerRunning: boolean;
+  timerStartedAt: string | null;
+  timerBaseSeconds: number;
+  assignedReferees: GameFeedReferee[];
+  lastScoredByName: string | null;
+  lastScoredAt: string | null;
+}
+
+function fmtClock(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+// The competition's actual breakMinutes isn't in this feed payload (it's a
+// per-competition setting that only comes down on the game-detail bundle) —
+// 5 is the standard used across MFL league nights; it only affects the
+// half-time countdown text, never the running first/second-half clock.
+const FEED_BREAK_MINUTES = 5;
+
+// A tiny self-ticking clock for a live game's row — mirrors MatchTimer's
+// derive-from-server-fields approach (client/src/components/match-timer.tsx)
+// so it stays correct across a stale tab or a slow refetch: it never owns a
+// running counter, it just re-renders every 500ms and recomputes from
+// whatever timer fields this row was last given.
+function LiveClock({ game }: { game: GameFeedItem }) {
+  const phase = game.timerPhase ?? "pre";
+  const running = !!game.timerRunning;
+  const live = phase === "first_half" || phase === "half_time" || phase === "second_half";
+
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const iv = setInterval(() => setTick((t) => t + 1), 500);
+    return () => clearInterval(iv);
+  }, [running, game.timerStartedAt]);
+
+  if (!live) return null;
+
+  let clockText: string;
+  if (phase === "half_time") {
+    const started = game.timerStartedAt ? new Date(game.timerStartedAt).getTime() : null;
+    const remaining = started ? FEED_BREAK_MINUTES * 60 - (Date.now() - started) / 1000 : FEED_BREAK_MINUTES * 60;
+    clockText = `HT ${fmtClock(Math.max(0, remaining))}`;
+  } else {
+    const base = game.timerBaseSeconds ?? 0;
+    const started = game.timerStartedAt ? new Date(game.timerStartedAt).getTime() : null;
+    const elapsed = running && started ? base + (Date.now() - started) / 1000 : base;
+    clockText = fmtClock(Math.max(0, elapsed));
+  }
+
+  return (
+    <span className="text-[10px] font-bold tabular-nums text-red-400/90 whitespace-nowrap" data-testid={`text-live-clock-${game.id}`}>
+      {clockText}
+    </span>
+  );
+}
+
+// Calendar-date label without a UTC round-trip — mirrors the same helper in
+// client/src/pages/mfl-ref/MflRefHome.tsx (the referee-facing twin of this feed).
+function dayLabel(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short" });
+}
+
+function StatusPill({ status, live }: { status: GameFeedItem["status"]; live: boolean }) {
+  if (status === "final") {
+    return (
+      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 whitespace-nowrap">
+        Final
+      </span>
+    );
+  }
+  if (status === "cancelled" || status === "forfeit") {
+    return (
+      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/5 text-white/35 whitespace-nowrap capitalize">
+        {status}
+      </span>
+    );
+  }
+  if (live) {
+    return (
+      <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 whitespace-nowrap">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> LIVE
+      </span>
+    );
+  }
+  return (
+    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/5 text-white/35 whitespace-nowrap">
+      Scheduled
+    </span>
+  );
+}
+
+function ScoreLine({ game }: { game: GameFeedItem }) {
+  const hasScore = game.homeScore != null && game.awayScore != null;
+  return (
+    <div className="flex items-center gap-3 min-w-0">
+      <span className="text-sm font-medium text-white/80 text-right flex-1 truncate">
+        {game.homeTeamName || "TBD"}
+      </span>
+      <div className="flex flex-col items-center shrink-0">
+        {hasScore ? (
+          <span className="text-base font-bold text-white tabular-nums">
+            {game.homeScore}–{game.awayScore}
+          </span>
+        ) : (
+          <span className="text-xs text-white/25 font-medium">vs</span>
+        )}
+      </div>
+      <span className="text-sm font-medium text-white/80 flex-1 truncate">
+        {game.awayTeamName || "TBD"}
+      </span>
+    </div>
+  );
+}
+
+function GameRow({ game }: { game: GameFeedItem }) {
+  const [, navigate] = useLocation();
+  const live = game.timerPhase === "first_half" || game.timerPhase === "half_time" || game.timerPhase === "second_half";
+  const refNames = game.assignedReferees.map((r) => r.fullName).join(", ");
+  return (
+    <div
+      className="rounded-xl border border-white/[0.05] bg-white/[0.015] p-3.5 space-y-2.5"
+      data-testid={`game-feed-row-${game.id}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 shrink-0 truncate max-w-[120px]">
+            {game.competitionName}
+          </span>
+          <span className="text-[11px] text-white/35 truncate">
+            {game.divisionName || ""}
+            {game.gameNumber != null ? ` · #${game.gameNumber}` : ""}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <LiveClock game={game} />
+          <StatusPill status={game.status} live={live} />
+        </div>
+      </div>
+
+      <ScoreLine game={game} />
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-white/35">
+        <span>{game.startTime || "—"}</span>
+        <span className="flex items-center gap-1">
+          <MapPin className="w-3 h-3" /> {game.location || "—"}
+        </span>
+        <span className="flex items-center gap-1 min-w-0">
+          <Users className="w-3 h-3 shrink-0" />
+          <span className={refNames ? "" : "text-white/20"}>{refNames || "Unassigned"}</span>
+        </span>
+      </div>
+
+      {game.lastScoredByName && (
+        <div className="text-[10px] text-white/25">
+          Last scored by <span className="text-white/40">{game.lastScoredByName}</span>
+          {game.lastScoredAt &&
+            ` · ${new Date(game.lastScoredAt).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}`}
+        </div>
+      )}
+
+      <button
+        onClick={() => navigate(`/admin/mfl-score/${game.id}`)}
+        className="w-full h-10 rounded-lg text-xs font-bold active:scale-[0.98] transition-transform"
+        style={{ background: GOLD, color: INK }}
+        data-testid={`button-score-game-${game.id}`}
+      >
+        Score Game
+      </button>
+    </div>
+  );
+}
+
+export function MflGameFeed() {
+  const [filterMode, setFilterMode] = useState<"today" | "all">("today");
+  const todayIso = nzTodayIso();
+
+  const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useQuery<{ games: GameFeedItem[] }>({
+    queryKey: ["/api/admin/mfl/game-feed"],
+    queryFn: async () => (await apiRequest("GET", "/api/admin/mfl/game-feed")).json(),
+    // League night: a second screen showing every game must not go stale —
+    // referees are scoring live from their phones the whole time this is open.
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const games = data?.games ?? [];
+  const visible = filterMode === "today" ? games.filter((g) => g.gameDate === todayIso) : games;
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, GameFeedItem[]>();
+    for (const g of visible) {
+      const key = g.gameDate ?? "unscheduled";
+      const arr = map.get(key) ?? [];
+      arr.push(g);
+      map.set(key, arr);
+    }
+    const entries = Array.from(map.entries());
+    entries.sort(([a], [b]) => a.localeCompare(b));
+    for (const [, arr] of entries) {
+      arr.sort((x, y) => {
+        const tA = x.startTime || "99:99";
+        const tB = y.startTime || "99:99";
+        if (tA !== tB) return tA.localeCompare(tB);
+        return (x.location || "").localeCompare(y.location || "");
+      });
+    }
+    return entries;
+  }, [visible]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-green-400" data-testid="text-game-feed-live-indicator">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> Live
+          </span>
+          <span className="text-xs text-white/25">
+            {dataUpdatedAt
+              ? `Updated ${new Date(dataUpdatedAt).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+              : "Loading…"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center rounded-lg bg-white/5 p-0.5">
+            <button
+              onClick={() => setFilterMode("today")}
+              className={`text-xs font-medium px-3 py-1.5 rounded-md transition-colors ${
+                filterMode === "today" ? "bg-blue-500/20 text-blue-400" : "text-white/40 hover:text-white/60"
+              }`}
+              data-testid="button-game-feed-today"
+            >
+              Today
+            </button>
+            <button
+              onClick={() => setFilterMode("all")}
+              className={`text-xs font-medium px-3 py-1.5 rounded-md transition-colors ${
+                filterMode === "all" ? "bg-blue-500/20 text-blue-400" : "text-white/40 hover:text-white/60"
+              }`}
+              data-testid="button-game-feed-all"
+            >
+              All days
+            </button>
+          </div>
+          <button
+            onClick={() => refetch()}
+            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/5 text-white/30 hover:text-white/60"
+            title="Refresh now"
+            data-testid="button-game-feed-refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-24 rounded-xl bg-white/[0.02] animate-pulse" />
+          ))}
+        </div>
+      ) : games.length === 0 ? (
+        <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] p-5">
+          <div className="flex flex-col items-center justify-center py-16 text-white/20">
+            <Goal className="w-12 h-12 mb-3" />
+            <p className="text-sm">No games yet</p>
+            <p className="text-xs mt-1">Games will appear here once a term's fixtures are generated</p>
+          </div>
+        </div>
+      ) : grouped.length === 0 ? (
+        <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] p-5">
+          <div className="flex flex-col items-center justify-center py-16 text-white/20">
+            <Goal className="w-12 h-12 mb-3" />
+            <p className="text-sm">No games today</p>
+            <button
+              onClick={() => setFilterMode("all")}
+              className="text-xs mt-2 text-blue-400 hover:text-blue-300 underline underline-offset-2"
+              data-testid="button-game-feed-view-all"
+            >
+              View all days
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {grouped.map(([date, dayGames]) => (
+            <div key={date}>
+              <div className="flex items-center gap-2 mb-2.5 px-1">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-white/40">
+                  {date === "unscheduled" ? "No date set" : dayLabel(date)}
+                </h3>
+                {date === todayIso && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">TODAY</span>
+                )}
+                <span className="text-[10px] text-white/20">
+                  {dayGames.length} game{dayGames.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                {dayGames.map((g) => (
+                  <GameRow key={g.id} game={g} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default MflGameFeed;

@@ -134,6 +134,14 @@ app.use(attributionCookieMiddleware);
   const { registerCicRefereeRoutes } = await import("./cic-referee-routes");
   registerCicRefereeRoutes(app);
 
+  // MFL referee scoring — clone of the CIC referee system for Mini Football
+  // Leagues. Public referee sign-up/login + token-scoped scoring endpoints
+  // (resolve MFL org server-side, never a staff session); admin approval gated
+  // by requireTab("mfl-referees"), scheduling/assignment/media gated by
+  // requireTab("competitions") — both in the MFL workspace.
+  const { registerLeagueRefereeRoutes } = await import("./league-referee-routes");
+  registerLeagueRefereeRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).

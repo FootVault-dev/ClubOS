@@ -111,6 +111,13 @@ import CicScoreGame from "@/pages/cic-score-game";
 import RefHome from "@/pages/ref/RefHome";
 import RefSignup from "@/pages/ref/RefSignup";
 import RefGameDetail from "@/pages/ref/RefGameDetail";
+import MflReferees from "@/pages/mfl-referees";
+import MflGameFeedPage from "@/pages/mfl-game-feed";
+import MflScoreGame from "@/pages/mfl-score-game";
+import MflMedia from "@/pages/mfl-media";
+import MflRefHome from "@/pages/mfl-ref/MflRefHome";
+import MflRefSignup from "@/pages/mfl-ref/MflRefSignup";
+import MflRefGameDetail from "@/pages/mfl-ref/MflRefGameDetail";
 import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
 import CugcFreeSessions from "@/pages/cugc-free-sessions";
@@ -360,6 +367,10 @@ function AdminRouter() {
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />
+        <Route path="/admin/mfl-referees" component={MflReferees} />
+        <Route path="/admin/mfl-game-feed" component={MflGameFeedPage} />
+        <Route path="/admin/mfl-score/:id" component={MflScoreGame} />
+        <Route path="/admin/mfl-media" component={MflMedia} />
         <Route path="/admin/payments" component={LeaguePayments} />
         <Route path="/admin/mailer" component={LeagueMailer} />
         <Route path="/admin/rewards" component={LeagueRewards} />
@@ -531,16 +542,20 @@ function App() {
                 const isVenueHost = host.startsWith("book.");
                 const isPrintHost = host.startsWith("order.") || host.includes("unitedprints.co.nz");
                 const isMflHost = host.includes("minifootball");
-                // ref.cicyouth.com = the referee platform (login/signup/dashboard).
-                // MUST come before the cicyouth check below — otherwise the
-                // "cicyouth" substring sends ref.cicyouth.com to the Skills
-                // Challenge page. join.cicyouth.com stays Skills Challenge.
+                // ref.cicyouth.com / ref.minifootball.co.nz = the referee
+                // platforms (login/signup/dashboard). MUST come before BOTH
+                // the minifootball check and the cicyouth check below —
+                // otherwise the "minifootball"/"cicyouth" substring sends a
+                // ref.* host to the league landing page / Skills Challenge
+                // page instead. join.cicyouth.com stays Skills Challenge;
+                // minifootball.co.nz (no "ref." prefix) stays the league page.
                 const isRefHost = host.startsWith("ref.");
+                const isMflRefHost = isRefHost && isMflHost;
                 const isCicHost = host.includes("cicyouth");
                 if (isVenueHost) return <VenueBookPage />;
                 if (isPrintHost) return <PrintHub />;
+                if (isRefHost) return <Redirect to={isMflRefHost ? "/mfl-ref" : "/login"} />;
                 if (isMflHost) return <Redirect to="/league" />;
-                if (isRefHost) return <Redirect to="/login" />;
                 if (isCicHost) return <Redirect to="/skills" />;
                 return <Redirect to={isAdminHost ? "/admin/login" : "/fundamentals-camp"} />;
               })()}
@@ -560,13 +575,41 @@ function App() {
             {/* CIC referee scoring — the mobile app referees use to score their
                 games. Referee token-auth (never a staff session); same-origin.
                 Clean URLs on ref.cicyouth.com (/login, /signup, /game/:id) —
-                old /ref* paths kept as redirects since links were already shared. */}
-            <Route path="/login" component={RefHome} />
-            <Route path="/signup" component={RefSignup} />
-            <Route path="/game/:id" component={RefGameDetail} />
+                old /ref* paths kept as redirects since links were already shared.
+                ref.minifootball.co.nz shares these SAME clean paths but redirects
+                into the /mfl-ref/* namespace below — one URL shape, two brands,
+                picked by hostname (cicyouth.com behaviour is untouched). */}
+            <Route path="/login">
+              {() => {
+                const host = typeof window !== "undefined" ? window.location.hostname : "";
+                if (host.startsWith("ref.") && host.includes("minifootball")) return <Redirect to="/mfl-ref" />;
+                return <RefHome />;
+              }}
+            </Route>
+            <Route path="/signup">
+              {() => {
+                const host = typeof window !== "undefined" ? window.location.hostname : "";
+                if (host.startsWith("ref.") && host.includes("minifootball")) return <Redirect to="/mfl-ref/signup" />;
+                return <RefSignup />;
+              }}
+            </Route>
+            <Route path="/game/:id">
+              {(params) => {
+                const host = typeof window !== "undefined" ? window.location.hostname : "";
+                if (host.startsWith("ref.") && host.includes("minifootball")) return <Redirect to={`/mfl-ref/game/${params.id}`} />;
+                return <RefGameDetail />;
+              }}
+            </Route>
             <Route path="/ref/signup"><Redirect to="/signup" /></Route>
             <Route path="/ref/game/:id">{(params) => <Redirect to={`/game/${params.id}`} />}</Route>
             <Route path="/ref"><Redirect to="/login" /></Route>
+            {/* MFL referee scoring — separate namespace, own gold-on-black
+                brand (client/src/pages/mfl-ref/*). Reached directly at
+                /mfl-ref/* on app.usg.co.nz, or via the clean-URL redirect
+                above on ref.minifootball.co.nz. */}
+            <Route path="/mfl-ref" component={MflRefHome} />
+            <Route path="/mfl-ref/signup" component={MflRefSignup} />
+            <Route path="/mfl-ref/game/:id" component={MflRefGameDetail} />
             <Route path="/book" component={VenueBookPage} />
             <Route path="/book/success" component={VenueBookSuccess} />
             <Route path="/book/split/:code" component={VenueSplitPage} />
