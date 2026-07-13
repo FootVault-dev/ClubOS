@@ -1,21 +1,21 @@
-# VERIFY.md — independent verification criteria for loop/tracking-platform
+# VERIFY.md — independent verification criteria for loop/warehouse
 
 You are a skeptical, READ-ONLY reviewer. Assume the loop's work only LOOKS done. Never change code.
-Review the branch diff (`git diff feat/proposals-tracker-search..HEAD`) against `PLAN.md` + `AGENTS.md`.
+Review the branch diff (`git diff integration/canonical-2..HEAD`) against `PLAN.md` + `SPEC.md` + `AGENTS.md`.
 Write findings to `NEEDS_REVIEW.md` (be specific: file:line, why it's wrong, how to confirm).
 
-## Gate the whole branch on these — a NO on any is a finding:
+## What to attack, in priority order
 
-1. **Build is green.** `npm run build` exits 0. (Do NOT judge on `tsc` — this repo has ~500 pre-existing type errors; only NEW errors introduced in the loop's OWN new files matter, and even those only if they'd break the esbuild build.)
-2. **Every pure-logic module has a passing test.** For each `shared/behavior*.ts`, a `script/test-*.ts` exists and passes (`npx tsx script/test-<name>.ts` exits 0). Re-run them yourself.
-3. **The attribution touch path is UNTOUCHED.** `git diff` must show NO semantic change to `shared/attribution.ts` classifier, `shapeAnalyticsEvent`, the `/api/public/analytics/{hello,event,batch}` handlers, or `analytics_events` touch columns. Behavioral events must write to the NEW `behavior_events` table, NOT `analytics_events`. Flag any modification to the live attribution flow.
-4. **No migration was applied; migrations are additive.** New files under `migrations/` only. grep them: NO `DROP TABLE`, NO `ALTER ... RENAME`, NO `db:push`, NO destructive verb — EXCEPT the single guarded 13-month `DROP PARTITION` in the prune step (that one is allowed). No code path calls a migration-apply/`drizzle-kit push` against a DB.
-5. **Fail-silent + no-block guarantee.** The `/api/public/analytics/behavior` handler is try/catch, returns 200 on bad input, and cannot throw into a request that matters. The client tracker additions cannot throw synchronously on the page. Confirm behavioral capture is not on any checkout-blocking path.
-6. **Dashboards read rollups, not raw events.** The `GET /api/admin/behavior/*` endpoints query the `*_daily` rollup tables, NOT `behavior_events` directly (raw table is for the cron only). Flag any admin endpoint scanning `behavior_events`.
-7. **Auth + org scoping.** Every `/api/admin/behavior/*` endpoint is `requireAuth` and org-scoped (`attributionScope`/`workspaceOrg`) — no cross-workspace leak, no unauthenticated admin data.
-8. **No child PII / no raw form values.** Behavioral events store visitor_id + shape only — no names, emails, or form field values; `click` stores a text HASH not raw text.
-9. **Tab wiring complete.** If a `behavior` tab was added, it's in `shared/tabs.ts` + all `app-sidebar.tsx` nav arrays + an `App.tsx` route + the page exists (mirror the `attribution` tab exactly — check the counts match).
-10. **PLAN accuracy.** Every task marked `- [x]` is genuinely, fully implemented (not a stub). Spot-check 2–3 checked tasks against the actual code.
+1. **Ledger integrity.** Any code path that UPDATEs or DELETEs `wh_movements` rows. Any stock change that bypasses `postMovementGroup`. Any place `wh_stock.on_hand` is written outside the engine's atomic upsert. The T13 shop-routes edit especially.
+2. **The derived-state rule.** A stored `available`, a stored `overdue`, a stored `qty_received` — any column duplicating what SPEC says is derived. Any query computing `available` from `on_hand` alone (ignoring reservations) or including QUARANTINE/virtual locations in sellable stock.
+3. **Race safety.** The non-negative guard: is it a genuine conditional UPDATE checked for 0 rows inside the same transaction as the ledger insert, or a read-then-write? Does idempotency actually short-circuit on unique violation and return the prior result? Do transfer groups reject when legs don't sum to zero?
+4. **Blind counts.** Does any counter-facing endpoint/UI response include `expected_qty` before approval? Is counter ≠ approver enforced server-side (not just hidden in UI)?
+5. **Auth.** Every `/api/admin/warehouse/*` route behind `requireTab("warehouse")` except the deliberate `requireAuth`-only requisition submit/view-own paths. No route trusts an org id from the request body.
+6. **Sync correctness.** Echo suppression logic (would our own push be re-detected as drift?); webhook dedupe on `wh_shopify_events`; SIU sibling fan-out (3 variants ↔ 1 item both directions); everything inert without env flags; idempotency key on every push; no REST Admin API calls anywhere.
+7. **House rules.** CHECK constraints on enum-ish text columns (forbidden); money not in cents; `new Date().toISOString()` used for calendar dates; ISO dates round-tripped through `Date`; CDN script tags; unpinned deps; edits to existing migrations or deploy.sh; any DB connection attempt in tests.
+8. **Migration/apply completeness.** Every table + index in `migrations/2026-07-13_warehouse.sql` present in `script/apply-warehouse.ts` verification arrays; partial unique indexes carry WHERE clauses; migration is strictly additive.
+9. **Fake completeness.** Stubs, TODOs (other than the sanctioned `TODO-verify(live)` Shopify-syntax markers and env-flagged calls), placeholder UI panels rendering nothing, tests that assert nothing, tasks marked `[x]` whose named `verify:` command doesn't actually pass when you run it (you MAY run `npm run check`, `npm run build`, and `npx tsx script/test-warehouse-*.ts` — they are read-only).
 
-## Output
-Write `NEEDS_REVIEW.md` with a prioritized list (blocking first). If everything passes, write `NEEDS_REVIEW.md` containing exactly `VERIFIED CLEAN` on the first line + a one-paragraph summary of what you checked.
+## Verdict format
+
+End `NEEDS_REVIEW.md` with either `VERDICT: CLEAN` or `VERDICT: ISSUES (<n>)` and a ranked list.
