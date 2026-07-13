@@ -42,6 +42,14 @@ interface MflReferee {
   decidedAt: string | null;
   lastLoginAt: string | null;
   createdAt: string;
+  // Invoice/payment details — what the coordinator needs to fill the
+  // fortnightly per-ref invoice. Null for refs who signed up before
+  // 2026-07-13 (server/league-referee-routes.ts).
+  bankAccountName: string | null;
+  bankAccountNumber: string | null;
+  bankName: string | null;
+  address: string | null;
+  gstNumber: string | null;
 }
 
 interface MflRefereeAssignment {
@@ -368,6 +376,7 @@ function RefereeCard({ referee, onSetStatus, onDelete }: {
               <CalendarCheck className="w-3 h-3" /> {referee.assignmentCount} game{referee.assignmentCount === 1 ? "" : "s"} assigned
             </span>
           </div>
+          <InvoiceDetailsBlock referee={referee} />
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
@@ -416,6 +425,64 @@ function RefereeCard({ referee, onSetStatus, onDelete }: {
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Muted "invoice details" block on each referee card — what the coordinator
+// needs to fill the fortnightly per-ref invoice, plus a Copy button that puts
+// all lines on the clipboard as plain text ready to paste into the invoice
+// template. Refs created before 2026-07-13 have no payment fields at all —
+// shown plainly rather than as blank/zero values.
+function InvoiceDetailsBlock({ referee }: { referee: MflReferee }) {
+  const { toast } = useToast();
+  const hasDetails = !!(referee.bankAccountName || referee.bankAccountNumber || referee.bankName || referee.address);
+
+  if (!hasDetails) {
+    return (
+      <div className="mt-2 rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-2 text-[11px] text-white/30">
+        No payment details yet (signed up before we collected them).
+      </div>
+    );
+  }
+
+  const rows: { label: string; value: string }[] = [
+    { label: "Name", value: referee.bankAccountName || "—" },
+    { label: "Bank", value: referee.bankName || "—" },
+    { label: "Account", value: referee.bankAccountNumber || "—" },
+    { label: "Address", value: referee.address || "—" },
+    { label: "GST", value: referee.gstNumber || "—" },
+  ];
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(rows.map((r) => `${r.label}: ${r.value}`).join("\n"));
+      toast({ title: "Copied", description: "Invoice details copied — paste into the invoice template." });
+    } catch {
+      toast({ title: "Couldn't copy", variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="mt-2 rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-2">
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-white/30">Invoice details</span>
+        <button
+          onClick={copy}
+          data-testid={`button-copy-invoice-details-${referee.id}`}
+          className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] font-medium text-white/50 hover:text-white/80 hover:bg-white/[0.06] transition-colors"
+        >
+          <Copy className="w-3 h-3" /> Copy
+        </button>
+      </div>
+      <div className="space-y-0.5 text-[12px] text-white/55">
+        {rows.map((r) => (
+          <div key={r.label} className="flex gap-1.5">
+            <span className="text-white/30 shrink-0">{r.label}</span>
+            <span className="truncate">{r.value}</span>
+          </div>
+        ))}
       </div>
     </div>
   );

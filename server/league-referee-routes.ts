@@ -22,6 +22,7 @@
 //   POST /api/public/mfl-referees/signup            — self sign-up → 'pending'
 //   POST /api/public/mfl-referees/login             — approved refs only → token
 //   GET  /api/public/mfl-referees/me
+//   PATCH /api/public/mfl-referees/me                — edit own payment/invoice details
 //   GET  /api/public/mfl-referees/games?scope=mine|all
 //   GET  /api/public/mfl-referees/games/:id
 //   PATCH/POST/DELETE .../games/:id/(score|goals|cards|timer)
@@ -78,6 +79,20 @@ const MFL_ORG_SLUG = "mini-football-leagues";
 
 const s = (v: any, max = 200): string => String(v ?? "").trim().slice(0, max);
 const isEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+
+// NZ bank account number: BB-BBBB-AAAAAAA-SS(S) — 2-digit bank, 4-digit
+// branch, 7-digit account, 2-or-3-digit suffix (15 or 16 digits total).
+// Referees can paste it however they like (spaces, dashes, none) — strip
+// everything but digits and re-canonicalise, so the coordinator's invoice
+// always shows one consistent format. Returns null if it isn't 15 or 16
+// digits.
+function formatNzBankAccount(raw: string): string | null {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (digits.length !== 15 && digits.length !== 16) return null;
+  return `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6, 13)}-${digits.slice(13)}`;
+}
+const BANK_ACCOUNT_ERROR =
+  "That doesn't look like a NZ bank account number — it should be 15 or 16 digits, like 12-3456-0123456-000.";
 
 // MFL org id, resolved from the slug (never trusted from the client) and cached.
 let mflOrgIdCache: number | null = null;
@@ -358,6 +373,9 @@ function hit(map: Map<string, number[]>, ip: string, cap: number): boolean {
   return false;
 }
 
+// Used by the admin (staff) routes — includes the payment/invoice fields so
+// the coordinator can read them straight off the Approvals card (and copy
+// them into the fortnightly per-ref invoice).
 const publicLeagueRef = (r: typeof leagueReferees.$inferSelect) => ({
   id: r.id,
   fullName: r.fullName,
@@ -368,6 +386,25 @@ const publicLeagueRef = (r: typeof leagueReferees.$inferSelect) => ({
   decidedAt: r.decidedAt,
   lastLoginAt: r.lastLoginAt,
   createdAt: r.createdAt,
+  bankAccountName: r.bankAccountName,
+  bankAccountNumber: r.bankAccountNumber,
+  bankName: r.bankName,
+  address: r.address,
+  gstNumber: r.gstNumber,
+});
+
+// Used by the referee-facing /me routes (GET + PATCH) — same payment fields,
+// referee identity shape instead of the admin/status shape.
+const refereeSelfView = (r: typeof leagueReferees.$inferSelect) => ({
+  id: r.id,
+  fullName: r.fullName,
+  email: r.email,
+  phone: r.phone,
+  bankAccountName: r.bankAccountName,
+  bankAccountNumber: r.bankAccountNumber,
+  bankName: r.bankName,
+  address: r.address,
+  gstNumber: r.gstNumber,
 });
 
 export function registerLeagueRefereeRoutes(app: Express) {
@@ -383,6 +420,14 @@ export function registerLeagueRefereeRoutes(app: Express) {
       const email = s(req.body?.email, LEAGUE_REFEREE_LIMITS.maxEmailLength).toLowerCase();
       const phone = s(req.body?.phone, LEAGUE_REFEREE_LIMITS.maxPhoneLength);
       const password = String(req.body?.password ?? "");
+      // Payment/invoice details — required so the MFL coordinator can pay
+      // this ref per game on the fortnightly invoice run.
+      const bankAccountName = s(req.body?.bankAccountName, 120);
+      const bankName = s(req.body?.bankName, 60);
+      const address = s(req.body?.address, 300);
+      const gstNumberRaw = s(req.body?.gstNumber, 20);
+      const bankAccountNumberRaw = String(req.body?.bankAccountNumber ?? "").trim();
+      const bankAccountNumber = bankAccountNumberRaw ? formatNzBankAccount(bankAccountNumberRaw) : null;
 
       const errors: string[] = [];
       if (!fullName) errors.push("Your full name is required.");
@@ -391,6 +436,17 @@ export function registerLeagueRefereeRoutes(app: Express) {
       if (password.length < LEAGUE_REFEREE_LIMITS.minPasswordLength) {
         errors.push(`Choose a password of at least ${LEAGUE_REFEREE_LIMITS.minPasswordLength} characters.`);
       }
+      if (!bankAccountName) errors.push("The name on your bank account is required.");
+      if (!bankName) errors.push("Your bank name is required.");
+      if (!bankAccountNumberRaw) errors.push("Your bank account number is required.");
+      else if (!bankAccountNumber) errors.push(BANK_ACCOUNT_ERROR);
+      if (!address) errors.push("Your address is required.");
+      // GST number is optional — only validated (digits/dashes) if provided.
+      let gstNumber: string | null = null;
+      if (gstNumberRaw) {
+        if (!/^[\d-]+$/.test(gstNumberRaw)) errors.push("Your GST number should only contain digits and dashes.");
+        else gstNumber = gstNumberRaw;
+      }
       if (errors.length) return res.status(400).json({ message: errors[0], errors });
 
       const orgId = await mflOrgId();
@@ -398,7 +454,10 @@ export function registerLeagueRefereeRoutes(app: Express) {
       let created;
       try {
         [created] = await db.insert(leagueReferees)
-          .values({ organizationId: orgId, fullName, email, phone, passwordHash, status: "pending" })
+          .values({
+            organizationId: orgId, fullName, email, phone, passwordHash, status: "pending",
+            bankAccountName, bankAccountNumber, bankName, address, gstNumber,
+          })
           .returning();
       } catch (e: any) {
         // league_referees_org_email_unq — someone already signed up with this email.
@@ -461,7 +520,56 @@ export function registerLeagueRefereeRoutes(app: Express) {
 
   app.get("/api/public/mfl-referees/me", requireLeagueRefereeToken, async (req, res) => {
     const r = (req as any).leagueReferee;
-    res.json({ referee: { id: r.id, fullName: r.fullName, email: r.email, phone: r.phone } });
+    res.json({ referee: refereeSelfView(r) });
+  });
+
+  // Referee self-service edit of their own payment/invoice details ONLY —
+  // the five fields the MFL coordinator needs for the fortnightly per-ref
+  // invoice. Same validation as signup; a referee can update these any time
+  // without staff involvement (e.g. they switch banks).
+  app.patch("/api/public/mfl-referees/me", requireLeagueRefereeToken, async (req, res) => {
+    try {
+      const r = (req as any).leagueReferee;
+      const b = req.body ?? {};
+      const patch: Record<string, any> = {};
+      const errors: string[] = [];
+
+      if (b.bankAccountName !== undefined) {
+        const v = s(b.bankAccountName, 120);
+        if (!v) errors.push("The name on your bank account is required.");
+        else patch.bankAccountName = v;
+      }
+      if (b.bankName !== undefined) {
+        const v = s(b.bankName, 60);
+        if (!v) errors.push("Your bank name is required.");
+        else patch.bankName = v;
+      }
+      if (b.bankAccountNumber !== undefined) {
+        const formatted = formatNzBankAccount(String(b.bankAccountNumber ?? "").trim());
+        if (!formatted) errors.push(BANK_ACCOUNT_ERROR);
+        else patch.bankAccountNumber = formatted;
+      }
+      if (b.address !== undefined) {
+        const v = s(b.address, 300);
+        if (!v) errors.push("Your address is required.");
+        else patch.address = v;
+      }
+      if (b.gstNumber !== undefined) {
+        const v = s(b.gstNumber, 20);
+        if (v && !/^[\d-]+$/.test(v)) errors.push("Your GST number should only contain digits and dashes.");
+        else patch.gstNumber = v || null;
+      }
+      if (errors.length) return res.status(400).json({ message: errors[0], errors });
+      if (Object.keys(patch).length === 0) return res.status(400).json({ message: "Nothing to update." });
+
+      const [updated] = await db.update(leagueReferees).set(patch)
+        .where(eq(leagueReferees.id, r.id))
+        .returning();
+      res.json({ referee: refereeSelfView(updated) });
+    } catch (e: any) {
+      console.error("[league-ref] update me failed", e);
+      res.status(500).json({ message: "Couldn't save your details." });
+    }
   });
 
   // The referee's game list. scope=mine → their assigned games; scope=all →

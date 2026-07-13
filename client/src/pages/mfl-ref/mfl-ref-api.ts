@@ -96,6 +96,38 @@ export interface Referee {
   fullName: string;
   email: string;
   phone?: string;
+  // Payment/invoice details — collected at signup, editable any time from
+  // MflRefHome's "Payment details" card. Null/undefined until filled in.
+  bankAccountName?: string | null;
+  bankAccountNumber?: string | null;
+  bankName?: string | null;
+  address?: string | null;
+  gstNumber?: string | null;
+}
+
+// Body shape for PATCH /api/public/mfl-referees/me — the five referee-
+// editable payment/invoice fields. gstNumber is the only optional one.
+export interface RefPaymentDetailsInput {
+  bankAccountName: string;
+  bankAccountNumber: string;
+  bankName: string;
+  address: string;
+  gstNumber?: string;
+}
+
+export const updateMyDetails = (details: RefPaymentDetailsInput) =>
+  refPatch<{ referee: Referee }>("/api/public/mfl-referees/me", details);
+
+// Live "auto-format as you type" for NZ bank account numbers — mirrors the
+// server's canonical BB-BBBB-AAAAAAA-SS(S) shape (formatNzBankAccount in
+// server/league-referee-routes.ts) but tolerant of partial input while the
+// referee is still typing. Strips non-digits, caps at 16, re-inserts dashes
+// at the 2-4-7 boundaries. Shared by MflRefSignup and MflRefHome's edit form.
+export function formatBankAccountInput(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 16);
+  return [digits.slice(0, 2), digits.slice(2, 6), digits.slice(6, 13), digits.slice(13, 16)]
+    .filter(Boolean)
+    .join("-");
 }
 
 export type MflGameStatus = "scheduled" | "in_progress" | "final" | "cancelled" | "forfeit";

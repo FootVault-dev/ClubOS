@@ -12,20 +12,26 @@ import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
   CalendarClock,
+  ChevronDown,
+  CreditCard,
   Loader2,
   LogOut,
   MapPin,
+  Pencil,
   ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   clearRefToken,
+  formatBankAccountInput,
   getRefToken,
   isGameLive,
   refGet,
   refPost,
   setRefToken,
+  updateMyDetails,
   RefApiError,
   type MflRefGameListItem,
   type Referee,
@@ -44,6 +50,8 @@ const FONT_STYLE = `
 
 const fieldClass =
   "h-12 text-base rounded-xl bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-[#d1b96e] focus-visible:ring-offset-0";
+const textareaClass =
+  "min-h-[68px] text-base rounded-xl bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-[#d1b96e] focus-visible:ring-offset-0";
 
 function RefShell({ children }: { children: ReactNode }) {
   return (
@@ -124,6 +132,7 @@ export default function MflRefHome() {
           referee={referee}
           onSignOut={handleSignOut}
           onOpenGame={(id) => navigate(`/mfl-ref/game/${id}`)}
+          onRefereeUpdated={setReferee}
         />
       )}
     </RefShell>
@@ -251,10 +260,12 @@ function GameListScreen({
   referee,
   onSignOut,
   onOpenGame,
+  onRefereeUpdated,
 }: {
   referee: Referee;
   onSignOut: () => void;
   onOpenGame: (id: number) => void;
+  onRefereeUpdated: (r: Referee) => void;
 }) {
   const [tab, setTab] = useState<FeedTab>("upcoming");
   const [scope, setScope] = useState<"mine" | "all">("mine");
@@ -295,6 +306,10 @@ function GameListScreen({
         >
           <LogOut className="h-3.5 w-3.5" /> Sign out
         </button>
+      </div>
+
+      <div className="px-5 mb-2.5">
+        <PaymentDetailsCard referee={referee} onUpdated={onRefereeUpdated} />
       </div>
 
       {/* Which games — My Games (assigned, default) vs All Games (every MFL
@@ -511,6 +526,226 @@ function GameCard({
       >
         Score Game
       </button>
+    </div>
+  );
+}
+
+// ── Payment details ─────────────────────────────────────────────────────
+// Collapsible card — what the MFL coordinator needs for the fortnightly
+// per-ref invoice (server/league-referee-routes.ts). Compact: collapsed by
+// default, view mode shows the five values, edit mode is the same fields as
+// signup, saved via PATCH /api/public/mfl-referees/me.
+function PaymentDetailsCard({
+  referee,
+  onUpdated,
+}: {
+  referee: Referee;
+  onUpdated: (r: Referee) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [bankAccountName, setBankAccountName] = useState(referee.bankAccountName ?? "");
+  const [bankName, setBankName] = useState(referee.bankName ?? "");
+  const [bankAccountNumber, setBankAccountNumber] = useState(referee.bankAccountNumber ?? "");
+  const [address, setAddress] = useState(referee.address ?? "");
+  const [gstNumber, setGstNumber] = useState(referee.gstNumber ?? "");
+
+  const bankDigits = bankAccountNumber.replace(/\D/g, "");
+  const bankAccountNumberValid = bankDigits.length === 15 || bankDigits.length === 16;
+  const gstNumberValid = !gstNumber.trim() || /^[\d-]+$/.test(gstNumber.trim());
+  const valid = Boolean(
+    bankAccountName.trim() && bankName.trim() && bankAccountNumberValid && address.trim() && gstNumberValid,
+  );
+
+  const hasDetails = !!(referee.bankAccountName || referee.bankAccountNumber || referee.bankName || referee.address);
+
+  const startEdit = () => {
+    setBankAccountName(referee.bankAccountName ?? "");
+    setBankName(referee.bankName ?? "");
+    setBankAccountNumber(referee.bankAccountNumber ?? "");
+    setAddress(referee.address ?? "");
+    setGstNumber(referee.gstNumber ?? "");
+    setError(null);
+    setSaved(false);
+    setEditing(true);
+    setOpen(true);
+  };
+
+  const save = async () => {
+    if (!valid) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await updateMyDetails({
+        bankAccountName: bankAccountName.trim(),
+        bankName: bankName.trim(),
+        bankAccountNumber,
+        address: address.trim(),
+        gstNumber: gstNumber.trim() || undefined,
+      });
+      onUpdated(res.referee);
+      setEditing(false);
+      setSaved(true);
+    } catch (e: any) {
+      setError(e instanceof RefApiError ? e.message : "Couldn't save your details.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl" style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <CreditCard className="h-4 w-4 shrink-0" style={{ color: GOLD }} />
+          <span className="text-[13px] font-bold text-white">Payment details</span>
+          {!hasDetails && (
+            <span
+              className="text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0"
+              style={{ background: "rgba(239,68,68,0.15)", color: "#f87171", border: "1px solid rgba(239,68,68,0.4)" }}
+            >
+              MISSING
+            </span>
+          )}
+        </div>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          style={{ color: "rgba(255,255,255,0.4)" }}
+        />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4">
+          {!editing ? (
+            <>
+              {hasDetails ? (
+                <div className="space-y-1.5 text-[13px]" style={{ color: "rgba(255,255,255,0.75)" }}>
+                  <PaymentRow label="Name on account" value={referee.bankAccountName} />
+                  <PaymentRow label="Bank" value={referee.bankName} />
+                  <PaymentRow label="Account number" value={referee.bankAccountNumber} />
+                  <PaymentRow label="Address" value={referee.address} />
+                  <PaymentRow label="GST number" value={referee.gstNumber} />
+                </div>
+              ) : (
+                <p className="text-[13px] leading-relaxed" style={{ color: "rgba(255,255,255,0.4)" }}>
+                  No payment details on file yet — add them so we can pay your match fees.
+                </p>
+              )}
+              {saved && (
+                <p className="mt-2 text-[12px] font-semibold" style={{ color: "#4ade80" }}>
+                  Saved.
+                </p>
+              )}
+              <button
+                onClick={startEdit}
+                className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-bold px-3 h-8 rounded-lg"
+                style={{ color: GOLD, background: "rgba(209,185,110,0.1)", border: "1px solid rgba(209,185,110,0.3)" }}
+              >
+                <Pencil className="h-3 w-3" /> {hasDetails ? "Edit" : "Add details"}
+              </button>
+            </>
+          ) : (
+            <div className="space-y-2.5">
+              {error && (
+                <div
+                  className="rounded-lg border px-3 py-2 text-[12px]"
+                  style={{ borderColor: "rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.08)", color: "#fca5a5" }}
+                >
+                  {error}
+                </div>
+              )}
+              <MiniField label="Name on bank account">
+                <Input
+                  value={bankAccountName}
+                  onChange={(e) => setBankAccountName(e.target.value)}
+                  className={fieldClass}
+                />
+              </MiniField>
+              <MiniField label="Bank">
+                <Input
+                  value={bankName}
+                  onChange={(e) => setBankName(e.target.value)}
+                  className={fieldClass}
+                  placeholder="e.g. ANZ, ASB, BNZ, Kiwibank"
+                />
+              </MiniField>
+              <MiniField label="Bank account number">
+                <Input
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={bankAccountNumber}
+                  onChange={(e) => setBankAccountNumber(formatBankAccountInput(e.target.value))}
+                  className={fieldClass}
+                  placeholder="00-0000-0000000-000"
+                />
+              </MiniField>
+              <MiniField label="Home address">
+                <Textarea value={address} onChange={(e) => setAddress(e.target.value)} className={textareaClass} />
+              </MiniField>
+              <MiniField label="GST number (optional)">
+                <Input
+                  value={gstNumber}
+                  onChange={(e) => setGstNumber(e.target.value)}
+                  className={fieldClass}
+                  placeholder="123-456-789"
+                />
+              </MiniField>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => {
+                    setEditing(false);
+                    setError(null);
+                  }}
+                  className="flex-1 h-10 rounded-lg text-[13px] font-semibold"
+                  style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={save}
+                  disabled={saving || !valid}
+                  className="flex-1 h-10 rounded-lg text-[13px] font-bold disabled:opacity-50"
+                  style={{ background: GOLD, color: INK }}
+                >
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : "Save"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PaymentRow({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="shrink-0 w-32 text-[11px] uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.35)" }}>
+        {label}
+      </span>
+      <span className="truncate">{value || "—"}</span>
+    </div>
+  );
+}
+
+function MiniField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <label
+        className="block text-[10px] font-semibold uppercase tracking-wide mb-1"
+        style={{ color: "rgba(255,255,255,0.4)" }}
+      >
+        {label}
+      </label>
+      {children}
     </div>
   );
 }

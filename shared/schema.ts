@@ -1167,6 +1167,17 @@ export const leagueReferees = pgTable("league_referees", {
   decidedAt: timestamp("decided_at"),
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // Invoice/payment details — the MFL coordinator fills a per-ref invoice
+  // fortnightly and needs each ref's bank account to pay into. Captured at
+  // signup, editable any time by the ref (PATCH /api/public/mfl-referees/me,
+  // server/league-referee-routes.ts). All nullable: refs who signed up before
+  // 2026-07-13 have none, and the admin UI says so plainly rather than
+  // guessing.
+  bankAccountName: text("bank_account_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankName: text("bank_name"),
+  address: text("address"),
+  gstNumber: text("gst_number"),
 });
 
 // Soft assignment of a referee to a game — drives the ref's default "My games"

@@ -12,7 +12,8 @@ import { useLocation } from "wouter";
 import { CheckCircle2, Loader2, ShieldCheck, Smartphone, Sparkles, Trophy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { refPost, RefApiError } from "./mfl-ref-api";
+import { Textarea } from "@/components/ui/textarea";
+import { refPost, RefApiError, formatBankAccountInput } from "./mfl-ref-api";
 import { useMflBrand } from "./useMflBrand";
 
 const GOLD = "#d1b96e";
@@ -26,8 +27,20 @@ const FONT_STYLE = `
 
 const fieldClass =
   "h-12 text-base rounded-xl bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-[#d1b96e] focus-visible:ring-offset-0";
+const textareaClass =
+  "min-h-[76px] text-base rounded-xl bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-[#d1b96e] focus-visible:ring-offset-0";
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({
+  label,
+  hint,
+  error,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  error?: string | null;
+  children: ReactNode;
+}) {
   return (
     <div>
       <label
@@ -35,8 +48,19 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
         style={{ color: "rgba(255,255,255,0.5)" }}
       >
         {label}
+        {hint && (
+          <span className="normal-case font-normal tracking-normal" style={{ color: "rgba(255,255,255,0.3)" }}>
+            {" "}
+            {hint}
+          </span>
+        )}
       </label>
       {children}
+      {error && (
+        <p className="mt-1.5 text-[11px]" style={{ color: "#fca5a5" }}>
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -66,14 +90,41 @@ export default function MflRefSignup() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  // Payment/invoice details — so the MFL coordinator can pay this ref per
+  // game on the fortnightly invoice run (server/league-referee-routes.ts
+  // signup validation mirrors these exactly). GST number is the one
+  // optional field.
+  const [bankAccountName, setBankAccountName] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [bankAccountNumber, setBankAccountNumber] = useState("");
+  const [address, setAddress] = useState("");
+  const [gstNumber, setGstNumber] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  // Only show inline field errors once the referee has tried to submit —
+  // not while they're still filling the form out top to bottom.
+  const [attempted, setAttempted] = useState(false);
 
-  const valid = fullName.trim() && email.trim() && phone.trim() && password.length >= 8;
+  const bankDigits = bankAccountNumber.replace(/\D/g, "");
+  const bankAccountNumberValid = bankDigits.length === 15 || bankDigits.length === 16;
+  const gstNumberValid = !gstNumber.trim() || /^[\d-]+$/.test(gstNumber.trim());
+
+  const valid = Boolean(
+    fullName.trim() &&
+      email.trim() &&
+      phone.trim() &&
+      password.length >= 8 &&
+      bankAccountName.trim() &&
+      bankName.trim() &&
+      bankAccountNumberValid &&
+      address.trim() &&
+      gstNumberValid,
+  );
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setAttempted(true);
     if (!valid) return;
     setError(null);
     setLoading(true);
@@ -83,6 +134,11 @@ export default function MflRefSignup() {
         email: email.trim(),
         phone: phone.trim(),
         password,
+        bankAccountName: bankAccountName.trim(),
+        bankName: bankName.trim(),
+        bankAccountNumber,
+        address: address.trim(),
+        gstNumber: gstNumber.trim() || undefined,
       });
       setDone(true);
     } catch (e: any) {
@@ -261,6 +317,84 @@ export default function MflRefSignup() {
                     {password.length}/8 characters minimum
                   </p>
                 </Field>
+
+                {/* ── Payment details ─────────────────────────────────── */}
+                <div className="pt-3 mt-1 border-t" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+                  <div className="mb-3">
+                    <div
+                      className="text-[11px] font-bold uppercase tracking-[0.2em]"
+                      style={{ color: GOLD }}
+                    >
+                      Payment details
+                    </div>
+                    <p className="mt-1 text-[12px] leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>
+                      So we can pay your match fees — this is what goes on your fortnightly invoice.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <Field
+                      label="Name on bank account"
+                      error={attempted && !bankAccountName.trim() ? "Required." : null}
+                    >
+                      <Input
+                        required
+                        value={bankAccountName}
+                        onChange={(e) => setBankAccountName(e.target.value)}
+                        className={fieldClass}
+                        placeholder="Jordan Smith"
+                      />
+                    </Field>
+                    <Field label="Bank" error={attempted && !bankName.trim() ? "Required." : null}>
+                      <Input
+                        required
+                        value={bankName}
+                        onChange={(e) => setBankName(e.target.value)}
+                        className={fieldClass}
+                        placeholder="e.g. ANZ, ASB, BNZ, Kiwibank"
+                      />
+                    </Field>
+                    <Field
+                      label="Bank account number"
+                      error={
+                        attempted && !bankAccountNumberValid
+                          ? "Enter a valid 15 or 16 digit NZ bank account number."
+                          : null
+                      }
+                    >
+                      <Input
+                        required
+                        inputMode="numeric"
+                        autoComplete="off"
+                        value={bankAccountNumber}
+                        onChange={(e) => setBankAccountNumber(formatBankAccountInput(e.target.value))}
+                        className={fieldClass}
+                        placeholder="00-0000-0000000-000"
+                      />
+                    </Field>
+                    <Field label="Home address" error={attempted && !address.trim() ? "Required." : null}>
+                      <Textarea
+                        required
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        className={textareaClass}
+                        placeholder="123 Example Street, Christchurch"
+                      />
+                    </Field>
+                    <Field
+                      label="GST number"
+                      hint="(optional — leave blank if not GST registered)"
+                      error={attempted && !gstNumberValid ? "GST number should only contain digits and dashes." : null}
+                    >
+                      <Input
+                        value={gstNumber}
+                        onChange={(e) => setGstNumber(e.target.value)}
+                        className={fieldClass}
+                        placeholder="123-456-789"
+                      />
+                    </Field>
+                  </div>
+                </div>
 
                 <Button
                   type="submit"
