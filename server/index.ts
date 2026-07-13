@@ -97,6 +97,14 @@ app.use(attributionCookieMiddleware);
   const { registerHiringRoutes } = await import("./hiring-routes");
   registerHiringRoutes(app);
 
+  // Print Quotes — indicative quotes from unitedprints.co.nz's Instant Quote
+  // page, approved/rejected into the existing Orders pipeline. Admin side is
+  // gated by requireTab("quotes") to the United Prints workspace; the public
+  // submit endpoint is CORS-allow-listed to unitedprints.co.nz and carries no
+  // session.
+  const { registerPrintQuoteRoutes } = await import("./print-quote-routes");
+  registerPrintQuoteRoutes(app);
+
   // USG Invoices — tracked, payable invoices (org 7, super-admin only). Admin
   // side is gated by requireTab("invoices"); public endpoints are CORS-allow-
   // listed to usg-invoices.vercel.app and carry no session.

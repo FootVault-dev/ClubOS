@@ -201,6 +201,7 @@ const printsTabs: TabDef[] = [
   { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "jobs", title: "Jobs", url: "/admin/print-jobs" },
+  { slug: "quotes", title: "Quotes", url: "/admin/print-quotes" },
   { slug: "orders", title: "Orders", url: "/admin/print-orders" },
   { slug: "materials", title: "Materials", url: "/admin/print-materials" },
   { slug: "crm", title: "CRM", url: "/admin/print-crm" },

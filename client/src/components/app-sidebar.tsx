@@ -275,6 +275,7 @@ const printsNav = [
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
   { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "jobs", title: "Jobs", url: "/admin/print-jobs", icon: FolderKanban },
+  { tab: "quotes", title: "Quotes", url: "/admin/print-quotes", icon: Receipt },
   { tab: "orders", title: "Orders", url: "/admin/print-orders", icon: ShoppingCart },
   { tab: "materials", title: "Materials", url: "/admin/print-materials", icon: FileText },
   { tab: "crm", title: "CRM", url: "/admin/print-crm", icon: Users },

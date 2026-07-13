@@ -2940,6 +2940,68 @@ export const insertPrintOrderEventSchema = createInsertSchema(printOrderEvents).
 export type InsertPrintOrderEvent = z.infer<typeof insertPrintOrderEventSchema>;
 export type PrintOrderEvent = typeof printOrderEvents.$inferSelect;
 
+// Quotes submitted from the unitedprints.co.nz "Instant Quote" page — indicative
+// self-serve totals awaiting Dima's Approve/Reject. Approve materialises a
+// quote into a real printOrders row (+ items + a 'created' event) so it enters
+// the existing Orders/production pipeline; Reject just closes it out. Status is
+// app-validated text, not a pgEnum, to avoid the prod enum-drift the hiring/
+// vehicles/housing tables already dodge this way.
+export const printQuotes = pgTable("print_quotes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // Random 48-hex token, for a future customer-facing quote view.
+  token: text("token").notNull().unique(),
+
+  status: text("status").notNull().default("new"), // new | approved | rejected
+
+  customerName: text("customer_name"),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+
+  source: text("source"),
+  sourceUrl: text("source_url"),
+
+  subtotalCents: integer("subtotal_cents").notNull().default(0),
+  gstCents: integer("gst_cents").notNull().default(0),
+  totalCents: integer("total_cents").notNull().default(0),
+
+  // Always true today — the website only ever sends an indicative self-serve
+  // total, never a confirmed price.
+  indicative: boolean("indicative").notNull().default(true),
+
+  note: text("note"),
+
+  reviewedBy: integer("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at"),
+  rejectedReason: text("rejected_reason"),
+  promotedOrderId: integer("promoted_order_id").references(() => printOrders.id, { onDelete: "set null" }),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertPrintQuoteSchema = createInsertSchema(printQuotes).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPrintQuote = z.infer<typeof insertPrintQuoteSchema>;
+export type PrintQuote = typeof printQuotes.$inferSelect;
+
+export const printQuoteItems = pgTable("print_quote_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  quoteId: integer("quote_id").notNull().references(() => printQuotes.id, { onDelete: "cascade" }),
+
+  designName: text("design_name"),
+  material: text("material"),
+  sizeLabel: text("size_label"),
+  areaM2: decimal("area_m2", { precision: 10, scale: 4 }),
+  quantity: integer("quantity").notNull().default(1),
+  lineExGstCents: integer("line_ex_gst_cents").notNull().default(0),
+  designFileName: text("design_file_name"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertPrintQuoteItemSchema = createInsertSchema(printQuoteItems).omit({ id: true, createdAt: true });
+export type InsertPrintQuoteItem = z.infer<typeof insertPrintQuoteItemSchema>;
+export type PrintQuoteItem = typeof printQuoteItems.$inferSelect;
+
 export const printProjectStatusEnum = pgEnum("print_project_status", ["planning", "active", "on_hold", "completed", "archived"]);
 
 export const printProjects = pgTable("print_projects", {
