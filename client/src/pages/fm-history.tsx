@@ -123,7 +123,7 @@ export default function FmHistory() {
                 <tr className="text-left text-[10px] uppercase tracking-wider text-white/30 border-b border-white/5">
                   <th className="py-2.5 px-4 w-10">#</th>
                   <th className="py-2.5 px-4">Person</th>
-                  <th className="py-2.5 px-4 text-center">Terms</th>
+                  <th className="py-2.5 px-4 text-center hidden sm:table-cell">Terms</th>
                   <th className="py-2.5 px-4 hidden md:table-cell text-center">Active</th>
                   <th className="py-2.5 px-4 text-center hidden sm:table-cell">Payments</th>
                   <th className="py-2.5 px-4 text-right">Paid</th>
@@ -140,22 +140,22 @@ export default function FmHistory() {
                       </span>
                     </td>
                     <td className="py-2.5 px-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-white">{name(p.firstName, p.lastName)}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-white truncate max-w-[140px] sm:max-w-none">{name(p.firstName, p.lastName)}</span>
                         <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${TYPE_BADGE[p.type] || "bg-white/10 text-white/50"}`}>{p.type}</span>
                         {p.children > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 inline-flex items-center gap-1"><Users className="w-2.5 h-2.5" />{p.children}</span>}
                       </div>
-                      <div className="text-[11px] text-white/30 truncate max-w-[260px]">
+                      <div className="text-[11px] text-white/30 truncate max-w-[140px] sm:max-w-[260px]">
                         {p.email || p.phone || "no contact on file"}
                         {p.guardians && <span> · parent: {p.guardians}</span>}
                       </div>
                     </td>
-                    <td className="py-2.5 px-4 text-center text-white/70">{p.terms || "—"}</td>
+                    <td className="py-2.5 px-4 text-center text-white/70 hidden sm:table-cell">{p.terms || "—"}</td>
                     <td className="py-2.5 px-4 text-center text-white/50 hidden md:table-cell text-[12px]">
                       {p.firstYear ? (p.firstYear === p.lastYear ? p.firstYear : `${p.firstYear}–${p.lastYear}`) : "—"}
                     </td>
                     <td className="py-2.5 px-4 text-center text-white/70 hidden sm:table-cell">{p.payments || "—"}</td>
-                    <td className="py-2.5 px-4 text-right font-semibold text-white">{p.cents ? fmt(p.cents) : "—"}</td>
+                    <td className="py-2.5 px-4 text-right font-semibold text-white whitespace-nowrap">{p.cents ? fmt(p.cents) : "—"}</td>
                     <td className="py-2.5 px-4"><ChevronRight className="w-4 h-4 text-white/0 group-hover:text-white/30" /></td>
                   </tr>
                 ))}
