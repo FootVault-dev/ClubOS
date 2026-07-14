@@ -5,6 +5,8 @@
 // DRY RUN by default (transaction rolled back). Pass --commit to persist.
 // Idempotent: contacts upsert on friendly_manager_id; history rows ON CONFLICT DO NOTHING
 // on their natural keys; relationships + unsubscribes check-before-insert.
+// Batched (500 rows/INSERT) — the first version did ~25k sequential round-trips to the
+// remote prod DB and outlived a 10-minute window; this one runs in ~1 minute.
 //
 // Usage:
 //   npx tsx script/import-fm-history.ts --dir /abs/path/to/2026-07-14 [--commit]
@@ -15,6 +17,7 @@ import path from "path";
 import crypto from "crypto";
 
 const ORG_ID = 1; // Christchurch United
+const BATCH = 500;
 
 // ---------- tiny CSV parser (handles quotes, embedded commas/newlines, BOM) ----------
 function parseCsv(text: string): string[][] {
@@ -45,11 +48,10 @@ function csvObjects(file: string): Record<string, string>[] {
 // ---------- helpers ----------
 const lc = (s: string) => (s || "").trim().toLowerCase();
 const nz = (s: string) => { const t = (s || "").trim(); return t === "" ? null : t; };
-const dobOk = (s: string) => s && s !== "0000-00-00" ? s : null;
+const dobOk = (s: string) => (s && s !== "0000-00-00" ? s : null);
 const sha1 = (s: string) => crypto.createHash("sha1").update(s).digest("hex");
 
 function parseNzDate(d: string): string | null {
-  // FM CSVs: DD/MM/YYYY or YYYY-MM-DD
   const m1 = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(d);
   if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
@@ -83,6 +85,21 @@ function amountToCents(s: string): number | null {
   if (!t || isNaN(Number(t))) return null;
   return Math.round(Number(t) * 100);
 }
+function chunks<T>(arr: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+// build "($1,$2,...),($k,...)" placeholders for a batch insert
+function valuesSql(rowCount: number, colCount: number): string {
+  const rows: string[] = [];
+  for (let r = 0; r < rowCount; r++) {
+    const cols: string[] = [];
+    for (let c = 0; c < colCount; c++) cols.push(`$${r * colCount + c + 1}`);
+    rows.push(`(${cols.join(",")})`);
+  }
+  return rows.join(",");
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -94,7 +111,7 @@ async function main() {
   const people = csvObjects(path.join(dir, "people/people-all-8716.csv"));
   const members = csvObjects(path.join(dir, "members/members-all-terms-combined.csv"));
   const txns = csvObjects(path.join(dir, "fees/transactions-all.csv"));
-  const termMap = new Map<string, string>(); // termId -> name
+  const termMap = new Map<string, string>();
   for (const line of fs.readFileSync(path.join(dir, "terms.tsv"), "utf8").split("\n")) {
     const [id, name] = line.split("\t");
     if (id && name) termMap.set(id.trim(), name.trim());
@@ -103,8 +120,8 @@ async function main() {
 
   // ---------- pre-compute classification ----------
   const memberPersonIds = new Set(members.map((m) => m["Id"]));
-  const primaryContactOf = new Map<string, string>(); // personId -> "Name: phone" raw
-  const isReferencedAsPC = new Set<string>(); // names (lc "first last") referenced as someone's primary contact
+  const primaryContactOf = new Map<string, string>();
+  const isReferencedAsPC = new Set<string>();
   for (const p of people) {
     const pc = p["Primary Contact"];
     if (pc) {
@@ -112,7 +129,7 @@ async function main() {
       isReferencedAsPC.add(lc(splitNamePhone(pc).name || ""));
     }
   }
-  const nameIndex = new Map<string, string[]>(); // lc "first last" -> [personIds]
+  const nameIndex = new Map<string, string[]>();
   for (const p of people) {
     const k = lc(`${p["First Name"]} ${p["Last Name"]}`);
     if (!nameIndex.has(k)) nameIndex.set(k, []);
@@ -157,34 +174,32 @@ async function main() {
   try {
     await client.query("BEGIN");
 
-    // ---------- 1. contacts ----------
+    // ---------- prefetch existing state (3 queries instead of 17k) ----------
     const fmToContactId = new Map<string, number>();
+    const already = await client.query(`SELECT id, friendly_manager_id FROM contacts WHERE friendly_manager_id IS NOT NULL`);
+    for (const r of already.rows) fmToContactId.set(r.friendly_manager_id, r.id);
+    stats.contactsUpdatedByFmId = already.rows.length;
+
+    const adoptables = await client.query(
+      `SELECT id, lower(trim(email)) AS e, lower(first_name) AS f, lower(last_name) AS l
+       FROM contacts WHERE friendly_manager_id IS NULL AND email IS NOT NULL AND trim(email) <> ''`);
+    const adoptIndex = new Map<string, number>(); // "email|first|last" -> id (first wins, lowest id)
+    for (const r of adoptables.rows) {
+      const k = `${r.e}|${r.f}|${r.l}`;
+      if (!adoptIndex.has(k)) adoptIndex.set(k, r.id);
+    }
+
+    // ---------- 1. contacts ----------
+    const toInsert: Record<string, string>[] = [];
     for (const p of people) {
       const fmId = p["Id"];
+      if (fmToContactId.has(fmId)) continue; // idempotent re-run
       const email = nz(lc(p["Email"]));
-      const first = p["First Name"].trim(), last = p["Last Name"].trim();
-      const type = contactType(p);
-      const em = splitNamePhone(p["Emergency Contact"]);
-      const gender = p["Gender"] === "Male" ? "male" : p["Gender"] === "Female" ? "female" : null;
-
-      // 1a: already imported? (idempotent re-run)
-      const existingByFm = await client.query(`SELECT id FROM contacts WHERE friendly_manager_id = $1 LIMIT 1`, [fmId]);
-      if (existingByFm.rows.length) {
-        fmToContactId.set(fmId, existingByFm.rows[0].id);
-        stats.contactsUpdatedByFmId++;
-        continue;
-      }
-      // 1b: adopt an existing prod contact (same email + name)
-      let adoptedId: number | null = null;
-      if (email) {
-        const r = await client.query(
-          `SELECT id FROM contacts WHERE friendly_manager_id IS NULL AND lower(trim(email)) = $1
-             AND lower(first_name) = $2 AND lower(last_name) = $3 ORDER BY id LIMIT 1`,
-          [email, lc(first), lc(last)]
-        );
-        if (r.rows.length) adoptedId = r.rows[0].id;
-      }
+      const adoptKey = email ? `${email}|${lc(p["First Name"])}|${lc(p["Last Name"])}` : null;
+      const adoptedId = adoptKey ? adoptIndex.get(adoptKey) : undefined;
       if (adoptedId) {
+        const em = splitNamePhone(p["Emergency Contact"]);
+        const gender = p["Gender"] === "Male" ? "male" : p["Gender"] === "Female" ? "female" : null;
         await client.query(
           `UPDATE contacts SET
              friendly_manager_id = $1,
@@ -220,36 +235,47 @@ async function main() {
         stats.contactsAdopted++;
         continue;
       }
-      // 1c: insert new
-      const ins = await client.query(
+      toInsert.push(p);
+    }
+
+    const CONTACT_COLS = 27;
+    for (const batch of chunks(toInsert, BATCH)) {
+      const params: any[] = [];
+      for (const p of batch) {
+        const em = splitNamePhone(p["Emergency Contact"]);
+        const gender = p["Gender"] === "Male" ? "male" : p["Gender"] === "Female" ? "female" : null;
+        const email = nz(lc(p["Email"]));
+        params.push(
+          contactType(p), p["First Name"].trim(), p["Last Name"].trim(), email,
+          nz(p["Phone"]), nz(p["Alternate Phone"]), gender, dobOk(p["Date Of Birth"]),
+          nz(p["Address"]), nz(p["Nationality"]), nz(p["School"]), nz(p["School Year"]),
+          nz(p["Medical"]), em.name, em.phone, p["Allow Photos"] === "Yes",
+          p["Subscribed"] === "Yes", nz(p["Previous Club"]), nz(p["Team Name"]),
+          email ? "fm-import" : "fm-import,no-email", buildNotes(p),
+          nz(p["Country of Birth"]), nz(p["Ethnicity"]), nz(p["Specific Ethnicity"]),
+          nz(p["Additional Ethnicity"]), nz(p["Specific Additional Ethnicity"]), p["Id"]
+        );
+      }
+      const res = await client.query(
         `INSERT INTO contacts (type, first_name, last_name, email, phone, alternate_phone, gender,
            date_of_birth, address, nationality, school, school_year, medical_notes,
            emergency_contact, emergency_phone, photo_consent, newsletter_consent,
            previous_club, team_name, tags, notes, country_of_birth, ethnicity, sub_ethnicity,
            ethnicity2, sub_ethnicity2, friendly_manager_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
-         RETURNING id`,
-        [type, first, last, email, nz(p["Phone"]), nz(p["Alternate Phone"]), gender,
-         dobOk(p["Date Of Birth"]), nz(p["Address"]), nz(p["Nationality"]), nz(p["School"]),
-         nz(p["School Year"]), nz(p["Medical"]), em.name, em.phone,
-         p["Allow Photos"] === "Yes", p["Subscribed"] === "Yes",
-         nz(p["Previous Club"]), nz(p["Team Name"]),
-         email ? "fm-import" : "fm-import,no-email", buildNotes(p),
-         nz(p["Country of Birth"]), nz(p["Ethnicity"]), nz(p["Specific Ethnicity"]),
-         nz(p["Additional Ethnicity"]), nz(p["Specific Additional Ethnicity"]), fmId]
+         VALUES ${valuesSql(batch.length, CONTACT_COLS)}
+         RETURNING id, friendly_manager_id`,
+        params
       );
-      fmToContactId.set(fmId, ins.rows[0].id);
-      stats.contactsInserted++;
+      for (const r of res.rows) fmToContactId.set(r.friendly_manager_id, r.id);
+      stats.contactsInserted += res.rows.length;
     }
 
-    // 1d: the ~5 archived people present only in member rows
+    // 1d: archived people present only in member rows
     const seenArchived = new Set<string>();
     for (const m of members) {
       const fmId = m["Id"];
       if (peopleById.has(fmId) || fmToContactId.has(fmId) || seenArchived.has(fmId)) continue;
       seenArchived.add(fmId);
-      const exists = await client.query(`SELECT id FROM contacts WHERE friendly_manager_id = $1 LIMIT 1`, [fmId]);
-      if (exists.rows.length) { fmToContactId.set(fmId, exists.rows[0].id); continue; }
       const em = splitNamePhone(m["Emergency Contact"] || "");
       const ins = await client.query(
         `INSERT INTO contacts (type, first_name, last_name, email, phone, gender, date_of_birth,
@@ -259,7 +285,7 @@ async function main() {
          RETURNING id`,
         [m["First Name"], m["Last Name"], nz(lc(m["Email"] || "")), nz(m["Phone"] || ""),
          m["Gender"] === "Male" ? "male" : m["Gender"] === "Female" ? "female" : null,
-         parseNzDate(m["Date Of Birth"] || "") , nz(m["Address"] || ""), nz(m["Medical"] || ""),
+         parseNzDate(m["Date Of Birth"] || ""), nz(m["Address"] || ""), nz(m["Medical"] || ""),
          em.name, em.phone, fmId]
       );
       fmToContactId.set(fmId, ins.rows[0].id);
@@ -267,6 +293,11 @@ async function main() {
     }
 
     // ---------- 2. relationships ----------
+    const existingPairs = new Set<string>();
+    const pairs = await client.query(`SELECT guardian_id, player_id FROM contact_relationships`);
+    for (const r of pairs.rows) existingPairs.add(`${r.guardian_id}|${r.player_id}`);
+
+    const relRows: Array<[number, number]> = [];
     for (const p of people) {
       const pcRaw = primaryContactOf.get(p["Id"]);
       if (!pcRaw) continue;
@@ -276,45 +307,54 @@ async function main() {
       let guardianFmId: string | null = null;
       if (candidates.length === 1) guardianFmId = candidates[0];
       else if (candidates.length > 1) {
-        // disambiguate by shared family email
         const myEmail = lc(p["Email"]);
-        const share = candidates.filter((cid) => cid !== p["Id"] && lc(peopleById.get(cid)!["Email"]) === myEmail && myEmail);
+        const share = candidates.filter((cid) => cid !== p["Id"] && myEmail && lc(peopleById.get(cid)!["Email"]) === myEmail);
         if (share.length === 1) guardianFmId = share[0];
         else { stats.relationshipsSkippedAmbiguous++; continue; }
       } else { stats.relationshipsSkippedAmbiguous++; continue; }
       if (!guardianFmId || guardianFmId === p["Id"]) continue;
       const gId = fmToContactId.get(guardianFmId), cId = fmToContactId.get(p["Id"]);
       if (!gId || !cId || gId === cId) continue;
-      const exists = await client.query(
-        `SELECT id FROM contact_relationships WHERE guardian_id = $1 AND player_id = $2 LIMIT 1`, [gId, cId]);
-      if (exists.rows.length) { stats.relationshipsExisting++; continue; }
+      const key = `${gId}|${cId}`;
+      if (existingPairs.has(key)) { stats.relationshipsExisting++; continue; }
+      existingPairs.add(key);
+      relRows.push([gId, cId]);
+    }
+    for (const batch of chunks(relRows, BATCH)) {
+      const params: any[] = [];
+      for (const [g, c] of batch) params.push(g, c, "parent", true);
       await client.query(
         `INSERT INTO contact_relationships (guardian_id, player_id, relationship, is_primary_contact)
-         VALUES ($1,$2,'parent',true)`, [gId, cId]);
-      stats.relationshipsInserted++;
+         VALUES ${valuesSql(batch.length, 4)}`, params);
+      stats.relationshipsInserted += batch.length;
     }
 
     // ---------- 3. fm_registration_history ----------
-    for (const m of members) {
-      const termId = parseInt(m["termId"], 10);
-      const termName = termMap.get(m["termId"]) || `term-${m["termId"]}`;
-      const cId = fmToContactId.get(m["Id"]) ?? null;
-      if (!cId) stats.regsNoContact++;
-      const r = await client.query(
+    for (const batch of chunks(members, BATCH)) {
+      const params: any[] = [];
+      for (const m of batch) {
+        const termId = parseInt(m["termId"], 10);
+        const termName = termMap.get(m["termId"]) || `term-${m["termId"]}`;
+        const cId = fmToContactId.get(m["Id"]) ?? null;
+        if (!cId) stats.regsNoContact++;
+        params.push(ORG_ID, cId, m["Id"], termId, termName, seasonYearFromTerm(termName),
+          m["Programme"] || "(unspecified)", nz(m["Position"] || ""), "friendly_manager", JSON.stringify(m));
+      }
+      const res = await client.query(
         `INSERT INTO fm_registration_history
            (organization_id, contact_id, fm_person_id, term_id, term_name, season_year,
             programme_group, position, source, raw_json)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'friendly_manager',$9)
+         VALUES ${valuesSql(batch.length, 10)}
          ON CONFLICT (fm_person_id, term_id, programme_group) DO NOTHING
-         RETURNING id`,
-        [ORG_ID, cId, m["Id"], termId, termName, seasonYearFromTerm(termName),
-         m["Programme"] || "(unspecified)", nz(m["Position"] || ""), JSON.stringify(m)]
-      );
-      if (r.rows.length) stats.regsInserted++; else stats.regsConflict++;
+         RETURNING id`, params);
+      stats.regsInserted += res.rows.length;
+      stats.regsConflict += batch.length - res.rows.length;
     }
 
     // ---------- 4. fm_payment_history ----------
     const occurrence = new Map<string, number>();
+    type PayRow = any[];
+    const payRows: PayRow[] = [];
     for (const t of txns) {
       const cents = amountToCents(t["Amount"]);
       const paidOn = parseNzDate(t["Date"]);
@@ -331,26 +371,29 @@ async function main() {
       else if (cand.length > 1) stats.paysAmbiguous++;
       else stats.paysNoMatch++;
 
-      // fee text: "Term 3 2026 - Technification: Technification: U11 - U12 Mondays"
       const feeText = (t["Fee"] || "").trim();
       const termM = /^(.*?20\d\d|[^-]*?)\s*-\s*(.*)$/.exec(feeText);
       const termName = termM && /20\d\d|Term|Academy|Camp|Winter|Senior|Programme/i.test(termM[1]) ? termM[1].trim() : null;
       const programme = termM ? termM[2].trim() : null;
 
-      const r = await client.query(
+      payRows.push([ORG_ID, cId, t["First Name"], t["Last Name"], nz(t["Fee #"]), nz(feeText),
+        termName, termName ? seasonYearFromTerm(termName) : null, programme,
+        normalizeMethod(t["Method"]), t["Method"], paidOn, cents, nz(t["Note/Reference"]),
+        "friendly_manager", externalKey]);
+    }
+    for (const batch of chunks(payRows, BATCH)) {
+      const params = batch.flat();
+      const res = await client.query(
         `INSERT INTO fm_payment_history
            (organization_id, contact_id, first_name, last_name, fee_number, fee_description,
             term_name, season_year, programme, method, method_raw, paid_on, amount_cents,
             note_reference, source, external_key)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'friendly_manager',$15)
+         VALUES ${valuesSql(batch.length, 16)}
          ON CONFLICT (external_key) DO NOTHING
-         RETURNING id`,
-        [ORG_ID, cId, t["First Name"], t["Last Name"], nz(t["Fee #"]), nz(feeText),
-         termName, termName ? seasonYearFromTerm(termName) : null, programme,
-         normalizeMethod(t["Method"]), t["Method"], paidOn, cents, nz(t["Note/Reference"]), externalKey]
-      );
-      if (r.rows.length) { stats.paysInserted++; stats.amountCentsTotal += cents; }
-      else stats.paysConflict++;
+         RETURNING amount_cents`, params);
+      stats.paysInserted += res.rows.length;
+      stats.paysConflict += batch.length - res.rows.length;
+      for (const r of res.rows) stats.amountCentsTotal += r.amount_cents;
     }
 
     // ---------- 5. unsubscribes (only emails where EVERY sharer is No) ----------
@@ -361,14 +404,15 @@ async function main() {
       if (!byEmail.has(e)) byEmail.set(e, []);
       byEmail.get(e)!.push(p["Subscribed"]);
     }
-    for (const [email, subs] of byEmail) {
-      if (!subs.every((s) => s === "No")) continue;
-      const r = await client.query(
+    const unsubEmails = [...byEmail.entries()].filter(([, subs]) => subs.every((s) => s === "No")).map(([e]) => e);
+    for (const batch of chunks(unsubEmails, BATCH)) {
+      const params: any[] = [];
+      for (const e of batch) params.push(ORG_ID, e, "fm-import");
+      const res = await client.query(
         `INSERT INTO email_unsubscribes (organization_id, email, source)
-         VALUES ($1,$2,'fm-import') ON CONFLICT (organization_id, email) DO NOTHING RETURNING id`,
-        [ORG_ID, email]
-      );
-      if (r.rows.length) stats.unsubsInserted++;
+         VALUES ${valuesSql(batch.length, 3)}
+         ON CONFLICT (organization_id, email) DO NOTHING RETURNING id`, params);
+      stats.unsubsInserted += res.rows.length;
     }
 
     // ---------- report ----------
@@ -377,12 +421,11 @@ async function main() {
     console.log(JSON.stringify(stats, null, 2));
     console.log(`payments $ total inserted: $${(stats.amountCentsTotal / 100).toLocaleString("en-NZ", { minimumFractionDigits: 2 })}`);
     console.log(`manifest expects:          $${(expectTotal / 100).toLocaleString("en-NZ", { minimumFractionDigits: 2 })}`);
-    console.log(`reconciles: ${stats.amountCentsTotal === expectTotal ? "YES ✓" : "NO — INVESTIGATE"}`);
+    console.log(`reconciles: ${stats.amountCentsTotal === expectTotal ? "YES ✓" : stats.paysConflict > 0 ? "n/a (re-run: conflicts skipped)" : "NO — INVESTIGATE"}`);
 
-    // sample families for eyeballing
     const fam = await client.query(`
       SELECT g.first_name || ' ' || g.last_name AS guardian, g.email,
-             c.first_name || ' ' || c.last_name AS child, c.date_of_birth,
+             c.first_name || ' ' || c.last_name AS child, c.date_of_birth::text AS dob,
              (SELECT count(*) FROM fm_registration_history h WHERE h.contact_id = c.id) AS reg_terms,
              (SELECT count(*) FROM fm_payment_history ph WHERE ph.contact_id = c.id) AS payments
       FROM contact_relationships r
@@ -391,7 +434,7 @@ async function main() {
       WHERE g.tags LIKE '%fm-import%'
       ORDER BY random() LIMIT 10`);
     console.log("\nSample families (guardian -> child, terms, payments):");
-    for (const f of fam.rows) console.log(` ${f.guardian} <${f.email}> -> ${f.child} (dob ${f.date_of_birth}) regs:${f.reg_terms} pays:${f.payments}`);
+    for (const f of fam.rows) console.log(` ${f.guardian} <${f.email}> -> ${f.child} (dob ${f.dob}) regs:${f.reg_terms} pays:${f.payments}`);
 
     if (commit) {
       await client.query("COMMIT");
