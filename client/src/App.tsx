@@ -380,7 +380,6 @@ function AdminRouter() {
         <Route path="/admin/mailer" component={LeagueMailer} />
         <Route path="/admin/rewards" component={LeagueRewards} />
         <Route path="/admin/loyalty" component={LeagueLoyalty} />
-        <Route path="/admin/fm-history" component={FmHistory} />
         <Route path="/admin/analytics" component={LeagueAnalytics} />
         <Route path="/admin/business-plan" component={LeagueBusinessPlan} />
         <Route path="/admin/inbox" component={LeagueInbox} />
@@ -448,6 +447,9 @@ function AdminRouter() {
       <Route path="/admin/mailer" component={AdminMailer} />
       <Route path="/admin/cufc-mailer" component={CufcMailer} />
       <Route path="/admin/predictor" component={Predictor} />
+      {/* Friendly Manager History — CUFC's 10-year archive (default/camps
+          workspace Switch: CUFC has no is* flag, it lands here). */}
+      <Route path="/admin/fm-history" component={FmHistory} />
       <Route path="/admin/football-institute" component={FootballInstitute} />
       <Route path="/admin/analytics" component={CampAnalytics} />
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
