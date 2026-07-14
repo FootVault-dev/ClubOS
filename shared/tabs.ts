@@ -63,6 +63,8 @@ const campsTabs: TabDef[] = [
   { slug: "cufc-mailer", title: "Mailer", url: "/admin/cufc-mailer" },
   // Play Predictor — first-team score predictions, leaderboards + prizes.
   { slug: "predictor", title: "Play Predictor", url: "/admin/predictor" },
+  // 10 years of Friendly Manager registrations + payments, imported 2026-07-14.
+  { slug: "fm-history", title: "History", url: "/admin/fm-history" },
   { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
@@ -290,6 +292,10 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // vehicles/housing/market-research were launched. Remove this line to open
   // it to the Group workspace's admins/managers.
   "sponsor-traffic",
+  // Friendly Manager History — 10 years of children's enrolment records and
+  // family payment history (imported 2026-07-14). Daniel-only while he shapes
+  // it. Remove this line to open it to CUFC admins/managers.
+  "fm-history",
 ]);
 
 /**

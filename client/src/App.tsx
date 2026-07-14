@@ -94,6 +94,7 @@ import LeaguePayments from "@/pages/league-payments";
 import LeagueMailer from "@/pages/league-mailer";
 import LeagueRewards from "@/pages/league-rewards";
 import LeagueLoyalty from "@/pages/league-loyalty";
+import FmHistory from "@/pages/fm-history";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
@@ -379,6 +380,7 @@ function AdminRouter() {
         <Route path="/admin/mailer" component={LeagueMailer} />
         <Route path="/admin/rewards" component={LeagueRewards} />
         <Route path="/admin/loyalty" component={LeagueLoyalty} />
+        <Route path="/admin/fm-history" component={FmHistory} />
         <Route path="/admin/analytics" component={LeagueAnalytics} />
         <Route path="/admin/business-plan" component={LeagueBusinessPlan} />
         <Route path="/admin/inbox" component={LeagueInbox} />

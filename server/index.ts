@@ -129,6 +129,14 @@ app.use(attributionCookieMiddleware);
   const { registerSalesRoutes } = await import("./sales-routes");
   registerSalesRoutes(app);
 
+  // Friendly Manager History — 10 years of CUFC registrations + payments,
+  // imported 2026-07-14 (fm_registration_history / fm_payment_history).
+  // Read-only, gated by requireTab("fm-history") which is SUPER_ADMIN_ONLY:
+  // children's enrolment records and family payment history, Daniel-only
+  // until he opens it up.
+  const { registerFmHistoryRoutes } = await import("./fm-history-routes");
+  registerFmHistoryRoutes(app);
+
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
   // gated by requireTab("cic-content-marketplace") to the CIC workspace.
