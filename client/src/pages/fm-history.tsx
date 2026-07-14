@@ -15,7 +15,23 @@ type Person = {
   email: string | null; phone: string | null; dob: string | null;
   terms: number; firstYear: number | null; lastYear: number | null;
   payments: number; cents: number; guardians: string | null; children: number;
+  isCurrent: boolean;
 };
+
+const PROGRAMME_CATS: [string, string][] = [
+  ["", "All programmes"],
+  ["u4-8", "FUNiño U4–8"],
+  ["pre-academy", "Pre-Academy"],
+  ["academy", "Academy (U9+)"],
+  ["hp-academy", "HP Academy"],
+  ["technification", "Technification"],
+  ["goalkeeper", "Goalkeeper"],
+  ["open-training", "Open Trainings"],
+  ["futsal", "Futsal"],
+  ["morning", "Morning"],
+  ["holiday", "Holiday / Winter / Camps"],
+  ["senior", "Senior Football"],
+];
 type Stats = {
   people: number; players: number; familyLinks: number; registrations: number;
   enrolledPeople: number; terms: number; payments: number; totalCents: number;
@@ -48,11 +64,14 @@ const TYPE_BADGE: Record<string, string> = {
 
 export default function FmHistory() {
   const [q, setQ] = useState("");
+  const [cat, setCat] = useState("");
+  const [status, setStatus] = useState("");
+  const [type, setType] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
 
   const { data: stats } = useQuery<Stats>({ queryKey: ["/api/admin/fm-history/stats"] });
   const { data: people = [], isLoading } = useQuery<Person[]>({
-    queryKey: [`/api/admin/fm-history/people?q=${encodeURIComponent(q)}`],
+    queryKey: [`/api/admin/fm-history/people?q=${encodeURIComponent(q)}&cat=${cat}&status=${status}&type=${type}`],
   });
 
   const tiles = [
@@ -104,8 +123,8 @@ export default function FmHistory() {
       )}
 
       <div className="rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
-        <div className="p-3 border-b border-white/5">
-          <div className="relative max-w-md">
+        <div className="p-3 border-b border-white/5 flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="w-4 h-4 text-white/25 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               value={q} onChange={(e) => setQ(e.target.value)} data-testid="fm-history-search"
@@ -113,6 +132,19 @@ export default function FmHistory() {
               className="w-full rounded-lg border border-white/10 bg-white/[0.03] pl-9 pr-3 py-2 text-sm text-white placeholder:text-white/25 focus:border-amber-500/40 focus:outline-none"
             />
           </div>
+          {([
+            [cat, setCat, PROGRAMME_CATS, "fm-filter-cat"],
+            [status, setStatus, [["", "Past & present"], ["current", "Current only"], ["past", "Past only"]], "fm-filter-status"],
+            [type, setType, [["", "Everyone"], ["player", "Players"], ["guardian", "Parents"], ["staff", "Staff & coaches"]], "fm-filter-type"],
+          ] as [string, (v: string) => void, [string, string][], string][]).map(([val, set, opts, tid]) => (
+            <select key={tid} value={val} onChange={(e) => set(e.target.value)} data-testid={tid}
+              className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-white/80 focus:border-amber-500/40 focus:outline-none [&>option]:bg-[#0a0e1a]">
+              {opts.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+            </select>
+          ))}
+          {status === "current" && (
+            <span className="text-[10px] text-white/25 w-full sm:w-auto">Current = enrolled this term, or a live ClubOS registration — children count for their parents.</span>
+          )}
         </div>
         {isLoading ? (
           <div className="p-10 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
@@ -143,6 +175,9 @@ export default function FmHistory() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-white truncate max-w-[140px] sm:max-w-none">{name(p.firstName, p.lastName)}</span>
                         <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${TYPE_BADGE[p.type] || "bg-white/10 text-white/50"}`}>{p.type}</span>
+                        {p.isCurrent
+                          ? <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/20">current</span>
+                          : <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/[0.06] text-white/35 hidden sm:inline">past</span>}
                         {p.children > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 inline-flex items-center gap-1"><Users className="w-2.5 h-2.5" />{p.children}</span>}
                       </div>
                       <div className="text-[11px] text-white/30 truncate max-w-[140px] sm:max-w-[260px]">

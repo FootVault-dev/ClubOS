@@ -57,10 +57,63 @@ export function registerFmHistoryRoutes(app: Express) {
     }
   });
 
+  // Programme buckets, derived from the FM term + group names. Order matters —
+  // first match wins (a "HP Camp" is a camp, not HP academy).
+  const CAT_EXPR = `CASE
+      WHEN h.term_name ~* '(camp|winter|holiday|queen)' THEN 'holiday'
+      WHEN h.term_name ~* 'senior' THEN 'senior'
+      WHEN h.term_name ~* 'hp academy' OR h.programme_group ~* 'high performance' THEN 'hp-academy'
+      WHEN h.programme_group ~* '(u4.?8|unlimited play|session per week)' THEN 'u4-8'
+      WHEN h.programme_group ~* 'open training' THEN 'open-training'
+      WHEN h.programme_group ~* 'futsal' THEN 'futsal'
+      WHEN h.programme_group ~* 'goal ?keeper' THEN 'goalkeeper'
+      WHEN h.programme_group ~* '(technification|advanced development)' THEN 'technification'
+      WHEN h.programme_group ~* 'pre.?academy' THEN 'pre-academy'
+      WHEN h.programme_group ~* 'morning' THEN 'morning'
+      ELSE 'academy'
+    END`;
+  const CATS = new Set(["holiday","senior","hp-academy","u4-8","open-training","futsal","goalkeeper","technification","pre-academy","morning","academy"]);
+
+  // "Current" = enrolled in a 2026 running term (67 = Term 2, 68 = Term 3) OR a
+  // confirmed LIVE ClubOS registration (org 1) — for guardians, their children
+  // count: a parent whose child trains this term is a current family.
+  const CURRENT_EXPR = `(
+       EXISTS (SELECT 1 FROM fm_registration_history h2 WHERE h2.contact_id = c.id AND h2.term_id IN (67,68))
+    OR EXISTS (SELECT 1 FROM registrations r JOIN programs p ON p.id = r.program_id AND p.organization_id = 1
+               WHERE (r.contact_id = c.id OR r.guardian_id = c.id) AND r.status = 'confirmed')
+    OR EXISTS (SELECT 1 FROM contact_relationships cr
+               JOIN fm_registration_history h3 ON h3.contact_id = cr.player_id AND h3.term_id IN (67,68)
+               WHERE cr.guardian_id = c.id)
+    OR EXISTS (SELECT 1 FROM contact_relationships cr
+               JOIN registrations r2 ON r2.contact_id = cr.player_id AND r2.status = 'confirmed'
+               JOIN programs p2 ON p2.id = r2.program_id AND p2.organization_id = 1
+               WHERE cr.guardian_id = c.id)
+  )`;
+
   app.get("/api/admin/fm-history/people", requireAuth, tab, async (req: Request, res: Response) => {
     try {
       const q = String(req.query.q ?? "").trim().slice(0, 80);
+      const cat = String(req.query.cat ?? "").trim();
+      const status = String(req.query.status ?? "").trim(); // '' | 'current' | 'past'
+      const type = String(req.query.type ?? "").trim();     // '' | 'player' | 'guardian' | 'staff'
       const limit = lim(req.query.limit, 100, 300);
+
+      let filters = sql``;
+      if (CATS.has(cat)) {
+        // Self has a reg in the bucket, or (for parents) a child does.
+        filters = sql`${filters} AND (
+          EXISTS (SELECT 1 FROM fm_registration_history h WHERE h.contact_id = c.id AND ${sql.raw(CAT_EXPR)} = ${cat})
+          OR EXISTS (SELECT 1 FROM contact_relationships cr
+                     JOIN fm_registration_history h ON h.contact_id = cr.player_id
+                     WHERE cr.guardian_id = c.id AND ${sql.raw(CAT_EXPR)} = ${cat})
+        )`;
+      }
+      if (status === "current") filters = sql`${filters} AND ${sql.raw(CURRENT_EXPR)}`;
+      if (status === "past") filters = sql`${filters} AND NOT ${sql.raw(CURRENT_EXPR)}`;
+      if (type === "player" || type === "guardian" || type === "staff") {
+        filters = sql`${filters} AND c.type = ${type}`;
+      }
+
       const rows = (await db.execute(sql`
         SELECT c.id, c.type, c.first_name AS "firstName", c.last_name AS "lastName",
                c.email, c.phone, to_char(c.date_of_birth,'YYYY-MM-DD') AS "dob",
@@ -70,7 +123,8 @@ export function registerFmHistoryRoutes(app: Express) {
                coalesce(pay.pays,0)::int   AS "payments",
                coalesce(pay.cents,0)::bigint AS "cents",
                guard.names                 AS "guardians",
-               coalesce(kids.n,0)::int     AS "children"
+               coalesce(kids.n,0)::int     AS "children",
+               ${sql.raw(CURRENT_EXPR)}    AS "isCurrent"
         FROM contacts c
         LEFT JOIN LATERAL (
           SELECT count(DISTINCT h.term_id) AS terms,
@@ -92,6 +146,7 @@ export function registerFmHistoryRoutes(app: Express) {
         WHERE c.friendly_manager_id IS NOT NULL
           AND (${q} = '' OR (c.first_name || ' ' || c.last_name) ILIKE ${"%" + q + "%"}
                OR c.email ILIKE ${"%" + q + "%"})
+          ${filters}
         ORDER BY coalesce(pay.cents,0) DESC, coalesce(reg.terms,0) DESC, c.last_name, c.first_name
         LIMIT ${limit}
       `)).rows.map((r: any) => ({ ...r, cents: Number(r.cents) }));
