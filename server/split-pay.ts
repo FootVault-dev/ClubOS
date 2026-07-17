@@ -886,8 +886,29 @@ export async function sweepSplitShareReminders(): Promise<number> {
     lt(splitSessions.reminderCount, REMINDER_MAX),
   ));
 
+  // A captain who re-registers leaves abandoned duplicate splits behind (live
+  // in prod: one captain, THREE open splits for the same team). Reminding on a
+  // dead one would point the squad at the wrong payment page — so per
+  // (captain, team) only the split with the most payments (tie: newest) gets
+  // reminders. The losers stay open and untouched; admin can cancel them.
+  const byKey = new Map<string, { s: SplitSession; paid: number }[]>();
+  for (const s of candidates) {
+    const members = await membersOf(s.id);
+    const organiser = members.find((m) => m.role === "organiser" && m.status !== "removed");
+    const paid = members.filter((m) => m.status !== "removed" && m.status === "paid").length;
+    const key = `${(organiser?.email || `session-${s.id}`).toLowerCase()}::${(s.teamName || "").trim().toLowerCase()}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push({ s, paid });
+  }
+  const winners = new Set<number>();
+  for (const group of byKey.values()) {
+    group.sort((a, b) => b.paid - a.paid || new Date(b.s.createdAt).getTime() - new Date(a.s.createdAt).getTime());
+    winners.add(group[0].s.id);
+  }
+
   let sent = 0;
   for (const s of candidates) {
+    if (!winners.has(s.id)) continue;
     if (now - new Date(s.createdAt).getTime() < REMINDER_FIRST_AFTER_MS) continue;
     if (s.expiresAt && new Date(s.expiresAt).getTime() < now) continue;
     if (s.lastReminderAt && now - new Date(s.lastReminderAt).getTime() < REMINDER_EVERY_MS) continue;
