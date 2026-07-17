@@ -1064,6 +1064,11 @@ export const splitSessions = pgTable("split_sessions", {
   fundingType: text("funding_type").notNull().default("registration"),
   // The facility booking group this split funds (when fundingType = 'booking').
   facilityBookingGroupId: text("facility_booking_group_id"),
+  // Share-link reminder emails to the captain (open registration splits only) —
+  // count + last-sent drive the sweep cadence and cap; a manual admin resend
+  // stamps lastReminderAt but never consumes the cap.
+  reminderCount: integer("reminder_count").notNull().default(0),
+  lastReminderAt: timestamp("last_reminder_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   uniqueShareCode: uniqueIndex("split_sessions_share_code_unique").on(t.shareCode),

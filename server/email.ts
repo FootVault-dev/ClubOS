@@ -504,15 +504,27 @@ export async function sendLeagueConfirmationEmail(params: {
   });
 }
 
-/** Split Pay — a squad member's share has been charged. Their personal receipt. */
+/** Split Pay — a squad member's share has been charged. Their personal receipt.
+ *  While the squad is still short, the receipt also carries the team's share
+ *  link so ANY paid member can pass it on (not just the captain). */
 export async function sendSplitShareReceiptEmail(params: {
   to: string;
   memberName: string;
   teamName: string;
   amountCents: number;
   registrationId?: number;
+  shareUrl?: string | null;      // included while the split is still open
+  paidCount?: number;
+  targetCount?: number | null;
 }): Promise<boolean> {
   const amount = `$${(params.amountCents / 100).toFixed(2)} NZD`;
+  const shareBlock = params.shareUrl
+    ? `
+    <p style="color:#b9b9b9; font-size:13px; line-height:1.6; margin:22px 0 8px;">
+      ${params.paidCount != null && params.targetCount ? `<strong style="color:#d1b96e;">${params.paidCount} of ${params.targetCount}</strong> shares are in so far. ` : ""}The team's spot is confirmed once the whole squad has paid — pass this link to anyone who hasn't yet:
+    </p>
+    <p style="margin:0; word-break:break-all;"><a href="${params.shareUrl}" style="color:#d1b96e; font-size:13px;">${params.shareUrl}</a></p>`
+    : "";
   const bodyHtml = `
     <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.memberName},</p>
     <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">
@@ -523,7 +535,7 @@ export async function sendSplitShareReceiptEmail(params: {
         ${mflRow("Team", params.teamName)}
         ${mflRow("Your share", amount, true)}
       </table>
-    </div>`;
+    </div>${shareBlock}`;
   return sendEmail({
     to: params.to,
     from: MFL_FROM,
@@ -531,6 +543,65 @@ export async function sendSplitShareReceiptEmail(params: {
     subject: `Your share is paid — ${params.teamName}`,
     html: mflShell({ heading: "Share paid ✓", bodyHtml }),
     ...(params.registrationId ? { registrationId: params.registrationId } : {}),
+  });
+}
+
+/** Player Pay — the captain's copy of the team share link. Sent once when the
+ *  split is created ('created') and again by the reminder sweep / an admin
+ *  resend ('reminder') until the squad completes. The raw URL is printed in
+ *  full on purpose: it makes the email findable by searching "player pay" or
+ *  the team name, and the link copyable — the exact failure this fixes is a
+ *  captain losing the link with no way to get it back. */
+export async function sendSplitShareLinkEmail(params: {
+  to: string;
+  captainName: string;
+  teamName: string;
+  shareUrl: string;
+  shareCents: number;
+  paidCount: number;
+  targetCount: number | null;
+  kind: "created" | "reminder";
+  registrationId?: number;
+  programId?: number;
+}): Promise<boolean> {
+  const share = `$${(params.shareCents / 100).toFixed(2)}`;
+  const target = params.targetCount && params.targetCount > 0 ? params.targetCount : null;
+  const progress = target ? `${params.paidCount} of ${target}` : `${params.paidCount}`;
+  const isCreated = params.kind === "created";
+
+  const intro = isCreated
+    ? `Your team's registration is in — now it's over to the squad. Everyone pays their own share (<strong style="color:#d1b96e;">${share}</strong> each) on the page below, and <strong>${params.teamName}</strong> is confirmed the moment ${target ? `all ${target}` : "everyone"} have paid. Send the link to your team chat and keep this email — it's your team's payment page whenever you need it.`
+    : `Quick nudge — <strong>${params.teamName}</strong> has <strong style="color:#d1b96e;">${progress}</strong> shares paid${target ? "" : " so far"}. The team's spot is only confirmed once the whole squad is in, so fire the link below into your team chat again for anyone who hasn't paid yet.`;
+
+  const rows = [
+    mflRow("Team", params.teamName),
+    mflRow("Each share", `${share} NZD`),
+    ...(target ? [mflRow("Paid so far", progress, true)] : []),
+  ].join("");
+
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.captainName},</p>
+    <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">${intro}</p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    <a href="${params.shareUrl}" style="display:inline-block; margin:22px 0 0; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">Open your team's payment page →</a>
+    <p style="color:#7d7d7d; font-size:12px; line-height:1.6; margin:16px 0 0;">
+      Your team's Player Pay link (share it with the squad):<br/>
+      <a href="${params.shareUrl}" style="color:#d1b96e; word-break:break-all;">${params.shareUrl}</a>
+    </p>`;
+
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: MFL_REPLY_TO,
+    subject: isCreated
+      ? `Your Player Pay link — ${params.teamName}`
+      : `${params.teamName}: ${progress}${target ? "" : ` share${params.paidCount === 1 ? "" : "s"}`} paid — share your Player Pay link`,
+    html: mflShell({ heading: isCreated ? "Your Player Pay link" : `${progress} paid`, bodyHtml }),
+    ...(params.programId ? { campId: params.programId } : {}),
+    ...(params.registrationId ? { registrationId: params.registrationId } : {}),
+    utm: { medium: "transactional", campaign: isCreated ? "league-split-link" : "league-split-reminder" },
   });
 }
 

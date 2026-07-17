@@ -253,12 +253,22 @@ export async function sweepDueBalances(): Promise<void> {
 
 let started = false;
 
+/** Player Pay share-link reminders ride the same tick (module-lazy, never throws). */
+async function sweepSplitReminders(): Promise<void> {
+  try {
+    const { sweepSplitShareReminders } = await import("./split-pay");
+    await sweepSplitShareReminders();
+  } catch (e) {
+    console.error("[MFL balance] split reminder sweep failed:", e);
+  }
+}
+
 /** Start the recurring balance sweeper (idempotent — safe to call once on boot). */
 export function startLeagueBalanceCron() {
   if (started) return;
   started = true;
   const intervalMs = parseInt(process.env.LEAGUE_BALANCE_CRON_INTERVAL_MS || "") || 30 * 60 * 1000;
-  setTimeout(() => { sweepDueBalances(); }, 60 * 1000);
-  setInterval(() => { sweepDueBalances(); }, intervalMs);
-  console.log(`[MFL balance] cron started (every ${Math.round(intervalMs / 60000)} min)`);
+  setTimeout(() => { sweepDueBalances(); sweepSplitReminders(); }, 60 * 1000);
+  setInterval(() => { sweepDueBalances(); sweepSplitReminders(); }, intervalMs);
+  console.log(`[MFL balance] cron started (every ${Math.round(intervalMs / 60000)} min, incl. Player Pay share-link reminders)`);
 }

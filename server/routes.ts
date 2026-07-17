@@ -6828,6 +6828,14 @@ export async function registerRoutes(
       res.json(r);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
+  // Resend the team's share link to the captain ("I lost the link").
+  app.post("/api/admin/league/splits/:id/send-link", requireAuth, async (req, res) => {
+    try {
+      const r = await splitPay.adminSendShareLink(parseInt(req.params.id));
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
 
   // ── MFL Mailer / CRM ────────────────────────────────────────────────────────
   // The full MFL contact database (captains + Player Pay squad players), deduped
