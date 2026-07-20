@@ -10,8 +10,9 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { LeagueCompetition } from "@shared/schema";
 
-type Contact = { name: string; email: string; phone: string; role: string; team: string; term: string; unsubscribed: boolean };
-type Campaign = { id: number; subject: string; recipientCount: number | null; sentCount: number | null; failedCount: number | null; status: string; sentAt: string | null; createdAt: string };
+type Contact = { name: string; email: string; phone: string; role: string; team: string; league: string; term: string; unsubscribed: boolean };
+type Campaign = { id: number; subject: string; recipientCount: number | null; sentCount: number | null; failedCount: number | null; status: string; scheduledAt: string | null; sentAt: string | null; createdAt: string };
+type Division = { id: number; name: string };
 type View = "compose" | "contacts";
 
 export default function LeagueMailer() {

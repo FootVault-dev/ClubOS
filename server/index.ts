@@ -208,6 +208,10 @@ app.use(attributionCookieMiddleware);
   const { startLeagueBalanceCron } = await import("./league-balance-cron");
   startLeagueBalanceCron();
 
+  // Mailer: dispatch scheduled newsletter sends when their time arrives.
+  const { startMflMailerScheduler } = await import("./routes");
+  startMflMailerScheduler();
+
   // External API security: nightly retention pruning of the key audit tables.
   const { startApiSecurityJobs } = await import("./api-security");
   startApiSecurityJobs();

@@ -14,7 +14,7 @@ import { db } from "./db";
 import * as watch from "./watch-supabase";
 import { buildConversionAttribution } from "./attribution-stamp";
 import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
-import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte } from "drizzle-orm";
+import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte, lte, like } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
@@ -6526,7 +6526,8 @@ export async function registerRoutes(
   app.get("/api/admin/league/mailer/contacts", requireAuth, async (req, res) => {
     try {
       const compId = req.query.competitionId ? parseInt(String(req.query.competitionId)) : null;
-      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: "all" });
+      const divisionId = req.query.divisionId ? parseInt(String(req.query.divisionId)) : null;
+      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: "all", divisionId });
       const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
       const contacts = recipients.map((r) => ({ ...r, unsubscribed: unsub.has(r.email) }));
       res.json({ contacts, total: contacts.length, unsubscribedCount: contacts.filter((c) => c.unsubscribed).length });
@@ -6545,8 +6546,9 @@ export async function registerRoutes(
   app.post("/api/admin/league/mailer/preview", requireAuth, async (req, res) => {
     try {
       const compId = req.body.competitionId ? parseInt(String(req.body.competitionId)) : null;
+      const divisionId = req.body.divisionId ? parseInt(String(req.body.divisionId)) : null;
       const audience = req.body.audience === "all" ? "all" : "captains";
-      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience });
+      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience, divisionId });
       const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
       res.json({ count: recipients.filter((r) => !unsub.has(r.email)).length });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
@@ -6571,24 +6573,50 @@ export async function registerRoutes(
   // Send the broadcast to the resolved audience (batched, MFL-branded, logged).
   app.post("/api/admin/league/mailer/send", requireAuth, async (req, res) => {
     try {
-      const { subject, body, competitionId, audience, replyTo } = req.body || {};
+      const { subject, body, competitionId, audience, replyTo, divisionId, scheduledAt } = req.body || {};
       const subj = String(subject || "").trim();
       if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
       if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
       const aud = audience === "all" ? "all" : "captains";
       const compId = competitionId ? parseInt(String(competitionId)) : null;
+      const divId = divisionId ? parseInt(String(divisionId)) : null;
 
-      const all = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: aud });
+      // Parse an optional schedule time. Must be a valid future time (with a
+      // small grace so "in 1 min" clicks don't get rejected by clock skew).
+      let scheduleFor: Date | null = null;
+      if (scheduledAt) {
+        const d = new Date(scheduledAt);
+        if (isNaN(d.getTime())) return res.status(400).json({ message: "Invalid schedule time" });
+        if (d.getTime() < Date.now() - 60_000) return res.status(400).json({ message: "Schedule time is in the past" });
+        scheduleFor = d;
+      }
+
+      const all = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: aud, divisionId: divId });
       const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
       const recipients = all.filter((r) => !unsub.has(r.email));
       if (recipients.length === 0) return res.status(400).json({ message: "No recipients in this audience" });
+
+      const segmentConfig = JSON.stringify({ orgId: MFL_ORG_ID, competitionId: compId, divisionId: divId, audience: aud, replyTo: replyTo || null });
+
+      // Scheduled: store it and let the mailer-schedule worker dispatch it at the
+      // due time (recipients are re-resolved then, so it reflects the latest
+      // audience). recipientCount here is an at-schedule estimate for the UI.
+      if (scheduleFor) {
+        const [campaign] = await db.insert(emailCampaigns).values({
+          subject: subj, body: String(body),
+          fromEmail: "Mini Football Leagues <noreply@minifootball.co.nz>",
+          replyTo: replyTo || "minifootball@cufc.co.nz",
+          segmentType: `league_${aud}`, segmentConfig,
+          recipientCount: recipients.length, status: "scheduled", scheduledAt: scheduleFor,
+        }).returning();
+        return res.json({ scheduled: true, scheduledAt: scheduleFor.toISOString(), recipientCount: recipients.length, campaignId: campaign.id });
+      }
 
       const [campaign] = await db.insert(emailCampaigns).values({
         subject: subj, body: String(body),
         fromEmail: "Mini Football Leagues <noreply@minifootball.co.nz>",
         replyTo: replyTo || "minifootball@cufc.co.nz",
-        segmentType: `league_${aud}`,
-        segmentConfig: JSON.stringify({ orgId: MFL_ORG_ID, competitionId: compId, audience: aud }),
+        segmentType: `league_${aud}`, segmentConfig,
         recipientCount: recipients.length, status: "sending",
       }).returning();
 
@@ -6606,6 +6634,21 @@ export async function registerRoutes(
       console.error("[League mailer send] error:", e);
       res.status(400).json({ message: e.message });
     }
+  });
+
+  // Cancel a scheduled send (only while still "scheduled" — once the worker has
+  // claimed it to "sending" it's already going out and can't be recalled).
+  app.post("/api/admin/league/mailer/campaigns/:id/cancel", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const [row] = await db.update(emailCampaigns)
+        .set({ status: "canceled" })
+        .where(and(eq(emailCampaigns.id, id), eq(emailCampaigns.status, "scheduled")))
+        .returning();
+      if (!row) return res.status(409).json({ message: "Not cancellable — it may have already started sending." });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // ── League Builders (referral rewards) — admin ──────────────────────────────
@@ -22783,31 +22826,34 @@ async function getUnsubscribedEmails(orgId: number): Promise<Set<string>> {
   return new Set(rows.map((r) => (r.email || "").trim().toLowerCase()));
 }
 
-type MflContact = { name: string; email: string; phone: string; role: string; team: string; term: string };
+type MflContact = { name: string; email: string; phone: string; role: string; team: string; league: string; term: string };
 
 // Build the MFL contact database: captains (from team registrations) + squad
 // players (from Player Pay splits), deduped by email. audience 'captains' skips
-// players. competitionId null = every term.
-async function resolveMflAudience(orgId: number, opts: { competitionId: number | null; audience: "captains" | "all" }): Promise<MflContact[]> {
+// players. competitionId null = every term. divisionId set = only that league.
+async function resolveMflAudience(orgId: number, opts: { competitionId: number | null; audience: "captains" | "all"; divisionId?: number | null }): Promise<MflContact[]> {
   const comps = await storage.getLeagueCompetitions(orgId);
   const targetComps = opts.competitionId ? comps.filter((c) => c.id === opts.competitionId) : comps;
+  const divisionId = opts.divisionId || null;
   const byEmail = new Map<string, MflContact>();
 
   for (const comp of targetComps) {
     const regs = await storage.getLeagueRegistrations(comp.id);
     for (const r of regs) {
+      if (divisionId && r.divisionId !== divisionId) continue;
       const email = String(r.captainEmail || "").trim().toLowerCase();
       if (!email) continue;
       if (!byEmail.has(email)) {
-        byEmail.set(email, { name: r.captainName || "", email, phone: r.captainPhone || "", role: "Captain", team: r.teamName || "", term: comp.name });
+        byEmail.set(email, { name: r.captainName || "", email, phone: r.captainPhone || "", role: "Captain", team: r.teamName || "", league: r.divisionName || "", term: comp.name });
       }
     }
     if (opts.audience === "all") {
       const members = await splitPay.listSplitMembersForOrg(orgId, comp.id);
       for (const m of members) {
+        if (divisionId && m.divisionId !== divisionId) continue;
         const email = String(m.email || "").trim().toLowerCase();
         if (!email || byEmail.has(email)) continue;
-        byEmail.set(email, { name: m.name || "", email, phone: m.phone || "", role: m.role === "organiser" ? "Captain" : "Player", team: m.teamName || "", term: comp.name });
+        byEmail.set(email, { name: m.name || "", email, phone: m.phone || "", role: m.role === "organiser" ? "Captain" : "Player", team: m.teamName || "", league: m.divisionName || "", term: comp.name });
       }
     }
   }
@@ -22859,6 +22905,71 @@ async function runBroadcastQueue(campaignId: number, recipients: string[], sendO
   }
   await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed, status: "sent", sentAt: new Date() })
     .where(eq(emailCampaigns.id, campaignId));
+}
+
+// ── Scheduled mailer dispatch ───────────────────────────────────────────────
+// Sends campaigns whose scheduled_at has arrived. Runs on EVERY app instance
+// (both Fly machines), so each due campaign is claimed atomically: a conditional
+// UPDATE flips status scheduled→sending and only one machine's UPDATE matches
+// the row (the other sees 0 rows). Recipients are re-resolved at dispatch time
+// so the send reflects the latest audience. Handles the league mailer today
+// (segment_type "league_*"); other mailers can opt in the same way later.
+let mailerSchedulerStarted = false;
+let mailerDispatching = false;
+async function dispatchDueScheduledCampaigns(): Promise<void> {
+  if (mailerDispatching) return; // never overlap on the same machine
+  mailerDispatching = true;
+  try {
+    const claimed = await db.update(emailCampaigns)
+      .set({ status: "sending" })
+      .where(and(
+        eq(emailCampaigns.status, "scheduled"),
+        lte(emailCampaigns.scheduledAt, new Date()),
+        like(emailCampaigns.segmentType, "league_%"),
+      ))
+      .returning();
+
+    for (const c of claimed) {
+      try {
+        const cfg = JSON.parse(c.segmentConfig || "{}");
+        const orgId = cfg.orgId || 3; // MFL
+        const aud = cfg.audience === "all" ? "all" : "captains";
+        const all = await resolveMflAudience(orgId, { competitionId: cfg.competitionId ?? null, audience: aud, divisionId: cfg.divisionId ?? null });
+        const unsub = await getUnsubscribedEmails(orgId);
+        const recipients = all.filter((r) => !unsub.has(r.email));
+
+        if (recipients.length === 0) {
+          await db.update(emailCampaigns).set({ status: "sent", recipientCount: 0, sentCount: 0, sentAt: new Date() }).where(eq(emailCampaigns.id, c.id));
+          continue;
+        }
+        // Refresh the count to the true at-send figure before dispatching.
+        await db.update(emailCampaigns).set({ recipientCount: recipients.length }).where(eq(emailCampaigns.id, c.id));
+
+        await runBroadcastQueue(c.id, recipients.map((r) => r.email), (email) =>
+          sendLeagueBroadcastEmail({
+            to: email, subject: c.subject, bodyHtml: c.body, replyTo: cfg.replyTo || undefined,
+            unsubscribeUrl: mflUnsubUrl(orgId, email), orgId, campaignId: c.id,
+          }),
+        );
+        console.log(`[Mailer scheduler] dispatched campaign ${c.id} → ${recipients.length} recipients`);
+      } catch (e) {
+        // Leave it 'sending' with whatever progress landed — a human can inspect.
+        // Do NOT reset to 'scheduled' (that would re-send to those already done).
+        console.error(`[Mailer scheduler] campaign ${c.id} failed mid-dispatch:`, e);
+      }
+    }
+  } finally {
+    mailerDispatching = false;
+  }
+}
+
+export function startMflMailerScheduler(): void {
+  if (mailerSchedulerStarted) return;
+  mailerSchedulerStarted = true;
+  const tick = () => { dispatchDueScheduledCampaigns().catch((e) => console.error("[Mailer scheduler] tick error:", e)); };
+  setInterval(tick, 60 * 1000); // sweep every minute
+  setTimeout(tick, 15 * 1000);  // and once shortly after boot
+  console.log("[Mailer scheduler] started (60s interval)");
 }
 
 // Parse a manually-entered recipient list (textarea or array) — split on

@@ -723,14 +723,14 @@ export async function sweepExpiredBookingSplits(organizationId: number): Promise
 // removed members; emails/phones come straight off split_members.
 export async function listSplitMembersForOrg(organizationId: number, competitionId?: number): Promise<Array<{
   name: string | null; email: string; phone: string | null; role: string; status: string;
-  teamName: string | null; divisionName: string | null;
+  teamName: string | null; divisionId: number | null; divisionName: string | null;
 }>> {
   const conds = [eq(splitSessions.organizationId, organizationId), ne(splitMembers.status, "removed")];
   if (competitionId) conds.push(eq(leagueDivisions.competitionId, competitionId));
   return db.select({
     name: splitMembers.name, email: splitMembers.email, phone: splitMembers.phone,
     role: splitMembers.role, status: splitMembers.status,
-    teamName: splitSessions.teamName, divisionName: leagueDivisions.name,
+    teamName: splitSessions.teamName, divisionId: leagueDivisions.id, divisionName: leagueDivisions.name,
   })
     .from(splitMembers)
     .innerJoin(splitSessions, eq(splitMembers.splitSessionId, splitSessions.id))
