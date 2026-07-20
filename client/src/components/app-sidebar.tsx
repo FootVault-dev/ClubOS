@@ -74,6 +74,7 @@ import {
   PhoneCall,
   Share2,
   History as HistoryIcon,
+  Video,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -264,6 +265,8 @@ const groupNav = [
   // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
   { tab: "vehicles", title: "Vehicles", url: "/admin/vehicles", icon: Car },
   { tab: "sponsor-traffic", title: "Sponsor Traffic", url: "/admin/sponsor-traffic", icon: Share2 },
+  // `Video`, not `Clapperboard` — Content owns Clapperboard in this nav.
+  { tab: "videos", title: "Videos", url: "/admin/videos", icon: Video },
 ];
 
 const groupSecondary = [

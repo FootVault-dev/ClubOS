@@ -66,6 +66,10 @@ import GroupContent from "@/pages/group-content";
 import GroupHiring from "@/pages/group-hiring";
 import GroupVehicles from "@/pages/group-vehicles";
 import GroupSponsors from "@/pages/group-sponsors";
+import GroupVideos from "@/pages/group-videos";
+import GroupVideoRecord from "@/pages/group-video-record";
+import GroupVideoDetail from "@/pages/group-video-detail";
+import VideoShare from "@/pages/video-share";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
@@ -279,6 +283,9 @@ function AdminRouter() {
         <Route path="/admin/cashflow" component={GroupCashflow} />
         <Route path="/admin/vehicles" component={GroupVehicles} />
         <Route path="/admin/sponsor-traffic" component={GroupSponsors} />
+        <Route path="/admin/videos/record" component={GroupVideoRecord} />
+        <Route path="/admin/videos/:id" component={GroupVideoDetail} />
+        <Route path="/admin/videos" component={GroupVideos} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -579,6 +586,9 @@ function App() {
             {/* USG Studio — public proposal pages (unlisted, no auth). Must
                 precede the 2-segment /:slug/* and 1-segment /:slug routes. */}
             <Route path="/p/:token" component={StudioPublicPage} />
+            {/* Staff Videos — the in-house Loom's public share pages. Random
+                non-enumerable tokens; visibility enforced by the public API. */}
+            <Route path="/v/:token" component={VideoShare} />
             <Route path="/studio-preview" component={StudioPreviewPage} />
             {/* CIC referee scoring — the mobile app referees use to score their
                 games. Referee token-auth (never a staff session); same-origin.
