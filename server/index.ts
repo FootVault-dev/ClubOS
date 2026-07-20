@@ -202,6 +202,11 @@ app.use(attributionCookieMiddleware);
   const { startAttributionMaintenanceCron } = await import("./attribution-maintenance-cron");
   startAttributionMaintenanceCron();
 
+  // Total Tracking Platform: nightly behavioral rollups (page/section/click/
+  // journey/hour-of-day) + behavior_events partition maintenance + 13-month prune.
+  const { startBehaviorRollupCron } = await import("./behavior-rollup-cron");
+  startBehaviorRollupCron();
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

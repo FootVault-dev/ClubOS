@@ -1,46 +1,21 @@
-# VERIFY.md — independent verification criteria for loop/attribution
+# VERIFY.md — independent verification criteria for loop/tracking-platform
 
-You are a read-only skeptic reviewing the AttributionOS build on this branch. Check each
-criterion against the ACTUAL CODE (not PLAN.md claims). Any failure → NEEDS_REVIEW.md.
+You are a skeptical, READ-ONLY reviewer. Assume the loop's work only LOOKS done. Never change code.
+Review the branch diff (`git diff feat/proposals-tracker-search..HEAD`) against `PLAN.md` + `AGENTS.md`.
+Write findings to `NEEDS_REVIEW.md` (be specific: file:line, why it's wrong, how to confirm).
 
-## Safety / non-negotiables
-1. No migration file contains DROP, ALTER COLUMN TYPE, or non-additive DDL; nothing in the
-   diff applies migrations (`db:push`, drizzle-kit push, psql apply) or starts the server.
-2. No deploy/push commands introduced anywhere the loop touched (deploy.sh, fly, vercel, git push).
-3. No child PII (child names/DOB/medical) written into analytics_events, link_clicks,
-   person tables, or any Meta CAPI payload. Persons are parents/payers only.
-4. Attribution code paths in conversion endpoints are failure-isolated (try/catch) — a
-   thrown attribution error cannot block a registration/payment.
-5. `/l/:key` cannot open-redirect: destination hosts restricted to our own domains at
-   CREATE time and/or redirect time. `?ci=`/`?vi=` acceptance cannot inject scripts or SQL.
-6. All new `/api/admin/*` endpoints requireAuth (and org-scope their queries); no new
-   unauthenticated endpoint returns PII (emails/phones) — collector endpoints accept
-   writes but never echo stored personal data.
+## Gate the whole branch on these — a NO on any is a finding:
 
-## Correctness
-7. Classifier: fbclid-with-no-utm/ad-params yields `meta_unattributed`, never a paid
-   channel; synonym map normalises fb→facebook, ig→instagram; values containing `{{` are
-   nulled; raw values stored alongside normalised.
-8. Identity: two already-identified persons are never auto-merged (code path provably
-   blocks it and audits it); illegal-ID blocklist enforced; retroactive stitch only fills
-   NULL person_id rows.
-9. Purchase events: browser and server use the identical deterministic
-   `purchase_<registrationId>` event id for the same purchase (check MFL, camps, venue).
-10. Attribution models: first_touch / last_non_direct / lifetime_first implemented as
-    specified over the touchpoint log at query time; lookback window is a parameter;
-    revenue math uses integer cents with no integer-division truncation; per-model sums
-    reconcile with total conversion revenue for the same filter set.
-11. Short links: click dedupe is 1h per (link, SHA256(ip+ua)); cached counters can be
-    recomputed from link_clicks (repair function exists and matches); QR flag flows from
-    `?qr=1` to stored click and into classification as channel `qr`.
-12. Mailer rewriting is idempotent (running twice doesn't double-append params) and only
-    rewrites links to our own domains; per-recipient tokens are HMAC-signed and the
-    resolver validates before binding identity.
-13. schema.ts mirrors every migration file exactly (names/types/nullability), and
-    `npm run build` passes from a clean checkout of the branch.
-14. Every `- [x]` task in PLAN.md has corresponding real code (spot-check all; no stubs,
-    no TODO-placeholder implementations).
+1. **Build is green.** `npm run build` exits 0. (Do NOT judge on `tsc` — this repo has ~500 pre-existing type errors; only NEW errors introduced in the loop's OWN new files matter, and even those only if they'd break the esbuild build.)
+2. **Every pure-logic module has a passing test.** For each `shared/behavior*.ts`, a `script/test-*.ts` exists and passes (`npx tsx script/test-<name>.ts` exits 0). Re-run them yourself.
+3. **The attribution touch path is UNTOUCHED.** `git diff` must show NO semantic change to `shared/attribution.ts` classifier, `shapeAnalyticsEvent`, the `/api/public/analytics/{hello,event,batch}` handlers, or `analytics_events` touch columns. Behavioral events must write to the NEW `behavior_events` table, NOT `analytics_events`. Flag any modification to the live attribution flow.
+4. **No migration was applied; migrations are additive.** New files under `migrations/` only. grep them: NO `DROP TABLE`, NO `ALTER ... RENAME`, NO `db:push`, NO destructive verb — EXCEPT the single guarded 13-month `DROP PARTITION` in the prune step (that one is allowed). No code path calls a migration-apply/`drizzle-kit push` against a DB.
+5. **Fail-silent + no-block guarantee.** The `/api/public/analytics/behavior` handler is try/catch, returns 200 on bad input, and cannot throw into a request that matters. The client tracker additions cannot throw synchronously on the page. Confirm behavioral capture is not on any checkout-blocking path.
+6. **Dashboards read rollups, not raw events.** The `GET /api/admin/behavior/*` endpoints query the `*_daily` rollup tables, NOT `behavior_events` directly (raw table is for the cron only). Flag any admin endpoint scanning `behavior_events`.
+7. **Auth + org scoping.** Every `/api/admin/behavior/*` endpoint is `requireAuth` and org-scoped (`attributionScope`/`workspaceOrg`) — no cross-workspace leak, no unauthenticated admin data.
+8. **No child PII / no raw form values.** Behavioral events store visitor_id + shape only — no names, emails, or form field values; `click` stores a text HASH not raw text.
+9. **Tab wiring complete.** If a `behavior` tab was added, it's in `shared/tabs.ts` + all `app-sidebar.tsx` nav arrays + an `App.tsx` route + the page exists (mirror the `attribution` tab exactly — check the counts match).
+10. **PLAN accuracy.** Every task marked `- [x]` is genuinely, fully implemented (not a stub). Spot-check 2–3 checked tasks against the actual code.
 
-## Tests
-15. Every `script/test-attribution*.ts` referenced in PLAN.md exists, runs green via
-    `npx tsx`, and actually asserts the behaviours above (not vacuous).
+## Output
+Write `NEEDS_REVIEW.md` with a prioritized list (blocking first). If everything passes, write `NEEDS_REVIEW.md` containing exactly `VERIFIED CLEAN` on the first line + a one-paragraph summary of what you checked.

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, boolean, timestamp, date, decimal, doublePrecision, pgEnum, uniqueIndex, unique, index, time, jsonb, serial, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, smallint, boolean, timestamp, date, decimal, doublePrecision, real, pgEnum, uniqueIndex, unique, index, time, jsonb, serial, uuid } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1407,7 +1407,138 @@ export const analyticsEvents = pgTable("analytics_events", {
 
 export const insertAnalyticsEventSchema = createInsertSchema(analyticsEvents).omit({ id: true });
 export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
+
+// ── Total Tracking Platform, Phase 1 (Behavioral Depth) ──────────────────────
+// behavior_events — a SEPARATE pipeline from analyticsEvents above (which is the
+// LIVE attribution touch path — see AGENTS.md rule 4). Written to ONLY by the
+// POST /api/public/analytics/behavior collector. The real table
+// (migrations/2026-07-10_behavior_events.sql) is monthly RANGE-partitioned on
+// `ts` with a composite (id, ts) primary key — drizzle can't own partitioning,
+// so this mirror carries matching columns for query typing only (no partition
+// clause, no PK annotation, since drizzle-kit push is never run against this
+// schema — the migration file is the source of truth).
+export const behaviorEvents = pgTable("behavior_events", {
+  id: bigint("id", { mode: "number" }).notNull(),
+  visitorId: text("visitor_id"),
+  personId: integer("person_id"),
+  sessionId: text("session_id"),
+  site: text("site"),
+  eventType: text("event_type").notNull(),
+  pagePath: text("page_path"),
+  cssPath: text("css_path"),
+  offsetX: real("offset_x"),
+  offsetY: real("offset_y"),
+  viewport: text("viewport"),
+  scrollBand: integer("scroll_band"),
+  sectionKey: text("section_key"),
+  visibleMs: integer("visible_ms"),
+  dwellMs: integer("dwell_ms"),
+  formId: text("form_id"),
+  metric: text("metric"),
+  metricValue: real("metric_value"),
+  textHash: text("text_hash"),
+  country: text("country"),
+  city: text("city"),
+  isBot: boolean("is_bot").notNull().default(false),
+  ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  visitorTsIdx: index("behavior_events_visitor_ts_idx").on(t.visitorId, t.ts),
+  pageTsIdx: index("behavior_events_page_ts_idx").on(t.pagePath, t.ts),
+  typeTsIdx: index("behavior_events_type_ts_idx").on(t.eventType, t.ts),
+  sectionTsIdx: index("behavior_events_section_ts_idx").on(t.sectionKey, t.ts),
+}));
+
+export const insertBehaviorEventSchema = createInsertSchema(behaviorEvents).omit({ id: true });
+export type InsertBehaviorEvent = z.infer<typeof insertBehaviorEventSchema>;
+export type BehaviorEvent = typeof behaviorEvents.$inferSelect;
 export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
+
+// ── Behavior rollups (nightly; the ONLY tables the Behavior tab/agents read —
+// never behavior_events directly. See AGENTS.md North star, D17/D18.) ─────────
+
+export const pageStatsDaily = pgTable("page_stats_daily", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  site: text("site").notNull().default(""),
+  pagePath: text("page_path").notNull(),
+  day: date("day").notNull(),
+  views: integer("views").notNull().default(0),
+  uniques: integer("uniques").notNull().default(0),
+  avgDwellMs: real("avg_dwell_ms").notNull().default(0),
+  scrollHist: jsonb("scroll_hist").$type<Record<string, number>>().notNull().default(sql`'{}'::jsonb`),
+  exitRate: real("exit_rate").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  unq: uniqueIndex("page_stats_daily_unq").on(t.site, t.pagePath, t.day),
+  dayIdx: index("page_stats_daily_day_idx").on(t.day),
+}));
+
+export type PageStatsDaily = typeof pageStatsDaily.$inferSelect;
+
+export const sectionStatsDaily = pgTable("section_stats_daily", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  pagePath: text("page_path").notNull(),
+  sectionKey: text("section_key").notNull(),
+  day: date("day").notNull(),
+  avgVisibleMs: real("avg_visible_ms").notNull().default(0),
+  viewCount: integer("view_count").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  unq: uniqueIndex("section_stats_daily_unq").on(t.pagePath, t.sectionKey, t.day),
+  dayIdx: index("section_stats_daily_day_idx").on(t.day),
+}));
+
+export type SectionStatsDaily = typeof sectionStatsDaily.$inferSelect;
+
+export const clickStatsDaily = pgTable("click_stats_daily", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  pagePath: text("page_path").notNull(),
+  cssPath: text("css_path").notNull(),
+  viewport: text("viewport").notNull().default(""),
+  day: date("day").notNull(),
+  clicks: integer("clicks").notNull().default(0),
+  uniques: integer("uniques").notNull().default(0),
+  avgOffsetX: real("avg_offset_x").notNull().default(0),
+  avgOffsetY: real("avg_offset_y").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  unq: uniqueIndex("click_stats_daily_unq").on(t.pagePath, t.cssPath, t.viewport, t.day),
+  dayIdx: index("click_stats_daily_day_idx").on(t.day),
+}));
+
+export type ClickStatsDaily = typeof clickStatsDaily.$inferSelect;
+
+export const journeyEdgesDaily = pgTable("journey_edges_daily", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  site: text("site").notNull().default(""),
+  fromPath: text("from_path").notNull(),
+  toPath: text("to_path").notNull(),
+  day: date("day").notNull(),
+  count: integer("count").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  unq: uniqueIndex("journey_edges_daily_unq").on(t.site, t.fromPath, t.toPath, t.day),
+  dayIdx: index("journey_edges_daily_day_idx").on(t.day),
+}));
+
+export type JourneyEdgesDaily = typeof journeyEdgesDaily.$inferSelect;
+
+export const hourOfDayProfile = pgTable("hour_of_day_profile", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  site: text("site").notNull().default(""),
+  dow: smallint("dow").notNull(),
+  hour: smallint("hour").notNull(),
+  sessions: integer("sessions").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  unq: uniqueIndex("hour_of_day_profile_unq").on(t.site, t.dow, t.hour),
+}));
+
+export type HourOfDayProfile = typeof hourOfDayProfile.$inferSelect;
 
 export const splitTestStatusEnum = pgEnum("split_test_status", ["active", "completed", "cancelled"]);
 

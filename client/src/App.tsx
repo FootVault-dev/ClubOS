@@ -70,6 +70,7 @@ import AdminAcademy from "@/pages/admin-academy";
 import AdminSquads from "@/pages/admin-squads";
 import LinksPage from "@/pages/links";
 import AttributionPage from "@/pages/attribution";
+import BehaviorPage from "@/pages/behavior";
 import VenueFacilities from "@/pages/venue-facilities";
 import VenueAddons from "@/pages/venue-addons";
 import VenuePeople from "@/pages/venue-people";
@@ -236,6 +237,7 @@ function AdminRouter() {
         <Route path="/admin/team" component={AdminTeam} />
         <Route path="/admin/links" component={LinksPage} />
         <Route path="/admin/attribution" component={AttributionPage} />
+        <Route path="/admin/behavior" component={BehaviorPage} />
         <Route component={NotFound} />
       </Switch>
     );
@@ -264,6 +266,7 @@ function AdminRouter() {
         <Route path="/admin/team" component={AdminTeam} />
         <Route path="/admin/links" component={LinksPage} />
         <Route path="/admin/attribution" component={AttributionPage} />
+        <Route path="/admin/behavior" component={BehaviorPage} />
         <Route component={NotFound} />
       </Switch>
     );
@@ -295,6 +298,7 @@ function AdminRouter() {
         <Route path="/admin/team" component={AdminTeam} />
         <Route path="/admin/links" component={LinksPage} />
         <Route path="/admin/attribution" component={AttributionPage} />
+        <Route path="/admin/behavior" component={BehaviorPage} />
         <Route component={NotFound} />
       </Switch>
     );
@@ -334,6 +338,7 @@ function AdminRouter() {
         <Route path="/admin/team" component={AdminTeam} />
         <Route path="/admin/links" component={LinksPage} />
         <Route path="/admin/attribution" component={AttributionPage} />
+        <Route path="/admin/behavior" component={BehaviorPage} />
         <Route component={NotFound} />
       </Switch>
     );
@@ -368,6 +373,7 @@ function AdminRouter() {
         <Route path="/admin/team" component={AdminTeam} />
         <Route path="/admin/links" component={LinksPage} />
         <Route path="/admin/attribution" component={AttributionPage} />
+        <Route path="/admin/behavior" component={BehaviorPage} />
         <Route component={NotFound} />
       </Switch>
     );
@@ -396,6 +402,7 @@ function AdminRouter() {
         <Route path="/admin/team" component={AdminTeam} />
         <Route path="/admin/links" component={LinksPage} />
         <Route path="/admin/attribution" component={AttributionPage} />
+        <Route path="/admin/behavior" component={BehaviorPage} />
         <Route component={NotFound} />
       </Switch>
     );
@@ -428,6 +435,7 @@ function AdminRouter() {
       <Route path="/admin/team" component={AdminTeam} />
       <Route path="/admin/links" component={LinksPage} />
       <Route path="/admin/attribution" component={AttributionPage} />
+      <Route path="/admin/behavior" component={BehaviorPage} />
       <Route path="/admin/licensing" component={AdminLicensing} />
       <Route path="/admin/declarations" component={AdminDeclarations} />
       <Route path="/admin/events" component={AdminEvents} />
