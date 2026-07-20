@@ -99,6 +99,7 @@ import LeagueMailer from "@/pages/league-mailer";
 import LeagueRewards from "@/pages/league-rewards";
 import LeagueLoyalty from "@/pages/league-loyalty";
 import FmHistory from "@/pages/fm-history";
+import SportySync from "@/pages/sporty-sync";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
@@ -457,6 +458,10 @@ function AdminRouter() {
       {/* Friendly Manager History — CUFC's 10-year archive (default/camps
           workspace Switch: CUFC has no is* flag, it lands here). */}
       <Route path="/admin/fm-history" component={FmHistory} />
+      {/* Sporty / NZ Football NRS push — same default Switch as fm-history
+          (CUFC has no is* flag, so it lands here; SIU shares this Switch too
+          since it has no dedicated branch above). */}
+      <Route path="/admin/sporty" component={SportySync} />
       <Route path="/admin/football-institute" component={FootballInstitute} />
       <Route path="/admin/analytics" component={CampAnalytics} />
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />

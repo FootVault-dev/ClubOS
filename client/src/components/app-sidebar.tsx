@@ -75,6 +75,7 @@ import {
   Share2,
   History as HistoryIcon,
   Video,
+  CloudUpload,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -121,6 +122,8 @@ const campsNav = [
   { tab: "predictor", title: "Play Predictor", url: "/admin/predictor", icon: Trophy },
   // 10 years of Friendly Manager registrations + payments (imported 2026-07-14).
   { tab: "fm-history", title: "History", url: "/admin/fm-history", icon: HistoryIcon },
+  // Sporty / NZ Football NRS push — super-admin only while in UAT.
+  { tab: "sporty", title: "Sporty NRS", url: "/admin/sporty", icon: CloudUpload },
   { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },

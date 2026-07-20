@@ -65,6 +65,9 @@ const campsTabs: TabDef[] = [
   { slug: "predictor", title: "Play Predictor", url: "/admin/predictor" },
   // 10 years of Friendly Manager registrations + payments, imported 2026-07-14.
   { slug: "fm-history", title: "History", url: "/admin/fm-history" },
+  // Sporty / NZ Football NRS — push confirmed registrations into the national
+  // register (the Friendly Manager / Club Hub pathway, NZF-approved 2026-07-20).
+  { slug: "sporty", title: "Sporty NRS", url: "/admin/sporty" },
   { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
@@ -272,6 +275,10 @@ export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
  */
 export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "budget", // Phase 1 construction — staff salaries visible. Daniel only.
+  // Sporty / NZF NRS push: sends children's identity data to a national
+  // register, and a mis-click during UAT could create real NRS records.
+  // Daniel-only until the integration passes UAT and the deeds are signed.
+  "sporty",
   "cashflow", // Club-wide cashflow insight (Xero patterns, wage-level data). Daniel only.
   "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
   "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.

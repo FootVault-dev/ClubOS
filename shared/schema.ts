@@ -5369,3 +5369,96 @@ export const staffVideoComments = pgTable(
 export type StaffVideo = typeof staffVideos.$inferSelect;
 export type StaffVideoEvent = typeof staffVideoEvents.$inferSelect;
 export type StaffVideoComment = typeof staffVideoComments.$inferSelect;
+
+// ═══════════════ Sporty / NZ Football NRS — outbound registration push ═══════════════
+// ClubOS pushes player registrations INTO NZ Football's National Registration System
+// (Sporty Football API) — the same third-party pathway Friendly Manager and Club Hub
+// use. NZF approval granted 2026-07-20 (Rodrigo Stephanou); UAT keys arrive after we
+// tell him development is done.
+//
+// Design rules:
+//  · sporty_id is the NRS registration id. Sporty's docs are emphatic: once ANY
+//    response — INCLUDING an error response ("Player already registered", "Overseas
+//    clearance is required", "Termination required") — returns a SportyId, it must be
+//    saved and sent on every later RegisterPerson for that player. A null SportyId
+//    always attempts a CREATE and is rejected as a duplicate. Losing the linkage risks
+//    double-registering a child with the national body, hence RESTRICT on contact
+//    delete.
+//  · Preflight problems (missing DOB, unmapped ethnicity…) are DERIVED at read time
+//    from the contact row — only push OUTCOMES are stored state.
+//  · status / block_reason / outcome are text validated app-side in shared/sporty.ts,
+//    never CHECK constraints (the stale-CHECK rule).
+
+export const sportySyncState = pgTable(
+  "sporty_sync_state",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+    // The NRS registration id — see doctrine above. Null until Sporty first returns one.
+    sportyId: integer("sporty_id"),
+    personFifaId: text("person_fifa_id"),
+    // 'pending' | 'synced' | 'blocked' | 'error' | 'excluded' (shared/sporty.ts)
+    status: text("status").notNull().default("pending"),
+    // 'overseas_clearance' | 'termination_required' | 'red_flag' — set when Sporty
+    // created the registration but activation needs a human process on their side.
+    blockReason: text("block_reason"),
+    lastError: text("last_error"),
+    // Hash of the last successfully-pushed payload: unchanged data is never re-sent.
+    lastPayloadHash: text("last_payload_hash"),
+    lastPushedAt: timestamp("last_pushed_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    // Set when staff deliberately keep a contact out of the push (test rows,
+    // duplicates awaiting merge). Cleared by re-including.
+    excludedReason: text("excluded_reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    unique("sporty_sync_state_contact_unique").on(t.contactId),
+    index("sporty_sync_state_org_status_idx").on(t.organizationId, t.status),
+  ],
+);
+
+// Append-only audit of every RegisterPerson call — what was sent, what came back.
+// contact_id is SET NULL so the audit survives a contact deletion; the payload
+// snapshot keeps the record intelligible for NZF queries years later.
+export const sportyPushLog = pgTable(
+  "sporty_push_log",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    endpoint: text("endpoint").notNull(), // 'RegisterPerson' | 'fantail/RegisterPerson'
+    baseUrl: text("base_url").notNull(), // which environment the call actually hit
+    outcome: text("outcome").notNull(), // 'synced' | 'blocked' | 'error' (shared/sporty.ts)
+    httpStatus: integer("http_status"),
+    sportyId: integer("sporty_id"),
+    message: text("message"),
+    requestPayload: jsonb("request_payload"),
+    responseBody: jsonb("response_body"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("sporty_push_log_contact_idx").on(t.contactId, t.createdAt),
+    index("sporty_push_log_org_idx").on(t.organizationId, t.createdAt),
+  ],
+);
+
+// Sporty reference data (countries / genders / ethnicity groups / fantail form
+// options), fetched from their API and cached so mapping is validated against the
+// REAL vocabulary, not our guesses. One row per kind, upserted on refresh.
+export const sportyReferenceCache = pgTable(
+  "sporty_reference_cache",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    kind: text("kind").notNull(), // 'countries' | 'genders' | 'ethnicity_groups' | 'fantail_form_options'
+    payload: jsonb("payload").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [unique("sporty_reference_cache_kind_unique").on(t.kind)],
+);
+
+export type SportySyncState = typeof sportySyncState.$inferSelect;
+export type SportyPushLogRow = typeof sportyPushLog.$inferSelect;
+export type SportyReferenceCacheRow = typeof sportyReferenceCache.$inferSelect;
