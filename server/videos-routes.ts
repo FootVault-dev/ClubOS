@@ -237,8 +237,24 @@ function rateLimit(key: string, max: number, windowMs: number): boolean {
 }
 
 const VIEWER_COOKIE = "usg_vv";
+// ClubOS mounts NO cookie-parser — req.cookies is always undefined here. The
+// house pattern (routes.ts readReqCookie) parses the raw Cookie header.
+function readCookie(req: Request, name: string): string | null {
+  const raw = String(req.headers.cookie || "");
+  for (const part of raw.split(/;\s*/)) {
+    const eq = part.indexOf("=");
+    if (eq > 0 && part.slice(0, eq) === name) {
+      try {
+        return decodeURIComponent(part.slice(eq + 1));
+      } catch {
+        return part.slice(eq + 1);
+      }
+    }
+  }
+  return null;
+}
 function viewerKey(req: Request, res: Response): string {
-  const existing = req.cookies?.[VIEWER_COOKIE];
+  const existing = readCookie(req, VIEWER_COOKIE);
   if (typeof existing === "string" && /^[a-f0-9]{32}$/.test(existing)) return existing;
   const key = randomBytes(16).toString("hex");
   res.cookie(VIEWER_COOKIE, key, {
