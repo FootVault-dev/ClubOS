@@ -523,6 +523,9 @@ export const emailCampaigns = pgTable("email_campaigns", {
   sentCount: integer("sent_count").default(0),
   failedCount: integer("failed_count").default(0),
   status: text("status").notNull().default("draft"),
+  // When set + status "scheduled", the mailer-schedule worker dispatches the
+  // send at/after this time (atomic claim → "sending"). Null = send immediately.
+  scheduledAt: timestamp("scheduled_at"),
   sentAt: timestamp("sent_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

@@ -1930,6 +1930,7 @@ export class DatabaseStorage implements IStorage {
       id: r.reg.id,
       teamName: r.reg.teamName,
       status: r.reg.status,
+      divisionId: r.reg.leagueDivisionId ?? null,
       divisionName: r.division?.name ?? null,
       captainName: r.captain ? `${r.captain.firstName} ${r.captain.lastName}` : "",
       captainEmail: r.captain?.email ?? null,
