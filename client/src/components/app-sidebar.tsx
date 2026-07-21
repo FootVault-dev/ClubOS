@@ -75,6 +75,7 @@ import {
   Share2,
   History as HistoryIcon,
   Video,
+  Wrench,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -150,6 +151,7 @@ const venueNav = [
   { tab: "facilities", title: "Facilities", url: "/admin/facilities", icon: Shield },
   { tab: "addons", title: "Add-ons", url: "/admin/addons", icon: Puzzle },
   { tab: "housing", title: "Housing", url: "/admin/housing", icon: Home },
+  { tab: "maintenance", title: "Maintenance", url: "/admin/maintenance", icon: Wrench },
   { tab: "people", title: "People & Access", url: "/admin/people", icon: Users },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
 ];

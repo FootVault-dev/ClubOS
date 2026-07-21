@@ -90,6 +90,9 @@ const venueTabs: TabDef[] = [
   { slug: "addons", title: "Add-ons", url: "/admin/addons" },
   // The residency houses: rooms, tenants, rent and the power/wifi bills.
   { slug: "housing", title: "Housing", url: "/admin/housing" },
+  // Cleaning/consumable supplies + machines & equipment. NOT super-admin-only —
+  // Riley (grounds staff) needs it once ticked for him in Team.
+  { slug: "maintenance", title: "Maintenance", url: "/admin/maintenance" },
   { slug: "people", title: "People & Access", url: "/admin/people" },
   { slug: "payments", title: "Payments", url: "/admin/payments" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },

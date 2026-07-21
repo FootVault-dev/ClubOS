@@ -5190,6 +5190,95 @@ export type HousingUtilityAccount = typeof housingUtilityAccounts.$inferSelect;
 export type HousingUtilityBill = typeof housingUtilityBills.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MAINTENANCE — cleaning/consumable supplies + machines & equipment (USC, org 4).
+//
+// See migrations/2026-07-21_usc_maintenance.sql for the reasoning. Two things
+// are deliberately absent as columns because they are DERIVED on read:
+//   * a supply's stock status    (out / low / no_level / ok — qty vs reorder level)
+//   * a machine's service status (overdue / due_soon / unknown / ok — vs today)
+// Categories/statuses/reasons/kinds are validated TEXT (shared/maintenance.ts),
+// never pg enums.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const maintSupplies = pgTable("maint_supplies", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  category: text("category").notNull().default("other"),
+  unit: text("unit"),
+  qtyOnHand: integer("qty_on_hand").notNull().default(0),
+  reorderLevel: integer("reorder_level"),
+  location: text("location"),
+  supplier: text("supplier"),
+  // A reference unit cost, not a purchasing ledger.
+  costCents: integer("cost_cents"),
+  notes: text("notes"),
+  // Archive, never delete — a supply with movement history keeps its trail.
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("maint_supplies_org_idx").on(t.organizationId),
+}));
+
+export const maintStockMovements = pgTable("maint_stock_movements", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  supplyId: integer("supply_id").notNull().references(() => maintSupplies.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  delta: integer("delta").notNull(),          // +received / -used
+  reason: text("reason").notNull(),           // received|used|adjusted|stocktake
+  note: text("note"),
+  recordedBy: text("recorded_by"),            // staff email/name from session
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  supplyIdx: index("maint_stock_movements_supply_idx").on(t.supplyId),
+  orgIdx: index("maint_stock_movements_org_idx").on(t.organizationId),
+}));
+
+export const maintAssets = pgTable("maint_assets", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  category: text("category").notNull().default("other"),  // mower|tractor|trailer|power_tool|appliance|other
+  make: text("make"),
+  model: text("model"),
+  serial: text("serial"),
+  location: text("location"),
+  purchaseDate: date("purchase_date"),
+  purchaseCostCents: integer("purchase_cost_cents"),
+  lastServicedOn: date("last_serviced_on"),
+  nextServiceDueOn: date("next_service_due_on"),
+  // Archive, never delete — a retired asset keeps its service history.
+  status: text("status").notNull().default("active"),     // active|retired
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("maint_assets_org_idx").on(t.organizationId),
+}));
+
+export const maintServiceRecords = pgTable("maint_service_records", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  assetId: integer("asset_id").notNull().references(() => maintAssets.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  servicedOn: date("serviced_on").notNull(),
+  kind: text("kind").notNull().default("service"),         // service|repair|inspection
+  performedBy: text("performed_by"),
+  costCents: integer("cost_cents"),
+  nextDueOn: date("next_due_on"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  assetIdx: index("maint_service_records_asset_idx").on(t.assetId),
+  orgIdx: index("maint_service_records_org_idx").on(t.organizationId),
+}));
+
+export type MaintSupply = typeof maintSupplies.$inferSelect;
+export type MaintStockMovement = typeof maintStockMovements.$inferSelect;
+export type MaintAsset = typeof maintAssets.$inferSelect;
+export type MaintServiceRecord = typeof maintServiceRecords.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SALES — United Print prospect database + sales pipeline (prints workspace).
 //
 // A prospect is a researched company that could buy what United Print sells

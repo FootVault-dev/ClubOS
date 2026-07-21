@@ -130,6 +130,12 @@ app.use(attributionCookieMiddleware);
   const { registerHousingRoutes } = await import("./housing-routes");
   registerHousingRoutes(app);
 
+  // Maintenance — the United Sports Centre's cleaning/consumable supplies and
+  // its machines & equipment. Admin-only, gated by requireTab("maintenance") to
+  // the venue workspace. Sibling of Housing, built for Riley (grounds staff).
+  const { registerMaintenanceRoutes } = await import("./maintenance-routes");
+  registerMaintenanceRoutes(app);
+
   // Sales — the United Print prospect database + pipeline (prints workspace).
   // Gated by requireTab("sales"), which is in SUPER_ADMIN_ONLY_TABS while
   // Daniel shapes it. No public surface: a prospect list is a sales asset.
