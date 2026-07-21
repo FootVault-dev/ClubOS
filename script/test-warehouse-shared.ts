@@ -7,6 +7,7 @@ import {
   LOCATION_KINDS, isLocationKind,
   NAMED_ZONES, VIRTUAL_LOCATION_CODES, QUARANTINE_ZONE,
   isValidLocationCode, normaliseLocationCode,
+  deriveLocationZone, LOCATION_BARCODE_PREFIX, locationBarcodePayload,
   normaliseSku, isValidSku,
   normaliseAliasCode,
   MOVEMENT_TYPES, isMovementType, MOVEMENT_TYPE_LABELS,
@@ -69,6 +70,14 @@ ok("empty string invalid", () => assert.equal(isValidLocationCode(""), false));
 ok("whitespace-only invalid", () => assert.equal(isValidLocationCode("   "), false));
 ok("non-string invalid", () => assert.equal(isValidLocationCode(123), false));
 ok("normalise trims + uppercases", () => assert.equal(normaliseLocationCode(" a-01-2 "), "A-01-2"));
+
+ok("zone: a bin code zones to its first segment", () => assert.equal(deriveLocationZone("A-01-2", "bin"), "A"));
+ok("zone: a deep bin still zones to its first segment", () => assert.equal(deriveLocationZone("RECEIVING-01-1-3", "bin"), "RECEIVING"));
+ok("zone: a bare named zone is its own zone", () => assert.equal(deriveLocationZone("RECEIVING", "zone"), "RECEIVING"));
+ok("zone: a virtual location has no zone", () => assert.equal(deriveLocationZone("SUPPLIER", "virtual"), null));
+ok("LOCATION_BARCODE_PREFIX is 'LOC:'", () => assert.equal(LOCATION_BARCODE_PREFIX, "LOC:"));
+ok("locationBarcodePayload prefixes the code", () => assert.equal(locationBarcodePayload("A-01-2"), "LOC:A-01-2"));
+ok("locationBarcodePayload works for a virtual/zone code too", () => assert.equal(locationBarcodePayload("QUARANTINE"), "LOC:QUARANTINE"));
 
 // ── SKUs (D7) ─────────────────────────────────────────────────────────────
 ok("normalise uppercases and dashes", () => assert.equal(normaliseSku("mfl kit  home_M"), "MFL-KIT-HOME-M"));

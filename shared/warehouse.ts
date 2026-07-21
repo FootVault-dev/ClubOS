@@ -112,6 +112,28 @@ export function normaliseLocationCode(code: string): string {
   return code.trim().toUpperCase();
 }
 
+/** Zone is auto-derived from a location's own code (D8/§4.1's schema comment
+ *  "first segment of a bin code, or the named zone itself") — never a second
+ *  free-text field a human can let drift out of sync with the code. A bin
+ *  `A-01-2` zones to `A`; a bare named zone `RECEIVING` zones to itself;
+ *  virtual locations (SUPPLIER/CUSTOMER/SCRAP/PRODUCTION) have no zone at all
+ *  — stock parked there isn't shelved anywhere physical. */
+export function deriveLocationZone(code: string, kind: LocationKind): string | null {
+  if (kind === "virtual") return null;
+  const first = code.split("-")[0];
+  return first || null;
+}
+
+/** The bin/item label QR payload for a location (§4.4/D5): `LOC:` + the
+ *  location's own code — item labels encode the SKU directly (no prefix
+ *  needed, a SKU can never collide with this shape). Centralised here so the
+ *  server's label endpoint (T4) and the scan resolver that will decode it
+ *  later (T7) can never drift apart on the prefix string. */
+export const LOCATION_BARCODE_PREFIX = "LOC:";
+export function locationBarcodePayload(code: string): string {
+  return `${LOCATION_BARCODE_PREFIX}${code}`;
+}
+
 // ── SKUs ──────────────────────────────────────────────────────────────────────
 // Scheme (D7): BRAND-CAT-STYLE-COLOUR-SIZE, uppercase, <=20 chars, encode only
 // durable attributes. Characters that are visually ambiguous when printed

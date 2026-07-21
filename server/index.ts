@@ -91,6 +91,14 @@ app.use(attributionCookieMiddleware);
   const { registerFeedbackRoutes } = await import("./feedback-routes");
   registerFeedbackRoutes(app);
 
+  // United Prints workspace — Warehouse Management System. Dark-launched
+  // (requireTab("warehouse") — super_admin only until T17 wires "warehouse"
+  // into shared/tabs.ts). This registers items/locations/barcode-alias CRUD +
+  // label-payload endpoints (T4); later loop tasks add reservations,
+  // receiving, scan, pick/dispatch, requisitions, loans, counts and sync.
+  const { registerWarehouseRoutes } = await import("./warehouse-routes");
+  registerWarehouseRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).
