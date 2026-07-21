@@ -33,4 +33,5 @@
 
 ## Lessons learned (append-only)
 
-- (loop appends here)
+- **2026-07-22 — THE TYPECHECK GATE IS `bash script/check-warehouse-gate.sh`, NOT a clean `npm run check`.** The canonical-2 base carries ~545 pre-existing tsc errors (routes.ts/schema.ts/storage.ts — snapshotted per-file in `script/BASELINE-TSC.txt`), so "check must be clean" was never achievable and is why the first loop runs stalled. The gate script passes iff warehouse-owned files have ZERO errors and no file regresses past its baseline count. Wherever PLAN.md/SPEC.md say `npm run check`, run the gate script instead. `npm run build` DOES pass at baseline and remains a hard gate for client-touching tasks.
+- 2026-07-22 — a crashed earlier run mangled `package-lock.json` (restored from base 541b58a) and left a PARTIAL `shared/warehouse.ts` (2 tsc errors, no test script). T1 must finish/fix it, not start over blindly.
