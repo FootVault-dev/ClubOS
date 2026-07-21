@@ -193,6 +193,10 @@ const groupTabs: TabDef[] = [
   // plus a sponsor-site health check. Launched dark (SUPER_ADMIN_ONLY_TABS)
   // while Daniel shapes it.
   { slug: "sponsor-traffic", title: "Sponsor Traffic", url: "/admin/sponsor-traffic" },
+  // The in-house Loom: record screen/camera in the browser, share at /v/{token}.
+  // NOT super-admin-locked — the whole point is any staff member recording
+  // tutorials; grant the tab per-member in Team as usual.
+  { slug: "videos", title: "Videos", url: "/admin/videos" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
   { slug: "team", title: "Team", url: "/admin/team", secondary: true },

@@ -117,6 +117,13 @@ app.use(attributionCookieMiddleware);
   const { registerVehicleRoutes } = await import("./vehicles-routes");
   registerVehicleRoutes(app);
 
+  // Staff Videos — the in-house Loom. Recorder + library gated by
+  // requireTab("videos") in the USG workspace; the /v/{token} share pages hit
+  // public endpoints (random non-enumerable tokens, staff opens excluded from
+  // analytics). Video bytes live on Cloudflare Stream, never in our DB.
+  const { registerVideoRoutes } = await import("./videos-routes");
+  registerVideoRoutes(app);
+
   // Housing — the residency houses at the United Sports Centre: rooms, tenants,
   // rent and utility bills. Admin-only, gated by requireTab("housing") to the
   // venue workspace. No public surface: rent arrears are not a public fact.
@@ -254,6 +261,10 @@ app.use(attributionCookieMiddleware);
   // MFL instalments: charge scheduled team-registration balances on their due date.
   const { startLeagueBalanceCron } = await import("./league-balance-cron");
   startLeagueBalanceCron();
+
+  // Mailer: dispatch scheduled newsletter sends when their time arrives.
+  const { startMflMailerScheduler } = await import("./routes");
+  startMflMailerScheduler();
 
   // External API security: nightly retention pruning of the key audit tables.
   const { startApiSecurityJobs } = await import("./api-security");

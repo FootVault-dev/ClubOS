@@ -523,6 +523,9 @@ export const emailCampaigns = pgTable("email_campaigns", {
   sentCount: integer("sent_count").default(0),
   failedCount: integer("failed_count").default(0),
   status: text("status").notNull().default("draft"),
+  // When set + status "scheduled", the mailer-schedule worker dispatches the
+  // send at/after this time (atomic claim → "sending"). Null = send immediately.
+  scheduledAt: timestamp("scheduled_at"),
   sentAt: timestamp("sent_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -5276,3 +5279,93 @@ export type SalesProspect = typeof salesProspects.$inferSelect;
 export const insertSalesActivitySchema = createInsertSchema(salesActivities).omit({ id: true, createdAt: true });
 export type InsertSalesActivity = z.infer<typeof insertSalesActivitySchema>;
 export type SalesActivity = typeof salesActivities.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STAFF VIDEOS — the in-house Loom (2026-07-20). Record screen/camera in the
+// browser, store on Cloudflare Stream, share at /v/{token}. `token` is the
+// public share id — random and non-enumerable (invoice-pages doctrine: a video
+// may show internal systems, so the set of videos must not be guessable).
+// A TRIM swaps stream_uid in place so share links survive trims; the old asset
+// is remembered in prev_stream_uid and deleted from Stream to free quota.
+// status/visibility/source are app-validated strings — deliberately NO CHECK
+// constraints (a stale CHECK is how the MFL checkout once 500'd).
+// ─────────────────────────────────────────────────────────────────────────────
+export const staffVideos = pgTable(
+  "staff_videos",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id").notNull().references(() => organizations.id),
+    createdBy: integer("created_by").notNull().references(() => users.id),
+    token: varchar("token", { length: 24 }).notNull(),
+    title: text("title").notNull().default("Untitled video"),
+    description: text("description"),
+    streamUid: varchar("stream_uid", { length: 64 }),
+    prevStreamUid: varchar("prev_stream_uid", { length: 64 }),
+    status: varchar("status", { length: 20 }).notNull().default("uploading"), // uploading | processing | ready | error
+    source: varchar("source", { length: 16 }).notNull().default("recording"), // recording | upload | clip
+    visibility: varchar("visibility", { length: 16 }).notNull().default("link"), // link | staff | private
+    allowDownload: boolean("allow_download").notNull().default(true),
+    allowComments: boolean("allow_comments").notNull().default(true),
+    durationSeconds: doublePrecision("duration_seconds"),
+    width: integer("width"),
+    height: integer("height"),
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
+    thumbnailUrl: text("thumbnail_url"),
+    playbackHlsUrl: text("playback_hls_url"),
+    downloadUrl: text("download_url"),
+    captionsStatus: varchar("captions_status", { length: 20 }),
+    viewCount: integer("view_count").notNull().default(0),
+    clippedFromId: integer("clipped_from_id"),
+    deletedAt: timestamp("deleted_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("staff_videos_token_key").on(t.token),
+    index("staff_videos_org_idx").on(t.organizationId, t.createdAt),
+    index("staff_videos_owner_idx").on(t.createdBy),
+  ],
+);
+
+export const staffVideoEvents = pgTable(
+  "staff_video_events",
+  {
+    id: serial("id").primaryKey(),
+    videoId: integer("video_id").notNull().references(() => staffVideos.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 16 }).notNull(), // view | play | milestone
+    viewerKey: varchar("viewer_key", { length: 64 }),
+    percent: integer("percent"),
+    positionSeconds: doublePrecision("position_seconds"),
+    isStaff: boolean("is_staff").notNull().default(false),
+    device: varchar("device", { length: 16 }),
+    referrer: text("referrer"),
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("staff_video_events_video_idx").on(t.videoId, t.kind, t.createdAt),
+    index("staff_video_events_viewer_idx").on(t.videoId, t.viewerKey),
+  ],
+);
+
+// Comments AND emoji reactions in one table: an emoji-only row is a reaction
+// (optionally pinned to at_seconds, Loom-style); a row with body is a comment.
+export const staffVideoComments = pgTable(
+  "staff_video_comments",
+  {
+    id: serial("id").primaryKey(),
+    videoId: integer("video_id").notNull().references(() => staffVideos.id, { onDelete: "cascade" }),
+    authorUserId: integer("author_user_id").references(() => users.id),
+    authorName: varchar("author_name", { length: 120 }),
+    body: text("body"),
+    emoji: varchar("emoji", { length: 16 }),
+    atSeconds: doublePrecision("at_seconds"),
+    isStaff: boolean("is_staff").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("staff_video_comments_video_idx").on(t.videoId, t.createdAt)],
+);
+
+export type StaffVideo = typeof staffVideos.$inferSelect;
+export type StaffVideoEvent = typeof staffVideoEvents.$inferSelect;
+export type StaffVideoComment = typeof staffVideoComments.$inferSelect;
