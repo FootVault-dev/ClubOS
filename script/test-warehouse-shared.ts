@@ -17,6 +17,8 @@ import {
   REF_KINDS, isRefKind,
   RESERVATION_STATUSES, isReservationStatus,
   PO_STATUSES, isPoStatus,
+  isValidDateOnly,
+  computeReceiveDiscrepancy, receiveDiscrepancyNote, derivePoStatusFromLines,
   REQUISITION_STATUSES, isRequisitionStatus, REQUISITION_TERMINAL_STATUSES,
   LOAN_STATUSES, isLoanStatus,
   CONDITION_GRADES, isConditionGrade,
@@ -148,6 +150,98 @@ ok("junk reservation status rejected", () => assert.equal(isReservationStatus("p
 ok("six PO statuses", () => assert.equal(PO_STATUSES.length, 6));
 ok("sent is a PO status", () => assert.equal(isPoStatus("sent"), true));
 ok("junk PO status rejected", () => assert.equal(isPoStatus("shipped"), false));
+
+// ── Dates (YYYY-MM-DD shape only) ─────────────────────────────────────────
+ok("plain YYYY-MM-DD accepted", () => assert.equal(isValidDateOnly("2026-07-22"), true));
+ok("a Date object is rejected (never round-trip through Date)", () => assert.equal(isValidDateOnly(new Date() as any), false));
+ok("a full ISO timestamp is rejected", () => assert.equal(isValidDateOnly("2026-07-22T00:00:00.000Z"), false));
+ok("garbage rejected", () => assert.equal(isValidDateOnly("22/07/2026"), false));
+ok("empty string rejected", () => assert.equal(isValidDateOnly(""), false));
+
+// ── Receiving (T6) ────────────────────────────────────────────────────────
+ok("exact receipt has no over/short", () => {
+  const d = computeReceiveDiscrepancy(50, 50, 0);
+  assert.equal(d.overQty, 0);
+  assert.equal(d.shortQty, 0);
+});
+ok("over-receipt flagged, no damage", () => {
+  const d = computeReceiveDiscrepancy(50, 55, 0);
+  assert.equal(d.overQty, 5);
+  assert.equal(d.shortQty, 0);
+});
+ok("short receipt flagged", () => {
+  const d = computeReceiveDiscrepancy(50, 40, 0);
+  assert.equal(d.overQty, 0);
+  assert.equal(d.shortQty, 10);
+});
+ok("damaged units count toward the total, not as a shortfall", () => {
+  const d = computeReceiveDiscrepancy(50, 45, 5);
+  assert.equal(d.overQty, 0);
+  assert.equal(d.shortQty, 0);
+});
+ok("damaged units on top of full expected qty are both damaged AND over", () => {
+  const d = computeReceiveDiscrepancy(50, 50, 3);
+  assert.equal(d.overQty, 3);
+  assert.equal(d.qtyDamaged, 3);
+});
+
+ok("a clean exact receipt has no discrepancy note", () => {
+  assert.equal(receiveDiscrepancyNote(computeReceiveDiscrepancy(50, 50, 0)), null);
+});
+ok("a damaged-only receipt notes the damage", () => {
+  const note = receiveDiscrepancyNote(computeReceiveDiscrepancy(50, 45, 5));
+  assert.match(note!, /5 damaged \(quarantined\)/);
+});
+ok("an over-receipt notes it", () => {
+  const note = receiveDiscrepancyNote(computeReceiveDiscrepancy(50, 55, 0));
+  assert.match(note!, /5 over expected/);
+});
+ok("a short receipt notes it", () => {
+  const note = receiveDiscrepancyNote(computeReceiveDiscrepancy(50, 40, 0));
+  assert.match(note!, /10 short of expected/);
+});
+ok("a receipt that is both damaged and short notes both", () => {
+  const note = receiveDiscrepancyNote(computeReceiveDiscrepancy(50, 30, 5));
+  assert.match(note!, /5 damaged \(quarantined\)/);
+  assert.match(note!, /15 short of expected/);
+});
+
+ok("PO stays draft even if (hypothetically) lines show receipts", () => {
+  assert.equal(derivePoStatusFromLines("draft", [{ qtyOrdered: 10, qtyReceived: 10 }]), "draft");
+});
+ok("cancelled PO never auto-advances", () => {
+  assert.equal(derivePoStatusFromLines("cancelled", [{ qtyOrdered: 10, qtyReceived: 10 }]), "cancelled");
+});
+ok("closed PO never auto-advances", () => {
+  assert.equal(derivePoStatusFromLines("closed", [{ qtyOrdered: 10, qtyReceived: 0 }]), "closed");
+});
+ok("sent PO with nothing received yet stays sent", () => {
+  assert.equal(derivePoStatusFromLines("sent", [{ qtyOrdered: 10, qtyReceived: 0 }]), "sent");
+});
+ok("sent PO with one of two lines received becomes partial", () => {
+  assert.equal(
+    derivePoStatusFromLines("sent", [
+      { qtyOrdered: 10, qtyReceived: 10 },
+      { qtyOrdered: 5, qtyReceived: 0 },
+    ]),
+    "partial",
+  );
+});
+ok("partial PO with every line now fully received becomes received", () => {
+  assert.equal(
+    derivePoStatusFromLines("partial", [
+      { qtyOrdered: 10, qtyReceived: 10 },
+      { qtyOrdered: 5, qtyReceived: 5 },
+    ]),
+    "received",
+  );
+});
+ok("over-received lines still count as fully received", () => {
+  assert.equal(derivePoStatusFromLines("sent", [{ qtyOrdered: 10, qtyReceived: 12 }]), "received");
+});
+ok("a PO with no lines at all never auto-advances", () => {
+  assert.equal(derivePoStatusFromLines("sent", []), "sent");
+});
 
 // ── Requisition statuses ──────────────────────────────────────────────────
 ok("six requisition statuses", () => assert.equal(REQUISITION_STATUSES.length, 6));

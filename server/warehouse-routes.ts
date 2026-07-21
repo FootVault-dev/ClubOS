@@ -25,10 +25,10 @@
 // are caught and turned into clean 409s rather than raw 500s.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Express, Response } from "express";
-import { and, asc, desc, eq, ilike, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
-import { whItems, whLocations, whBarcodeAliases, whReservations } from "@shared/schema";
+import { whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines } from "@shared/schema";
 import {
   ITEM_KINDS, isItemKind,
   BRAND_OWNERS, isBrandOwner,
@@ -42,16 +42,22 @@ import {
   isReservationStatus,
   MOVEMENT_TYPES, isMovementType,
   REASON_CODES, isReasonCode,
+  PO_STATUSES, isPoStatus,
+  isValidDateOnly,
+  computeReceiveDiscrepancy, receiveDiscrepancyNote, derivePoStatusFromLines,
+  QUARANTINE_ZONE,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
-  type RefKind, type MovementType, type ReasonCode,
+  type RefKind, type MovementType, type ReasonCode, type PoStatus,
 } from "@shared/warehouse";
 import {
   runReserveStock,
   runReleaseReservation,
   runConsumeReservation,
+  runMovementGroup,
   reservationDbFromTx,
   InsufficientAvailableError,
   InsufficientStockError,
+  type MovementLeg,
 } from "./warehouse";
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -130,6 +136,77 @@ function toBool(v: unknown, fallback: boolean): boolean {
   if (v === undefined) return fallback;
   return !!v;
 }
+
+// ── PO receiving helpers (T6) ────────────────────────────────────────────────
+// qty_received is NEVER a stored column (schema.ts's own comment on
+// wh_po_lines) — it's derived by summing every receipt movement referencing
+// a line (ref_kind='po', ref_id=line id, movement_type='receipt'). A single
+// raw aggregate (with a FILTER clause splitting good vs damaged by
+// reason_code) rather than drizzle's query builder, same "computed aggregate
+// isn't practically expressed via the builder" reasoning as
+// server/warehouse.ts's reconcile query.
+
+interface PoLineReceiptTotals {
+  good: number;
+  damaged: number;
+}
+
+async function getPoLineReceiptTotals(lineIds: number[]): Promise<Map<number, PoLineReceiptTotals>> {
+  const totals = new Map<number, PoLineReceiptTotals>();
+  if (lineIds.length === 0) return totals;
+  const result = await db.execute(sql`
+    SELECT ref_id AS po_line_id,
+      COALESCE(SUM(delta) FILTER (WHERE reason_code IS DISTINCT FROM 'damaged'), 0) AS good,
+      COALESCE(SUM(delta) FILTER (WHERE reason_code = 'damaged'), 0) AS damaged
+    FROM wh_movements
+    WHERE ref_kind = 'po' AND movement_type = 'receipt'
+      AND ref_id IN (${sql.join(lineIds.map((id) => sql`${id}`), sql`, `)})
+    GROUP BY ref_id
+  `);
+  for (const row of result.rows as Array<{ po_line_id: number | string; good: string; damaged: string }>) {
+    totals.set(Number(row.po_line_id), { good: Number(row.good), damaged: Number(row.damaged) });
+  }
+  return totals;
+}
+
+/** Every line of a PO, joined to its item, with the derived receiving
+ *  position layered on (never a stored column — see the comment above).
+ *  Shared by the PO detail GET and the receive endpoint's own status
+ *  recompute, so the two can never drift on how "received" is calculated. */
+async function loadPoLinesWithReceipts(poId: number) {
+  const rows = await db
+    .select({ line: whPoLines, itemSku: whItems.sku, itemName: whItems.name })
+    .from(whPoLines)
+    .innerJoin(whItems, eq(whPoLines.itemId, whItems.id))
+    .where(eq(whPoLines.poId, poId))
+    .orderBy(asc(whPoLines.id));
+
+  const totals = await getPoLineReceiptTotals(rows.map((r) => r.line.id));
+
+  return rows.map((r) => {
+    const t = totals.get(r.line.id) ?? { good: 0, damaged: 0 };
+    const qtyOrdered = Number(r.line.qtyOrdered);
+    const qtyReceivedGood = t.good;
+    const qtyReceivedDamaged = t.damaged;
+    const qtyReceived = qtyReceivedGood + qtyReceivedDamaged;
+    return {
+      ...r.line,
+      itemSku: r.itemSku,
+      itemName: r.itemName,
+      qtyReceivedGood,
+      qtyReceivedDamaged,
+      qtyReceived,
+      qtyRemaining: Math.max(qtyOrdered - qtyReceived, 0),
+    };
+  });
+}
+
+/** PO statuses a receive-scan is allowed against. Not 'draft' (nothing has
+ *  been sent to the supplier yet) and not the terminal 'cancelled'/'closed'
+ *  (a human closed the PO out on purpose). 'received' stays receivable too —
+ *  a supplier occasionally sends a late top-up after the line already read
+ *  fully received, and that's still real stock arriving at the dock. */
+const RECEIVABLE_PO_STATUSES: ReadonlySet<PoStatus> = new Set<PoStatus>(["sent", "partial", "received"]);
 
 export function registerWarehouseRoutes(app: Express) {
   // ═══════════════════════════════════════════════════════════════════════
@@ -723,6 +800,390 @@ export function registerWarehouseRoutes(app: Express) {
       res.json(result);
     } catch (e: any) {
       handleWarehouseError(res, e, "reservation consume");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Purchase orders + receiving (T6). PO/PO-line CRUD is plain master-data
+  // (never touches wh_movements/wh_stock directly — same doctrine as the
+  // items/locations/aliases CRUD above); the receive-scan endpoint is the one
+  // place in this section that calls into the movement engine.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/admin/warehouse/pos", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const q = clean(req.query.q as string | undefined);
+      const status = clean(req.query.status as string | undefined);
+
+      const conditions = [];
+      if (q) conditions.push(ilike(whPurchaseOrders.supplierName, `%${q}%`));
+      if (status && isPoStatus(status)) conditions.push(eq(whPurchaseOrders.status, status));
+
+      const pos = await db
+        .select()
+        .from(whPurchaseOrders)
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(desc(whPurchaseOrders.createdAt));
+
+      // Per-PO line count + total ordered qty — a second, small aggregate
+      // query rather than a GROUP BY on the main select (keeps the primary
+      // list query simple and filterable; this repo's other list+aggregate
+      // endpoints — e.g. items' defaultLocationCode join — follow the same
+      // "merge two queries in JS" shape rather than fighting drizzle's
+      // builder into one).
+      const poIds = pos.map((p) => p.id);
+      const lineCounts = new Map<number, { lineCount: number; totalOrderedQty: number }>();
+      if (poIds.length > 0) {
+        const agg = await db
+          .select({
+            poId: whPoLines.poId,
+            lineCount: sql<string>`COUNT(*)`,
+            totalOrderedQty: sql<string>`COALESCE(SUM(${whPoLines.qtyOrdered}), 0)`,
+          })
+          .from(whPoLines)
+          .where(inArray(whPoLines.poId, poIds))
+          .groupBy(whPoLines.poId);
+        for (const row of agg) {
+          lineCounts.set(row.poId, { lineCount: Number(row.lineCount), totalOrderedQty: Number(row.totalOrderedQty) });
+        }
+      }
+
+      res.json(
+        pos.map((p) => ({
+          ...p,
+          lineCount: lineCounts.get(p.id)?.lineCount ?? 0,
+          totalOrderedQty: lineCounts.get(p.id)?.totalOrderedQty ?? 0,
+        })),
+      );
+    } catch (e: any) {
+      handleWarehouseError(res, e, "POs list");
+    }
+  });
+
+  app.get("/api/admin/warehouse/pos/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [po] = await db.select().from(whPurchaseOrders).where(eq(whPurchaseOrders.id, id));
+      if (!po) return res.status(404).json({ message: "Purchase order not found" });
+
+      const lines = await loadPoLinesWithReceipts(id);
+      res.json({ ...po, lines });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO get");
+    }
+  });
+
+  app.post("/api/admin/warehouse/pos", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const supplierName = clean(b.supplierName);
+      if (!supplierName) throw new WarehouseRouteError("A supplier name is required");
+
+      const statusRaw = clean(b.status) ?? "draft";
+      if (!isPoStatus(statusRaw)) throw new WarehouseRouteError(`status must be one of: ${PO_STATUSES.join(", ")}`);
+
+      let expectedOn: string | null = null;
+      if (b.expectedOn !== undefined && b.expectedOn !== null && b.expectedOn !== "") {
+        if (!isValidDateOnly(b.expectedOn)) throw new WarehouseRouteError("expectedOn must be a YYYY-MM-DD date");
+        expectedOn = b.expectedOn;
+      }
+
+      const operatorUserId = req.session.userId!;
+      const [created] = await db
+        .insert(whPurchaseOrders)
+        .values({
+          supplierName,
+          status: statusRaw,
+          expectedOn,
+          notes: clean(b.notes) ?? null,
+          createdBy: operatorUserId,
+        })
+        .returning();
+      res.status(201).json({ ...created, lines: [] });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO create");
+    }
+  });
+
+  app.patch("/api/admin/warehouse/pos/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [existing] = await db.select().from(whPurchaseOrders).where(eq(whPurchaseOrders.id, id));
+      if (!existing) return res.status(404).json({ message: "Purchase order not found" });
+
+      const b = req.body || {};
+      const patch: Record<string, any> = { updatedAt: new Date() };
+      if (b.supplierName !== undefined) {
+        const supplierName = clean(b.supplierName);
+        if (!supplierName) throw new WarehouseRouteError("Supplier name can't be blank");
+        patch.supplierName = supplierName;
+      }
+      if (b.status !== undefined) {
+        if (!isPoStatus(b.status)) throw new WarehouseRouteError(`status must be one of: ${PO_STATUSES.join(", ")}`);
+        patch.status = b.status;
+      }
+      if (b.expectedOn !== undefined) {
+        if (b.expectedOn === null || b.expectedOn === "") {
+          patch.expectedOn = null;
+        } else {
+          if (!isValidDateOnly(b.expectedOn)) throw new WarehouseRouteError("expectedOn must be a YYYY-MM-DD date");
+          patch.expectedOn = b.expectedOn;
+        }
+      }
+      if (b.notes !== undefined) patch.notes = clean(b.notes) ?? null;
+
+      const [updated] = await db.update(whPurchaseOrders).set(patch).where(eq(whPurchaseOrders.id, id)).returning();
+      res.json(updated);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO update");
+    }
+  });
+
+  app.delete("/api/admin/warehouse/pos/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const lineIds = (await db.select({ id: whPoLines.id }).from(whPoLines).where(eq(whPoLines.poId, id))).map((r) => r.id);
+      if (lineIds.length > 0) {
+        const totals = await getPoLineReceiptTotals(lineIds);
+        const anyReceived = Array.from(totals.values()).some((t) => t.good + t.damaged > 0);
+        if (anyReceived) {
+          throw new WarehouseRouteError(
+            "This PO already has receiving history — it can't be deleted (the audit trail would lose its reference). Cancel it instead.",
+            409,
+          );
+        }
+      }
+      const [deleted] = await db.delete(whPurchaseOrders).where(eq(whPurchaseOrders.id, id)).returning({ id: whPurchaseOrders.id });
+      if (!deleted) return res.status(404).json({ message: "Purchase order not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO delete");
+    }
+  });
+
+  // ── PO lines ─────────────────────────────────────────────────────────────
+
+  app.get("/api/admin/warehouse/pos/:poId/lines", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const poId = parseId(req.params.poId);
+      if (poId === null) return res.status(400).json({ message: "Bad PO id" });
+      const [po] = await db.select({ id: whPurchaseOrders.id }).from(whPurchaseOrders).where(eq(whPurchaseOrders.id, poId));
+      if (!po) return res.status(404).json({ message: "Purchase order not found" });
+      res.json(await loadPoLinesWithReceipts(poId));
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO lines list");
+    }
+  });
+
+  app.post("/api/admin/warehouse/pos/:poId/lines", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const poId = parseId(req.params.poId);
+      if (poId === null) return res.status(400).json({ message: "Bad PO id" });
+      const [po] = await db.select({ id: whPurchaseOrders.id }).from(whPurchaseOrders).where(eq(whPurchaseOrders.id, poId));
+      if (!po) return res.status(404).json({ message: "Purchase order not found" });
+
+      const b = req.body || {};
+      const itemId = parseId(b.itemId);
+      if (itemId === null) throw new WarehouseRouteError("itemId is required");
+      const [item] = await db.select({ id: whItems.id, sku: whItems.sku, name: whItems.name }).from(whItems).where(eq(whItems.id, itemId));
+      if (!item) throw new WarehouseRouteError("itemId does not reference a real item");
+
+      const qtyOrdered = Number(b.qtyOrdered);
+      if (!Number.isFinite(qtyOrdered) || qtyOrdered <= 0) throw new WarehouseRouteError("qtyOrdered must be a positive number");
+
+      const [created] = await db
+        .insert(whPoLines)
+        .values({
+          poId,
+          itemId,
+          qtyOrdered: String(qtyOrdered),
+          unitCostCents: toCents(b.unitCostCents, "unitCostCents") ?? null,
+          notes: clean(b.notes) ?? null,
+        })
+        .returning();
+      res.status(201).json({ ...created, itemSku: item.sku, itemName: item.name });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO line create");
+    }
+  });
+
+  app.patch("/api/admin/warehouse/pos/lines/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [existing] = await db.select().from(whPoLines).where(eq(whPoLines.id, id));
+      if (!existing) return res.status(404).json({ message: "PO line not found" });
+
+      const b = req.body || {};
+      const patch: Record<string, any> = {};
+
+      if (b.qtyOrdered !== undefined) {
+        const totals = await getPoLineReceiptTotals([id]);
+        const received = totals.get(id);
+        if (received && received.good + received.damaged > 0) {
+          throw new WarehouseRouteError("Can't change the quantity ordered once receiving has started on this line.", 409);
+        }
+        const qtyOrdered = Number(b.qtyOrdered);
+        if (!Number.isFinite(qtyOrdered) || qtyOrdered <= 0) throw new WarehouseRouteError("qtyOrdered must be a positive number");
+        patch.qtyOrdered = String(qtyOrdered);
+      }
+      if (b.unitCostCents !== undefined) patch.unitCostCents = toCents(b.unitCostCents, "unitCostCents");
+      if (b.notes !== undefined) patch.notes = clean(b.notes) ?? null;
+
+      const [updated] = await db.update(whPoLines).set(patch).where(eq(whPoLines.id, id)).returning();
+      res.json(updated);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO line update");
+    }
+  });
+
+  app.delete("/api/admin/warehouse/pos/lines/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const totals = await getPoLineReceiptTotals([id]);
+      const received = totals.get(id);
+      if (received && received.good + received.damaged > 0) {
+        throw new WarehouseRouteError("Can't delete a PO line that already has receiving history.", 409);
+      }
+      const [deleted] = await db.delete(whPoLines).where(eq(whPoLines.id, id)).returning({ id: whPoLines.id });
+      if (!deleted) return res.status(404).json({ message: "PO line not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO line delete");
+    }
+  });
+
+  // ── Receiving ────────────────────────────────────────────────────────────
+  // Body: { poLineId, locationId?, qtyGood?, qtyDamaged?, expectedQty?, note?,
+  // idempotencyKey? }. locationId is required only when qtyGood > 0 (a
+  // 100%-damaged receipt never needs a sellable destination). Posts up to two
+  // legs in ONE movement group: qtyGood → locationId, qtyDamaged →
+  // QUARANTINE (reason 'damaged') — then recomputes the PO's derived status
+  // (SPEC §4.1/T6: qty_received is never a stored column).
+  app.post("/api/admin/warehouse/pos/:poId/receive", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const poId = parseId(req.params.poId);
+      if (poId === null) return res.status(400).json({ message: "Bad PO id" });
+      const [po] = await db.select().from(whPurchaseOrders).where(eq(whPurchaseOrders.id, poId));
+      if (!po) return res.status(404).json({ message: "Purchase order not found" });
+      if (!RECEIVABLE_PO_STATUSES.has(po.status as PoStatus)) {
+        if (po.status === "draft") {
+          throw new WarehouseRouteError("This PO hasn't been sent yet — mark it sent before receiving against it.");
+        }
+        throw new WarehouseRouteError(`This PO is ${po.status} — it can't receive any more stock.`);
+      }
+
+      const b = req.body || {};
+      const poLineId = parseId(b.poLineId);
+      if (poLineId === null) throw new WarehouseRouteError("poLineId is required");
+      const [line] = await db.select().from(whPoLines).where(eq(whPoLines.id, poLineId));
+      if (!line || line.poId !== poId) throw new WarehouseRouteError("poLineId does not reference a line on this PO");
+
+      const qtyGood = b.qtyGood !== undefined ? Number(b.qtyGood) : 0;
+      const qtyDamaged = b.qtyDamaged !== undefined ? Number(b.qtyDamaged) : 0;
+      if (!Number.isFinite(qtyGood) || qtyGood < 0) throw new WarehouseRouteError("qtyGood must be zero or a positive number");
+      if (!Number.isFinite(qtyDamaged) || qtyDamaged < 0) throw new WarehouseRouteError("qtyDamaged must be zero or a positive number");
+      if (qtyGood === 0 && qtyDamaged === 0) {
+        throw new WarehouseRouteError("Nothing to receive — qtyGood and/or qtyDamaged must be greater than zero");
+      }
+
+      let goodLocation: { id: number; code: string; kind: string } | undefined;
+      if (qtyGood > 0) {
+        const locationId = parseId(b.locationId);
+        if (locationId === null) throw new WarehouseRouteError("locationId is required to receive undamaged stock");
+        const [loc] = await db
+          .select({ id: whLocations.id, code: whLocations.code, kind: whLocations.kind })
+          .from(whLocations)
+          .where(eq(whLocations.id, locationId));
+        if (!loc) throw new WarehouseRouteError("locationId does not reference a real location");
+        if (loc.kind === "virtual") {
+          throw new WarehouseRouteError("Can't receive stock into a virtual location — choose a real bin or zone");
+        }
+        goodLocation = loc;
+      }
+
+      let quarantineLocation: { id: number; code: string } | undefined;
+      if (qtyDamaged > 0) {
+        const [loc] = await db
+          .select({ id: whLocations.id, code: whLocations.code })
+          .from(whLocations)
+          .where(eq(whLocations.code, QUARANTINE_ZONE));
+        if (!loc) throw new WarehouseRouteError("No QUARANTINE location is set up yet — create one before receiving damaged stock");
+        quarantineLocation = loc;
+      }
+
+      // expectedQty defaults to what's still outstanding on the line
+      // (derived from prior receipts) — a packing-slip-driven override lets
+      // the operator compare against what the supplier's paperwork actually
+      // says, rather than the PO's original order quantity.
+      const priorTotals = (await getPoLineReceiptTotals([poLineId])).get(poLineId) ?? { good: 0, damaged: 0 };
+      const priorReceived = priorTotals.good + priorTotals.damaged;
+      const outstanding = Math.max(Number(line.qtyOrdered) - priorReceived, 0);
+      let expectedQty = outstanding;
+      if (b.expectedQty !== undefined && b.expectedQty !== null && b.expectedQty !== "") {
+        const ex = Number(b.expectedQty);
+        if (!Number.isFinite(ex) || ex < 0) throw new WarehouseRouteError("expectedQty must be zero or a positive number");
+        expectedQty = ex;
+      }
+
+      const discrepancy = computeReceiveDiscrepancy(expectedQty, qtyGood, qtyDamaged);
+      const autoNote = receiveDiscrepancyNote(discrepancy);
+      const combinedNote = [clean(b.note), autoNote].filter(Boolean).join(" — ") || null;
+
+      const legs: MovementLeg[] = [];
+      if (qtyGood > 0 && goodLocation) {
+        legs.push({ itemId: line.itemId, locationId: goodLocation.id, locationCode: goodLocation.code, delta: qtyGood });
+      }
+      if (qtyDamaged > 0 && quarantineLocation) {
+        legs.push({
+          itemId: line.itemId,
+          locationId: quarantineLocation.id,
+          locationCode: quarantineLocation.code,
+          delta: qtyDamaged,
+          reasonCode: "damaged",
+        });
+      }
+
+      const operatorUserId = req.session.userId!;
+      const movement = await runMovementGroup({
+        legs,
+        movementType: "receipt",
+        ref: { kind: "po", id: poLineId },
+        operatorUserId,
+        idempotencyKey: clean(b.idempotencyKey) ?? null,
+        note: combinedNote,
+      });
+
+      // Recompute the PO's status from every line's derived receipt total —
+      // safe to run even on an idempotent replay (recomputing from unchanged
+      // totals just re-writes the same status).
+      const lines = await loadPoLinesWithReceipts(poId);
+      const nextStatus = derivePoStatusFromLines(
+        po.status as PoStatus,
+        lines.map((l) => ({ qtyOrdered: Number(l.qtyOrdered), qtyReceived: l.qtyReceived })),
+      );
+      let updatedPo = po;
+      if (nextStatus !== po.status) {
+        const [saved] = await db
+          .update(whPurchaseOrders)
+          .set({ status: nextStatus, updatedAt: new Date() })
+          .where(eq(whPurchaseOrders.id, poId))
+          .returning();
+        updatedPo = saved;
+      }
+
+      res.status(movement.alreadyProcessed ? 200 : 201).json({
+        movement,
+        discrepancy,
+        po: updatedPo,
+        line: lines.find((l) => l.id === poLineId),
+      });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "PO receive");
     }
   });
 

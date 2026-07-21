@@ -290,6 +290,85 @@ export function isPoStatus(v: unknown): v is PoStatus {
   return typeof v === "string" && (PO_STATUSES as readonly string[]).includes(v);
 }
 
+// ── Dates (DB `date` columns — expected_on, needed_by, due_on…) ─────────────
+// Plain YYYY-MM-DD shape check only. NZ-local semantics + never round-tripping
+// through `Date` is the CALLER's job (house rule, grep nzTodayIso()) — this is
+// just the shared shape validator so every date-only field (PO expected_on
+// here, requisition needed_by / loan due_on later) rejects the same junk.
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+export function isValidDateOnly(v: unknown): v is string {
+  return typeof v === "string" && DATE_ONLY_RE.test(v);
+}
+
+// ── Receiving (T6) ───────────────────────────────────────────────────────────
+// A receive-scan reports qtyGood (undamaged units landing in the named
+// sellable bin) and qtyDamaged (units landing in QUARANTINE, reason
+// 'damaged' — the only D15 reason code that applies at receiving time).
+// `expectedQty` is what the PO line still owes (qty_ordered minus whatever's
+// already been received against it, derived from the ledger) unless the
+// caller overrides it with what a packing slip actually says. It's compared
+// against the real total purely to produce a human-readable discrepancy
+// NOTE on the movement group — D15 has no reason code for "unexpected
+// surplus", so an over-receipt is recorded as a note, never routed anywhere
+// special. Only genuinely damaged stock is quarantined.
+
+export interface ReceiveDiscrepancy {
+  expectedQty: number;
+  qtyGood: number;
+  qtyDamaged: number;
+  /** > 0 when more arrived (good + damaged) than was expected. */
+  overQty: number;
+  /** > 0 when less arrived than was expected. */
+  shortQty: number;
+}
+
+export function computeReceiveDiscrepancy(expectedQty: number, qtyGood: number, qtyDamaged: number): ReceiveDiscrepancy {
+  const diff = qtyGood + qtyDamaged - expectedQty;
+  return {
+    expectedQty,
+    qtyGood,
+    qtyDamaged,
+    overQty: diff > 0 ? diff : 0,
+    shortQty: diff < 0 ? -diff : 0,
+  };
+}
+
+/** Human-readable note for the receipt movement group. Null when the scan
+ *  matched exactly — no damage, no over/short — nothing worth flagging. */
+export function receiveDiscrepancyNote(d: ReceiveDiscrepancy): string | null {
+  const parts: string[] = [];
+  if (d.qtyDamaged > 0) parts.push(`${d.qtyDamaged} damaged (quarantined)`);
+  if (d.overQty > 0) parts.push(`${d.overQty} over expected`);
+  if (d.shortQty > 0) parts.push(`${d.shortQty} short of expected`);
+  if (parts.length === 0) return null;
+  return `Expected ${d.expectedQty}, received ${d.qtyGood + d.qtyDamaged} — ${parts.join(", ")}.`;
+}
+
+/** A PO line's derived receiving position (qty_received is never a stored
+ *  column — schema.ts's own comment on wh_po_lines — it's the SUM of every
+ *  receipt movement, good + damaged, referencing that line). */
+export interface PoLineReceiptStatus {
+  qtyOrdered: number;
+  qtyReceived: number;
+}
+
+/**
+ * Auto-advances a PO's status from its lines' derived receiving totals.
+ * Never touches 'draft' (nothing has been sent to the supplier yet — a
+ * receive-scan against a draft PO is rejected before this is ever reached)
+ * or the two terminal states 'cancelled'/'closed' (a human closed the PO on
+ * purpose; more stock turning up shouldn't silently reopen it).
+ */
+export function derivePoStatusFromLines(currentStatus: PoStatus, lines: PoLineReceiptStatus[]): PoStatus {
+  if (currentStatus === "draft" || currentStatus === "cancelled" || currentStatus === "closed") return currentStatus;
+  if (lines.length === 0) return currentStatus;
+  const allReceived = lines.every((l) => l.qtyReceived >= l.qtyOrdered);
+  if (allReceived) return "received";
+  const anyReceived = lines.some((l) => l.qtyReceived > 0);
+  return anyReceived ? "partial" : currentStatus;
+}
+
 // ── Requisitions ───────────────────────────────────────────────────────────────
 
 export const REQUISITION_STATUSES = ["submitted", "approved", "picking", "ready", "collected", "declined"] as const;
