@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, smallint, boolean, timestamp, date, decimal, doublePrecision, real, pgEnum, uniqueIndex, unique, index, time, jsonb, serial, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, smallint, boolean, timestamp, date, decimal, numeric, doublePrecision, real, pgEnum, uniqueIndex, unique, index, time, jsonb, serial, uuid } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -4760,3 +4760,331 @@ export const mediaAssets = pgTable("media_assets", {
 export const insertMediaAssetSchema = createInsertSchema(mediaAssets).omit({ id: true, createdAt: true });
 export type InsertMediaAsset = z.infer<typeof insertMediaAssetSchema>;
 export type MediaAsset = typeof mediaAssets.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Warehouse (WMS) — United Prints workspace. One physical warehouse at United
+// Sports Centre shared by four brands' sellable merch (MFL + CIC on our own
+// commerce engine, SIU + CUFC on two Shopify stores), United Prints raw
+// materials, club equipment (loan/return) and event stock.
+//
+// Truth model (SPEC.md §4.1, D1/D2): `wh_movements` is an APPEND-ONLY signed
+// ledger — no UPDATE/DELETE code paths, ever. `wh_stock` is a same-transaction
+// cache (never the source of truth); `available` is DERIVED (on_hand minus
+// active reservations) and is NEVER a stored column anywhere in this schema.
+// Enum-ish text columns (kind, status, movement_type, reason_code…) carry NO
+// DB CHECK constraints — validated in shared/warehouse.ts instead (a stale
+// CHECK once 500'd the MFL checkout). The one true invariant, `delta <> 0` on
+// wh_movements, IS a DB CHECK — see migrations/2026-07-13_warehouse.sql.
+//
+// Not org-scoped (like feature_requests above) — this is a single shared
+// warehouse, not a per-workspace list; brand ownership lives on `brand_owner`
+// instead. Access is gated by requireTab("warehouse") in the routes layer.
+//
+// None of the `insertWhXSchema` exports below call `.omit(...)` — verified
+// (isolated repro) that `createInsertSchema(t).omit({...})` throws a spurious
+// tsc TS2322 "boolean is not assignable to never" on ANY table whose `id` uses
+// `.generatedAlwaysAsIdentity()` (a drizzle-zod 0.7 / zod 3.24 inference bug,
+// already the majority of shared/schema.ts's 154 pre-existing baseline
+// errors). Dropping `.omit()` is behaviourally identical here — every field it
+// would have omitted (id, createdAt, updatedAt, processedAt) already carries
+// a DB default, so drizzle-zod already infers it optional on insert.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Bins, named zones (RECEIVING/PACK/DISPATCH/QUARANTINE) and virtual
+// locations (SUPPLIER/CUSTOMER/SCRAP/PRODUCTION) so every movement always has
+// a real from/to story (D8). `code` validated by isValidLocationCode() /
+// normalised by normaliseLocationCode() in shared/warehouse.ts.
+export const whLocations = pgTable("wh_locations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  code: text("code").notNull().unique(),          // e.g. 'A-01-2', 'QUARANTINE', 'SUPPLIER'
+  zone: text("zone"),                             // first segment of a bin code, or the named zone itself
+  kind: text("kind").notNull().default("bin"),    // LocationKind: 'bin' | 'zone' | 'virtual'
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertWhLocationSchema = createInsertSchema(whLocations); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhLocation = z.infer<typeof insertWhLocationSchema>;
+export type WhLocation = typeof whLocations.$inferSelect;
+
+// Everything stocked: sellable merch + uniforms, print-shop materials, club
+// equipment, event stock. Identical physical products owned by different
+// brands are DIFFERENT items (D4) — brand_owner is part of the item's
+// identity, never a pooled row. Channel mappings are nullable + partial-unique
+// so an item can be unmapped, native-mapped, or Shopify-mapped.
+export const whItems = pgTable("wh_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  sku: text("sku").notNull().unique(),            // BRAND-CAT-STYLE-COLOUR-SIZE (D7) — shared/warehouse.ts isValidSku
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("merch"),  // ItemKind: 'merch' | 'material' | 'equipment' | 'event'
+  brandOwner: text("brand_owner").notNull().default("club"), // BrandOwner: 'cufc'|'siu'|'mfl'|'cic'|'up'|'club'
+  category: text("category"),
+  unit: text("unit").notNull().default("ea"),     // Unit: 'ea' | 'm' | 'roll' | 'box'
+  purchaseUnit: text("purchase_unit"),            // Unit the supplier sells in, e.g. 'roll'
+  purchaseQty: numeric("purchase_qty", { precision: 12, scale: 3 }), // e.g. 1 roll = 50 m
+  allowNegative: boolean("allow_negative").notNull().default(false), // D16 — bulk materials where paperwork lags
+  isLoanable: boolean("is_loanable").notNull().default(false),
+  minQty: numeric("min_qty", { precision: 12, scale: 3 }), // reorder alert threshold
+  costCents: integer("cost_cents"),                // reference only, NZD cents
+  defaultLocationId: integer("default_location_id").references(() => whLocations.id, { onDelete: "set null" }),
+  active: boolean("active").notNull().default(true),
+  notes: text("notes"),
+  // Native ClubOS commerce mapping (MFL/CIC) — D11.
+  shopVariantId: integer("shop_variant_id").references(() => shopVariants.id, { onDelete: "set null" }),
+  // Shopify mapping (SIU/CUFC) — D9.
+  shopifyStore: text("shopify_store"),             // 'siu' | 'cufc'
+  shopifyInventoryItemId: text("shopify_inventory_item_id"),
+  shopifyVariantId: text("shopify_variant_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  shopVariantUnq: uniqueIndex("wh_items_shop_variant_unique")
+    .on(t.shopVariantId)
+    .where(sql`${t.shopVariantId} IS NOT NULL`),
+  shopifyMappingUnq: uniqueIndex("wh_items_shopify_mapping_unique")
+    .on(t.shopifyStore, t.shopifyVariantId)
+    .where(sql`${t.shopifyVariantId} IS NOT NULL`),
+}));
+export const insertWhItemSchema = createInsertSchema(whItems); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhItem = z.infer<typeof insertWhItemSchema>;
+export type WhItem = typeof whItems.$inferSelect;
+
+// Manufacturer EANs / any scanned code that isn't the item's own SKU — looked
+// up verbatim (never reshaped, D5). packQty lets one scan of a multipack alias
+// post a multi-unit movement (e.g. a case barcode = 12 eaches).
+export const whBarcodeAliases = pgTable("wh_barcode_aliases", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  code: text("code").notNull().unique(),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "cascade" }),
+  packQty: numeric("pack_qty", { precision: 12, scale: 3 }).notNull().default("1"),
+  note: text("note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertWhBarcodeAliasSchema = createInsertSchema(whBarcodeAliases); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhBarcodeAlias = z.infer<typeof insertWhBarcodeAliasSchema>;
+export type WhBarcodeAlias = typeof whBarcodeAliases.$inferSelect;
+
+// THE LEDGER (D1). Append-only — no UPDATE/DELETE code paths, ever; stock
+// corrections are new adjustment movements. `groupId` links every leg of one
+// multi-leg operation (a transfer is a -row at the source + a +row at the
+// destination sharing one groupId — see legsSumToZero() in shared/warehouse.ts).
+// `delta <> 0` is a true invariant enforced by a DB CHECK in the migration
+// (everything else here is validated app-side, never by a DB CHECK/enum).
+export const whMovements = pgTable("wh_movements", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  groupId: uuid("group_id").notNull().default(sql`gen_random_uuid()`),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  locationId: integer("location_id").notNull().references(() => whLocations.id, { onDelete: "restrict" }),
+  delta: numeric("delta", { precision: 12, scale: 3 }).notNull(), // signed; CHECK (delta <> 0) in the migration
+  movementType: text("movement_type").notNull(),  // MovementType (D15) — validated in shared/warehouse.ts
+  reasonCode: text("reason_code"),                // ReasonCode (D15) — validated in shared/warehouse.ts
+  refKind: text("ref_kind"),                      // RefKind — polymorphic reference (shop_order, po, requisition…)
+  refId: integer("ref_id"),
+  operatorUserId: integer("operator_user_id").notNull().references(() => users.id), // D17 — named operator, always
+  note: text("note"),
+  idempotencyKey: text("idempotency_key").unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertWhMovementSchema = createInsertSchema(whMovements); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhMovement = z.infer<typeof insertWhMovementSchema>;
+export type WhMovement = typeof whMovements.$inferSelect;
+
+// Cache only (D1/D2) — maintained in the SAME transaction as the ledger insert
+// via an atomic non-negative-guarded upsert (server/warehouse.ts
+// postMovementGroup). Nightly reconcile asserts on_hand == Σ ledger deltas and
+// repairs + alerts on any drift (a repair means a code path bypassed the engine).
+export const whStock = pgTable("wh_stock", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "cascade" }),
+  locationId: integer("location_id").notNull().references(() => whLocations.id, { onDelete: "cascade" }),
+  onHand: numeric("on_hand", { precision: 12, scale: 3 }).notNull().default("0"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  itemLocationUnq: uniqueIndex("wh_stock_item_location_unique").on(t.itemId, t.locationId),
+}));
+export const insertWhStockSchema = createInsertSchema(whStock); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhStock = z.infer<typeof insertWhStockSchema>;
+export type WhStock = typeof whStock.$inferSelect;
+
+// Hard reservations (D3) for every paid-but-unfulfilled order (native +
+// Shopify) — physical truth stays true: the shirt is on the shelf until it's
+// picked. `available(item) = Σ on_hand(sellable bins) − Σ active reservations`
+// — computed in queries, never stored. Partial-unique so at most one ACTIVE
+// reservation exists per (ref, item); released/consumed rows are history.
+export const whReservations = pgTable("wh_reservations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  qty: numeric("qty", { precision: 12, scale: 3 }).notNull(),
+  refKind: text("ref_kind").notNull(),             // RefKind — shop_order | shopify_order | requisition | …
+  refId: integer("ref_id").notNull(),
+  status: text("status").notNull().default("active"), // ReservationStatus: 'active' | 'released' | 'consumed'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  activeRefItemUnq: uniqueIndex("wh_reservations_active_ref_item_unique")
+    .on(t.refKind, t.refId, t.itemId)
+    .where(sql`${t.status} = 'active'`),
+}));
+export const insertWhReservationSchema = createInsertSchema(whReservations); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhReservation = z.infer<typeof insertWhReservationSchema>;
+export type WhReservation = typeof whReservations.$inferSelect;
+
+// Purchase orders. `qty_received` is DERIVED from receipt movements
+// referencing a po_line (ref_kind='po', ref_id=line id) — never a stored column.
+export const whPurchaseOrders = pgTable("wh_purchase_orders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  supplierName: text("supplier_name").notNull(),
+  status: text("status").notNull().default("draft"), // PoStatus (D15/§4.1)
+  expectedOn: date("expected_on"),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertWhPurchaseOrderSchema = createInsertSchema(whPurchaseOrders); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhPurchaseOrder = z.infer<typeof insertWhPurchaseOrderSchema>;
+export type WhPurchaseOrder = typeof whPurchaseOrders.$inferSelect;
+
+export const whPoLines = pgTable("wh_po_lines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  poId: integer("po_id").notNull().references(() => whPurchaseOrders.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  qtyOrdered: numeric("qty_ordered", { precision: 12, scale: 3 }).notNull(),
+  unitCostCents: integer("unit_cost_cents"),
+  notes: text("notes"),
+});
+export const insertWhPoLineSchema = createInsertSchema(whPoLines); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhPoLine = z.infer<typeof insertWhPoLineSchema>;
+export type WhPoLine = typeof whPoLines.$inferSelect;
+
+// Requisitions (D13) — any staff submits (requireAuth, like the Feedback
+// board above), operators approve/pick/ready/collect. chargeTo drives the
+// monthly chargeback report (suggested values: CUFC/SIU/MFL/CIC/USC/Academy/Office
+// — free text, Daniel names the real list at seed time).
+export const whRequisitions = pgTable("wh_requisitions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  requestedBy: integer("requested_by").notNull().references(() => users.id),
+  chargeTo: text("charge_to").notNull(),
+  status: text("status").notNull().default("submitted"), // RequisitionStatus (D15/§4.1)
+  neededBy: date("needed_by"),
+  approvedBy: integer("approved_by").references(() => users.id, { onDelete: "set null" }),
+  collectedAt: timestamp("collected_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertWhRequisitionSchema = createInsertSchema(whRequisitions); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhRequisition = z.infer<typeof insertWhRequisitionSchema>;
+export type WhRequisition = typeof whRequisitions.$inferSelect;
+
+export const whRequisitionLines = pgTable("wh_requisition_lines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  requisitionId: integer("requisition_id").notNull().references(() => whRequisitions.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  qtyRequested: numeric("qty_requested", { precision: 12, scale: 3 }).notNull(),
+  qtyPicked: numeric("qty_picked", { precision: 12, scale: 3 }),
+});
+export const insertWhRequisitionLineSchema = createInsertSchema(whRequisitionLines); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhRequisitionLine = z.infer<typeof insertWhRequisitionLineSchema>;
+export type WhRequisitionLine = typeof whRequisitionLines.$inferSelect;
+
+// Equipment loans (D14) — library/tool-crib model. `overdue` is DERIVED
+// (dueOn < nzTodayIso() AND status='out') — never a stored column; see
+// isLoanOverdue() in shared/warehouse.ts. borrowerContactId is nullable —
+// coaches may lack a ClubOS login, so a free-text borrowerName always works.
+export const whLoans = pgTable("wh_loans", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  borrowerName: text("borrower_name").notNull(),
+  borrowerContactId: integer("borrower_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  dueOn: date("due_on").notNull(),
+  status: text("status").notNull().default("out"), // LoanStatus: 'out' | 'returned'
+  operatorUserId: integer("operator_user_id").notNull().references(() => users.id), // D17 — named at checkout
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  returnedAt: timestamp("returned_at"),
+});
+export const insertWhLoanSchema = createInsertSchema(whLoans); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhLoan = z.infer<typeof insertWhLoanSchema>;
+export type WhLoan = typeof whLoans.$inferSelect;
+
+// conditionGrade/conditionNote/replacementChargedCents are set on return only.
+export const whLoanLines = pgTable("wh_loan_lines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  loanId: integer("loan_id").notNull().references(() => whLoans.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  qty: numeric("qty", { precision: 12, scale: 3 }).notNull(),
+  conditionGrade: text("condition_grade"),        // ConditionGrade: 'A' | 'B' | 'C' | 'D' — set on return
+  conditionNote: text("condition_note"),
+  replacementChargedCents: integer("replacement_charged_cents"),
+});
+export const insertWhLoanLineSchema = createInsertSchema(whLoanLines); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhLoanLine = z.infer<typeof insertWhLoanLineSchema>;
+export type WhLoanLine = typeof whLoanLines.$inferSelect;
+
+// Cycle counts (D12) — blind by default (counter never sees expected_qty;
+// snapshotted server-side and hidden from the counter UI). counted_by <>
+// approved_by is enforced app-side (shared/warehouse.ts), never a DB CHECK
+// (both are the same users FK, so a same-column CHECK can't express it anyway).
+export const whCounts = pgTable("wh_counts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  scopeZone: text("scope_zone"),                  // free-text scope, e.g. a zone code
+  scopeClass: text("scope_class"),                // ABC cadence class this session covers, if class-scoped
+  blind: boolean("blind").notNull().default(true),
+  countedBy: integer("counted_by").references(() => users.id, { onDelete: "set null" }),
+  approvedBy: integer("approved_by").references(() => users.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("open"), // CountStatus: 'open' | 'submitted' | 'approved'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  submittedAt: timestamp("submitted_at"),
+  approvedAt: timestamp("approved_at"),
+});
+export const insertWhCountSchema = createInsertSchema(whCounts); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhCount = z.infer<typeof insertWhCountSchema>;
+export type WhCount = typeof whCounts.$inferSelect;
+
+// expectedQty is the snapshot taken when the session opens — never sent to
+// the counter's UI (blind). Approval posts an adjustment movement group for
+// every line whose resolution is 'accepted' with a variance.
+export const whCountLines = pgTable("wh_count_lines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  countId: integer("count_id").notNull().references(() => whCounts.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  locationId: integer("location_id").notNull().references(() => whLocations.id, { onDelete: "restrict" }),
+  expectedQty: numeric("expected_qty", { precision: 12, scale: 3 }).notNull(),
+  countedQty: numeric("counted_qty", { precision: 12, scale: 3 }),
+  resolution: text("resolution"),                 // CountLineResolution: 'accepted' | 'recount'
+}, (t) => ({
+  countItemLocationUnq: uniqueIndex("wh_count_lines_count_item_location_unique").on(t.countId, t.itemId, t.locationId),
+}));
+export const insertWhCountLineSchema = createInsertSchema(whCountLines); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhCountLine = z.infer<typeof insertWhCountLineSchema>;
+export type WhCountLine = typeof whCountLines.$inferSelect;
+
+// Webhook dedupe (D9) — Shopify can and does redeliver. Unique on the
+// provider's own webhook id, never our own generated key.
+export const whShopifyEvents = pgTable("wh_shopify_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  webhookId: text("webhook_id").notNull().unique(),
+  topic: text("topic").notNull(),
+  store: text("store").notNull(),                 // 'siu' | 'cufc'
+  processedAt: timestamp("processed_at").defaultNow().notNull(),
+});
+export const insertWhShopifyEventSchema = createInsertSchema(whShopifyEvents); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhShopifyEvent = z.infer<typeof insertWhShopifyEventSchema>;
+export type WhShopifyEvent = typeof whShopifyEvents.$inferSelect;
+
+// Per mapped item x store push state — echo suppression + drift detection
+// (D9) + the sync dashboard's data. One row per (item, store).
+export const whSyncState = pgTable("wh_sync_state", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "cascade" }),
+  store: text("store").notNull(),                 // 'siu' | 'cufc' | 'native'
+  lastPushedQty: numeric("last_pushed_qty", { precision: 12, scale: 3 }),
+  lastPushedAt: timestamp("last_pushed_at"),
+  pending: boolean("pending").notNull().default(false),
+  lastDriftAt: timestamp("last_drift_at"),
+  driftNote: text("drift_note"),
+}, (t) => ({
+  itemStoreUnq: uniqueIndex("wh_sync_state_item_store_unique").on(t.itemId, t.store),
+}));
+export const insertWhSyncStateSchema = createInsertSchema(whSyncState); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhSyncState = z.infer<typeof insertWhSyncStateSchema>;
+export type WhSyncState = typeof whSyncState.$inferSelect;
