@@ -65,6 +65,8 @@ const campsTabs: TabDef[] = [
   { slug: "predictor", title: "Play Predictor", url: "/admin/predictor" },
   // 10 years of Friendly Manager registrations + payments, imported 2026-07-14.
   { slug: "fm-history", title: "History", url: "/admin/fm-history" },
+  // 11 years of FM tournaments + social leagues (imported 2026-07-17).
+  { slug: "fm-competitions", title: "Competitions", url: "/admin/fm-competitions" },
   { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
@@ -296,6 +298,8 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // family payment history (imported 2026-07-14). Daniel-only while he shapes
   // it. Remove this line to open it to CUFC admins/managers.
   "fm-history",
+  // Competitions history — carries team-manager phones/emails; Daniel-only.
+  "fm-competitions",
 ]);
 
 /**

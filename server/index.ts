@@ -137,6 +137,11 @@ app.use(attributionCookieMiddleware);
   const { registerFmHistoryRoutes } = await import("./fm-history-routes");
   registerFmHistoryRoutes(app);
 
+  // FM Competitions — 11yr tournaments + social leagues (fm_competition_*).
+  // Read-only, requireTab("fm-competitions") ∈ SUPER_ADMIN_ONLY.
+  const { registerFmCompetitionsRoutes } = await import("./fm-competitions-routes");
+  registerFmCompetitionsRoutes(app);
+
   // CIC Content Marketplace — live sales + engagement analytics for the CIC
   // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
   // gated by requireTab("cic-content-marketplace") to the CIC workspace.

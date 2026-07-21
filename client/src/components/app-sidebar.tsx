@@ -120,6 +120,7 @@ const campsNav = [
   { tab: "predictor", title: "Play Predictor", url: "/admin/predictor", icon: Trophy },
   // 10 years of Friendly Manager registrations + payments (imported 2026-07-14).
   { tab: "fm-history", title: "History", url: "/admin/fm-history", icon: HistoryIcon },
+  { tab: "fm-competitions", title: "Competitions", url: "/admin/fm-competitions", icon: Trophy },
   { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
@@ -129,7 +130,7 @@ const campsNav = [
 // club-building tools (must NOT show for CUFC).
 const siuNav = [
   // FM History is CUFC's archive (org 1) — keep it out of SIU's sidebar.
-  ...campsNav.filter((t) => t.tab !== "fm-history"),
+  ...campsNav.filter((t) => t.tab !== "fm-history" && t.tab !== "fm-competitions"),
   { tab: "licensing", title: "OFC Licensing", url: "/admin/licensing", icon: Award },
   { tab: "declarations", title: "Declarations", url: "/admin/declarations", icon: FileSignature },
   { tab: "events", title: "Community Events", url: "/admin/events", icon: Calendar },
