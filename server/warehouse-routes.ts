@@ -7,24 +7,28 @@
 // short-circuits to `next()` for super_admin regardless of tab wiring, so
 // these routes work today even though the tab doesn't exist in the UI yet).
 //
-// This file owns the CRUD + search + label-payload surface (T4). It does NOT
-// touch wh_movements/wh_stock — no stock is ever created, changed or moved
-// here; that is exclusively server/warehouse.ts's postMovementGroup (T3),
-// called by later route groups (T5 reservations, T6 receiving, T7 scan,
-// T8 pick/dispatch, T9 requisitions, T10 loans, T11 counts).
+// This file owns the CRUD + search + label-payload surface (T4) plus the
+// reservations surface (T5: `available`, reserve/release/consume). Master
+// data (items/locations/aliases) still never touches wh_movements/wh_stock
+// directly — only the reservations section below calls into
+// server/warehouse.ts's reserve/release/consume + postMovementGroup (T3),
+// same as later route groups will (T6 receiving, T7 scan, T8 pick/dispatch,
+// T9 requisitions, T10 loans, T11 counts).
 //
 // House rules followed (AGENTS.md): no DB CHECKs on open value sets — every
-// enum-ish field (kind, brandOwner, unit, locationKind) is validated against
-// shared/warehouse.ts; quantities are numeric(12,3) columns that Drizzle maps
-// to strings, converted explicitly at this edge; money (costCents) is integer
-// cents; unique-violation (23505) and FK-restrict-violation (23503) Postgres
-// error codes are caught and turned into clean 409s rather than raw 500s.
+// enum-ish field (kind, brandOwner, unit, locationKind, refKind,
+// movementType, reasonCode) is validated against shared/warehouse.ts;
+// quantities are numeric(12,3) columns that Drizzle maps to strings,
+// converted explicitly at this edge; money (costCents) is integer cents;
+// unique-violation (23505) and FK-restrict-violation (23503) Postgres error
+// codes, plus the engine's InsufficientStockError/InsufficientAvailableError,
+// are caught and turned into clean 409s rather than raw 500s.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Express, Response } from "express";
-import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
-import { whItems, whLocations, whBarcodeAliases } from "@shared/schema";
+import { whItems, whLocations, whBarcodeAliases, whReservations } from "@shared/schema";
 import {
   ITEM_KINDS, isItemKind,
   BRAND_OWNERS, isBrandOwner,
@@ -34,8 +38,21 @@ import {
   isValidSku, normaliseSku,
   normaliseAliasCode,
   locationBarcodePayload,
+  REF_KINDS, isRefKind,
+  isReservationStatus,
+  MOVEMENT_TYPES, isMovementType,
+  REASON_CODES, isReasonCode,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
+  type RefKind, type MovementType, type ReasonCode,
 } from "@shared/warehouse";
+import {
+  runReserveStock,
+  runReleaseReservation,
+  runConsumeReservation,
+  reservationDbFromTx,
+  InsufficientAvailableError,
+  InsufficientStockError,
+} from "./warehouse";
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -49,6 +66,10 @@ class WarehouseRouteError extends Error {
 
 function handleWarehouseError(res: Response, e: any, context: string) {
   if (e instanceof WarehouseRouteError) return res.status(e.status).json({ message: e.message });
+  // The engine's own stock-guard errors (T3/T5) — a real conflict, not a bug.
+  if (e instanceof InsufficientStockError || e instanceof InsufficientAvailableError) {
+    return res.status(409).json({ message: e.message });
+  }
   // 23505 = unique_violation, 23503 = foreign_key_violation (Postgres error codes).
   if (e?.code === "23505") {
     return res.status(409).json({ message: "That code is already in use." });
@@ -567,6 +588,141 @@ export function registerWarehouseRoutes(app: Express) {
       res.json({ ok: true });
     } catch (e: any) {
       handleWarehouseError(res, e, "alias delete");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Reservations (T5, D2/D3) — `available` for an item, and the
+  // reserve/release/consume lifecycle. Every stock-affecting step goes
+  // through server/warehouse.ts (reserveStock/releaseReservation/
+  // consumeReservation) — this section only validates input, resolves ids,
+  // and translates engine errors into clean HTTP responses.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/admin/warehouse/items/:id/available", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [item] = await db.select({ id: whItems.id }).from(whItems).where(eq(whItems.id, id));
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      // Read-only — no need to open an explicit transaction; the row locks
+      // taken inside getAvailableForItem release the instant this statement
+      // completes (each is its own implicit transaction), which is fine for
+      // a plain GET that isn't trying to serialize against a concurrent
+      // reserveStock call.
+      const available = await reservationDbFromTx(db).getAvailableForItem(id);
+      res.json({ itemId: id, available });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "item available");
+    }
+  });
+
+  app.get("/api/admin/warehouse/reservations", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const itemId = req.query.itemId !== undefined ? parseId(req.query.itemId) : null;
+      const refKind = clean(req.query.refKind as string | undefined);
+      const refId = req.query.refId !== undefined ? parseId(req.query.refId) : null;
+      const status = clean(req.query.status as string | undefined);
+
+      const conditions = [];
+      if (itemId !== null) conditions.push(eq(whReservations.itemId, itemId));
+      if (refKind && isRefKind(refKind)) conditions.push(eq(whReservations.refKind, refKind));
+      if (refId !== null) conditions.push(eq(whReservations.refId, refId));
+      if (status && isReservationStatus(status)) conditions.push(eq(whReservations.status, status));
+
+      const rows = await db
+        .select({ reservation: whReservations, itemSku: whItems.sku, itemName: whItems.name })
+        .from(whReservations)
+        .innerJoin(whItems, eq(whReservations.itemId, whItems.id))
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(desc(whReservations.createdAt));
+
+      res.json(rows.map((r) => ({ ...r.reservation, itemSku: r.itemSku, itemName: r.itemName })));
+    } catch (e: any) {
+      handleWarehouseError(res, e, "reservations list");
+    }
+  });
+
+  // Body: { itemId, qty, refKind, refId }. Idempotent per (refKind, refId,
+  // itemId) — calling this again for the same ref+item returns the existing
+  // reservation (alreadyReserved: true) rather than double-booking.
+  app.post("/api/admin/warehouse/reservations", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const itemId = parseId(b.itemId);
+      if (itemId === null) throw new WarehouseRouteError("itemId is required");
+      const [item] = await db.select({ id: whItems.id }).from(whItems).where(eq(whItems.id, itemId));
+      if (!item) throw new WarehouseRouteError("itemId does not reference a real item");
+
+      const qty = Number(b.qty);
+      if (!Number.isFinite(qty) || qty <= 0) throw new WarehouseRouteError("qty must be a positive number");
+
+      const refKind = clean(b.refKind);
+      if (!refKind || !isRefKind(refKind)) throw new WarehouseRouteError(`refKind must be one of: ${REF_KINDS.join(", ")}`);
+      const refId = parseId(b.refId);
+      if (refId === null) throw new WarehouseRouteError("refId is required");
+
+      const result = await runReserveStock({ itemId, qty, ref: { kind: refKind as RefKind, id: refId } });
+      res.status(result.alreadyReserved ? 200 : 201).json(result);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "reservation create");
+    }
+  });
+
+  // Idempotent — releasing an already-released reservation is a no-op
+  // (released: false); releasing a consumed one is a real error (the stock
+  // has already left the building).
+  app.post("/api/admin/warehouse/reservations/:id/release", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const result = await runReleaseReservation(id);
+      res.json(result);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "reservation release");
+    }
+  });
+
+  // Body: { locationId, movementType?, reasonCode?, note?, idempotencyKey? }.
+  // Posts the movement that removes the reservation's full qty from the
+  // named sellable bin and marks it consumed. movementType defaults to
+  // 'dispatch' (the common case — fulfilling a paid order); T7/T8's scan
+  // flows will usually pass 'pick' or 'dispatch' explicitly.
+  app.post("/api/admin/warehouse/reservations/:id/consume", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+
+      const b = req.body || {};
+      const locationId = parseId(b.locationId);
+      if (locationId === null) throw new WarehouseRouteError("locationId is required");
+      const [location] = await db.select({ code: whLocations.code }).from(whLocations).where(eq(whLocations.id, locationId));
+      if (!location) throw new WarehouseRouteError("locationId does not reference a real location");
+
+      const movementTypeRaw = clean(b.movementType) ?? "dispatch";
+      if (!isMovementType(movementTypeRaw)) {
+        throw new WarehouseRouteError(`movementType must be one of: ${MOVEMENT_TYPES.join(", ")}`);
+      }
+      let reasonCode: ReasonCode | null = null;
+      if (b.reasonCode !== undefined && b.reasonCode !== null && b.reasonCode !== "") {
+        if (!isReasonCode(b.reasonCode)) throw new WarehouseRouteError(`reasonCode must be one of: ${REASON_CODES.join(", ")}`);
+        reasonCode = b.reasonCode;
+      }
+
+      const operatorUserId = req.session.userId!;
+      const result = await runConsumeReservation({
+        reservationId: id,
+        locationId,
+        locationCode: location.code,
+        movementType: movementTypeRaw as MovementType,
+        reasonCode,
+        operatorUserId,
+        idempotencyKey: clean(b.idempotencyKey) ?? null,
+        note: clean(b.note) ?? null,
+      });
+      res.json(result);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "reservation consume");
     }
   });
 

@@ -14,11 +14,19 @@ import {
   postMovementGroup,
   reconcileStock,
   InsufficientStockError,
+  reserveStock,
+  releaseReservation,
+  releaseReservationsForRef,
+  consumeReservation,
+  InsufficientAvailableError,
   type WarehouseDb,
   type ReconcileDb,
+  type ReservationDb,
+  type ReservationRow,
   type NewMovementRow,
   type PostMovementGroupInput,
 } from "../server/warehouse";
+import type { RefKind, ReservationStatus } from "../shared/warehouse";
 
 let passed = 0;
 async function ok(name: string, fn: () => Promise<void> | void) {
@@ -337,6 +345,353 @@ await ok("reconcile: drift is repaired from the ledger and reported", async () =
   assert.deepEqual(result.drifts[0], { itemId: 2, locationId: 20, cachedOnHand: 9, ledgerSum: 4 });
   assert.equal(repairs.length, 1);
   assert.deepEqual(repairs[0], { itemId: 2, locationId: 20, correctOnHand: 4 });
+});
+
+// ── Reservations (T5) ─────────────────────────────────────────────────────────
+// One combined fake satisfying WarehouseDb & ReservationDb — reserveStock and
+// releaseReservation only ever touch the ReservationDb half; consumeReservation
+// needs both (it posts a movement AND updates a reservation in one call), and
+// the two halves must share the SAME underlying stock map so a consume's
+// stock decrement is visible to a subsequent getAvailableForItem call.
+
+function makeFakeCombinedDb(
+  opts: {
+    /** (item,location) -> starting on_hand. */
+    stock?: Array<{ itemId: number; locationId: number; onHand: number }>;
+    /** Location ids excluded from `available` (mirrors QUARANTINE/virtual
+     *  locations being filtered out of getAvailableForItem's real SQL). */
+    nonSellableLocationIds?: number[];
+    reservations?: Array<{
+      id: number;
+      itemId: number;
+      qty: number;
+      refKind: RefKind;
+      refId: number;
+      status: ReservationStatus;
+    }>;
+  } = {},
+) {
+  const stock = new Map<string, number>();
+  for (const s of opts.stock ?? []) stock.set(`${s.itemId}:${s.locationId}`, s.onHand);
+  const nonSellable = new Set(opts.nonSellableLocationIds ?? []);
+  const reservations = new Map<number, ReservationRow>();
+  let nextReservationId = 1;
+  for (const r of opts.reservations ?? []) {
+    reservations.set(r.id, { ...r });
+    nextReservationId = Math.max(nextReservationId, r.id + 1);
+  }
+  const movementRows: Array<NewMovementRow & { id: number }> = [];
+  const idempotency = new Map<string, string>();
+  let nextMovementId = 1;
+  const calls = {
+    findMovementGroupByIdempotencyKey: 0,
+    insertMovementLegs: 0,
+    upsertStockLeg: 0,
+    getAvailableForItem: 0,
+    insertReservation: 0,
+    markReservationStatus: 0,
+  };
+
+  const db: WarehouseDb & ReservationDb = {
+    // ── WarehouseDb half ──
+    async findMovementGroupByIdempotencyKey(key) {
+      calls.findMovementGroupByIdempotencyKey++;
+      const groupId = idempotency.get(key);
+      return groupId ? { groupId } : undefined;
+    },
+    async insertMovementLegs(rows) {
+      calls.insertMovementLegs++;
+      const out: { id: number }[] = [];
+      for (const row of rows) {
+        const id = nextMovementId++;
+        movementRows.push({ ...row, id });
+        if (row.idempotencyKey) idempotency.set(row.idempotencyKey, row.groupId);
+        out.push({ id });
+      }
+      return out;
+    },
+    async upsertStockLeg(leg) {
+      calls.upsertStockLeg++;
+      const key = `${leg.itemId}:${leg.locationId}`;
+      const hadExisting = stock.has(key);
+      const newOnHand = (hadExisting ? stock.get(key)! : 0) + leg.delta;
+      if (hadExisting && !leg.allowNegative && newOnHand < 0) return null;
+      stock.set(key, newOnHand);
+      return { onHand: newOnHand };
+    },
+    // ── ReservationDb half ──
+    async getAvailableForItem(itemId) {
+      calls.getAvailableForItem++;
+      let onHandSum = 0;
+      for (const [key, qty] of stock.entries()) {
+        const [itemPart, locPart] = key.split(":").map(Number);
+        if (itemPart === itemId && !nonSellable.has(locPart)) onHandSum += qty;
+      }
+      const reservedSum = Array.from(reservations.values())
+        .filter((r) => r.itemId === itemId && r.status === "active")
+        .reduce((sum, r) => sum + r.qty, 0);
+      return onHandSum - reservedSum;
+    },
+    async findActiveReservationByRef(ref, itemId) {
+      const found = Array.from(reservations.values()).find(
+        (r) => r.refKind === ref.kind && r.refId === ref.id && r.itemId === itemId && r.status === "active",
+      );
+      return found ? { id: found.id } : undefined;
+    },
+    async findActiveReservationsByRef(ref) {
+      return Array.from(reservations.values()).filter(
+        (r) => r.refKind === ref.kind && r.refId === ref.id && r.status === "active",
+      );
+    },
+    async getReservationById(id) {
+      return reservations.get(id);
+    },
+    async insertReservation(row) {
+      calls.insertReservation++;
+      const id = nextReservationId++;
+      reservations.set(id, {
+        id,
+        itemId: row.itemId,
+        qty: Number(row.qty),
+        refKind: row.refKind,
+        refId: row.refId,
+        status: "active",
+      });
+      return { id };
+    },
+    async markReservationStatus(id, status) {
+      calls.markReservationStatus++;
+      const r = reservations.get(id);
+      if (r) r.status = status;
+    },
+  };
+
+  return { db, stock, reservations, movementRows, calls };
+}
+
+// ── reserveStock ──────────────────────────────────────────────────────────────
+
+await ok("reserveStock: available drops by the reserved qty", async () => {
+  const { db } = makeFakeCombinedDb({ stock: [{ itemId: 1, locationId: 10, onHand: 10 }] });
+  const before = await db.getAvailableForItem(1);
+  assert.equal(before, 10);
+  const result = await reserveStock(db, { itemId: 1, qty: 3, ref: { kind: "shop_order", id: 100 } });
+  assert.equal(result.alreadyReserved, false);
+  const after = await db.getAvailableForItem(1);
+  assert.equal(after, 7);
+});
+
+await ok("reserveStock: excludes non-sellable (quarantine/virtual) locations from available", async () => {
+  const { db } = makeFakeCombinedDb({
+    stock: [
+      { itemId: 1, locationId: 10, onHand: 2 }, // sellable
+      { itemId: 1, locationId: 99, onHand: 100 }, // QUARANTINE — excluded
+    ],
+    nonSellableLocationIds: [99],
+  });
+  assert.equal(await db.getAvailableForItem(1), 2);
+  await assert.rejects(
+    () => reserveStock(db, { itemId: 1, qty: 5, ref: { kind: "shop_order", id: 1 } }),
+    (err: unknown) => {
+      assert.ok(err instanceof InsufficientAvailableError);
+      assert.equal((err as InsufficientAvailableError).available, 2);
+      assert.equal((err as InsufficientAvailableError).requestedQty, 5);
+      assert.equal((err as InsufficientAvailableError).itemId, 1);
+      return true;
+    },
+  );
+});
+
+await ok("reserveStock: insufficient available throws InsufficientAvailableError, nothing inserted", async () => {
+  const { db, calls } = makeFakeCombinedDb({ stock: [{ itemId: 1, locationId: 10, onHand: 2 }] });
+  await assert.rejects(() => reserveStock(db, { itemId: 1, qty: 3, ref: { kind: "shop_order", id: 1 } }), InsufficientAvailableError);
+  assert.equal(calls.insertReservation, 0);
+});
+
+await ok("reserveStock: idempotent per (ref, item) — second call is a no-op replay", async () => {
+  const { db, calls } = makeFakeCombinedDb({ stock: [{ itemId: 1, locationId: 10, onHand: 10 }] });
+  const ref = { kind: "shop_order" as RefKind, id: 42 };
+  const first = await reserveStock(db, { itemId: 1, qty: 4, ref });
+  assert.equal(first.alreadyReserved, false);
+  assert.equal(calls.getAvailableForItem, 1);
+
+  const second = await reserveStock(db, { itemId: 1, qty: 4, ref });
+  assert.equal(second.alreadyReserved, true);
+  assert.equal(second.reservationId, first.reservationId);
+  assert.equal(calls.insertReservation, 1, "no second insert");
+  assert.equal(calls.getAvailableForItem, 1, "availability is NOT re-checked on a replay");
+});
+
+await ok("reserveStock: rejects unknown ref kind and non-positive qty before touching the DB", async () => {
+  const { db, calls } = makeFakeCombinedDb({ stock: [{ itemId: 1, locationId: 10, onHand: 10 }] });
+  await assert.rejects(
+    () => reserveStock(db, { itemId: 1, qty: 1, ref: { kind: "carrier_pigeon" as any, id: 1 } }),
+    /unknown ref kind/,
+  );
+  await assert.rejects(() => reserveStock(db, { itemId: 1, qty: 0, ref: { kind: "shop_order", id: 1 } }), /greater than zero/);
+  await assert.rejects(() => reserveStock(db, { itemId: 1, qty: -1, ref: { kind: "shop_order", id: 1 } }), /greater than zero/);
+  assert.equal(calls.insertReservation, 0);
+  assert.equal(calls.getAvailableForItem, 0);
+});
+
+// ── releaseReservation ────────────────────────────────────────────────────────
+
+await ok("releaseReservation: releases an active reservation and restores available", async () => {
+  const { db } = makeFakeCombinedDb({
+    stock: [{ itemId: 1, locationId: 10, onHand: 10 }],
+    reservations: [{ id: 1, itemId: 1, qty: 4, refKind: "shop_order", refId: 1, status: "active" }],
+  });
+  assert.equal(await db.getAvailableForItem(1), 6);
+  const result = await releaseReservation(db, 1);
+  assert.deepEqual(result, { released: true, itemId: 1 });
+  assert.equal(await db.getAvailableForItem(1), 10);
+});
+
+await ok("releaseReservation: releasing an already-released reservation is a no-op", async () => {
+  const { db, calls } = makeFakeCombinedDb({
+    reservations: [{ id: 1, itemId: 1, qty: 4, refKind: "shop_order", refId: 1, status: "released" }],
+  });
+  const result = await releaseReservation(db, 1);
+  assert.deepEqual(result, { released: false, itemId: 1 });
+  assert.equal(calls.markReservationStatus, 0, "no write on a no-op");
+});
+
+await ok("releaseReservation: a consumed reservation can't be released", async () => {
+  const { db } = makeFakeCombinedDb({
+    reservations: [{ id: 1, itemId: 1, qty: 4, refKind: "shop_order", refId: 1, status: "consumed" }],
+  });
+  await assert.rejects(() => releaseReservation(db, 1), /already consumed/);
+});
+
+await ok("releaseReservation: unknown id throws", async () => {
+  const { db } = makeFakeCombinedDb();
+  await assert.rejects(() => releaseReservation(db, 999), /not found/);
+});
+
+await ok("releaseReservationsForRef: releases every active line of a ref, skips non-active ones", async () => {
+  const { db } = makeFakeCombinedDb({
+    reservations: [
+      { id: 1, itemId: 1, qty: 2, refKind: "shop_order", refId: 5, status: "active" },
+      { id: 2, itemId: 2, qty: 3, refKind: "shop_order", refId: 5, status: "active" },
+      { id: 3, itemId: 3, qty: 1, refKind: "shop_order", refId: 5, status: "consumed" },
+      { id: 4, itemId: 4, qty: 1, refKind: "shop_order", refId: 6, status: "active" }, // different ref
+    ],
+  });
+  const result = await releaseReservationsForRef(db, { kind: "shop_order", id: 5 });
+  assert.equal(result.releasedCount, 2);
+  assert.deepEqual(result.itemIds.sort(), [1, 2]);
+  assert.equal((await db.getReservationById(1))!.status, "released");
+  assert.equal((await db.getReservationById(2))!.status, "released");
+  assert.equal((await db.getReservationById(3))!.status, "consumed", "untouched — wasn't active");
+  assert.equal((await db.getReservationById(4))!.status, "active", "untouched — different ref");
+});
+
+// ── consumeReservation ────────────────────────────────────────────────────────
+
+await ok("consumeReservation: posts a dispatch movement, marks consumed, available unchanged", async () => {
+  const { db, stock } = makeFakeCombinedDb({ stock: [{ itemId: 1, locationId: 10, onHand: 10 }] });
+  const reserved = await reserveStock(db, { itemId: 1, qty: 4, ref: { kind: "shop_order", id: 1 } });
+  const availableAfterReserve = await db.getAvailableForItem(1);
+  assert.equal(availableAfterReserve, 6);
+
+  const result = await consumeReservation(db, {
+    reservationId: reserved.reservationId,
+    locationId: 10,
+    locationCode: "A-01-1",
+    movementType: "dispatch",
+    operatorUserId: 7,
+  });
+  assert.equal(result.movement.alreadyProcessed, false);
+  assert.equal(stock.get("1:10"), 6, "on_hand dropped by the reservation's qty");
+  assert.equal((await db.getReservationById(reserved.reservationId))!.status, "consumed");
+  // Physical truth: it was already promised, now it's actually gone — the
+  // AVAILABLE number itself doesn't move across a consume.
+  assert.equal(await db.getAvailableForItem(1), availableAfterReserve);
+});
+
+await ok("consumeReservation: guard fires against a pre-existing too-low stock row (location-level guard)", async () => {
+  // Reserved against 21 units of TOTAL item availability (across two bins),
+  // but the specific bin the dispatch scan names only physically holds 1 —
+  // the item-level `available` check inside reserveStock can't know in
+  // advance which bin will actually be picked from.
+  const { db } = makeFakeCombinedDb({
+    stock: [
+      { itemId: 1, locationId: 10, onHand: 20 }, // enough for the item overall
+      { itemId: 1, locationId: 20, onHand: 1 }, // but THIS bin only has 1
+    ],
+  });
+  const reserved = await reserveStock(db, { itemId: 1, qty: 5, ref: { kind: "shop_order", id: 1 } });
+  await assert.rejects(
+    () =>
+      consumeReservation(db, {
+        reservationId: reserved.reservationId,
+        locationId: 20,
+        locationCode: "LOW-BIN",
+        movementType: "dispatch",
+        operatorUserId: 7,
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof InsufficientStockError);
+      assert.equal((err as InsufficientStockError).locationCode, "LOW-BIN");
+      return true;
+    },
+  );
+  // The reservation must NOT have been marked consumed — the whole call threw.
+  assert.equal((await db.getReservationById(reserved.reservationId))!.status, "active");
+});
+
+await ok("consumeReservation: idempotent replay — reservation untouched, no second stock write", async () => {
+  const { db, calls } = makeFakeCombinedDb({ stock: [{ itemId: 1, locationId: 10, onHand: 10 }] });
+  const reserved = await reserveStock(db, { itemId: 1, qty: 4, ref: { kind: "shop_order", id: 1 } });
+  const input = {
+    reservationId: reserved.reservationId,
+    locationId: 10,
+    locationCode: "A-01-1",
+    movementType: "dispatch" as const,
+    operatorUserId: 7,
+    idempotencyKey: "dispatch-order-1",
+  };
+  const first = await consumeReservation(db, input);
+  assert.equal(first.movement.alreadyProcessed, false);
+  assert.equal(calls.markReservationStatus, 1);
+
+  const second = await consumeReservation(db, input);
+  assert.equal(second.movement.alreadyProcessed, true);
+  assert.equal(calls.markReservationStatus, 1, "not called again on a replay");
+  assert.equal((await db.getReservationById(reserved.reservationId))!.status, "consumed");
+});
+
+await ok("consumeReservation: a released reservation can't be consumed", async () => {
+  const { db } = makeFakeCombinedDb({
+    stock: [{ itemId: 1, locationId: 10, onHand: 10 }],
+    reservations: [{ id: 1, itemId: 1, qty: 4, refKind: "shop_order", refId: 1, status: "released" }],
+  });
+  await assert.rejects(
+    () =>
+      consumeReservation(db, {
+        reservationId: 1,
+        locationId: 10,
+        locationCode: "A-01-1",
+        movementType: "dispatch",
+        operatorUserId: 7,
+      }),
+    /was released, not active/,
+  );
+});
+
+await ok("consumeReservation: unknown reservation id throws", async () => {
+  const { db } = makeFakeCombinedDb();
+  await assert.rejects(
+    () =>
+      consumeReservation(db, {
+        reservationId: 999,
+        locationId: 10,
+        locationCode: "A-01-1",
+        movementType: "dispatch",
+        operatorUserId: 7,
+      }),
+    /not found/,
+  );
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

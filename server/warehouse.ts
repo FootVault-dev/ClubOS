@@ -26,17 +26,19 @@
 // shared/schema.ts but never unit-tested directly (would need a live
 // Postgres — exercised for real only after a human runs the migration).
 import { randomUUID } from "crypto";
-import { eq, sql } from "drizzle-orm";
-import { whMovements, whStock } from "@shared/schema";
+import { and, eq, sql } from "drizzle-orm";
+import { whMovements, whReservations, whStock } from "@shared/schema";
 import type { db as realDb } from "./db";
 import {
   isMovementType,
   isReasonCode,
   isRefKind,
   legsSumToZero,
+  QUARANTINE_ZONE,
   type MovementType,
   type ReasonCode,
   type RefKind,
+  type ReservationStatus,
 } from "@shared/warehouse";
 
 // ── Public shapes ────────────────────────────────────────────────────────────
@@ -322,6 +324,373 @@ export async function runMovementGroup(input: PostMovementGroupInput): Promise<P
   const { db } = await import("./db");
   const result = await db.transaction(async (tx) => postMovementGroup(warehouseDbFromTx(tx), input));
   if (!result.alreadyProcessed) notifyMovementCommitted(result.affectedItemIds);
+  return result;
+}
+
+// ── Reservations (D2/D3) ─────────────────────────────────────────────────────
+// Hard reservations for every paid-but-unfulfilled order (native + Shopify) —
+// physical truth stays true: the shirt is on the shelf until it's picked.
+// `wh_reservations` (shared/schema.ts) is ITEM-level, not (item, location) —
+// the warehouse promises a QUANTITY of an item out of whichever sellable
+// bins currently hold it, never a specific bin. `available(item)` is DERIVED
+// (D2): Σ on_hand across sellable bins − Σ qty of its active reservations —
+// computed by ReservationDb.getAvailableForItem, never a stored column
+// anywhere (mirrors wh_stock.on_hand's own derived-`available` doctrine one
+// level up the stack).
+//
+// Three transitions, matching RESERVATION_STATUSES exactly:
+//   reserveStock         active created (or found — idempotent per ref+item;
+//                        D3's partial-unique index is the DB-level half of
+//                        this, this is the app-level half).
+//   releaseReservation   active -> released (order cancelled/refunded — T12's
+//                        webhook path).
+//   consumeReservation   active -> consumed, AND posts the movement that
+//                        actually removes the physical stock (dispatch scan,
+//                        T8) — after consume, on_hand and the
+//                        active-reservation sum both drop by the same qty,
+//                        so `available` doesn't move (it was already
+//                        "promised", now it's actually gone).
+//
+// Same testability seam as WarehouseDb/ReconcileDb (see this file's header
+// comment) — getAvailableForItem needs row-locking across two tables to
+// serialize concurrent reserve() calls, which isn't meaningfully fakeable via
+// drizzle's query builder, so ReservationDb is bespoke: a plain in-memory
+// fake in script/test-warehouse-engine.ts, and `reservationDbFromTx` (real
+// drizzle, never unit-tested directly — needs a live Postgres) in production.
+
+export interface ReservationRow {
+  id: number;
+  itemId: number;
+  qty: number;
+  refKind: RefKind;
+  refId: number;
+  status: ReservationStatus;
+}
+
+/** Thrown when reserveStock would take `available` negative — the item-level
+ *  sibling of InsufficientStockError (which is location-level). */
+export class InsufficientAvailableError extends Error {
+  constructor(
+    public readonly itemId: number,
+    public readonly available: number,
+    public readonly requestedQty: number,
+  ) {
+    super(`Insufficient available stock for item ${itemId}: requested ${requestedQty}, only ${available} available`);
+    this.name = "InsufficientAvailableError";
+  }
+}
+
+export interface ReservationDb {
+  /** Σ on_hand across sellable bins for this item, minus Σ qty of its active
+   *  reservations (D2/D3) — the number reserveStock must not oversell past.
+   *  The real adapter takes row locks on every wh_stock/wh_reservations row
+   *  it reads so two concurrent reserveStock calls against the same item
+   *  can't both read the same number and both succeed past it (the SECOND
+   *  call blocks until the first commits, then re-reads the now-lower
+   *  number) — the multi-row-aggregate equivalent of postMovementGroup's
+   *  single-row `UPDATE ... WHERE` guard. */
+  getAvailableForItem(itemId: number): Promise<number>;
+  /** The active reservation already on file for this (ref, item), if any —
+   *  read back for reserveStock's idempotent no-op path (a second call for
+   *  the same ref+item is a replay, not a double-book; mirrors the DB's own
+   *  partial-unique index invariant). */
+  findActiveReservationByRef(ref: { kind: RefKind; id: number }, itemId: number): Promise<{ id: number } | undefined>;
+  /** Every active reservation for a ref, across all its items — releasing a
+   *  whole order (cancel/refund) touches every line, not just one item. */
+  findActiveReservationsByRef(ref: { kind: RefKind; id: number }): Promise<ReservationRow[]>;
+  getReservationById(id: number): Promise<ReservationRow | undefined>;
+  insertReservation(row: { itemId: number; qty: string; refKind: RefKind; refId: number }): Promise<{ id: number }>;
+  markReservationStatus(id: number, status: ReservationStatus): Promise<void>;
+}
+
+/** Real adapter — never unit-tested directly (needs a live Postgres for the
+ *  row-locking to mean anything). Same status as warehouseDbFromTx /
+ *  reconcileDbFromRealDb. */
+export function reservationDbFromTx(
+  tx: Pick<typeof realDb, "insert" | "select" | "update" | "execute">,
+): ReservationDb {
+  return {
+    async getAvailableForItem(itemId) {
+      // Two locked SELECTs, not one aggregate — Postgres doesn't allow
+      // FOR UPDATE on a query with GROUP BY/aggregate functions, and locking
+      // is the whole point (it's what serializes concurrent callers).
+      const stockRows = await tx.execute(sql`
+        SELECT s.on_hand
+        FROM wh_stock s
+        JOIN wh_locations l ON l.id = s.location_id
+        WHERE s.item_id = ${itemId}
+          AND l.kind <> 'virtual'
+          AND UPPER(l.code) <> ${QUARANTINE_ZONE}
+        FOR UPDATE OF s
+      `);
+      const reservedRows = await tx.execute(sql`
+        SELECT qty FROM wh_reservations
+        WHERE item_id = ${itemId} AND status = 'active'
+        FOR UPDATE
+      `);
+      const onHandSum = (stockRows.rows as Array<{ on_hand: string }>).reduce((sum, r) => sum + Number(r.on_hand), 0);
+      const reservedSum = (reservedRows.rows as Array<{ qty: string }>).reduce((sum, r) => sum + Number(r.qty), 0);
+      return onHandSum - reservedSum;
+    },
+    async findActiveReservationByRef(ref, itemId) {
+      const rows = await tx
+        .select({ id: whReservations.id })
+        .from(whReservations)
+        .where(
+          and(
+            eq(whReservations.refKind, ref.kind),
+            eq(whReservations.refId, ref.id),
+            eq(whReservations.itemId, itemId),
+            eq(whReservations.status, "active"),
+          ),
+        )
+        .limit(1);
+      return rows[0];
+    },
+    async findActiveReservationsByRef(ref) {
+      const rows = await tx
+        .select()
+        .from(whReservations)
+        .where(
+          and(
+            eq(whReservations.refKind, ref.kind),
+            eq(whReservations.refId, ref.id),
+            eq(whReservations.status, "active"),
+          ),
+        );
+      return rows.map(toReservationRow);
+    },
+    async getReservationById(id) {
+      const rows = await tx.select().from(whReservations).where(eq(whReservations.id, id)).limit(1);
+      return rows[0] ? toReservationRow(rows[0]) : undefined;
+    },
+    async insertReservation(row) {
+      const [created] = await tx.insert(whReservations).values(row).returning({ id: whReservations.id });
+      return created;
+    },
+    async markReservationStatus(id, status) {
+      await tx.update(whReservations).set({ status, updatedAt: new Date() }).where(eq(whReservations.id, id));
+    },
+  };
+}
+
+function toReservationRow(row: typeof whReservations.$inferSelect): ReservationRow {
+  return {
+    id: row.id,
+    itemId: row.itemId,
+    qty: Number(row.qty),
+    refKind: row.refKind as RefKind,
+    refId: row.refId,
+    status: row.status as ReservationStatus,
+  };
+}
+
+/** Combines both seams behind one object for consumeReservation's real path
+ *  (a movement post + a reservation-status update, same transaction). An
+ *  explicit return type keeps the spread's assignability check in ONE place
+ *  rather than at every call site. */
+function combinedDbFromTx(
+  tx: Pick<typeof realDb, "insert" | "select" | "update" | "execute">,
+): WarehouseDb & ReservationDb {
+  return { ...warehouseDbFromTx(tx), ...reservationDbFromTx(tx) };
+}
+
+// ── reserveStock ──────────────────────────────────────────────────────────────
+
+export interface ReserveInput {
+  itemId: number;
+  /** Must be > 0 — a reservation for zero or negative units makes no sense
+   *  (unlike a movement leg's signed delta, a reservation qty is always a
+   *  positive promise). */
+  qty: number;
+  ref: { kind: RefKind; id: number };
+}
+
+export interface ReserveResult {
+  reservationId: number;
+  /** true when an active reservation already existed for this (ref, item) —
+   *  idempotent no-op: no new row, availability was NOT re-checked or
+   *  touched (mirrors postMovementGroup's own idempotency semantics). */
+  alreadyReserved: boolean;
+}
+
+export async function reserveStock(db: ReservationDb, input: ReserveInput): Promise<ReserveResult> {
+  if (!isRefKind(input.ref.kind)) {
+    throw new Error(`reserveStock: unknown ref kind "${input.ref.kind}"`);
+  }
+  if (!(input.qty > 0)) {
+    throw new Error("reserveStock: qty must be greater than zero");
+  }
+  const existing = await db.findActiveReservationByRef(input.ref, input.itemId);
+  if (existing) {
+    return { reservationId: existing.id, alreadyReserved: true };
+  }
+  const available = await db.getAvailableForItem(input.itemId);
+  if (available < input.qty) {
+    throw new InsufficientAvailableError(input.itemId, available, input.qty);
+  }
+  const created = await db.insertReservation({
+    itemId: input.itemId,
+    qty: String(input.qty),
+    refKind: input.ref.kind,
+    refId: input.ref.id,
+  });
+  return { reservationId: created.id, alreadyReserved: false };
+}
+
+// ── releaseReservation ───────────────────────────────────────────────────────
+
+export interface ReleaseResult {
+  /** false when the reservation was already released — idempotent no-op. */
+  released: boolean;
+  itemId: number;
+}
+
+export async function releaseReservation(db: ReservationDb, reservationId: number): Promise<ReleaseResult> {
+  const reservation = await db.getReservationById(reservationId);
+  if (!reservation) {
+    throw new Error(`releaseReservation: reservation ${reservationId} not found`);
+  }
+  if (reservation.status === "released") {
+    return { released: false, itemId: reservation.itemId }; // idempotent no-op
+  }
+  if (reservation.status === "consumed") {
+    throw new Error(
+      `releaseReservation: reservation ${reservationId} was already consumed — the stock has left the building, it can't be released`,
+    );
+  }
+  await db.markReservationStatus(reservationId, "released");
+  return { released: true, itemId: reservation.itemId };
+}
+
+/** Releases every active reservation for a ref (e.g. every line of a
+ *  cancelled/refunded order) — T12's webhook path calls this rather than
+ *  looping releaseReservation() per item itself. */
+export async function releaseReservationsForRef(
+  db: ReservationDb,
+  ref: { kind: RefKind; id: number },
+): Promise<{ releasedCount: number; itemIds: number[] }> {
+  const active = await db.findActiveReservationsByRef(ref);
+  for (const r of active) {
+    await db.markReservationStatus(r.id, "released");
+  }
+  return { releasedCount: active.length, itemIds: active.map((r) => r.itemId) };
+}
+
+// ── consumeReservation ────────────────────────────────────────────────────────
+
+export interface ConsumeReservationInput {
+  reservationId: number;
+  /** The sellable bin actually being picked from (caller/scan already
+   *  resolved this — the engine never runs its own SELECT). */
+  locationId: number;
+  locationCode: string;
+  movementType: MovementType;
+  reasonCode?: ReasonCode | null;
+  operatorUserId: number;
+  idempotencyKey?: string | null;
+  note?: string | null;
+  /** Overrides the movement's ref — defaults to the reservation's own ref
+   *  (the order it was reserved for). */
+  ref?: { kind: RefKind; id: number } | null;
+}
+
+export interface ConsumeReservationResult {
+  reservation: ReservationRow;
+  movement: PostMovementGroupResult;
+}
+
+/**
+ * Fulfils a reservation: posts the movement that removes the reservation's
+ * FULL qty from the named sellable bin, then marks the reservation
+ * 'consumed' — but only when the movement was genuinely new. A replayed
+ * idempotencyKey short-circuits inside postMovementGroup (alreadyProcessed),
+ * and this function then does NOTHING further (reservation untouched),
+ * exactly like postMovementGroup's own "touches nothing else" replay
+ * contract one level up. (v1 always consumes the reservation's full qty —
+ * there's no partial-ship state in RESERVATION_STATUSES; a partial dispatch
+ * is a T8-level concern, out of scope here.)
+ */
+export async function consumeReservation(
+  db: WarehouseDb & ReservationDb,
+  input: ConsumeReservationInput,
+): Promise<ConsumeReservationResult> {
+  const reservation = await db.getReservationById(input.reservationId);
+  if (!reservation) {
+    throw new Error(`consumeReservation: reservation ${input.reservationId} not found`);
+  }
+  if (reservation.status === "released") {
+    throw new Error(`consumeReservation: reservation ${input.reservationId} was released, not active`);
+  }
+
+  const movement = await postMovementGroup(db, {
+    legs: [
+      {
+        itemId: reservation.itemId,
+        locationId: input.locationId,
+        locationCode: input.locationCode,
+        delta: -reservation.qty,
+      },
+    ],
+    movementType: input.movementType,
+    reasonCode: input.reasonCode ?? null,
+    ref: input.ref ?? { kind: reservation.refKind, id: reservation.refId },
+    operatorUserId: input.operatorUserId,
+    idempotencyKey: input.idempotencyKey ?? null,
+    note: input.note ?? null,
+  });
+
+  if (!movement.alreadyProcessed) {
+    // Reached only for a genuinely NEW movement. reservation.status here can
+    // only legitimately be 'active' — a 'consumed' reservation paired with a
+    // brand-new (non-replay) movement means some caller reused a stale
+    // reservation id with a fresh idempotencyKey, which is a bug, not
+    // something to paper over by re-marking it consumed.
+    if (reservation.status !== "active") {
+      throw new Error(
+        `consumeReservation: reservation ${input.reservationId} is not active (status=${reservation.status}) and this was not an idempotent replay`,
+      );
+    }
+    await db.markReservationStatus(input.reservationId, "consumed");
+  }
+
+  return { reservation, movement };
+}
+
+// ── Route-facing wrappers (open their own transaction + fire the sync hook) ──
+// Same shape as runMovementGroup above: lazily import the real db (this
+// module must stay importable with no DATABASE_URL), open one transaction,
+// run the already-tested pure-logic function against the real adapter, and
+// only fire the channel-sync hook for a genuine change (never a replay / a
+// no-op release).
+
+export async function runReserveStock(input: ReserveInput): Promise<ReserveResult> {
+  const { db } = await import("./db");
+  const result = await db.transaction(async (tx) => reserveStock(reservationDbFromTx(tx), input));
+  if (!result.alreadyReserved) notifyMovementCommitted([input.itemId]);
+  return result;
+}
+
+export async function runReleaseReservation(reservationId: number): Promise<ReleaseResult> {
+  const { db } = await import("./db");
+  const result = await db.transaction(async (tx) => releaseReservation(reservationDbFromTx(tx), reservationId));
+  if (result.released) notifyMovementCommitted([result.itemId]);
+  return result;
+}
+
+export async function runReleaseReservationsForRef(
+  ref: { kind: RefKind; id: number },
+): Promise<{ releasedCount: number; itemIds: number[] }> {
+  const { db } = await import("./db");
+  const result = await db.transaction(async (tx) => releaseReservationsForRef(reservationDbFromTx(tx), ref));
+  if (result.itemIds.length) notifyMovementCommitted(result.itemIds);
+  return result;
+}
+
+export async function runConsumeReservation(input: ConsumeReservationInput): Promise<ConsumeReservationResult> {
+  const { db } = await import("./db");
+  const result = await db.transaction(async (tx) => consumeReservation(combinedDbFromTx(tx), input));
+  if (!result.movement.alreadyProcessed) notifyMovementCommitted(result.movement.affectedItemIds);
   return result;
 }
 
