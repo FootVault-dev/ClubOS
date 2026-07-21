@@ -75,6 +75,26 @@ const SEED: SeedRow[] = [
   { brand: "siu", name: "LT McGuinness", code: "siu-ltmcguinness", tier: "Premium partner", url: "https://ltmcguinness.co.nz/" },
   { brand: "siu", name: "The Yard Gym", code: "siu-yardgym", tier: "Premium partner", url: "https://theyardgym.com/locations/christchurch-south" },
   { brand: "siu", name: "The Drifter", code: "siu-drifter", tier: "Premium partner", url: "https://thedrifter.com/christchurch/" },
+
+  // ── CIC (cicyouth.com — Christchurch International Cup, July youth tournament) ──
+  // Sponsor set = the CIC 2026 perimeter-board logos. Codes match the tracked
+  // links wired on cicyouth.com's Sponsor Wall + the client impression/view beacon.
+  { brand: "cic", name: "Commodore Airport Hotel", code: "cic-commodore", tier: "partner", url: "https://www.commodorehotel.co.nz" },
+  { brand: "cic", name: "The Drifter", code: "cic-drifter", tier: "partner", url: "https://thedrifter.com/christchurch" },
+  { brand: "cic", name: "Go Media", code: "cic-gomedia", tier: "partner", url: "https://www.gomedia.co.nz" },
+  { brand: "cic", name: "The Lone Star", code: "cic-lonestar", tier: "partner", url: "https://www.lonestar.co.nz" },
+  { brand: "cic", name: "New Balance", code: "cic-newbalance", tier: "partner", url: "https://www.newbalance.co.nz" },
+  { brand: "cic", name: "SMC Design", code: "cic-smc", tier: "partner", url: "https://smcdesign.co.nz" },
+  { brand: "cic", name: "United Prints", code: "cic-unitedprints", tier: "partner", url: "https://unitedprints.co.nz" },
+  { brand: "cic", name: "United Steel", code: "cic-unitedsteel", tier: "partner", url: "https://www.unitedsteel.co.nz" },
+  { brand: "cic", name: "Victoria Foods", code: "cic-victoriafoods", tier: "partner", url: "https://victoriafoods.co.nz" },
+  { brand: "cic", name: "Heartland", code: "cic-heartland", tier: "partner", url: "https://www.heartland.nz" },
+  { brand: "cic", name: "Perennial", code: "cic-perennial", tier: "partner", url: "https://www.perennial.co.nz" },
+  // Gaming/community grant funders — seeded (impression-tracked + health-checkable)
+  // but the click-through link stays OFF on the site until Daniel signs off.
+  { brand: "cic", name: "NZCT", code: "cic-nzct", tier: "grant funder", url: "https://www.nzct.org.nz" },
+  { brand: "cic", name: "The Lion Foundation", code: "cic-lionfoundation", tier: "grant funder", url: "https://lionfoundation.nz" },
+  { brand: "cic", name: "Kiwi Gaming", code: "cic-kiwigaming", tier: "grant funder", url: "https://www.kiwigaming.org.nz" },
 ];
 
 async function main() {

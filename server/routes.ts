@@ -4417,9 +4417,12 @@ export async function registerRoutes(
       if (ids.length) {
         const agg = await db.execute(sql`
           SELECT sponsor_id,
-                 COUNT(*) FILTER (WHERE occurred_at > now() - interval '30 days') AS clicks_30d,
-                 COUNT(DISTINCT COALESCE(visitor_id, 'e'||id::text)) FILTER (WHERE occurred_at > now() - interval '30 days') AS unique_30d,
-                 MAX(occurred_at) AS last_click
+                 COUNT(*) FILTER (WHERE kind = 'click' AND occurred_at > now() - interval '30 days') AS clicks_30d,
+                 COUNT(DISTINCT COALESCE(visitor_id, 'e'||id::text)) FILTER (WHERE kind = 'click' AND occurred_at > now() - interval '30 days') AS unique_30d,
+                 COUNT(*) FILTER (WHERE kind = 'impression' AND occurred_at > now() - interval '30 days') AS impressions_30d,
+                 COUNT(*) FILTER (WHERE kind = 'view' AND occurred_at > now() - interval '30 days') AS views_30d,
+                 COUNT(DISTINCT COALESCE(visitor_id, 'e'||id::text)) FILTER (WHERE kind = 'view' AND occurred_at > now() - interval '30 days') AS view_uniques_30d,
+                 MAX(occurred_at) FILTER (WHERE kind = 'click') AS last_click
           FROM sponsor_link_events
           WHERE sponsor_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND is_internal = false
           GROUP BY sponsor_id`);
@@ -4429,7 +4432,7 @@ export async function registerRoutes(
           SELECT sponsor_id, to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, COUNT(*) AS clicks
           FROM sponsor_link_events
           WHERE sponsor_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND is_internal = false
-            AND occurred_at > now() - interval '30 days'
+            AND kind = 'click' AND occurred_at > now() - interval '30 days'
           GROUP BY sponsor_id, day ORDER BY day`);
         for (const r of (days.rows as any[])) {
           const sid = Number(r.sponsor_id);
@@ -4441,6 +4444,9 @@ export async function registerRoutes(
         stats: {
           clicks30d: Number(statsById[r.id]?.clicks_30d ?? 0),
           unique30d: Number(statsById[r.id]?.unique_30d ?? 0),
+          impressions30d: Number(statsById[r.id]?.impressions_30d ?? 0),
+          views30d: Number(statsById[r.id]?.views_30d ?? 0),
+          viewUniques30d: Number(statsById[r.id]?.view_uniques_30d ?? 0),
           totalClicks: r.openCount,
           lastClick: statsById[r.id]?.last_click ?? r.lastOpenedAt ?? null,
           byDay: byDayBySponsor[r.id] ?? [],
@@ -4512,26 +4518,29 @@ export async function registerRoutes(
       if (!(await checkUserOrg(req.session.userId!, s.organizationId))) return res.status(403).json({ message: "Forbidden" });
       const internalFilter = req.query.includeInternal === "1" ? sql`` : sql` AND is_internal = false`;
       const summary = await db.execute(sql`
-        SELECT COUNT(*) AS clicks,
-               COUNT(DISTINCT COALESCE(visitor_id,'e'||id::text)) AS unique_visitors,
-               MIN(occurred_at) AS first_click,
-               MAX(occurred_at) AS last_click
+        SELECT COUNT(*) FILTER (WHERE kind = 'click') AS clicks,
+               COUNT(DISTINCT COALESCE(visitor_id,'e'||id::text)) FILTER (WHERE kind = 'click') AS unique_visitors,
+               COUNT(*) FILTER (WHERE kind = 'impression') AS impressions,
+               COUNT(*) FILTER (WHERE kind = 'view') AS views,
+               COUNT(DISTINCT COALESCE(visitor_id,'e'||id::text)) FILTER (WHERE kind = 'view') AS unique_viewers,
+               MIN(occurred_at) FILTER (WHERE kind = 'click') AS first_click,
+               MAX(occurred_at) FILTER (WHERE kind = 'click') AS last_click
         FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}`);
       const byDay = await db.execute(sql`
         SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, COUNT(*) AS clicks
-        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter} AND occurred_at > now() - interval '30 days'
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter} AND kind = 'click' AND occurred_at > now() - interval '30 days'
         GROUP BY day ORDER BY day`);
       const byDevice = await db.execute(sql`
         SELECT COALESCE(device,'unknown') AS device, COUNT(*) AS n
-        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter} AND kind = 'click'
         GROUP BY device ORDER BY n DESC`);
       const byReferrer = await db.execute(sql`
         SELECT COALESCE(NULLIF(referrer,''),'direct') AS referrer, COUNT(*) AS n
-        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter} AND kind = 'click'
         GROUP BY referrer ORDER BY n DESC LIMIT 8`);
       const bySource = await db.execute(sql`
         SELECT COALESCE(NULLIF(source,''),'(none)') AS source, COUNT(*) AS n
-        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter} AND kind = 'click'
         GROUP BY source ORDER BY n DESC LIMIT 8`);
       const timeline = await db.execute(sql`
         SELECT kind, occurred_at, device, referrer, source, country, is_internal
@@ -4628,6 +4637,52 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[/s/:code] error", error);
       res.status(500).type("html").send("Something went wrong.");
+    }
+  });
+
+  // Public impression/view beacon for the sponsor walls on the brand sites.
+  // Clicks come through /s/:code (server redirect); impressions (logo rendered)
+  // and views (logo dwelt ≥50% in the viewport ≥1s) are reported here from the
+  // client, so sponsors get real reach + CTR, not just clicks.
+  // CORS via isOurOrigin() (cicyouth.com + *.vercel.app etc.); no credentials —
+  // the client sends its own first-party visitor id, so no cookie is required.
+  app.options("/api/public/sponsor-traffic/beacon", (req, res) => { setTrackerCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/sponsor-traffic/beacon", async (req, res) => {
+    setTrackerCors(req, res);
+    try {
+      const body = req.body || {};
+      const ua = String(req.headers["user-agent"] || "");
+      const rawEvents = Array.isArray(body.events) ? body.events.slice(0, 50) : [];
+      // Bots and empty payloads: accept silently, record nothing.
+      if (!rawEvents.length || detectBot(ua)) return res.json({ ok: true, inserted: 0 });
+      const wanted = rawEvents
+        .filter((e: any) => e && (e.kind === "impression" || e.kind === "view") && typeof e.code === "string" && e.code.trim())
+        .map((e: any) => ({ code: e.code.trim().slice(0, 64), kind: e.kind as "impression" | "view" }));
+      if (!wanted.length) return res.json({ ok: true, inserted: 0 });
+      const codes = Array.from(new Set(wanted.map(e => e.code)));
+      const known = await db.select({ id: sponsors.id, shortCode: sponsors.shortCode })
+        .from(sponsors)
+        .where(sql`${sponsors.shortCode} IN (${sql.join(codes.map(c => sql`${c}`), sql`, `)})`);
+      const idByCode: Record<string, number> = {};
+      for (const k of known) idByCode[k.shortCode] = k.id;
+      const visitorId = typeof body.visitorId === "string" && body.visitorId.trim() ? body.visitorId.trim().slice(0, 64) : null;
+      const source = typeof body.source === "string" && body.source.trim() ? body.source.trim().slice(0, 120) : null;
+      const device = deviceFromUA(ua);
+      const referrer = String(req.headers["referer"] || "").slice(0, 400);
+      const country = coarseGeo(req);
+      const isInternal = !!req.session?.userId;
+      const rows = wanted
+        .filter(e => idByCode[e.code])
+        .map(e => ({
+          sponsorId: idByCode[e.code], kind: e.kind, visitorId,
+          device, userAgent: ua.slice(0, 400), referrer, source, country, isInternal,
+        }));
+      if (rows.length) await db.insert(sponsorLinkEvents).values(rows);
+      res.json({ ok: true, inserted: rows.length });
+    } catch (error: any) {
+      // Fail-soft: a beacon must never surface an error onto the visitor's page.
+      console.error("[sponsor beacon] error", error?.message || error);
+      res.json({ ok: false });
     }
   });
 
