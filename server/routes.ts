@@ -5715,6 +5715,10 @@ export async function registerRoutes(
     // Liability Waiver — enforced here too so a hand-crafted request can't
     // skip it. Acceptance is stamped on every created booking row.
     waiverAccepted: z.literal(true),
+    // Marketing attribution — where the booking came from (e.g. the cufc.co.nz
+    // "Field Hire" menu link → "field-hire-mainmenu"). Optional; only public
+    // bookings that arrived with a ?source=/utm tag carry one.
+    attributionSource: z.string().max(120).optional().nullable(),
   });
 
   app.post("/api/public/venue/:orgId/bookings/checkout", async (req, res) => {
@@ -5766,6 +5770,7 @@ export async function registerRoutes(
           discountCents: line.totalCents - lineTotalCents,
           status: "pending" as const,
           source: "public" as const,
+          attributionSource: parsed.attributionSource ?? null,
           bookingGroupId: groupId,
           notes: parsed.customer.notes || null,
           waiverAccepted: true,
@@ -5895,7 +5900,7 @@ export async function registerRoutes(
           subtotalCents: lineTotalCents - lineGstCents, gstCents: lineGstCents, totalCents: lineTotalCents,
           totalAmount: (lineTotalCents / 100).toFixed(2), gstAmount: (lineGstCents / 100).toFixed(2),
           discountCode: quote.discount?.code || null, discountCents: line.totalCents - lineTotalCents,
-          status: "pending" as const, source: "public" as const, bookingGroupId: groupId,
+          status: "pending" as const, source: "public" as const, attributionSource: parsed.attributionSource ?? null, bookingGroupId: groupId,
           notes: parsed.customer.notes || null, waiverAccepted: true, waiverVersion: USC_WAIVER_VERSION, waiverAcceptedAt: new Date(),
         };
       });
@@ -6034,6 +6039,7 @@ export async function registerRoutes(
           gstAmount: (lineGstCents / 100).toFixed(2),
           status: "pending" as const,
           source: "public" as const,
+          attributionSource: parsed.attributionSource ?? null,
           bookingGroupId: groupId,
           notes: parsed.customer.notes
             ? `${parsed.customer.notes}\n[Recurring weekly · ${idx + 1}/${parsed.items.length}]`

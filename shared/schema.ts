@@ -825,6 +825,13 @@ export const facilityBookings = pgTable("facility_bookings", {
   source: text("source"),
   createdByUserId: integer("created_by_user_id").references(() => users.id),
   createdByName: text("created_by_name"),
+  // Marketing attribution — where a PUBLIC booking originated, captured from a
+  // ?source= / utm_* param on the booking URL (e.g. the cufc.co.nz "Field Hire"
+  // menu link arrives with ?source=field-hire-mainmenu). NULL for manual/member
+  // bookings and for public bookings that arrived untagged. Kept separate from
+  // `source` (the manual|public|member_request channel) so that audit taxonomy
+  // is untouched.
+  attributionSource: text("attribution_source"),
   // Waiver acceptance for bookings made through the public booking site —
   // stamped at checkout (see shared/usc-waiver.ts). Admin-created and
   // member-request bookings leave these at their defaults (the member flow

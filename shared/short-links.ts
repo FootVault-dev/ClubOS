@@ -25,6 +25,7 @@ export const CLUB_ROOT_DOMAINS = [
   "cugc.co.nz",
   "cufc.co.nz",
   "usg.co.nz",
+  "unitedsportscentre.com", // United Sports Centre — book.unitedsportscentre.com (org 4 venue booking)
 ] as const;
 
 // Our own app host(s) + preview + dev hosts (exact host or suffix match).

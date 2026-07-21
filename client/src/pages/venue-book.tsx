@@ -169,6 +169,28 @@ function getOrgSlug(): string | undefined {
   return undefined;
 }
 
+// Marketing attribution — where this booking session came from. The cufc.co.nz
+// "Field Hire" menu link routes through the /l/ tracker and lands here as
+// book.unitedsportscentre.com/?source=field-hire-mainmenu (plus utm_*). Capture
+// it on first load and stash it in sessionStorage so it survives the multi-step
+// flow / a reload, then stamp it on the booking at checkout for revenue
+// attribution. Falls back to utm_campaign / utm_source so a direct utm-tagged
+// link also attributes. Capped and null-safe.
+const ATTRIBUTION_KEY = "vb:attribution_source";
+function getAttributionSource(): string | null {
+  try {
+    const params = new URL(window.location.href).searchParams;
+    const fromUrl = params.get("source") || params.get("utm_campaign") || params.get("utm_source");
+    if (fromUrl) {
+      const v = fromUrl.trim().slice(0, 120);
+      if (v) { sessionStorage.setItem(ATTRIBUTION_KEY, v); return v; }
+    }
+    return sessionStorage.getItem(ATTRIBUTION_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function fmtDateLong(iso: string): string {
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
@@ -300,6 +322,10 @@ export default function VenueBookPage() {
     };
   }, []);
 
+  // Capture marketing attribution from the landing URL on first load, before any
+  // in-app step navigation can drop the query string.
+  useEffect(() => { getAttributionSource(); }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -408,6 +434,7 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
   const startCheckout = async () => {
     setCheckingOut(true);
     setCheckoutErr(null);
+    const attributionSource = getAttributionSource() ?? undefined;
     try {
       // If any cart item is flagged for weekly subscription, route the WHOLE
       // cart to the subscription endpoint. The current UX only allows one
@@ -429,7 +456,7 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
         const r = await fetch(`/api/public/venue/${organization.id}/bookings/checkout-split`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customer, items, discountCode: discountCode.trim() || undefined, waiverAccepted: waiverAgreed, targetCount: splitCount }),
+          body: JSON.stringify({ customer, items, discountCode: discountCode.trim() || undefined, waiverAccepted: waiverAgreed, targetCount: splitCount, attributionSource }),
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.message || "Couldn't start the split");
@@ -451,6 +478,7 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
           items,
           discountCode: discountCode.trim() || undefined,
           waiverAccepted: waiverAgreed,
+          attributionSource,
         }),
       });
       const data = await r.json();
