@@ -221,7 +221,7 @@ export function isDisposition(v: unknown): v is Disposition {
 /** Reason codes that always route stock to QUARANTINE rather than a sellable
  *  bin. `sample`, `store_use` and `event_use` consume stock outright (it
  *  leaves the building) rather than quarantining it. */
-const QUARANTINE_REASONS: ReadonlySet<ReasonCode> = new Set(["damaged", "shrinkage"]);
+const QUARANTINE_REASONS: ReadonlySet<ReasonCode> = new Set<ReasonCode>(["damaged", "shrinkage"]);
 
 export function dispositionForReason(reason: ReasonCode | null | undefined): Disposition {
   if (reason && QUARANTINE_REASONS.has(reason)) return "unavailable";
@@ -285,7 +285,10 @@ export function isRequisitionStatus(v: unknown): v is RequisitionStatus {
 }
 
 /** Terminal states — no further transition is valid. */
-export const REQUISITION_TERMINAL_STATUSES: ReadonlySet<RequisitionStatus> = new Set(["collected", "declined"]);
+export const REQUISITION_TERMINAL_STATUSES: ReadonlySet<RequisitionStatus> = new Set<RequisitionStatus>([
+  "collected",
+  "declined",
+]);
 
 // ── Equipment loans ───────────────────────────────────────────────────────────
 
