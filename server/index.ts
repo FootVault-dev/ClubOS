@@ -136,6 +136,12 @@ app.use(attributionCookieMiddleware);
   const { registerMaintenanceRoutes } = await import("./maintenance-routes");
   registerMaintenanceRoutes(app);
 
+  // Open Trainings — free open-training requests from cufc.co.nz. The
+  // invite-only funnel for U9–U20 academy programmes (2026-07-21): public
+  // POST + the CUFC workspace tab where staff approve/decline each request.
+  const { registerOpenTrainingRoutes } = await import("./open-training-routes");
+  registerOpenTrainingRoutes(app);
+
   // Sales — the United Print prospect database + pipeline (prints workspace).
   // Gated by requireTab("sales"), which is in SUPER_ADMIN_ONLY_TABS while
   // Daniel shapes it. No public surface: a prospect list is a sales asset.

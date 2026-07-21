@@ -404,6 +404,108 @@ export async function sendCufcContactNotification(params: {
   });
 }
 
+// ── CUFC Open Trainings ───────────────────────────────────────────────────────
+// The invite-only funnel's three emails: parent acknowledgement at submit,
+// staff notification to the academy office, and the approval confirmation.
+// Same navy shell as the contact notification above.
+
+const cufcShellWrap = (heading: string, inner: string) => `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#030711;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#7d95ff;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United FC</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">${heading}</h1>
+      </div>
+      <div style="background:#0c1226;border:1px solid #1d2a55;border-radius:18px;padding:24px;color:#e6e6e6;font-size:14px;line-height:1.65;">
+        ${inner}
+      </div>
+      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Football Club · Christchurch, New Zealand
+      </p>
+    </div>
+  </div>`;
+
+const cufcInfoRow = (label: string, value: string) =>
+  `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:130px;vertical-align:top;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+
+const esc = (v: string) => String(v || "").replace(/</g, "&lt;");
+
+/** Parent acknowledgement — sent the moment a request lands. Promises a
+ *  review, not a booking: nothing is confirmed until staff approve it. */
+export async function sendCufcOpenTrainingReceived(params: {
+  to: string; guardianName: string; childName: string; groupLabel: string;
+}): Promise<boolean> {
+  const html = cufcShellWrap("Open Training Request Received", `
+    <p style="margin:0 0 14px;">Kia ora ${esc(params.guardianName)},</p>
+    <p style="margin:0 0 14px;">Thanks for requesting a free open training for <strong>${esc(params.childName)}</strong> (${esc(params.groupLabel)}).</p>
+    <p style="margin:0 0 14px;">Our academy staff review every request. Once yours is approved you'll get an email from us confirming the session details.</p>
+    <p style="margin:0;">Open trainings are free of charge. If anything changes in the meantime, just reply to this email.</p>
+  `);
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: "academy@cufc.co.nz",
+    subject: `Open training request received — ${params.childName}`,
+    html,
+  });
+}
+
+/** Staff notification → the academy office inbox. */
+export async function sendCufcOpenTrainingNotification(params: {
+  to: string; childName: string; dob: string; grade: number | null; groupLabel: string;
+  guardianName: string; email: string; phone: string;
+  currentClub?: string | null; notes?: string | null; sourceUrl?: string;
+}): Promise<boolean> {
+  const rows = [
+    cufcInfoRow("Player", esc(params.childName)),
+    cufcInfoRow("Date of birth", esc(params.dob) + (params.grade != null ? ` (U${params.grade})` : "")),
+    cufcInfoRow("Age group", esc(params.groupLabel)),
+    cufcInfoRow("Parent / guardian", esc(params.guardianName)),
+    cufcInfoRow("Email", esc(params.email)),
+    cufcInfoRow("Phone", esc(params.phone)),
+    ...(params.currentClub ? [cufcInfoRow("Current club", esc(params.currentClub))] : []),
+  ].join("");
+  const html = cufcShellWrap("New Open Training Request", `
+    <table style="width:100%;border-collapse:collapse;">${rows}</table>
+    ${params.notes ? `<p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:18px 0 0;white-space:pre-wrap;">${esc(params.notes)}</p>` : ""}
+    <p style="color:#7d8ba8;font-size:12px;margin:18px 0 0;">Review it in ClubOS → Christchurch United → Open Trainings.</p>
+    ${params.sourceUrl ? `<p style="color:#7d8ba8;font-size:11px;margin:8px 0 0;">via ${esc(params.sourceUrl)}</p>` : ""}
+  `);
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: params.email || CUFC_REPLY_TO,
+    subject: `Open training request — ${params.childName} (${params.groupLabel})`,
+    html,
+  });
+}
+
+/** Approval confirmation — sent on the transition into `approved`. If staff
+ *  entered session details they're included verbatim; otherwise the email
+ *  promises a follow-up rather than inventing a time or venue. */
+export async function sendCufcOpenTrainingConfirmed(params: {
+  to: string; guardianName: string; childName: string; sessionDetails?: string | null;
+}): Promise<boolean> {
+  const html = cufcShellWrap("Open Training Confirmed", `
+    <p style="margin:0 0 14px;">Kia ora ${esc(params.guardianName)},</p>
+    <p style="margin:0 0 14px;">Good news — <strong>${esc(params.childName)}</strong>'s open training request has been approved.</p>
+    ${params.sessionDetails
+      ? `<div style="background:#101a3a;border:1px solid #2a3a6b;border-radius:12px;padding:16px;margin:0 0 14px;">
+           <p style="color:#7d95ff;margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;">Session details</p>
+           <p style="color:#ffffff;font-size:14px;line-height:1.65;margin:0;white-space:pre-wrap;">${esc(params.sessionDetails)}</p>
+         </div>`
+      : `<p style="margin:0 0 14px;">Our academy staff will be in touch shortly with the session details.</p>`}
+    <p style="margin:0;">The session is free of charge. If you have any questions, just reply to this email.</p>
+  `);
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: "academy@cufc.co.nz",
+    subject: `Open training confirmed — ${params.childName}`,
+    html,
+  });
+}
+
 /**
  * CUFC broadcast / newsletter — wraps the composer's rich HTML in the navy
  * Christchurch United shell with the subject as the heading and a

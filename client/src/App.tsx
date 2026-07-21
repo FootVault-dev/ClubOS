@@ -101,6 +101,7 @@ import LeagueRewards from "@/pages/league-rewards";
 import LeagueLoyalty from "@/pages/league-loyalty";
 import FmHistory from "@/pages/fm-history";
 import FmCompetitions from "@/pages/fm-competitions";
+import CufcOpenTrainings from "@/pages/cufc-open-trainings";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
@@ -461,6 +462,7 @@ function AdminRouter() {
           workspace Switch: CUFC has no is* flag, it lands here). */}
       <Route path="/admin/fm-history" component={FmHistory} />
       <Route path="/admin/fm-competitions" component={FmCompetitions} />
+      <Route path="/admin/open-trainings" component={CufcOpenTrainings} />
       <Route path="/admin/football-institute" component={FootballInstitute} />
       <Route path="/admin/analytics" component={CampAnalytics} />
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />

@@ -67,6 +67,10 @@ const campsTabs: TabDef[] = [
   { slug: "fm-history", title: "History", url: "/admin/fm-history" },
   // 11 years of FM tournaments + social leagues (imported 2026-07-17).
   { slug: "fm-competitions", title: "Competitions", url: "/admin/fm-competitions" },
+  // Free open-training requests from cufc.co.nz — the invite-only funnel for
+  // U9–U20 (2026-07-21). CUFC-only: filtered out of SIU's sidebar like
+  // fm-history; the routes are org-scoped to CUFC regardless.
+  { slug: "open-trainings", title: "Open Trainings", url: "/admin/open-trainings" },
   { slug: "football-institute", title: "Football Institute", url: "/admin/football-institute" },
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },

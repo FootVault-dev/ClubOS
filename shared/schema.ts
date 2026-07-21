@@ -3565,6 +3565,41 @@ export const insertCugcFreeSessionSchema = createInsertSchema(cugcFreeSessions).
 export type InsertCugcFreeSession = z.infer<typeof insertCugcFreeSessionSchema>;
 export type CugcFreeSession = typeof cugcFreeSessions.$inferSelect;
 
+// ---- CUFC Open Trainings ----
+// Free open-training requests from cufc.co.nz (2026-07-21). U9–U20 academy
+// programmes are invite-only: the public form replaces the direct checkout,
+// staff approve or decline each request in the CUFC workspace "Open Trainings"
+// tab, and an approval sends the family a confirmation email. The age band is
+// DERIVED server-side from the child's date of birth (NZF rule: grade =
+// season year − birth year), never trusted from the browser. DOB is ISO text —
+// a `date` column read through node-postgres comes back a day out in NZ.
+export const cufcOpenTrainings = pgTable("cufc_open_trainings", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  ageGroup: text("age_group").notNull(), // 'u4-u8' | 'u9-u12' | 'u13-plus' — app-validated, no CHECK (prod enum drift)
+  childFirstName: text("child_first_name").notNull(),
+  childLastName: text("child_last_name").notNull(),
+  childDob: text("child_dob").notNull(), // ISO date, e.g. "2015-04-09"
+  ageGrade: integer("age_grade"),        // NZF grade at request time (season − birth year)
+  guardianName: text("guardian_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),        // club rule: phone is mandatory
+  currentClub: text("current_club"),
+  notes: text("notes"),                  // anything the parent told us
+  status: text("status").notNull().default("pending"), // 'pending' | 'approved' | 'declined' — app-validated
+  sessionDetails: text("session_details"), // staff-entered; included in the approval email
+  staffNotes: text("staff_notes"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  decidedBy: text("decided_by"),
+  source: text("source"),
+  sourceUrl: text("source_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const insertCufcOpenTrainingSchema = createInsertSchema(cufcOpenTrainings).omit({ id: true, createdAt: true });
+export type InsertCufcOpenTraining = z.infer<typeof insertCufcOpenTrainingSchema>;
+export type CufcOpenTraining = typeof cufcOpenTrainings.$inferSelect;
+
 // ---- Football Institute Applications ----
 // Enrolment enquiries for the Football Institute (Christchurch United × Ao
 // Tawhiti Unlimited Discovery). One row per application. Submissions come from
