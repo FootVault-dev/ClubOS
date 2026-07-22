@@ -13,3 +13,6 @@ clubos_backup.sql
 sync-output.log
 .fly
 fly.toml.bak
+
+# Local-only preview harness for warehouse-dashboard.tsx/warehouse-scan.tsx (no runtime role).
+preview
