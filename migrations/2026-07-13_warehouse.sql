@@ -98,6 +98,24 @@ CREATE TABLE IF NOT EXISTS wh_barcode_aliases (
 CREATE UNIQUE INDEX IF NOT EXISTS wh_barcode_aliases_code_unique ON wh_barcode_aliases (code);
 CREATE INDEX IF NOT EXISTS wh_barcode_aliases_item_idx ON wh_barcode_aliases (item_id);
 
+-- 3b) T12/§4.3 — SIU sibling-variant links. wh_items' own shopify_variant_id/
+-- shopify_inventory_item_id columns stay the item's PRIMARY Shopify mapping;
+-- this table holds any EXTRA sibling variant(s) (Plain/Player/Custom = one
+-- physical shirt) that must receive the same pushed `available` and resolve
+-- back to the same item on an inbound order/refund webhook line.
+CREATE TABLE IF NOT EXISTS wh_shopify_variant_links (
+  id                          integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  item_id                     integer NOT NULL REFERENCES wh_items(id) ON DELETE CASCADE,
+  store                       text NOT NULL,        -- 'siu' | 'cufc' — must match the item's own shopify_store
+  shopify_variant_id          text NOT NULL,
+  shopify_inventory_item_id   text NOT NULL,
+  note                        text,
+  created_at                  timestamp NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS wh_shopify_variant_links_store_variant_unique
+  ON wh_shopify_variant_links (store, shopify_variant_id);
+CREATE INDEX IF NOT EXISTS wh_shopify_variant_links_item_idx ON wh_shopify_variant_links (item_id);
+
 -- 4) THE LEDGER (D1). Append-only — no UPDATE/DELETE code path, ever; stock
 -- corrections are new adjustment movements. group_id links every leg of one
 -- multi-leg operation (a transfer = a -row at the source + a +row at the
@@ -114,7 +132,7 @@ CREATE TABLE IF NOT EXISTS wh_movements (
   reason_code         text,                       -- damaged|shrinkage|count_variance|sample|write_off|
                                                   -- store_use|event_use (D15) — validated app-side, no CHECK
   ref_kind            text,                       -- shop_order|shopify_order|print_order|requisition|loan|po|count
-  ref_id              integer,
+  ref_id              bigint,                     -- bigint (T12): a Shopify order id can exceed int4's ~2.1bn ceiling
   operator_user_id    integer NOT NULL REFERENCES users(id),  -- D17 — every movement is scanned against a person
   note                text,
   idempotency_key     text,
@@ -150,7 +168,7 @@ CREATE TABLE IF NOT EXISTS wh_reservations (
   item_id     integer NOT NULL REFERENCES wh_items(id) ON DELETE RESTRICT,
   qty         numeric(12,3) NOT NULL,
   ref_kind    text NOT NULL,
-  ref_id      integer NOT NULL,
+  ref_id      bigint NOT NULL,                    -- bigint — see wh_movements.ref_id's comment (T12)
   status      text NOT NULL DEFAULT 'active',    -- 'active' | 'released' | 'consumed'
   created_at  timestamp NOT NULL DEFAULT now(),
   updated_at  timestamp NOT NULL DEFAULT now()

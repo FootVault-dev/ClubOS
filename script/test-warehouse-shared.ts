@@ -37,6 +37,8 @@ import {
   stripLocationPrefix, scanActionsForItem, scanActionsForLocation,
   scanQuantityToUnits, buildLocationMoveLegs,
   DISPATCH_SOURCE_KINDS, isDispatchSourceKind, nextOrderStatusAfterDispatch,
+  SHOPIFY_STORES, isShopifyStoreKey,
+  SYNC_STORES, isSyncStore,
 } from "../shared/warehouse";
 
 let passed = 0;
@@ -639,6 +641,25 @@ ok("nextOrderStatusAfterDispatch: no address requirement (pickup, or no shipping
   assert.equal(nextOrderStatusAfterDispatch(null), "ready_for_pickup");
   assert.equal(nextOrderStatusAfterDispatch(undefined), "ready_for_pickup");
 });
+
+// ── Channel sync store enums (T12) ───────────────────────────────────────
+ok("two Shopify stores", () => assert.equal(SHOPIFY_STORES.length, 2));
+ok("siu and cufc are Shopify stores", () => {
+  assert.equal(isShopifyStoreKey("siu"), true);
+  assert.equal(isShopifyStoreKey("cufc"), true);
+});
+ok("mfl/native/junk are not Shopify stores", () => {
+  assert.equal(isShopifyStoreKey("mfl"), false);
+  assert.equal(isShopifyStoreKey("native"), false);
+  assert.equal(isShopifyStoreKey(""), false);
+  assert.equal(isShopifyStoreKey(undefined), false);
+});
+ok("three sync stores (siu/cufc/native)", () => assert.equal(SYNC_STORES.length, 3));
+ok("native is a sync store but not a Shopify store", () => {
+  assert.equal(isSyncStore("native"), true);
+  assert.equal(isShopifyStoreKey("native"), false);
+});
+ok("junk sync store rejected", () => assert.equal(isSyncStore("shopify"), false));
 
 console.log(`\n✅ warehouse (shared): ${passed} assertions passed`);
 if (process.exitCode) console.error("❌ some assertions failed");

@@ -4863,6 +4863,30 @@ export const insertWhBarcodeAliasSchema = createInsertSchema(whBarcodeAliases); 
 export type InsertWhBarcodeAlias = z.infer<typeof insertWhBarcodeAliasSchema>;
 export type WhBarcodeAlias = typeof whBarcodeAliases.$inferSelect;
 
+// T12/§4.3 — SIU sibling-variant fan-out. A single wh_item (one physical
+// blank shirt) is sold as 3 SEPARATE Shopify variants of the same size
+// (Plain/Player/Custom printing) that must all move together — whItems'
+// OWN shopify_variant_id/shopify_inventory_item_id columns hold the item's
+// PRIMARY mapping (unchanged, still what T4/T8's existing code reads); this
+// table holds the EXTRA sibling variant(s) that receive the identical
+// `available` on every push and must also resolve back to the same item on
+// an inbound order/refund webhook line. Unique on (store, shopify_variant_id)
+// — a given Shopify variant belongs to exactly one wh_item, never two.
+export const whShopifyVariantLinks = pgTable("wh_shopify_variant_links", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "cascade" }),
+  store: text("store").notNull(),                 // 'siu' | 'cufc' — must match the item's own shopify_store
+  shopifyVariantId: text("shopify_variant_id").notNull(),
+  shopifyInventoryItemId: text("shopify_inventory_item_id").notNull(),
+  note: text("note"),                             // e.g. 'Player printing'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  storeVariantUnq: uniqueIndex("wh_shopify_variant_links_store_variant_unique").on(t.store, t.shopifyVariantId),
+}));
+export const insertWhShopifyVariantLinkSchema = createInsertSchema(whShopifyVariantLinks); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhShopifyVariantLink = z.infer<typeof insertWhShopifyVariantLinkSchema>;
+export type WhShopifyVariantLink = typeof whShopifyVariantLinks.$inferSelect;
+
 // THE LEDGER (D1). Append-only — no UPDATE/DELETE code paths, ever; stock
 // corrections are new adjustment movements. `groupId` links every leg of one
 // multi-leg operation (a transfer is a -row at the source + a +row at the
@@ -4878,7 +4902,14 @@ export const whMovements = pgTable("wh_movements", {
   movementType: text("movement_type").notNull(),  // MovementType (D15) — validated in shared/warehouse.ts
   reasonCode: text("reason_code"),                // ReasonCode (D15) — validated in shared/warehouse.ts
   refKind: text("ref_kind"),                      // RefKind — polymorphic reference (shop_order, po, requisition…)
-  refId: integer("ref_id"),
+  // bigint, not integer (T12 fix) — a Shopify order id ('shopify_order' ref)
+  // routinely exceeds Postgres int4's ~2.1bn ceiling; every OTHER ref_kind
+  // uses one of our own serial ids (po/requisition/loan/count line ids, or
+  // shop_orders.id), which fit comfortably either way. mode:'number' keeps
+  // the TS type identical to plain integer (JS numbers are exact up to 2^53,
+  // matching this file's own client_ts/size_bytes bigint columns) — zero
+  // downstream change needed in any already-committed T3/T5/T6/T8/T9/T10/T11 code.
+  refId: bigint("ref_id", { mode: "number" }),
   operatorUserId: integer("operator_user_id").notNull().references(() => users.id), // D17 — named operator, always
   note: text("note"),
   idempotencyKey: text("idempotency_key").unique(),
@@ -4915,7 +4946,7 @@ export const whReservations = pgTable("wh_reservations", {
   itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
   qty: numeric("qty", { precision: 12, scale: 3 }).notNull(),
   refKind: text("ref_kind").notNull(),             // RefKind — shop_order | shopify_order | requisition | …
-  refId: integer("ref_id").notNull(),
+  refId: bigint("ref_id", { mode: "number" }).notNull(), // bigint — see whMovements.refId's comment (T12)
   status: text("status").notNull().default("active"), // ReservationStatus: 'active' | 'released' | 'consumed'
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

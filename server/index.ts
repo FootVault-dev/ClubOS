@@ -99,6 +99,15 @@ app.use(attributionCookieMiddleware);
   const { registerWarehouseRoutes } = await import("./warehouse-routes");
   registerWarehouseRoutes(app);
 
+  // United Prints workspace — Warehouse channel sync (T12/SPEC §4.3): the
+  // public Shopify webhook endpoint (siu/cufc) + the debounced push queue
+  // wired into server/warehouse.ts's post-commit hook. Entirely inert
+  // without config — WH_SYNC_ENABLED unset means the push queue no-ops, and
+  // a store missing its WH_SHOPIFY_<STORE>_WEBHOOK_SECRET just 200s an
+  // ignored event rather than crashing.
+  const { registerWarehouseSyncRoutes } = await import("./warehouse-sync");
+  registerWarehouseSyncRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).

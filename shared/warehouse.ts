@@ -839,3 +839,31 @@ export function buildLocationMoveLegs(
     { itemId: item.id, locationId: toLocation.id, locationCode: toLocation.code, delta: qty, allowNegative: item.allowNegative },
   ];
 }
+
+// ── Channel sync (T12/§4.3) ─────────────────────────────────────────────────
+// Two Shopify stores hold WMS-mapped inventory (D9) — the enum-ish `store`
+// column on wh_items/wh_shopify_variant_links/wh_shopify_events/
+// wh_sync_state, validated here per the house rule (no DB CHECKs on open
+// value sets) rather than in server/warehouse-sync.ts, since a future T16c
+// sync-dashboard page will want the same validator/list client-side. The
+// echo-suppression/drift/debounce/fan-out MATH itself is server-only
+// reasoning (nothing a client UI needs to recompute) and lives in
+// server/warehouse-sync.ts instead, tested by script/test-warehouse-sync.ts —
+// same "pure logic in shared only when a client would ever import it" split
+// SPEC.md already draws between this file and server/warehouse.ts's engine.
+
+export const SHOPIFY_STORES = ["siu", "cufc"] as const;
+export type ShopifyStoreKey = (typeof SHOPIFY_STORES)[number];
+export function isShopifyStoreKey(v: unknown): v is ShopifyStoreKey {
+  return typeof v === "string" && (SHOPIFY_STORES as readonly string[]).includes(v);
+}
+
+/** wh_sync_state.store is one of these three — a mapped item's native (own
+ *  commerce engine) push state and its Shopify push state are tracked as
+ *  separate rows even when an item somehow had both (it never does today,
+ *  but nothing stops it structurally). */
+export const SYNC_STORES = ["siu", "cufc", "native"] as const;
+export type SyncStore = (typeof SYNC_STORES)[number];
+export function isSyncStore(v: unknown): v is SyncStore {
+  return typeof v === "string" && (SYNC_STORES as readonly string[]).includes(v);
+}
