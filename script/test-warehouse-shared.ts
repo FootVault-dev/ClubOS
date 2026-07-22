@@ -26,6 +26,7 @@ import {
   LOAN_STATUSES, isLoanStatus,
   CONDITION_GRADES, isConditionGrade,
   isLoanOverdue,
+  loanLineIsReturned, allLoanLinesReturned, deriveLoanStatusFromLines, reasonCodeForConditionGrade,
   COUNT_STATUSES, isCountStatus,
   COUNT_LINE_RESOLUTIONS, isCountLineResolution,
   COUNT_VARIANCE_PERCENT_THRESHOLD, COUNT_VARIANCE_CENTS_THRESHOLD,
@@ -379,6 +380,44 @@ ok("a returned loan is never overdue even past due_on", () => {
 });
 ok("due exactly today is not overdue yet", () => {
   assert.equal(isLoanOverdue({ status: "out", dueOn: "2026-07-22" }, "2026-07-22"), false);
+});
+
+// ── Loan check-out / return (T10) ───────────────────────────────────────────
+ok("loanLineIsReturned: no grade yet means not returned", () => {
+  assert.equal(loanLineIsReturned({ conditionGrade: null }), false);
+  assert.equal(loanLineIsReturned({ conditionGrade: undefined }), false);
+});
+ok("loanLineIsReturned: any real grade means returned", () => {
+  for (const g of CONDITION_GRADES) assert.equal(loanLineIsReturned({ conditionGrade: g }), true, g);
+});
+
+ok("allLoanLinesReturned: empty line list is never 'returned'", () => {
+  assert.equal(allLoanLinesReturned([]), false);
+});
+ok("allLoanLinesReturned: false while any line is still ungraded", () => {
+  assert.equal(allLoanLinesReturned([{ conditionGrade: "A" }, { conditionGrade: null }]), false);
+});
+ok("allLoanLinesReturned: true once every line has a grade", () => {
+  assert.equal(allLoanLinesReturned([{ conditionGrade: "A" }, { conditionGrade: "C" }]), true);
+});
+
+ok("deriveLoanStatusFromLines: stays 'out' with a partial return", () => {
+  assert.equal(deriveLoanStatusFromLines("out", [{ conditionGrade: "A" }, { conditionGrade: null }]), "out");
+});
+ok("deriveLoanStatusFromLines: flips to 'returned' once every line is graded", () => {
+  assert.equal(deriveLoanStatusFromLines("out", [{ conditionGrade: "A" }, { conditionGrade: "B" }]), "returned");
+});
+ok("deriveLoanStatusFromLines: an already-'returned' loan is terminal, never re-derived", () => {
+  assert.equal(deriveLoanStatusFromLines("returned", [{ conditionGrade: null }]), "returned");
+});
+
+ok("reasonCodeForConditionGrade: A/B/C carry no special reason code", () => {
+  assert.equal(reasonCodeForConditionGrade("A"), null);
+  assert.equal(reasonCodeForConditionGrade("B"), null);
+  assert.equal(reasonCodeForConditionGrade("C"), null);
+});
+ok("reasonCodeForConditionGrade: D (scrap) is tagged write_off", () => {
+  assert.equal(reasonCodeForConditionGrade("D"), "write_off");
 });
 
 // ── Cycle counts ──────────────────────────────────────────────────────────

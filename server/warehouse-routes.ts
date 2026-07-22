@@ -33,8 +33,9 @@ import { nzTodayIso } from "@shared/academy";
 import {
   whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines,
   whRequisitions, whRequisitionLines, whMovements,
+  whLoans, whLoanLines,
   shopOrders, shopOrderItems,
-  users,
+  users, contacts,
 } from "@shared/schema";
 import {
   ITEM_KINDS, isItemKind,
@@ -57,8 +58,12 @@ import {
   DISPATCH_SOURCE_KINDS, isDispatchSourceKind, nextOrderStatusAfterDispatch,
   REQUISITION_STATUSES, isRequisitionStatus, isValidRequisitionTransition,
   isValidMonth, deriveRequisitionStatusFromLines,
+  LOAN_STATUSES, isLoanStatus, isLoanOverdue,
+  deriveLoanStatusFromLines, reasonCodeForConditionGrade,
+  CONDITION_GRADES, isConditionGrade,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
   type RefKind, type MovementType, type ReasonCode, type PoStatus, type RequisitionStatus,
+  type LoanStatus, type ConditionGrade,
 } from "@shared/warehouse";
 import {
   runReserveStock,
@@ -68,6 +73,9 @@ import {
   reservationDbFromTx,
   resolveScanCode,
   scanLookupDbFromDb,
+  postMovementGroup,
+  warehouseDbFromTx,
+  notifyMovementCommitted,
   InsufficientAvailableError,
   InsufficientStockError,
   type MovementLeg,
@@ -148,6 +156,19 @@ function toCents(v: unknown, field: string): number | null | undefined {
 function toBool(v: unknown, fallback: boolean): boolean {
   if (v === undefined) return fallback;
   return !!v;
+}
+
+/** A replacement charge (T10) is money in cents like costCents, but unlike
+ *  costCents (a reference figure that could theoretically be zero/absent) a
+ *  charge that's supplied at all must be a real non-negative amount — a
+ *  negative "charge" makes no sense. */
+function toChargeCents(v: unknown): number | null {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new WarehouseRouteError("replacementChargedCents must be zero or a positive whole number of cents");
+  }
+  return n;
 }
 
 // ── PO receiving helpers (T6) ────────────────────────────────────────────────
@@ -1940,6 +1961,352 @@ export function registerWarehouseRoutes(app: Express) {
       res.status(result.movement.alreadyProcessed ? 200 : 201).json({ ...result, sourceKind, sourceId });
     } catch (e: any) {
       handleWarehouseError(res, e, "dispatch");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Equipment loans (T10/D14) — library/tool-crib model. Check-out creates
+  // the wh_loans/wh_loan_lines parent rows AND posts the outbound loan_out
+  // movement (one leg per line, no incoming leg — a borrower isn't a
+  // wh_location, exactly the same "stock leaves the building with nothing
+  // local absorbing it" shape as T8's requisition pick/shop-order dispatch)
+  // in ONE database transaction — unlike every other route in this file,
+  // this is the first case where a NEW parent record is created in the same
+  // call as a stock movement, so an insufficient-stock failure must roll
+  // back the loan record too (never leave a dangling "checked out" row with
+  // no movement behind it). Return posts loan_return legs to a real bin the
+  // operator names, then stamps each line's condition grade — the derived
+  // signal (shared/warehouse.ts's deriveLoanStatusFromLines) that flips the
+  // loan's own stored status once every line has one. Only one grade per
+  // line (no partial-quantity return, same v1 scope-cut as T5's
+  // consumeReservation always consuming a reservation's full qty).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  async function loadLoanLines(loanId: number) {
+    const lines = await db
+      .select({
+        id: whLoanLines.id,
+        loanId: whLoanLines.loanId,
+        itemId: whLoanLines.itemId,
+        qty: whLoanLines.qty,
+        conditionGrade: whLoanLines.conditionGrade,
+        conditionNote: whLoanLines.conditionNote,
+        replacementChargedCents: whLoanLines.replacementChargedCents,
+        itemSku: whItems.sku,
+        itemName: whItems.name,
+      })
+      .from(whLoanLines)
+      .innerJoin(whItems, eq(whLoanLines.itemId, whItems.id))
+      .where(eq(whLoanLines.loanId, loanId))
+      .orderBy(asc(whLoanLines.id));
+    return lines.map((l) => ({ ...l, qty: Number(l.qty) }));
+  }
+
+  function withOverdue<T extends { status: string; dueOn: string }>(loan: T): T & { overdue: boolean } {
+    return { ...loan, overdue: isLoanOverdue({ status: loan.status as LoanStatus, dueOn: loan.dueOn }, nzTodayIso()) };
+  }
+
+  // ── List + detail ─────────────────────────────────────────────────────────
+  app.get("/api/admin/warehouse/loans", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const statusRaw = clean(req.query.status as string | undefined);
+      const overdueOnly = req.query.overdue === "true";
+      const q = clean(req.query.q as string | undefined);
+      const borrowerContactId = req.query.borrowerContactId !== undefined ? parseId(req.query.borrowerContactId) : null;
+
+      const conditions = [];
+      if (statusRaw) {
+        if (!isLoanStatus(statusRaw)) throw new WarehouseRouteError(`status must be one of: ${LOAN_STATUSES.join(", ")}`);
+        conditions.push(eq(whLoans.status, statusRaw));
+      }
+      if (borrowerContactId !== null) conditions.push(eq(whLoans.borrowerContactId, borrowerContactId));
+      if (q) conditions.push(ilike(whLoans.borrowerName, `%${q}%`));
+
+      const rows = await db
+        .select()
+        .from(whLoans)
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(asc(whLoans.dueOn));
+
+      let result = rows.map(withOverdue);
+      if (overdueOnly) result = result.filter((r) => r.overdue);
+
+      const loanIds = result.map((r) => r.id);
+      const lineAgg = new Map<number, { lineCount: number; totalQty: number }>();
+      if (loanIds.length > 0) {
+        const agg = await db
+          .select({
+            loanId: whLoanLines.loanId,
+            lineCount: sql<string>`COUNT(*)`,
+            totalQty: sql<string>`COALESCE(SUM(${whLoanLines.qty}), 0)`,
+          })
+          .from(whLoanLines)
+          .where(inArray(whLoanLines.loanId, loanIds))
+          .groupBy(whLoanLines.loanId);
+        for (const row of agg) lineAgg.set(row.loanId, { lineCount: Number(row.lineCount), totalQty: Number(row.totalQty) });
+      }
+
+      res.json(result.map((r) => ({ ...r, ...(lineAgg.get(r.id) ?? { lineCount: 0, totalQty: 0 }) })));
+    } catch (e: any) {
+      handleWarehouseError(res, e, "loans list");
+    }
+  });
+
+  app.get("/api/admin/warehouse/loans/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [loan] = await db.select().from(whLoans).where(eq(whLoans.id, id));
+      if (!loan) return res.status(404).json({ message: "Loan not found" });
+      res.json({ ...withOverdue(loan), lines: await loadLoanLines(id) });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "loan get");
+    }
+  });
+
+  // ── Check-out ─────────────────────────────────────────────────────────────
+  // Body: { borrowerName, borrowerContactId?, dueOn, notes?, lines: [{itemId,
+  // qty, locationId?}], note? }. Deliberately does NOT accept a client
+  // idempotencyKey (unlike receive/putaway/dispatch/reservations) — a retry
+  // of this endpoint always inserts a brand-new wh_loans/wh_loan_lines row
+  // (same "no dedup on the parent record" reality as PO/requisition create,
+  // neither of which take one either), so honouring a replayed key on JUST
+  // the movement half would short-circuit postMovementGroup against a PRIOR
+  // loan's movement group while a second, phantom loan row still commits —
+  // a confusing mismatch, not real retry-safety. locationId per line is
+  // optional only when the item has its own defaultLocationId set — the loan
+  // has to know a real bin to draw stock FROM (wh_loan_lines itself carries
+  // no location column; it's only ever used to build the movement leg, same
+  // as a PO line's receive-time locationId is never stored on the line
+  // either).
+  app.post("/api/admin/warehouse/loans", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const borrowerName = clean(b.borrowerName);
+      if (!borrowerName) throw new WarehouseRouteError("borrowerName is required");
+
+      if (!isValidDateOnly(b.dueOn)) throw new WarehouseRouteError("dueOn must be a YYYY-MM-DD date");
+      const dueOn = b.dueOn as string;
+
+      let borrowerContactId: number | null = null;
+      if (b.borrowerContactId !== undefined && b.borrowerContactId !== null && b.borrowerContactId !== "") {
+        const cid = parseId(b.borrowerContactId);
+        if (cid === null) throw new WarehouseRouteError("borrowerContactId must be a number");
+        const [contact] = await db.select({ id: contacts.id }).from(contacts).where(eq(contacts.id, cid));
+        if (!contact) throw new WarehouseRouteError("borrowerContactId does not reference a real contact");
+        borrowerContactId = cid;
+      }
+
+      const rawLines = Array.isArray(b.lines) ? b.lines : [];
+      if (rawLines.length === 0) throw new WarehouseRouteError("At least one line is required");
+      const parsedLines: { itemId: number; qty: number; locationIdRaw: unknown }[] = [];
+      for (const raw of rawLines) {
+        const itemId = parseId(raw?.itemId);
+        if (itemId === null) throw new WarehouseRouteError("Every line needs an itemId");
+        const qty = Number(raw?.qty);
+        if (!Number.isFinite(qty) || qty <= 0) throw new WarehouseRouteError("Every line's qty must be a positive number");
+        parsedLines.push({ itemId, qty, locationIdRaw: raw?.locationId });
+      }
+
+      // Validate every itemId (and that it's actually loanable, D14) up
+      // front, before any insert — same "no bad line leaves an orphaned
+      // parent record behind" discipline as requisition submit (T9).
+      const itemIds = Array.from(new Set(parsedLines.map((l) => l.itemId)));
+      const items = await db
+        .select({
+          id: whItems.id, sku: whItems.sku, name: whItems.name,
+          isLoanable: whItems.isLoanable, allowNegative: whItems.allowNegative,
+          defaultLocationId: whItems.defaultLocationId,
+        })
+        .from(whItems)
+        .where(inArray(whItems.id, itemIds));
+      const itemById = new Map(items.map((i) => [i.id, i]));
+      for (const l of parsedLines) {
+        const item = itemById.get(l.itemId);
+        if (!item) throw new WarehouseRouteError(`itemId ${l.itemId} does not reference a real item`);
+        if (!item.isLoanable) throw new WarehouseRouteError(`${item.sku} is not marked as loanable — mark it is_loanable before it can be checked out`);
+      }
+
+      // Resolve + validate each line's real (non-virtual) checkout location —
+      // an explicit locationId per line, or the item's own defaultLocationId
+      // when the caller doesn't name one.
+      const legs: MovementLeg[] = [];
+      for (const l of parsedLines) {
+        const item = itemById.get(l.itemId)!;
+        const candidate = l.locationIdRaw ?? item.defaultLocationId;
+        if (candidate === null || candidate === undefined || candidate === "") {
+          throw new WarehouseRouteError(`No locationId given for ${item.sku} and it has no default location set — pass one explicitly`);
+        }
+        const location = await resolveRealLocationForMove(candidate, `locationId for ${item.sku}`);
+        legs.push({ itemId: item.id, locationId: location.id, locationCode: location.code, delta: -l.qty, allowNegative: item.allowNegative });
+      }
+
+      const operatorUserId = req.session.userId!;
+      const note = clean(b.note) ?? null;
+
+      // ONE transaction: the loan/lines rows and the loan_out movement commit
+      // or roll back together (see this section's header comment for why —
+      // unlike PO/requisition creation, a loan's parent row and its stock
+      // movement are the same real-world event). No idempotencyKey here — see
+      // the header comment above for why one can't safely apply to only half
+      // of this operation.
+      const { loan, insertedLines, movement } = await db.transaction(async (tx) => {
+        const [loanRow] = await tx
+          .insert(whLoans)
+          .values({ borrowerName, borrowerContactId, dueOn, status: "out", operatorUserId, notes: clean(b.notes) ?? null })
+          .returning();
+        const lines = await tx
+          .insert(whLoanLines)
+          .values(parsedLines.map((l) => ({ loanId: loanRow.id, itemId: l.itemId, qty: String(l.qty) })))
+          .returning();
+        const movementResult = await postMovementGroup(warehouseDbFromTx(tx), {
+          legs,
+          movementType: "loan_out",
+          ref: { kind: "loan", id: loanRow.id },
+          operatorUserId,
+          idempotencyKey: null,
+          note,
+        });
+        return { loan: loanRow, insertedLines: lines, movement: movementResult };
+      });
+      if (!movement.alreadyProcessed) notifyMovementCommitted(movement.affectedItemIds);
+
+      res.status(201).json({
+        ...withOverdue(loan),
+        lines: insertedLines.map((l) => ({
+          ...l,
+          qty: Number(l.qty),
+          itemSku: itemById.get(l.itemId)!.sku,
+          itemName: itemById.get(l.itemId)!.name,
+        })),
+        movement,
+      });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "loan check-out");
+    }
+  });
+
+  // ── Return ────────────────────────────────────────────────────────────────
+  // Body: { lines: [{loanLineId, locationId, conditionGrade, conditionNote?,
+  // replacementChargedCents?}], idempotencyKey?, note? }. Posts ONE movement
+  // group (one inbound leg per returned line — a receive-shaped, N-leg group
+  // like T6's receive endpoint, generalised past 2 legs) THEN — only for a
+  // genuinely new movement, never a replay — stamps each line's condition
+  // grade and recomputes the loan's own derived status. A line already
+  // graded can't be returned again (guards a real double-process, not just
+  // the exact-replay case idempotencyKey already covers).
+  app.post("/api/admin/warehouse/loans/:id/return", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [loan] = await db.select().from(whLoans).where(eq(whLoans.id, id));
+      if (!loan) return res.status(404).json({ message: "Loan not found" });
+      if (loan.status === "returned") throw new WarehouseRouteError("This loan has already been fully returned");
+
+      const b = req.body || {};
+      const rawLines = Array.isArray(b.lines) ? b.lines : [];
+      if (rawLines.length === 0) throw new WarehouseRouteError("At least one line is required");
+      // The same loanLineId can't appear twice in one call — the
+      // conditionGrade-already-set guard below only protects against
+      // returning a line that was graded in a PRIOR call; within this same
+      // batch every line starts "ungraded" in existingById, so a duplicate
+      // would otherwise post two inbound legs for one physical item and
+      // silently double-credit stock.
+      const rawLoanLineIds = rawLines.map((raw: any) => raw?.loanLineId);
+      if (new Set(rawLoanLineIds).size !== rawLoanLineIds.length) {
+        throw new WarehouseRouteError("The same loanLineId was given more than once in this return");
+      }
+
+      const existingLines = await loadLoanLines(id);
+      const existingById = new Map(existingLines.map((l) => [l.id, l]));
+
+      interface ParsedReturnLine {
+        loanLineId: number;
+        locationId: number;
+        locationCode: string;
+        conditionGrade: ConditionGrade;
+        conditionNote: string | null;
+        replacementChargedCents: number | null;
+        qty: number;
+        itemId: number;
+      }
+      const parsed: ParsedReturnLine[] = [];
+      for (const raw of rawLines) {
+        const loanLineId = parseId(raw?.loanLineId);
+        if (loanLineId === null) throw new WarehouseRouteError("Every line needs a loanLineId");
+        const existing = existingById.get(loanLineId);
+        if (!existing) throw new WarehouseRouteError(`loanLineId ${loanLineId} does not reference a line on this loan`);
+        if (existing.conditionGrade != null) throw new WarehouseRouteError(`${existing.itemSku} on this loan has already been returned`);
+
+        const conditionGrade = clean(raw?.conditionGrade);
+        if (!conditionGrade || !isConditionGrade(conditionGrade)) {
+          throw new WarehouseRouteError(`conditionGrade must be one of: ${CONDITION_GRADES.join(", ")}`);
+        }
+        const location = await resolveRealLocationForMove(raw?.locationId, `locationId for ${existing.itemSku}`);
+        parsed.push({
+          loanLineId,
+          locationId: location.id,
+          locationCode: location.code,
+          conditionGrade,
+          conditionNote: clean(raw?.conditionNote) ?? null,
+          replacementChargedCents: toChargeCents(raw?.replacementChargedCents),
+          qty: existing.qty,
+          itemId: existing.itemId,
+        });
+      }
+
+      const legs: MovementLeg[] = parsed.map((l) => ({
+        itemId: l.itemId,
+        locationId: l.locationId,
+        locationCode: l.locationCode,
+        delta: l.qty,
+        reasonCode: reasonCodeForConditionGrade(l.conditionGrade),
+      }));
+
+      const operatorUserId = req.session.userId!;
+      const movement = await runMovementGroup({
+        legs,
+        movementType: "loan_return",
+        ref: { kind: "loan", id },
+        operatorUserId,
+        idempotencyKey: clean(b.idempotencyKey) ?? null,
+        note: clean(b.note) ?? null,
+      });
+
+      let updatedLoan = loan;
+      if (!movement.alreadyProcessed) {
+        for (const l of parsed) {
+          await db
+            .update(whLoanLines)
+            .set({
+              conditionGrade: l.conditionGrade,
+              conditionNote: l.conditionNote,
+              replacementChargedCents: l.replacementChargedCents,
+            })
+            .where(eq(whLoanLines.id, l.loanLineId));
+        }
+
+        // Recompute the loan's own status from EVERY line's freshly-updated
+        // grade (D14's sibling of derivePoStatusFromLines/deriveRequisition-
+        // StatusFromLines) — never accepted directly from the client.
+        const allLines = await loadLoanLines(id);
+        const nextStatus = deriveLoanStatusFromLines(
+          loan.status as LoanStatus,
+          allLines.map((l) => ({ conditionGrade: l.conditionGrade as ConditionGrade | null })),
+        );
+        if (nextStatus !== loan.status) {
+          const [saved] = await db
+            .update(whLoans)
+            .set({ status: nextStatus, returnedAt: nextStatus === "returned" ? new Date() : loan.returnedAt })
+            .where(eq(whLoans.id, id))
+            .returning();
+          updatedLoan = saved;
+        }
+      }
+
+      res.status(movement.alreadyProcessed ? 200 : 201).json({ ...withOverdue(updatedLoan), lines: await loadLoanLines(id), movement });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "loan return");
     }
   });
 }

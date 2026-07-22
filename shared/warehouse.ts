@@ -87,6 +87,12 @@ export type VirtualLocationCode = (typeof VIRTUAL_LOCATION_CODES)[number];
  *  from the ledger, it just isn't sellable. */
 export const QUARANTINE_ZONE: NamedZone = "QUARANTINE";
 
+/** SCRAP is where written-off stock lives (D14/D15's "vanish TO scrap") — a
+ *  loan line returned in grade D (scrap, write off) posts a real ledger row
+ *  into this virtual location rather than simply never coming back, so the
+ *  write-off stays auditable. */
+export const SCRAP_ZONE: VirtualLocationCode = "SCRAP";
+
 /**
  * Location codes are one of:
  *  - a virtual code (`SUPPLIER`, `CUSTOMER`, `SCRAP`, `PRODUCTION`)
@@ -494,6 +500,56 @@ export function isConditionGrade(v: unknown): v is ConditionGrade {
  *  `overdue` column, always recompute from `due_on`/`status` at read time. */
 export function isLoanOverdue(loan: { status: LoanStatus; dueOn: string }, todayIso: string): boolean {
   return loan.status === "out" && loan.dueOn < todayIso;
+}
+
+// ── Equipment loans: check-out / return (T10) ────────────────────────────────
+// wh_loan_lines has no stored "returned" flag — `condition_grade` is set ONLY
+// on return (schema.ts's own comment on the table), so its presence IS the
+// derived per-line signal, the same "derived, never a second stored flag"
+// doctrine as qty_received/qty_picked one level down at the LINE grain rather
+// than the whole-record STATUS grain those two drive.
+
+/** Has this specific loan line already come back? */
+export function loanLineIsReturned(line: { conditionGrade: ConditionGrade | null | undefined }): boolean {
+  return line.conditionGrade != null;
+}
+
+/** Every line of the loan graded on return — LOAN_STATUSES has no partial
+ *  state (unlike PO/requisition's multi-step workflows, a loan is only ever
+ *  'out' or 'returned'), so a loan with 3 lines and 2 returned stays 'out'
+ *  until the last one comes back too. An empty line list is never "returned"
+ *  (there's nothing to have returned). */
+export function allLoanLinesReturned(lines: readonly { conditionGrade: ConditionGrade | null | undefined }[]): boolean {
+  return lines.length > 0 && lines.every((l) => loanLineIsReturned(l));
+}
+
+/**
+ * Recomputes a loan's stored `status` from its lines' own condition grades —
+ * the D14 sibling of derivePoStatusFromLines (T6) / deriveRequisitionStatus-
+ * FromLines (T9) one level up. Never touches an already-'returned' loan
+ * (terminal — a loan can't be "un-returned"; borrowing the same gear again is
+ * a brand-new wh_loans row, a fresh checkout).
+ */
+export function deriveLoanStatusFromLines(
+  current: LoanStatus,
+  lines: readonly { conditionGrade: ConditionGrade | null | undefined }[],
+): LoanStatus {
+  if (current !== "out") return current;
+  return allLoanLinesReturned(lines) ? "returned" : "out";
+}
+
+/**
+ * A 'D' grade (scrap, write off) return is tagged with the EXISTING
+ * 'write_off' reason code (D15) on its loan_return ledger leg — this is not a
+ * new disposition/routing rule like receiving's automatic QUARANTINE routing
+ * for genuinely damaged stock (T6/dispositionForReason); WHERE a returned
+ * item physically goes (a normal bin, QUARANTINE, wherever) stays the
+ * operator's own choice of locationId, exactly like every other movement leg
+ * in this file. This only decides the ledger's reason_code so a written-off
+ * loan return is searchable/auditable by reason like any other write-off.
+ */
+export function reasonCodeForConditionGrade(grade: ConditionGrade): ReasonCode | null {
+  return grade === "D" ? "write_off" : null;
 }
 
 // ── Cycle counts ───────────────────────────────────────────────────────────────

@@ -309,7 +309,18 @@ export function onMovementCommitted(hook: MovementCommittedHook): void {
   movementHooks.push(hook);
 }
 
-function notifyMovementCommitted(itemIds: number[]): void {
+/**
+ * Exported (unlike the rest of this section) because T10's loan check-out
+ * route needs to open its OWN transaction (it inserts the wh_loans/
+ * wh_loan_lines parent rows AND posts the outbound movement atomically — an
+ * insufficient-stock failure must roll back the loan record too, not leave a
+ * dangling "checked out" row with no movement behind it — see
+ * server/warehouse-routes.ts's loan check-out handler), so it can't go
+ * through runMovementGroup's self-contained transaction. It calls
+ * postMovementGroup + this function directly instead, mirroring exactly what
+ * runMovementGroup does internally for every other caller.
+ */
+export function notifyMovementCommitted(itemIds: number[]): void {
   if (itemIds.length === 0) return;
   for (const hook of movementHooks) {
     try {
