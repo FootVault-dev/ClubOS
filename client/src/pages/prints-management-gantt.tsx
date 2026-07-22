@@ -18,7 +18,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { Diamond, ChevronDown, ChevronRight, AlertTriangle, Inbox } from "lucide-react";
 import {
-  addDaysIso, daysBetween, taskBarRange, parseLocalDate, toLocalDateStr,
+  addDaysIso, daysBetween, taskBarRange, parseLocalDate, toLocalDateStr, canEdit,
   type PlanProjectRow, type PlanTaskRow, type DepRow,
 } from "@/lib/management";
 
@@ -57,6 +57,7 @@ export function GanttView({ projects, tasks, deps, today, onTask, onPatch, onAdd
     .map((t) => ({ task: t, range: taskBarRange(t) }))
     .filter((x): x is { task: PlanTaskRow; range: { start: string; end: string } } => !!x.range), [tasks]);
   const unscheduled = tasks.filter((t) => !t.startDate && !t.dueDate);
+  const editableIds = useMemo(() => new Set(projects.filter(canEdit).map((p) => p.id)), [projects]);
 
   // ── time range: everything scheduled ±padding, always including today ──────
   const { origin, totalDays } = useMemo(() => {
@@ -123,6 +124,7 @@ export function GanttView({ projects, tasks, deps, today, onTask, onPatch, onAdd
    *  the day after its predecessor ends (duration kept), cascading downstream
    *  on local copies, then PATCH each changed task once. */
   const fixConflicts = () => {
+    // Only shift tasks the user can actually edit — the server would 403 the rest.
     const local = new Map<number, { start: string; end: string; hasStart: boolean; hasDue: boolean }>();
     for (const t of tasks) {
       const r = taskBarRange(t);
@@ -140,6 +142,7 @@ export function GanttView({ projects, tasks, deps, today, onTask, onPatch, onAdd
       if (!moved) break;
     }
     for (const t of tasks) {
+      if (!editableIds.has(t.projectId)) continue;
       const orig = taskBarRange(t); const next = local.get(t.id);
       if (!orig || !next || (orig.start === next.start && orig.end === next.end)) continue;
       const body: any = {};
@@ -158,6 +161,7 @@ export function GanttView({ projects, tasks, deps, today, onTask, onPatch, onAdd
 
   // ── drag: move / resize, transform-only during, one PATCH on release ────────
   const dragTask = (e: React.PointerEvent, t: PlanTaskRow, kind: "move" | "resize-start" | "resize-end") => {
+    if (!editableIds.has(t.projectId)) return;   // viewers/commenters look, never move
     const range = taskBarRange(t);
     if (!range) return;
     e.preventDefault(); e.stopPropagation();
@@ -208,6 +212,7 @@ export function GanttView({ projects, tasks, deps, today, onTask, onPatch, onAdd
 
   // ── drag: create a dependency from a bar's end-dot ──────────────────────────
   const dragLink = (e: React.PointerEvent, fromTask: PlanTaskRow) => {
+    if (!editableIds.has(fromTask.projectId)) return;
     e.preventDefault(); e.stopPropagation();
     const chart = chartBodyRef.current, rubber = rubberRef.current;
     const rect = rects.get(fromTask.id);
@@ -446,15 +451,17 @@ export function GanttView({ projects, tasks, deps, today, onTask, onPatch, onAdd
                       {!labelInside && (
                         <span className="absolute left-full ml-1.5 top-1/2 -translate-y-1/2 text-[10px] text-white/50 whitespace-nowrap pointer-events-none">{t.title}</span>
                       )}
-                      {/* resize handles */}
-                      <div className="absolute inset-y-0 left-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/20 rounded-l-md"
-                        onPointerDown={(e) => dragTask(e, t, "resize-start")} />
-                      <div className="absolute inset-y-0 right-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/20 rounded-r-md"
-                        onPointerDown={(e) => dragTask(e, t, "resize-end")} />
-                      {/* dependency dot */}
-                      <button title="Drag to another bar to link (finish → start)"
-                        className="absolute -right-2.5 top-1/2 -translate-y-1/2 w-[10px] h-[10px] rounded-full border border-indigo-300 bg-[#0a0e1a] opacity-0 group-hover:opacity-100 cursor-crosshair z-[4]"
-                        onPointerDown={(e) => dragLink(e, t)} onClick={(e) => e.stopPropagation()} />
+                      {editableIds.has(t.projectId) && (<>
+                        {/* resize handles */}
+                        <div className="absolute inset-y-0 left-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/20 rounded-l-md"
+                          onPointerDown={(e) => dragTask(e, t, "resize-start")} />
+                        <div className="absolute inset-y-0 right-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/20 rounded-r-md"
+                          onPointerDown={(e) => dragTask(e, t, "resize-end")} />
+                        {/* dependency dot */}
+                        <button title="Drag to another bar to link (finish → start)"
+                          className="absolute -right-2.5 top-1/2 -translate-y-1/2 w-[10px] h-[10px] rounded-full border border-indigo-300 bg-[#0a0e1a] opacity-0 group-hover:opacity-100 cursor-crosshair z-[4]"
+                          onPointerDown={(e) => dragLink(e, t)} onClick={(e) => e.stopPropagation()} />
+                      </>)}
                     </div>
                   );
                 })}

@@ -63,6 +63,53 @@ export const PROJECT_COLORS = [
   "#8b5cf6", "#ef4444", "#eab308", "#3b82f6", "#14b8a6",
 ] as const;
 
+// ── Collaborators & roles (per-project, Google-Docs model) ──────────────────
+// viewer < commenter < editor < admin. Enforced SERVER-side per project; the
+// client mirrors the same helpers so a disabled button is the same rule the
+// API applies. `default_role` on a project = what any tab-holder gets when
+// not explicitly listed ('none' = private).
+
+export const COLLAB_ROLES = ["viewer", "commenter", "editor", "admin"] as const;
+export type CollabRole = (typeof COLLAB_ROLES)[number];
+export const PROJECT_DEFAULT_ROLES = ["none", ...COLLAB_ROLES] as const;
+export type ProjectDefaultRole = (typeof PROJECT_DEFAULT_ROLES)[number];
+
+export const isCollabRole = (v: unknown): v is CollabRole =>
+  COLLAB_ROLES.includes(v as CollabRole);
+export const isProjectDefaultRole = (v: unknown): v is ProjectDefaultRole =>
+  PROJECT_DEFAULT_ROLES.includes(v as ProjectDefaultRole);
+
+export const ROLE_RANK: Record<CollabRole, number> = { viewer: 0, commenter: 1, editor: 2, admin: 3 };
+
+export const COLLAB_ROLE_META: Record<CollabRole, { label: string; hint: string }> = {
+  viewer:    { label: "Viewer",    hint: "Can see everything, change nothing" },
+  commenter: { label: "Commenter", hint: "Viewer + write comments" },
+  editor:    { label: "Editor",    hint: "Work the tasks — create, edit, move, complete" },
+  admin:     { label: "Admin",     hint: "Editor + project settings, columns, people" },
+};
+
+/** role ≥ min on the viewer<commenter<editor<admin ladder ('none' fails all). */
+export function roleAtLeast(role: CollabRole | "none" | null | undefined, min: CollabRole): boolean {
+  if (!role || role === "none") return false;
+  return ROLE_RANK[role as CollabRole] >= ROLE_RANK[min];
+}
+
+/** The one place access is decided — server filters/gates and client UI both
+ *  call this. super_admin → admin; explicit row → its role; the project's
+ *  CREATOR → admin (can never be locked out of their own project); everyone
+ *  else → the project's default_role. */
+export function effectiveRole(args: {
+  isSuperAdmin: boolean;
+  userId: number;
+  project: { createdBy: number | null; defaultRole: string };
+  collabRole: string | null | undefined;   // explicit row for this user, if any
+}): CollabRole | "none" {
+  if (args.isSuperAdmin) return "admin";
+  if (args.collabRole && isCollabRole(args.collabRole)) return args.collabRole;
+  if (args.project.createdBy != null && args.project.createdBy === args.userId) return "admin";
+  return isProjectDefaultRole(args.project.defaultRole) ? (args.project.defaultRole as ProjectDefaultRole) === "none" ? "none" : (args.project.defaultRole as CollabRole) : "none";
+}
+
 // ── Dates ────────────────────────────────────────────────────────────────────
 // Date-only ISO strings end to end. ISO dates compare correctly as strings,
 // so no Date round-trip is ever needed (the UTC off-by-one trap).
