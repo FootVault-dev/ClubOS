@@ -56,6 +56,36 @@ check "zach" "$ZACH_KEY" "/api/v1/league/teams" 403
 check "zach" "$ZACH_KEY" "/api/v1/cic7s/registrations" 403
 check "zach" "$ZACH_KEY" "/api/v1/sporty/registrations" 403
 
+echo "── Zach key: programme fence (holiday camps + u4-u8 ONLY) ──"
+# The scope matrix above proves WHICH ENDPOINTS he reaches. This proves WHAT COMES
+# BACK from the ones he does — a 200 on /camps is not a pass if it lists the academy.
+# Requires ZACH_KEY to carry a program_filter; skipped otherwise.
+prog_check() { # label path jq-expression-that-must-be-empty description
+  local label="$1" path="$2" expr="$3" desc="$4"
+  if [ -z "$ZACH_KEY" ]; then SKIP=$((SKIP+1)); return; fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "SKIP  [$label] $desc (jq not installed)"; SKIP=$((SKIP+1)); return
+  fi
+  local body offenders
+  body=$(curl -s -H "Authorization: Bearer $ZACH_KEY" "$BASE$path")
+  offenders=$(echo "$body" | jq -r "$expr" 2>/dev/null)
+  if [ -z "$offenders" ]; then
+    PASS=$((PASS+1)); echo "PASS  [$label] $desc"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL  [$label] $desc — leaked: $(echo "$offenders" | tr '\n' ' ')"
+  fi
+}
+
+prog_check "zach-fence" "/api/v1/camps" \
+  '.camps[] | select(.type != "holiday_camp" and .slug != "u4-u8") | .slug' \
+  "/camps lists only holiday camps + u4-u8"
+prog_check "zach-fence" "/api/v1/registrations?days=365&limit=200" \
+  '.registrations[] | select(.campSlug != "u4-u8" and (.campName | test("Holiday Camp") | not)) | .campSlug' \
+  "/registrations carries no other programme's families"
+prog_check "zach-fence" "/api/v1/revenue?days=365" \
+  '.camps[] | select(.slug != "u4-u8" and (.campName | test("Holiday Camp") | not)) | .slug' \
+  "/revenue breaks down only his programmes"
+
 echo "── Isaac key (CIC + CIC7s + MFL only) ──"
 check "isaac" "$ISAAC_KEY" "/api/v1/tournament/summary" 200
 check "isaac" "$ISAAC_KEY" "/api/v1/tournament/teams" 200

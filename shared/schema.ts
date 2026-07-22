@@ -3,6 +3,7 @@ import { pgTable, text, varchar, integer, bigint, smallint, boolean, timestamp, 
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import type { HiringQuestion } from "./hiring";
+import type { ProgramFilter } from "./api-scopes";
 import type { InvoiceLine, InvoiceSpendSummary } from "./invoice-types";
 import type { StaffChatAttachment } from "./staff-chat";
 
@@ -2053,6 +2054,11 @@ export const apiKeys = pgTable("api_keys", {
   // Orgs this key may read. NULL/empty = just organizationId (legacy single-org
   // keys). Enforced in requireApiKey; scopes gate WHAT, this gates WHOSE.
   allowedOrgIds: integer("allowed_org_ids").array(),
+  // Programmes this key may read WITHIN those orgs — the third axis of least
+  // privilege, for staff who run part of a workspace (holiday-camp coordinator
+  // vs the whole academy). NULL = unrestricted; see shared/api-scopes.ts.
+  // A programme matches on type OR slug. Present-but-empty means nothing.
+  programFilter: jsonb("program_filter").$type<ProgramFilter | null>(),
   // Set on keys created by POST /api/admin/api-keys/:id/rotate — points at the
   // key this one replaced (which keeps working until its grace expiry).
   rotatedFromId: integer("rotated_from_id"),

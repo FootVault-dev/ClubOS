@@ -19,8 +19,10 @@ extend it safely.
 
 ## The guarantees
 
-1. **Scopes gate WHAT, workspace binding gates WHOSE.** Every `/api/v1`
-   endpoint names its scope; a key reaches only orgs in its `allowed_org_ids`.
+1. **Scopes gate WHAT, workspace binding gates WHOSE, the programme filter
+   gates WHICH.** Every `/api/v1` endpoint names its scope; a key reaches only
+   orgs in its `allowed_org_ids`; and inside those orgs it reads only the
+   programmes its `program_filter` allows (see "Programme filtering" below).
 2. **No scope exists** for sponsorship, budget/Xero, inbox, e-sign, split-pay,
    venue bookings, medical fields, child DOBs/ID documents, Stripe identifiers,
    or marketing attribution. Adding one is a deliberate decision, not a default.
@@ -66,6 +68,60 @@ extend it safely.
 | `sporty:read` | `/api/v1/sporty/registrations` (NZF Integration-1 field set) |
 | any valid key | `/api/v1/openapi.json` |
 
+## Programme filtering — fencing a key to part of a workspace
+
+Scopes are per-domain and workspaces are per-org, so neither can express "the
+holiday camps and the U4-U8 programme, but not the rest of the academy" — they
+all live in the CUFC workspace and `camps:read` returned the lot. That is what
+`api_keys.program_filter` (jsonb, nullable) adds.
+
+```json
+{ "types": ["holiday_camp"], "slugs": ["u4-u8"] }
+```
+
+A programme matches if **its type is listed OR its slug is listed**. Prefer a
+**type** where one fits — `holiday_camp` covers camps created next year with
+nobody editing the key. Use a **slug** to pin one programme out of a type that
+holds several (every academy programme is `type='academy'`, so U4-U8 has to be
+named by slug).
+
+- **`NULL` = unrestricted.** Every key predating this feature is NULL, so the
+  migration could not change anyone's access.
+- **Present-but-empty = nothing.** The gate **fails closed**: a filter that
+  resolves to no usable tokens yields `FALSE`, never an absent clause. Quietly
+  widening back to "all programmes" would turn a typo into a data leak. The
+  create/patch endpoints reject an empty filter outright rather than store one.
+- **Rotation carries the filter across.** `POST /:id/rotate` copies
+  `program_filter` onto the replacement — a rotation must never widen access.
+- Enforced by `programSqlCondition()` in `server/routes.ts`, which delegates to
+  `programFilterSqlCondition()` in `shared/api-scopes.ts`. Applied to **all 14
+  programme-derived queries** across `/overview`, `/revenue`, `/analytics`,
+  `/customers`, `/camps`, `/split-tests`, `/registrations`, `/order-timing` and
+  `/sporty/registrations`. **Add the clause to any new programme query you write.**
+- Tokens are validated against `^[a-z0-9_-]+$` twice — once on the way in, once
+  again at SQL-build time, because the value is interpolated into `sql.raw()`
+  and a row edited straight in the database must not reach the query text.
+
+**Set it on an existing key** (no re-issue — the holder's `.env` keeps working,
+and the new fence applies on their next request):
+
+```bash
+npx tsx script/set-api-key-program-filter.ts --key "Zach AIOS …" \
+    --types holiday_camp --slugs u4-u8            # dry run: shows what it gains/loses
+npx tsx script/set-api-key-program-filter.ts --key "Zach AIOS …" \
+    --types holiday_camp --slugs u4-u8 --apply
+```
+
+Or `PATCH /api/admin/api-keys/:id/program-filter` with
+`{"programFilter": {...}}` (send `null` to lift it). The create modal in
+Settings → API Keys has Types/Slugs fields with a live plain-English summary.
+
+**Conformance:** `npx tsx script/verify-program-filter.ts` — 29 assertions
+covering the fail-closed cases, the injection guard, and the real fenced SQL run
+read-only against the live database. Plus the `zach-fence` section of
+`scripts/api-fence-test.sh`, which checks response **bodies**, not just status
+codes (a 200 on `/camps` is not a pass if the academy is in the list).
+
 ## Adding a new scope/endpoint — the checklist
 
 1. Add the scope to `shared/api-scopes.ts` (label + honest description +
@@ -74,6 +130,8 @@ extend it safely.
    `requireApiKey, requireScope("<new>:read")`, org filter via
    `apiKeyOrgsOfType(req, "<workspace type>")`, **explicit SELECT column list**
    (never `SELECT *`), archived filter + `limit`/`offset` on list endpoints.
+   **If it reads `programs`, append `${programSqlFilter(req)}` to its WHERE** —
+   a new endpoint that forgets this silently bypasses every programme fence.
 3. Never expose: medical, child DOB/ID docs, Stripe/payment IDs, marketing
    attribution, secrets. If a partner needs one of these, that's a design
    conversation, not a field addition.

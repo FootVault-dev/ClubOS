@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Users, Settings, Plus, Trash2, X, Shield, ShieldCheck, UserCog, User, Pencil, Key, Copy, Check, Eye, EyeOff, ExternalLink, RefreshCw, Activity } from "lucide-react";
-import { API_SCOPES } from "@shared/api-scopes";
+import { API_SCOPES, describeProgramFilter, normalizeProgramFilter, type ProgramFilter } from "@shared/api-scopes";
 
 type UserAccount = {
   id: number;
@@ -500,6 +500,7 @@ type ApiKeyData = {
   organizationId: number;
   allowedOrgIds: number[] | null;
   scopes: string[];
+  programFilter: ProgramFilter | null;
   lastUsedAt: string | null;
   expiresAt: string | null;
   active: boolean;
@@ -637,6 +638,15 @@ function ApiKeysTab() {
                         {s}
                       </Badge>
                     ))}
+                    {key.programFilter && (
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] px-1.5 py-0.5 border-emerald-500/25 text-emerald-300/70 bg-emerald-500/5"
+                        title={describeProgramFilter(normalizeProgramFilter(key.programFilter))}
+                      >
+                        {[...(key.programFilter.types || []), ...(key.programFilter.slugs || [])].join(" · ") || "no programmes"}
+                      </Badge>
+                    )}
                   </div>
                   <button
                     onClick={() => setActivityKeyId(activityKeyId === key.id ? null : key.id)}
@@ -775,7 +785,15 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const [expiresInDays, setExpiresInDays] = useState<string>("");
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [selectedOrgIds, setSelectedOrgIds] = useState<number[]>([]);
+  const [programTypes, setProgramTypes] = useState("");
+  const [programSlugs, setProgramSlugs] = useState("");
   const { data: orgs } = useQuery<OrgOption[]>({ queryKey: ["/api/admin/organizations"] });
+
+  const splitTokens = (v: string) => v.split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
+  const draftFilter: ProgramFilter | null =
+    programTypes.trim() || programSlugs.trim()
+      ? { types: splitTokens(programTypes), slugs: splitTokens(programSlugs) }
+      : null;
 
   const toggleScope = (scope: string) =>
     setSelectedScopes(prev => prev.includes(scope) ? prev.filter(s => s !== scope) : [...prev, scope]);
@@ -791,6 +809,7 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
         scopes: selectedScopes,
       };
       if (expiresInDays) body.expiresInDays = parseInt(expiresInDays);
+      if (draftFilter) body.programFilter = draftFilter;
       const res = await apiRequest("POST", "/api/admin/api-keys", body);
       return res.json();
     },
@@ -864,6 +883,32 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
                 </button>
               ))}
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[11px] text-amber-300/30 uppercase tracking-wider font-semibold">Programmes (optional)</label>
+            <p className="text-[11px] text-white/25">
+              Leave both empty and the key reads every programme in those workspaces. Fill either in to fence
+              it to part of a workspace — for a holiday-camp coordinator, type <span className="font-mono text-amber-300/40">holiday_camp</span> and
+              slug <span className="font-mono text-amber-300/40">u4-u8</span>. A programme matches on type OR slug, so a
+              type covers camps created later without editing the key.
+            </p>
+            <Input
+              value={programTypes}
+              onChange={e => setProgramTypes(e.target.value)}
+              placeholder="Types — e.g. holiday_camp"
+              className="premium-input text-white/80 rounded-xl"
+              data-testid="input-api-key-program-types"
+            />
+            <Input
+              value={programSlugs}
+              onChange={e => setProgramSlugs(e.target.value)}
+              placeholder="Slugs — e.g. u4-u8"
+              className="premium-input text-white/80 rounded-xl"
+              data-testid="input-api-key-program-slugs"
+            />
+            <p className="text-[11px] text-emerald-300/40" data-testid="text-program-filter-summary">
+              {describeProgramFilter(normalizeProgramFilter(draftFilter))}
+            </p>
           </div>
           <div className="space-y-1.5">
             <label className="text-[11px] text-amber-300/30 uppercase tracking-wider font-semibold">Expires In (Days)</label>

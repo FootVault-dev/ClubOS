@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents } from "@shared/schema";
-import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
+import { isValidApiScope, API_SCOPES, normalizeProgramFilter, programFilterIsEmpty, programFilterSqlCondition, describeProgramFilter, type ProgramFilter } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
@@ -16452,6 +16452,9 @@ export async function registerRoutes(
         apiKey.allowedOrgIds && apiKey.allowedOrgIds.length > 0
           ? apiKey.allowedOrgIds
           : [apiKey.organizationId];
+      // Third axis of least privilege: which programmes inside those orgs.
+      // Normalised here (once) so no endpoint ever touches the raw jsonb.
+      (req as any).apiKeyProgramFilter = normalizeProgramFilter(apiKey.programFilter);
 
       next();
     } catch (error: any) {
@@ -16474,6 +16477,31 @@ export async function registerRoutes(
       }
       next();
     };
+  }
+
+  // Programme gate — the third axis, after scopes (WHAT) and orgs (WHOSE).
+  // Returns a fragment to append inside an existing WHERE over `programs`:
+  //     ... WHERE p.organization_id = 1 ${programSqlFilter(req)}
+  // `alias` names the programs table in that query.
+  //
+  // Fails CLOSED. A key carrying a filter that resolves to no tokens reads
+  // nothing, because the alternative — quietly widening back to every
+  // programme — turns a typo in an allow-list into a data leak.
+  //
+  // Tokens were already validated by normalizeProgramFilter; they are validated
+  // again here because this string is interpolated into sql.raw, and a row
+  // edited straight in the database must never reach the query text.
+  // Bare condition, or null when the key is unrestricted. Use this where the
+  // query builds an array of conditions joined with AND. The logic itself lives
+  // in shared/api-scopes.ts so it can be exercised by script/verify-program-filter.ts.
+  function programSqlCondition(req: Request, alias = "p"): string | null {
+    return programFilterSqlCondition((req as any).apiKeyProgramFilter || null, alias);
+  }
+
+  // Fragment appended inside an existing WHERE. Empty string = unrestricted.
+  function programSqlFilter(req: Request, alias = "p"): string {
+    const condition = programSqlCondition(req, alias);
+    return condition ? ` AND ${condition}` : "";
   }
 
   // Resolve which of the key's allowed orgs are a given workspace type
@@ -16519,6 +16547,7 @@ export async function registerRoutes(
         organizationId: apiKeys.organizationId,
         allowedOrgIds: apiKeys.allowedOrgIds,
         scopes: apiKeys.scopes,
+        programFilter: apiKeys.programFilter,
         lastUsedAt: apiKeys.lastUsedAt,
         expiresAt: apiKeys.expiresAt,
         active: apiKeys.active,
@@ -16554,8 +16583,19 @@ export async function registerRoutes(
 
   app.post("/api/admin/api-keys", requireSuperAdmin, async (req, res) => {
     try {
-      const { name, organizationId, allowedOrgIds, scopes, expiresInDays } = req.body;
+      const { name, organizationId, allowedOrgIds, scopes, expiresInDays, programFilter } = req.body;
       if (!name) return res.status(400).json({ message: "name is required" });
+
+      // Optional programme allow-list. Rejected rather than silently widened if
+      // it was sent but every token was malformed — a filter the admin believed
+      // they set must never come out as "all programmes".
+      const cleanFilter = normalizeProgramFilter(programFilter);
+      if (programFilter != null && cleanFilter === null) {
+        return res.status(400).json({ message: 'programFilter must be an object like {"types":["holiday_camp"],"slugs":["u4-u8"]}' });
+      }
+      if (cleanFilter && programFilterIsEmpty(cleanFilter)) {
+        return res.status(400).json({ message: "programFilter contains no valid programme types or slugs — a key with an empty filter could read nothing" });
+      }
 
       // Explicit least-privilege: scopes are required and must all be known.
       if (!Array.isArray(scopes) || scopes.length === 0) {
@@ -16588,15 +16628,16 @@ export async function registerRoutes(
         createdById: (req as any).session.userId,
         scopes,
         expiresAt,
+        programFilter: cleanFilter,
       }).returning();
       await storage.createAuditLog({
         userId: (req as any).session.userId,
         action: "create",
         entity: "api_key",
         entityId: created.id,
-        details: `Created API key "${created.name}" — scopes: ${scopes.join(", ")}; orgs: [${bindOrgIds.join(",")}]`,
+        details: `Created API key "${created.name}" — scopes: ${scopes.join(", ")}; orgs: [${bindOrgIds.join(",")}]; programmes: ${describeProgramFilter(cleanFilter)}`,
       });
-      res.json({ id: created.id, name: created.name, key: raw, keyPrefix: prefix, expiresAt: created.expiresAt, scopes: created.scopes, allowedOrgIds: created.allowedOrgIds, message: "Save this key now — it won't be shown again." });
+      res.json({ id: created.id, name: created.name, key: raw, keyPrefix: prefix, expiresAt: created.expiresAt, scopes: created.scopes, allowedOrgIds: created.allowedOrgIds, programFilter: created.programFilter, message: "Save this key now — it won't be shown again." });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -16625,6 +16666,7 @@ export async function registerRoutes(
         createdById: (req as any).session.userId,
         scopes: oldKey.scopes,
         expiresAt: oldKey.expiresAt, // a rotation never EXTENDS an expiry policy
+        programFilter: oldKey.programFilter, // nor WIDENS the programme allow-list
       }).returning();
 
       const graceExpiry = new Date(Date.now() + graceHours * 3_600_000);
@@ -16653,6 +16695,47 @@ export async function registerRoutes(
         oldKeyExpiresAt: graceExpiry,
         message: `Save this key now — it won't be shown again. The old key keeps working until ${graceExpiry.toISOString()}.`,
       });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Narrow (or lift) an existing key's programme allow-list without re-minting
+  // it — the holder's .env keeps working, and the change takes effect on their
+  // very next request because the filter is read per-request in requireApiKey.
+  //
+  // Body: { programFilter: {"types":[...],"slugs":[...]} } to restrict,
+  //       { programFilter: null } to lift the restriction entirely.
+  app.patch("/api/admin/api-keys/:id/program-filter", requireSuperAdmin, async (req, res) => {
+    try {
+      const keyId = parseInt(req.params.id as string);
+      if (isNaN(keyId)) return res.status(400).json({ message: "Invalid key ID" });
+      if (!("programFilter" in (req.body || {}))) {
+        return res.status(400).json({ message: "programFilter is required (send null to lift the restriction)" });
+      }
+
+      const [key] = await db.select().from(apiKeys).where(eq(apiKeys.id, keyId));
+      if (!key) return res.status(404).json({ message: "Key not found" });
+
+      const raw = req.body.programFilter;
+      const cleanFilter = normalizeProgramFilter(raw);
+      if (raw != null && cleanFilter === null) {
+        return res.status(400).json({ message: 'programFilter must be null, or an object like {"types":["holiday_camp"],"slugs":["u4-u8"]}' });
+      }
+      if (cleanFilter && programFilterIsEmpty(cleanFilter)) {
+        return res.status(400).json({ message: "programFilter contains no valid programme types or slugs — that key would be able to read nothing" });
+      }
+
+      await db.update(apiKeys).set({ programFilter: cleanFilter }).where(eq(apiKeys.id, keyId));
+      await storage.createAuditLog({
+        userId: (req as any).session.userId,
+        action: "update",
+        entity: "api_key",
+        entityId: keyId,
+        details: `Programme access for API key "${key.name}": ${describeProgramFilter(normalizeProgramFilter(key.programFilter))} → ${describeProgramFilter(cleanFilter)}`,
+      });
+
+      res.json({ id: keyId, name: key.name, programFilter: cleanFilter, description: describeProgramFilter(cleanFilter) });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -16711,7 +16794,7 @@ export async function registerRoutes(
                CASE WHEN COUNT(r.id) > 0 THEN ROUND(SUM(r.total_cents)::numeric / COUNT(r.id), 0) ELSE 0 END as avg_order_value
         FROM registrations r
         JOIN programs p ON r.program_id = p.id
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND r.registered_at >= '${since}'
           AND r.status = 'confirmed'
       `));
@@ -16724,7 +16807,7 @@ export async function registerRoutes(
                COUNT(*) FILTER (WHERE event_type = 'cta_click') as cta_clicks
         FROM analytics_events ae
         JOIN programs p ON ae.camp_slug = p.slug
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND ae.timestamp >= '${since}'
       `));
       const analytics = analyticsRows[0] || {};
@@ -16769,7 +16852,7 @@ export async function registerRoutes(
                CASE WHEN COUNT(r.id) > 0 THEN ROUND(SUM(r.total_cents)::numeric / COUNT(r.id), 0) ELSE 0 END as avg_order_cents
         FROM programs p
         LEFT JOIN registrations r ON r.program_id = p.id AND r.status = 'confirmed' AND r.registered_at >= '${since}'
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
         GROUP BY p.id, p.name, p.slug
         ORDER BY revenue_cents DESC
       `));
@@ -16820,7 +16903,7 @@ export async function registerRoutes(
                ROUND(AVG(CASE WHEN event_type = 'scroll_depth' THEN (metadata->>'depth')::numeric END), 1) as avg_scroll_depth
         FROM analytics_events ae
         JOIN programs p ON ae.camp_slug = p.slug
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND ae.timestamp >= '${since}'
           ${slugFilter}
       `));
@@ -16833,7 +16916,7 @@ export async function registerRoutes(
         SELECT COALESCE(device, 'unknown') as device, COUNT(*) as count
         FROM analytics_events ae
         JOIN programs p ON ae.camp_slug = p.slug
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND ae.timestamp >= '${since}'
           AND ae.event_type = 'page_view'
           ${slugFilter}
@@ -16844,7 +16927,7 @@ export async function registerRoutes(
         SELECT COALESCE(ae.metadata->>'trafficSource', 'Direct') as source, COUNT(*) as count
         FROM analytics_events ae
         JOIN programs p ON ae.camp_slug = p.slug
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND ae.timestamp >= '${since}'
           AND ae.event_type = 'page_view'
           ${slugFilter}
@@ -16857,7 +16940,7 @@ export async function registerRoutes(
                COUNT(DISTINCT session_id) as sessions
         FROM analytics_events ae
         JOIN programs p ON ae.camp_slug = p.slug
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND ae.timestamp >= '${since}'
           ${slugFilter}
         GROUP BY DATE(ae.timestamp) ORDER BY date
@@ -16897,7 +16980,7 @@ export async function registerRoutes(
         FROM contacts c
         JOIN registrations r ON r.contact_id = c.id AND r.status = 'confirmed'
         JOIN programs p ON r.program_id = p.id
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
         GROUP BY c.id, c.first_name, c.last_name, c.email, c.phone, c.created_at
         ORDER BY lifetime_value_cents DESC
         LIMIT ${limit} OFFSET ${offset}
@@ -16908,7 +16991,7 @@ export async function registerRoutes(
         FROM contacts c
         JOIN registrations r ON r.contact_id = c.id AND r.status = 'confirmed'
         JOIN programs p ON r.program_id = p.id
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
       `));
 
       res.json({
@@ -16944,7 +17027,7 @@ export async function registerRoutes(
                COALESCE(SUM(r.total_cents) FILTER (WHERE r.status = 'confirmed'), 0) as revenue_cents
         FROM programs p
         LEFT JOIN registrations r ON r.program_id = p.id
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
         GROUP BY p.id
         ORDER BY p.start_date DESC
       `));
@@ -16982,7 +17065,7 @@ export async function registerRoutes(
                st.winner_id, st.end_condition, p.name as camp_name
         FROM split_tests st
         JOIN programs p ON st.program_id = p.id
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
         ORDER BY st.started_at DESC
       `));
 
@@ -17043,7 +17126,7 @@ export async function registerRoutes(
         FROM registrations r
         JOIN programs p ON r.program_id = p.id
         JOIN contacts c ON r.contact_id = c.id
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND r.registered_at >= '${since}'
         ORDER BY r.registered_at DESC
         LIMIT ${limit} OFFSET ${offset}
@@ -17053,7 +17136,7 @@ export async function registerRoutes(
         SELECT COUNT(*) as total
         FROM registrations r
         JOIN programs p ON r.program_id = p.id
-        WHERE p.organization_id = ${orgId}
+        WHERE p.organization_id = ${orgId}${programSqlFilter(req)}
           AND r.registered_at >= '${since}'
       `));
 
@@ -17095,7 +17178,7 @@ export async function registerRoutes(
         FROM registrations r
         JOIN programs p ON r.program_id = p.id
         WHERE r.status = 'confirmed'
-          AND p.organization_id = ${orgId}
+          AND p.organization_id = ${orgId}${programSqlFilter(req)}
           AND r.registered_at >= '${since}'
         GROUP BY day_of_week, hour_of_day
         ORDER BY day_of_week, hour_of_day
@@ -17514,6 +17597,7 @@ export async function registerRoutes(
         `r.status IN ('confirmed', 'pending')`,
         programType !== "all" ? `p.type = '${programType}'` : null,
         updatedSince ? `r.registered_at >= '${updatedSince}'` : null,
+        programSqlCondition(req),
       ].filter(Boolean).join(" AND ");
 
       const { rows } = await db.execute(sql.raw(`
