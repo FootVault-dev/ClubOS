@@ -148,6 +148,12 @@ app.use(attributionCookieMiddleware);
   const { registerOpenTrainingRoutes } = await import("./open-training-routes");
   registerOpenTrainingRoutes(app);
 
+  // Management — the planning workspace (projects → statuses → tasks with
+  // board/table/calendar/Gantt views). First home: United Prints (org 8);
+  // org-scoped and generic by design.
+  const { registerManagementRoutes } = await import("./management-routes");
+  registerManagementRoutes(app);
+
   // Sales — the United Print prospect database + pipeline (prints workspace).
   // Gated by requireTab("sales"), which is in SUPER_ADMIN_ONLY_TABS while
   // Daniel shapes it. No public surface: a prospect list is a sales asset.

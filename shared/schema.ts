@@ -5322,6 +5322,122 @@ export type MaintAsset = typeof maintAssets.$inferSelect;
 export type MaintServiceRecord = typeof maintServiceRecords.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MANAGEMENT — the planning workspace behind the "Management" tab (first home:
+// United Prints, org 8; org-scoped and generic by design). Projects →
+// per-project workflow statuses → tasks (+ checklists, finish-to-start
+// dependencies for the Gantt, comments). Migration
+// migrations/2026-07-22_up_management.sql; vocab/derivation in
+// shared/management.ts. Overdue is DERIVED (due < today-NZ and not in a
+// done-kind status), never stored; completed_at is stamped server-side when a
+// task enters a done-kind column. Vocab columns are validated TEXT, never
+// pg enums / CHECK gates.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const planProjects = pgTable("plan_projects", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  color: text("color").notNull().default("#6366f1"),
+  status: text("status").notNull().default("active"), // active|completed|archived
+  startDate: date("start_date"),
+  targetDate: date("target_date"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdBy: integer("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("plan_projects_org_idx").on(t.organizationId),
+}));
+
+export const planStatuses = pgTable("plan_statuses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => planProjects.id, { onDelete: "cascade" }),
+  label: text("label").notNull(),
+  color: text("color").notNull().default("#64748b"),
+  kind: text("kind").notNull().default("todo"), // todo|active|done
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index("plan_statuses_project_idx").on(t.projectId),
+  orgIdx: index("plan_statuses_org_idx").on(t.organizationId),
+}));
+
+export const planTasks = pgTable("plan_tasks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => planProjects.id, { onDelete: "cascade" }),
+  statusId: integer("status_id").notNull().references(() => planStatuses.id, { onDelete: "restrict" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  priority: text("priority").notNull().default("medium"), // low|medium|high|urgent
+  assigneeId: integer("assignee_id"),
+  startDate: date("start_date"),
+  dueDate: date("due_date"),
+  milestone: boolean("milestone").notNull().default(false),
+  progress: integer("progress"), // manual owner estimate 0–100; checklist shows done/total instead
+  tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+  sortOrder: integer("sort_order").notNull().default(0),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index("plan_tasks_project_idx").on(t.projectId),
+  orgIdx: index("plan_tasks_org_idx").on(t.organizationId),
+  statusIdx: index("plan_tasks_status_idx").on(t.statusId),
+  assigneeIdx: index("plan_tasks_assignee_idx").on(t.assigneeId),
+}));
+
+export const planTaskDeps = pgTable("plan_task_deps", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  predecessorId: integer("predecessor_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  successorId: integer("successor_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  succIdx: index("plan_task_deps_succ_idx").on(t.successorId),
+  orgIdx: index("plan_task_deps_org_idx").on(t.organizationId),
+  edgeUq: unique("plan_task_deps_edge_uq").on(t.predecessorId, t.successorId),
+}));
+
+export const planChecklistItems = pgTable("plan_checklist_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  done: boolean("done").notNull().default(false),
+  assigneeId: integer("assignee_id"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  taskIdx: index("plan_checklist_task_idx").on(t.taskId),
+  orgIdx: index("plan_checklist_org_idx").on(t.organizationId),
+}));
+
+export const planComments = pgTable("plan_comments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  authorId: integer("author_id"),
+  authorName: text("author_name"), // denormalized snapshot (recordedBy doctrine)
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  taskIdx: index("plan_comments_task_idx").on(t.taskId),
+  orgIdx: index("plan_comments_org_idx").on(t.organizationId),
+}));
+
+export type PlanProject = typeof planProjects.$inferSelect;
+export type PlanStatus = typeof planStatuses.$inferSelect;
+export type PlanTask = typeof planTasks.$inferSelect;
+export type PlanTaskDep = typeof planTaskDeps.$inferSelect;
+export type PlanChecklistItem = typeof planChecklistItems.$inferSelect;
+export type PlanComment = typeof planComments.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SALES — United Print prospect database + sales pipeline (prints workspace).
 //
 // A prospect is a researched company that could buy what United Print sells

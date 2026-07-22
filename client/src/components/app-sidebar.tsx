@@ -77,6 +77,7 @@ import {
   History as HistoryIcon,
   Video,
   Wrench,
+  ClipboardList,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -288,6 +289,7 @@ const groupSecondary = [
 
 const printsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
+  { tab: "management", title: "Management", url: "/admin/print-management", icon: ClipboardList },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
   { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "jobs", title: "Jobs", url: "/admin/print-jobs", icon: FolderKanban },
