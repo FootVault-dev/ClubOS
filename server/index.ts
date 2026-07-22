@@ -91,6 +91,12 @@ app.use(attributionCookieMiddleware);
   const { registerFeedbackRoutes } = await import("./feedback-routes");
   registerFeedbackRoutes(app);
 
+  // Staff Chat — the in-house Slack (channels + DMs, replaces the WhatsApp
+  // staff groups). Universal tab like Feedback: requireAuth only, every
+  // workspace. See migrations/2026-07-22_staff_chat.sql + shared/staff-chat.ts.
+  const { registerStaffChatRoutes } = await import("./staff-chat-routes");
+  registerStaffChatRoutes(app);
+
   // Hiring — job postings + applications. Admin side is gated by
   // requireTab("hiring") to the USG workspace; the public apply endpoints are
   // CORS-allow-listed to our own brand sites and carry no session.

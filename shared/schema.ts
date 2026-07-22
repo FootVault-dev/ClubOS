@@ -4,6 +4,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import type { HiringQuestion } from "./hiring";
 import type { InvoiceLine, InvoiceSpendSummary } from "./invoice-types";
+import type { StaffChatAttachment } from "./staff-chat";
 
 export const roleEnum = pgEnum("role_type", ["super_admin", "admin", "team_member", "manager", "coach", "finance", "marketing", "registrar"]);
 // "tenant" is for someone who exists in ClubOS only because they rent a room in
@@ -5616,3 +5617,152 @@ export const staffVideoComments = pgTable(
 export type StaffVideo = typeof staffVideos.$inferSelect;
 export type StaffVideoEvent = typeof staffVideoEvents.$inferSelect;
 export type StaffVideoComment = typeof staffVideoComments.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Staff Chat — the in-house Slack (replaces the WhatsApp staff groups).
+//
+// Distinct from chat_conversations/chat_messages (the VISITOR live-chat widget
+// on the brand sites) — staff chat is staff↔staff, org-wide, universal tab.
+// Design: channels + DMs, no threads; unread = a per-membership pointer
+// (Campfire model), never per-message receipt rows; mentions are explicit rows
+// written at send time (powers badges + away-email escalation); presence is a
+// single heartbeat row per user, server-side only (no green dots).
+// Pure logic in shared/staff-chat.ts. Migration 2026-07-22_staff_chat.sql.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const staffChannels = pgTable(
+  "staff_channels",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    kind: text("kind").notNull().default("channel"), // 'channel' | 'dm'
+    // Channels only. Slack-style normalized ("match-day-ops"); null for DMs.
+    name: text("name"),
+    topic: text("topic"),
+    // Private channel = invite-only, hidden from the browse list.
+    isPrivate: boolean("is_private").notNull().default(false),
+    // Default channels auto-join every active staff member (e.g. general,
+    // announcements) — nobody has to discover them.
+    isDefault: boolean("is_default").notNull().default(false),
+    // 'anyone' | 'leadership' — announcements channels are leadership-post-only.
+    postPolicy: text("post_policy").notNull().default("anyone"),
+    // DMs only: sorted participant ids "4:17:23". Same people → same DM
+    // (partial unique index in the migration).
+    dmKey: text("dm_key"),
+    createdBy: integer("created_by"),
+    archivedAt: timestamp("archived_at"), // archive, never delete — history survives
+    lastMessageAt: timestamp("last_message_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("staff_channels_kind_idx").on(t.kind, t.lastMessageAt)],
+);
+
+export const staffChannelMembers = pgTable(
+  "staff_channel_members",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    channelId: integer("channel_id").notNull().references(() => staffChannels.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    role: text("role").notNull().default("member"), // 'owner' | 'member'
+    // 'all' = email/badge on every message · 'mentions' (default — research-
+    // backed quiet default) · 'muted' = badge only, never escalate.
+    notifyLevel: text("notify_level").notNull().default("mentions"),
+    // THE unread pointer: everything newer than this is unread. Null = never
+    // opened (unread since join).
+    lastReadAt: timestamp("last_read_at"),
+    // Debounce for the away-email escalation (≤1 email / channel / 15 min).
+    lastEmailedAt: timestamp("last_emailed_at"),
+    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+    // Leave/retire keeps the row — history of who was in the room survives.
+    leftAt: timestamp("left_at"),
+  },
+  (t) => [
+    uniqueIndex("staff_channel_members_unq").on(t.channelId, t.userId),
+    index("staff_channel_members_user_idx").on(t.userId),
+  ],
+);
+
+export const staffMessages = pgTable(
+  "staff_messages",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    channelId: integer("channel_id").notNull().references(() => staffChannels.id, { onDelete: "cascade" }),
+    authorId: integer("author_id").notNull(),
+    body: text("body").notNull().default(""),
+    // [{url,name,contentType,size,kind:'image'|'voice'|'file',durationSec?}]
+    attachments: jsonb("attachments").$type<StaffChatAttachment[] | null>(),
+    // Client-generated id → retry-safe idempotent sends (partial unique index).
+    clientMessageId: text("client_message_id"),
+    // Leadership can request explicit confirmation ("Confirm you've seen this")
+    // — the read-acknowledgment WhatsApp structurally can't do.
+    requiresAck: boolean("requires_ack").notNull().default(false),
+    editedAt: timestamp("edited_at"),
+    // Soft delete: row stays (channel history + "message removed" stub), body
+    // is blanked and attachments cleared at delete time.
+    deletedAt: timestamp("deleted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("staff_messages_channel_idx").on(t.channelId, t.id)],
+);
+
+// One row per person actually mentioned in a message (explicit ids from the
+// composer, or fan-out of a leadership @channel). Powers the mention badge and
+// the email escalation — no free-text re-parsing ever.
+export const staffMessageMentions = pgTable(
+  "staff_message_mentions",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    messageId: integer("message_id").notNull().references(() => staffMessages.id, { onDelete: "cascade" }),
+    channelId: integer("channel_id").notNull(),
+    userId: integer("user_id").notNull(),
+    kind: text("kind").notNull().default("user"), // 'user' | 'channel'
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("staff_message_mentions_unq").on(t.messageId, t.userId),
+    index("staff_message_mentions_user_idx").on(t.userId, t.channelId, t.createdAt),
+  ],
+);
+
+export const staffMessageReactions = pgTable(
+  "staff_message_reactions",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    messageId: integer("message_id").notNull().references(() => staffMessages.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull(),
+    emoji: text("emoji").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("staff_message_reactions_unq").on(t.messageId, t.userId, t.emoji),
+    index("staff_message_reactions_msg_idx").on(t.messageId),
+  ],
+);
+
+// Explicit "I've seen this" confirmations on requires_ack messages.
+export const staffMessageAcks = pgTable(
+  "staff_message_acks",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    messageId: integer("message_id").notNull().references(() => staffMessages.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull(),
+    ackedAt: timestamp("acked_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("staff_message_acks_unq").on(t.messageId, t.userId),
+    index("staff_message_acks_msg_idx").on(t.messageId),
+  ],
+);
+
+// One heartbeat row per user, upserted by the sync poll. Server-side ONLY —
+// decides "away → escalate to email". Never rendered as a green dot.
+export const staffChatPresence = pgTable("staff_chat_presence", {
+  userId: integer("user_id").primaryKey(),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+});
+
+export type StaffChannel = typeof staffChannels.$inferSelect;
+export type StaffChannelMember = typeof staffChannelMembers.$inferSelect;
+export type StaffMessage = typeof staffMessages.$inferSelect;
+export type StaffMessageMention = typeof staffMessageMentions.$inferSelect;
+export type StaffMessageReaction = typeof staffMessageReactions.$inferSelect;
+export type StaffMessageAck = typeof staffMessageAcks.$inferSelect;

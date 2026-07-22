@@ -1103,6 +1103,52 @@ export async function sendChatReplyNotification(params: {
   });
 }
 
+/** Staff Chat (the in-house Slack) — away-escalation email for a mention / DM /
+ *  opted-in channel message. Sent ONLY when the recipient has no active chat
+ *  session (away ≥5 min), never in NZ quiet hours, max one per channel per
+ *  15 min — the durable safety net under in-app badges. Org-agnostic system
+ *  mail → sends from cufc.co.nz per shared/org-domains doctrine. */
+export async function sendStaffChatNotification(params: {
+  to: string; recipientName: string; senderName: string;
+  /** "#match-day-ops" or "a direct message" */
+  context: string; messageExcerpt: string; mentioned?: boolean; chatUrl: string;
+}): Promise<boolean> {
+  const accent = "#c9a43e";
+  const isDm = !params.context.startsWith("#");
+  const headline = params.mentioned
+    ? `${params.senderName} mentioned you`
+    : isDm
+      ? `${params.senderName} messaged you`
+      : `New message in ${params.context}`;
+  const whereLine = params.mentioned
+    ? `${params.senderName} mentioned you in ${params.context}:`
+    : isDm
+      ? `${params.senderName} sent you a direct message:`
+      : `${params.senderName} posted in ${params.context}:`;
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:520px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:${accent};margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">United Sports Group · Staff Chat</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">${headline.replace(/</g, "&lt;")}</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.6;margin:0 0 14px;">Hi ${params.recipientName.split(" ")[0].replace(/</g, "&lt;")},</p>
+        <p style="color:#9aa0a6;font-size:13px;margin:0 0 6px;">${whereLine.replace(/</g, "&lt;")}</p>
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:0;white-space:pre-wrap;border-left:3px solid ${accent};padding:2px 0 2px 14px;">${(params.messageExcerpt || "").replace(/</g, "&lt;")}</p>
+        <div style="text-align:center;margin:24px 0 4px;"><a href="${params.chatUrl}" style="display:inline-block;background:${accent};color:#0b0b08;font-weight:700;font-size:14px;text-decoration:none;padding:11px 22px;border-radius:10px;">Open Chat</a></div>
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">You get these only when you're away from ClubOS. Mute any channel from its header — mentions still reach you.</p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "ClubOS Chat <noreply@cufc.co.nz>",
+    subject: `${headline} — Staff Chat`,
+    html,
+  });
+}
+
 /** Club logo licence — a participating club's rep signed the CIC logo agreement
  *  (cicyouth.com/club-logo-agreement). Emails info@cicyouth.com the proof record. */
 export async function sendClubLogoConsentNotification(params: {
