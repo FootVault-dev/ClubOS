@@ -28,6 +28,8 @@ import {
   COUNT_VARIANCE_PERCENT_THRESHOLD, COUNT_VARIANCE_CENTS_THRESHOLD,
   countLineNeedsRecount,
   availableQty, wouldGoNegative, legsSumToZero,
+  stripLocationPrefix, scanActionsForItem, scanActionsForLocation,
+  scanQuantityToUnits, buildLocationMoveLegs,
 } from "../shared/warehouse";
 
 let passed = 0;
@@ -324,6 +326,70 @@ ok("multi-leg group summing to zero passes", () => assert.equal(legsSumToZero([-
 ok("legs that do not sum to zero fail", () => assert.equal(legsSumToZero([-5, 4]), false));
 ok("a single non-zero leg fails (not a transfer)", () => assert.equal(legsSumToZero([5]), false));
 ok("an empty leg list trivially sums to zero", () => assert.equal(legsSumToZero([]), true));
+
+// ── Scan resolution & location moves (T7) ────────────────────────────────
+ok("LOC: prefix is stripped and the remainder normalised", () => {
+  assert.deepEqual(stripLocationPrefix("LOC:A-01-2"), { isLocationCode: true, code: "A-01-2" });
+});
+ok("LOC: prefix is matched case-insensitively, code still normalised", () => {
+  assert.deepEqual(stripLocationPrefix("loc:a-01-2 "), { isLocationCode: true, code: "A-01-2" });
+});
+ok("a code with no LOC: prefix is left as isLocationCode: false, just trimmed", () => {
+  assert.deepEqual(stripLocationPrefix("  A-01-2  "), { isLocationCode: false, code: "A-01-2" });
+});
+ok("an empty code has no prefix either", () => {
+  assert.deepEqual(stripLocationPrefix(""), { isLocationCode: false, code: "" });
+});
+
+ok("scanActionsForItem: a non-loanable item never offers loan actions", () => {
+  const actions = scanActionsForItem({ isLoanable: false });
+  assert.deepEqual(actions, ["putaway", "pick", "dispatch", "transfer", "consume"]);
+});
+ok("scanActionsForItem: a loanable item adds loan_out + loan_return", () => {
+  const actions = scanActionsForItem({ isLoanable: true });
+  assert.ok(actions.includes("loan_out"));
+  assert.ok(actions.includes("loan_return"));
+  assert.equal(actions.length, 7);
+});
+
+ok("scanActionsForLocation: a virtual location offers nothing (no printed label anyone scans)", () => {
+  assert.deepEqual(scanActionsForLocation({ kind: "virtual" }), []);
+});
+ok("scanActionsForLocation: a bin offers putaway/transfer/count", () => {
+  assert.deepEqual(scanActionsForLocation({ kind: "bin" }), ["putaway", "transfer", "count"]);
+});
+ok("scanActionsForLocation: a zone offers the same set as a bin", () => {
+  assert.deepEqual(scanActionsForLocation({ kind: "zone" }), ["putaway", "transfer", "count"]);
+});
+
+ok("scanQuantityToUnits: one scan of a non-multiplied alias is one unit", () => {
+  assert.equal(scanQuantityToUnits(1, 1), 1);
+});
+ok("scanQuantityToUnits: a case-of-6 alias scanned 4 times is 24 units", () => {
+  assert.equal(scanQuantityToUnits(4, 6), 24);
+});
+ok("scanQuantityToUnits: zero scans is zero units regardless of pack size", () => {
+  assert.equal(scanQuantityToUnits(0, 6), 0);
+});
+
+ok("buildLocationMoveLegs: builds an opposite-signed pair carrying the item's allowNegative", () => {
+  const legs = buildLocationMoveLegs(
+    { id: 1, allowNegative: false },
+    { id: 10, code: "A-01-1" },
+    { id: 20, code: "A-02-1" },
+    5,
+  );
+  assert.deepEqual(legs, [
+    { itemId: 1, locationId: 10, locationCode: "A-01-1", delta: -5, allowNegative: false },
+    { itemId: 1, locationId: 20, locationCode: "A-02-1", delta: 5, allowNegative: false },
+  ]);
+  assert.equal(legsSumToZero(legs.map((l) => l.delta)), true, "a move's own legs must satisfy the transfer invariant");
+});
+ok("buildLocationMoveLegs: propagates allowNegative: true to both legs", () => {
+  const legs = buildLocationMoveLegs({ id: 2, allowNegative: true }, { id: 11, code: "B" }, { id: 21, code: "C" }, 3);
+  assert.equal(legs[0].allowNegative, true);
+  assert.equal(legs[1].allowNegative, true);
+});
 
 console.log(`\n✅ warehouse (shared): ${passed} assertions passed`);
 if (process.exitCode) console.error("❌ some assertions failed");

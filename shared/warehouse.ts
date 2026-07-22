@@ -489,3 +489,93 @@ export function legsSumToZero(deltas: number[]): boolean {
   const sum = deltas.reduce((a, b) => a + b, 0);
   return Math.abs(sum) < 1e-9;
 }
+
+// ── Scan resolution & location moves (T7) ───────────────────────────────────
+// The scan station's whole job (§4.4): read a code, work out what it names,
+// offer the right next actions. The actual lookups need wh_items/
+// wh_locations/wh_barcode_aliases tables (server/warehouse.ts's
+// resolveScanCode, behind a bespoke ScanLookupDb seam — same reasoning as
+// WarehouseDb/ReservationDb there, see that file's header comment);
+// everything below is the DB-free half — the LOC: prefix convention, the
+// advisory action lists, the pack_qty multiplier arithmetic, and the
+// two-leg shape every putaway/transfer shares — kept here so it's
+// unit-testable with no DB and shared with the future scan station UI (T15)
+// so client and server never carry two different copies of this logic.
+
+/** Does this code carry the `LOC:` prefix (§4.4/D5)? If so it's
+ *  UNAMBIGUOUSLY a location — the caller must look ONLY at wh_locations,
+ *  never fall through to an item/alias lookup even on a miss (a mistyped
+ *  bin code should read as "unknown", not get silently checked against SKUs
+ *  it was never meant to be). Case-insensitive on the prefix itself (a
+ *  human might type `loc:a-01-2` by hand); the code portion is always run
+ *  through normaliseLocationCode regardless of how it was cased. */
+export function stripLocationPrefix(code: string): { isLocationCode: boolean; code: string } {
+  const trimmed = code.trim();
+  if (trimmed.toUpperCase().startsWith(LOCATION_BARCODE_PREFIX)) {
+    return { isLocationCode: true, code: normaliseLocationCode(trimmed.slice(LOCATION_BARCODE_PREFIX.length)) };
+  }
+  return { isLocationCode: false, code: trimmed };
+}
+
+/** The scan station's action sheet once a code resolves to an ITEM (§4.4).
+ *  Advisory, not a live capability check — putaway/transfer get a real
+ *  endpoint in T7 itself; receive/pick/dispatch/consume/loan_out/
+ *  loan_return/count wire up across T6 and T8-T11, and the UI is expected to
+ *  grey out whatever it can't yet actually call. Equipment loan actions only
+ *  appear when the item itself is loanable (wh_items.is_loanable) — offering
+ *  "loan out" on a box of vinyl makes no sense. */
+export function scanActionsForItem(item: { isLoanable: boolean }): MovementType[] {
+  const actions: MovementType[] = ["putaway", "pick", "dispatch", "transfer", "consume"];
+  if (item.isLoanable) actions.push("loan_out", "loan_return");
+  return actions;
+}
+
+/** Same advisory list once a code resolves to a LOCATION. A virtual
+ *  location (SUPPLIER/CUSTOMER/SCRAP/PRODUCTION) has no printed label
+ *  anyone would ever scan — it's chosen from a dropdown as one leg of a
+ *  receipt/dispatch/write-off, never walked to with a trolley — so scanning
+ *  one offers nothing. A real bin/zone offers the full set. */
+export function scanActionsForLocation(location: { kind: LocationKind }): MovementType[] {
+  if (location.kind === "virtual") return [];
+  return ["putaway", "transfer", "count"];
+}
+
+/** A barcode alias's pack_qty is a per-scan multiplier (D5) — scanning a
+ *  case barcode `scans` times (or entering a case count once against it)
+ *  posts `scans * packQty` eaches, never `scans` eaches. Its own one-line
+ *  function so the scan station (T15) and any server-side receiving/putaway
+ *  flow multiply it exactly the same way. */
+export function scanQuantityToUnits(scans: number, packQty: number): number {
+  return scans * packQty;
+}
+
+/** One (item, fromLocation, toLocation, qty) move as the two ledger legs
+ *  every putaway/transfer needs (D8: every movement has a real from/to
+ *  story) — stock leaving fromLocation, the same qty arriving at
+ *  toLocation. `allowNegative` is the ITEM's own setting, applied to both
+ *  legs — it only ever matters for the source leg's guard (the destination
+ *  leg's delta is always positive and can never go negative), but passing
+ *  it uniformly means putaway and transfer's route handlers build their
+ *  legs identically instead of each deciding separately. `movementType`
+ *  itself is NOT baked in here — it's the one thing that differs between a
+ *  putaway and a transfer, so the caller supplies it directly to
+ *  postMovementGroup/runMovementGroup. */
+export interface LocationMoveLeg {
+  itemId: number;
+  locationId: number;
+  locationCode: string;
+  delta: number;
+  allowNegative: boolean;
+}
+
+export function buildLocationMoveLegs(
+  item: { id: number; allowNegative: boolean },
+  fromLocation: { id: number; code: string },
+  toLocation: { id: number; code: string },
+  qty: number,
+): [LocationMoveLeg, LocationMoveLeg] {
+  return [
+    { itemId: item.id, locationId: fromLocation.id, locationCode: fromLocation.code, delta: -qty, allowNegative: item.allowNegative },
+    { itemId: item.id, locationId: toLocation.id, locationCode: toLocation.code, delta: qty, allowNegative: item.allowNegative },
+  ];
+}

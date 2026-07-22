@@ -27,7 +27,7 @@
 // Postgres — exercised for real only after a human runs the migration).
 import { randomUUID } from "crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { whMovements, whReservations, whStock } from "@shared/schema";
+import { whMovements, whReservations, whStock, whItems, whLocations, whBarcodeAliases } from "@shared/schema";
 import type { db as realDb } from "./db";
 import {
   isMovementType,
@@ -35,10 +35,17 @@ import {
   isRefKind,
   legsSumToZero,
   QUARANTINE_ZONE,
+  normaliseSku,
+  normaliseAliasCode,
+  normaliseLocationCode,
+  stripLocationPrefix,
+  scanActionsForItem,
+  scanActionsForLocation,
   type MovementType,
   type ReasonCode,
   type RefKind,
   type ReservationStatus,
+  type LocationKind,
 } from "@shared/warehouse";
 
 // ── Public shapes ────────────────────────────────────────────────────────────
@@ -794,4 +801,149 @@ export async function reconcileStock(database?: ReconcileDb): Promise<ReconcileR
     }
   }
   return { checked: rows.length, drifts };
+}
+
+// ── Scan resolution (T7) ─────────────────────────────────────────────────────
+// resolveScanCode is the ONE place a scanned/typed code becomes an item, a
+// location, or "unknown" (§4.4). Three simple, UNLOCKED lookups — unlike
+// ReservationDb's getAvailableForItem, nothing here needs to serialize
+// concurrent callers, so a plain read has no reason to take a row lock —
+// wrapped in a bespoke ScanLookupDb seam purely so script/test-warehouse-
+// scan.ts can fake it with plain in-memory objects instead of needing a live
+// Postgres (same spirit as WarehouseDb/ReservationDb/ReconcileDb above, for
+// a much simpler reason: keeping the DB entirely out of a DB-free test run).
+
+export interface ScanResolvedItem {
+  id: number;
+  sku: string;
+  name: string;
+  isLoanable: boolean;
+}
+
+export interface ScanResolvedLocation {
+  id: number;
+  code: string;
+  kind: LocationKind;
+}
+
+export type ScanResolution =
+  | {
+      kind: "item";
+      item: ScanResolvedItem;
+      /** 'sku' = the code IS the item's own SKU (packQty always 1 — our own
+       *  scheme has no multiplier). 'alias' = a barcode alias matched
+       *  instead (packQty comes off that alias row — see
+       *  shared/warehouse.ts's scanQuantityToUnits for how it's applied). */
+      matchedVia: "sku" | "alias";
+      aliasCode?: string;
+      packQty: number;
+      actions: MovementType[];
+    }
+  | { kind: "location"; location: ScanResolvedLocation; actions: MovementType[] }
+  | { kind: "unknown"; rawCode: string };
+
+export interface ScanLookupDb {
+  findItemBySku(sku: string): Promise<ScanResolvedItem | undefined>;
+  findAliasByCode(code: string): Promise<{ item: ScanResolvedItem; packQty: number; aliasCode: string } | undefined>;
+  findLocationByCode(code: string): Promise<ScanResolvedLocation | undefined>;
+}
+
+/**
+ * Resolution order (D5/D7/D8), first match wins:
+ *  1. `LOC:`-prefixed → a location, full stop. A miss here is "unknown" —
+ *     never falls through to an item/alias lookup (see
+ *     shared/warehouse.ts's stripLocationPrefix comment for why).
+ *  2. Our own SKU scheme (D7) — we own this format, so it's checked before
+ *     the alias table.
+ *  3. A barcode alias (manufacturer EAN etc., D5) — looked up verbatim.
+ *  4. A bare (unprefixed) location code — an operator typing a bin code by
+ *     hand at a desk rather than scanning its printed LOC:-prefixed label.
+ *  5. Nothing matched → unknown. `rawCode` is preserved exactly as given
+ *     (untrimmed) for a future "did you mean" UI — only the code actually
+ *     used for lookups is trimmed/normalised.
+ */
+export async function resolveScanCode(db: ScanLookupDb, rawCode: string): Promise<ScanResolution> {
+  const code = rawCode.trim();
+  if (!code) return { kind: "unknown", rawCode };
+
+  const stripped = stripLocationPrefix(code);
+  if (stripped.isLocationCode) {
+    const location = await db.findLocationByCode(stripped.code);
+    if (!location) return { kind: "unknown", rawCode };
+    return { kind: "location", location, actions: scanActionsForLocation(location) };
+  }
+
+  const item = await db.findItemBySku(normaliseSku(code));
+  if (item) {
+    return { kind: "item", item, matchedVia: "sku", packQty: 1, actions: scanActionsForItem(item) };
+  }
+
+  const alias = await db.findAliasByCode(normaliseAliasCode(code));
+  if (alias) {
+    return {
+      kind: "item",
+      item: alias.item,
+      matchedVia: "alias",
+      aliasCode: alias.aliasCode,
+      packQty: alias.packQty,
+      actions: scanActionsForItem(alias.item),
+    };
+  }
+
+  const bareLocation = await db.findLocationByCode(normaliseLocationCode(code));
+  if (bareLocation) {
+    return { kind: "location", location: bareLocation, actions: scanActionsForLocation(bareLocation) };
+  }
+
+  return { kind: "unknown", rawCode };
+}
+
+/** Real adapter — plain unlocked reads, so unlike warehouseDbFromTx/
+ *  reservationDbFromTx this never needs to be handed an open transaction;
+ *  the top-level `db` works fine (never unit-tested directly all the same —
+ *  see the file-header comment — this one just doesn't NEED a live Postgres
+ *  to be trustworthy the way a guarded upsert or a row lock does, it's only
+ *  kept out of the test run for consistency with the rest of this file). */
+export function scanLookupDbFromDb(database: Pick<typeof realDb, "select">): ScanLookupDb {
+  return {
+    async findItemBySku(sku) {
+      const rows = await database
+        .select({ id: whItems.id, sku: whItems.sku, name: whItems.name, isLoanable: whItems.isLoanable })
+        .from(whItems)
+        .where(eq(whItems.sku, sku))
+        .limit(1);
+      return rows[0];
+    },
+    async findAliasByCode(code) {
+      const rows = await database
+        .select({
+          aliasCode: whBarcodeAliases.code,
+          packQty: whBarcodeAliases.packQty,
+          itemId: whItems.id,
+          itemSku: whItems.sku,
+          itemName: whItems.name,
+          itemIsLoanable: whItems.isLoanable,
+        })
+        .from(whBarcodeAliases)
+        .innerJoin(whItems, eq(whBarcodeAliases.itemId, whItems.id))
+        .where(eq(whBarcodeAliases.code, code))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return undefined;
+      return {
+        aliasCode: row.aliasCode,
+        packQty: Number(row.packQty),
+        item: { id: row.itemId, sku: row.itemSku, name: row.itemName, isLoanable: row.itemIsLoanable },
+      };
+    },
+    async findLocationByCode(code) {
+      const rows = await database
+        .select({ id: whLocations.id, code: whLocations.code, kind: whLocations.kind })
+        .from(whLocations)
+        .where(eq(whLocations.code, code))
+        .limit(1);
+      const row = rows[0];
+      return row ? { id: row.id, code: row.code, kind: row.kind as LocationKind } : undefined;
+    },
+  };
 }

@@ -7,13 +7,14 @@
 // short-circuits to `next()` for super_admin regardless of tab wiring, so
 // these routes work today even though the tab doesn't exist in the UI yet).
 //
-// This file owns the CRUD + search + label-payload surface (T4) plus the
-// reservations surface (T5: `available`, reserve/release/consume). Master
+// This file owns the CRUD + search + label-payload surface (T4), the
+// reservations surface (T5: `available`, reserve/release/consume), PO
+// receiving (T6), and the scan resolver + putaway/transfer (T7). Master
 // data (items/locations/aliases) still never touches wh_movements/wh_stock
-// directly — only the reservations section below calls into
+// directly — only the reservations/receiving/scan-move sections call into
 // server/warehouse.ts's reserve/release/consume + postMovementGroup (T3),
-// same as later route groups will (T6 receiving, T7 scan, T8 pick/dispatch,
-// T9 requisitions, T10 loans, T11 counts).
+// same as later route groups will (T8 pick/dispatch, T9 requisitions,
+// T10 loans, T11 counts).
 //
 // House rules followed (AGENTS.md): no DB CHECKs on open value sets — every
 // enum-ish field (kind, brandOwner, unit, locationKind, refKind,
@@ -24,7 +25,7 @@
 // codes, plus the engine's InsufficientStockError/InsufficientAvailableError,
 // are caught and turned into clean 409s rather than raw 500s.
 // ─────────────────────────────────────────────────────────────────────────────
-import type { Express, Response } from "express";
+import type { Express, Request, Response } from "express";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
@@ -46,6 +47,7 @@ import {
   isValidDateOnly,
   computeReceiveDiscrepancy, receiveDiscrepancyNote, derivePoStatusFromLines,
   QUARANTINE_ZONE,
+  buildLocationMoveLegs,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
   type RefKind, type MovementType, type ReasonCode, type PoStatus,
 } from "@shared/warehouse";
@@ -55,6 +57,8 @@ import {
   runConsumeReservation,
   runMovementGroup,
   reservationDbFromTx,
+  resolveScanCode,
+  scanLookupDbFromDb,
   InsufficientAvailableError,
   InsufficientStockError,
   type MovementLeg,
@@ -207,6 +211,69 @@ async function loadPoLinesWithReceipts(poId: number) {
  *  a supplier occasionally sends a late top-up after the line already read
  *  fully received, and that's still real stock arriving at the dock. */
 const RECEIVABLE_PO_STATUSES: ReadonlySet<PoStatus> = new Set<PoStatus>(["sent", "partial", "received"]);
+
+// ── Scan / location-move helpers (T7) ───────────────────────────────────────
+// Loads + validates a location for a putaway/transfer leg — must exist and
+// must NOT be virtual (SUPPLIER/CUSTOMER/SCRAP/PRODUCTION are movement
+// ENDPOINTS chosen from a dropdown by a receipt/dispatch/write-off flow,
+// never somewhere a human walks a trolley to — see
+// shared/warehouse.ts's scanActionsForLocation for the same call made on the
+// scan-resolver side).
+async function resolveRealLocationForMove(rawId: unknown, field: string) {
+  const locId = parseId(rawId);
+  if (locId === null) throw new WarehouseRouteError(`${field} is required`);
+  const [loc] = await db
+    .select({ id: whLocations.id, code: whLocations.code, kind: whLocations.kind })
+    .from(whLocations)
+    .where(eq(whLocations.id, locId));
+  if (!loc) throw new WarehouseRouteError(`${field} does not reference a real location`);
+  if (loc.kind === "virtual") {
+    throw new WarehouseRouteError(`${field} can't be a virtual location — choose a real bin or zone`);
+  }
+  return loc;
+}
+
+/**
+ * Body: { itemId, fromLocationId, toLocationId, qty, note?, idempotencyKey? }.
+ * Shared by putaway (moving newly-received stock off a receiving/staging
+ * zone into its home bin) and transfer (any other bin-to-bin move) — the two
+ * are the exact same two-leg shape (shared/warehouse.ts's
+ * buildLocationMoveLegs), only the `movementType` label differs.
+ */
+async function handleLocationMove(req: Request, res: Response, movementType: "putaway" | "transfer") {
+  try {
+    const b = req.body || {};
+    const itemId = parseId(b.itemId);
+    if (itemId === null) throw new WarehouseRouteError("itemId is required");
+    const [item] = await db
+      .select({ id: whItems.id, allowNegative: whItems.allowNegative })
+      .from(whItems)
+      .where(eq(whItems.id, itemId));
+    if (!item) throw new WarehouseRouteError("itemId does not reference a real item");
+
+    const fromLocation = await resolveRealLocationForMove(b.fromLocationId, "fromLocationId");
+    const toLocation = await resolveRealLocationForMove(b.toLocationId, "toLocationId");
+    if (fromLocation.id === toLocation.id) {
+      throw new WarehouseRouteError("fromLocationId and toLocationId must be different locations");
+    }
+
+    const qty = Number(b.qty);
+    if (!Number.isFinite(qty) || qty <= 0) throw new WarehouseRouteError("qty must be a positive number");
+
+    const legs = buildLocationMoveLegs(item, fromLocation, toLocation, qty);
+    const operatorUserId = req.session.userId!;
+    const movement = await runMovementGroup({
+      legs,
+      movementType,
+      operatorUserId,
+      idempotencyKey: clean(b.idempotencyKey) ?? null,
+      note: clean(b.note) ?? null,
+    });
+    res.status(movement.alreadyProcessed ? 200 : 201).json(movement);
+  } catch (e: any) {
+    handleWarehouseError(res, e, movementType);
+  }
+}
 
 export function registerWarehouseRoutes(app: Express) {
   // ═══════════════════════════════════════════════════════════════════════
@@ -1186,6 +1253,36 @@ export function registerWarehouseRoutes(app: Express) {
       handleWarehouseError(res, e, "PO receive");
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Scan resolver + putaway/transfer (T7). The scan station's core loop:
+  // scan any code → resolve to item | location | unknown + valid next
+  // actions (server/warehouse.ts's resolveScanCode — a bespoke ScanLookupDb
+  // seam, same reasoning as WarehouseDb/ReservationDb there); putaway and
+  // transfer both post a plain two-leg movement group via runMovementGroup —
+  // no new engine machinery beyond what T3 already built, only a different
+  // movementType label distinguishes the two (handleLocationMove above).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // Body: { code }. Never mutates anything — a pure lookup the scan station
+  // calls on every single scan before deciding which action sheet to show.
+  app.post("/api/admin/warehouse/scan", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const code = clean(req.body?.code);
+      if (!code) throw new WarehouseRouteError("A scanned code is required");
+      const result = await resolveScanCode(scanLookupDbFromDb(db), code);
+      res.json(result);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "scan resolve");
+    }
+  });
+
+  app.post("/api/admin/warehouse/putaway", requireAuth, requireTab("warehouse"), (req, res) =>
+    handleLocationMove(req, res, "putaway"),
+  );
+  app.post("/api/admin/warehouse/transfer", requireAuth, requireTab("warehouse"), (req, res) =>
+    handleLocationMove(req, res, "transfer"),
+  );
 
   // ═══════════════════════════════════════════════════════════════════════
   // Label-payload endpoints — bulk lookup by id so an admin can select
