@@ -638,15 +638,25 @@ function ApiKeysTab() {
                         {s}
                       </Badge>
                     ))}
-                    {key.programFilter && (
-                      <Badge
-                        variant="outline"
-                        className="text-[9px] px-1.5 py-0.5 border-emerald-500/25 text-emerald-300/70 bg-emerald-500/5"
-                        title={describeProgramFilter(normalizeProgramFilter(key.programFilter))}
-                      >
-                        {[...(key.programFilter.types || []), ...(key.programFilter.slugs || [])].join(" · ") || "no programmes"}
-                      </Badge>
-                    )}
+                    {(() => {
+                      // Render from the NORMALISED filter, never the raw column —
+                      // otherwise a malformed value can show one thing on the badge
+                      // and mean another in the enforcement.
+                      const pf = normalizeProgramFilter(key.programFilter);
+                      if (!pf) return null;
+                      const tokens = [...(pf.types || []), ...(pf.slugs || [])];
+                      return (
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] px-1.5 py-0.5 ${tokens.length
+                            ? "border-emerald-500/25 text-emerald-300/70 bg-emerald-500/5"
+                            : "border-red-500/30 text-red-300/70 bg-red-500/5"}`}
+                          title={describeProgramFilter(pf)}
+                        >
+                          {tokens.length ? tokens.join(" · ") : "reads nothing"}
+                        </Badge>
+                      );
+                    })()}
                   </div>
                   <button
                     onClick={() => setActivityKeyId(activityKeyId === key.id ? null : key.id)}

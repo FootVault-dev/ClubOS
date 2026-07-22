@@ -21,8 +21,11 @@ extend it safely.
 
 1. **Scopes gate WHAT, workspace binding gates WHOSE, the programme filter
    gates WHICH.** Every `/api/v1` endpoint names its scope; a key reaches only
-   orgs in its `allowed_org_ids`; and inside those orgs it reads only the
-   programmes its `program_filter` allows (see "Programme filtering" below).
+   orgs in its `allowed_org_ids`; and for the programme-based scopes it reads
+   only the programmes its `program_filter` allows. **The filter does not reach
+   `league:read`, `tournament:read` or `cic7s:read`** — that data is not
+   organised by programme — so a key may not hold both (enforced at create and
+   patch). See "Programme filtering" below.
 2. **No scope exists** for sponsorship, budget/Xero, inbox, e-sign, split-pay,
    venue bookings, medical fields, child DOBs/ID documents, Stripe identifiers,
    or marketing attribution. Adding one is a deliberate decision, not a default.
@@ -86,11 +89,33 @@ holds several (every academy programme is `type='academy'`, so U4-U8 has to be
 named by slug).
 
 - **`NULL` = unrestricted.** Every key predating this feature is NULL, so the
-  migration could not change anyone's access.
-- **Present-but-empty = nothing.** The gate **fails closed**: a filter that
-  resolves to no usable tokens yields `FALSE`, never an absent clause. Quietly
-  widening back to "all programmes" would turn a typo into a data leak. The
-  create/patch endpoints reject an empty filter outright rather than store one.
+  migration could not change anyone's access. **Only a literal NULL means
+  unrestricted.**
+- **Anything else that fails to parse = nothing.** The gate **fails closed**.
+  `{}`, a bare array, a jsonb *string* (`pg` hands those back as a JS string, so
+  `'"holiday_camp"'::jsonb` is a real shape), `{"type":[…]}` with the singular
+  key, `{"Types":[…]}` capitalised — all resolve to an empty filter and read no
+  rows. A value in this column was written to *restrict* a key; if we cannot
+  understand it, "restrict everything" is the only safe reading. Quietly
+  widening back to all programmes would turn a typo into a data leak.
+- **Which scopes it reaches.** The filter narrows queries over `programs`, so it
+  covers `overview` / `analytics` / `customers` / `camps` / `registrations` /
+  `sporty`. It is a **no-op** on `league:read`, `tournament:read` and
+  `cic7s:read`, whose data is reached without touching `programs`. Create and
+  patch therefore **reject** a key that holds both a filter and one of those
+  scopes — a "fenced" badge on a key still returning every CIC 7s registrant's
+  email is worse than no badge at all. Issue a separate key instead.
+- **Write-time validation.** A filter is rejected if any token is malformed
+  (rather than silently dropped, which would store a fence narrower than the one
+  the admin typed), or if a `types` entry is not a real `program_type`
+  (`holiday_camp`, `academy`, `trials`, `event`, `open_training`, `league_team`).
+  Programme names like `u4-u8` go in **slugs**; putting a type in the slugs box
+  and a slug in the types box is the one mistake that silently *widens*.
+- **`type` is compared as `::text`.** The column is a Postgres enum; comparing it
+  to a non-label literal raises `invalid input value for enum program_type`,
+  which every v1 handler would hand back to the caller as a 500 carrying the
+  internal type name. Casting compares as strings, so an unknown type matches no
+  row — fail-closed, no crash, no schema disclosure.
 - **Rotation carries the filter across.** `POST /:id/rotate` copies
   `program_filter` onto the replacement — a rotation must never widen access.
 - Enforced by `programSqlCondition()` in `server/routes.ts`, which delegates to
@@ -116,11 +141,19 @@ Or `PATCH /api/admin/api-keys/:id/program-filter` with
 `{"programFilter": {...}}` (send `null` to lift it). The create modal in
 Settings → API Keys has Types/Slugs fields with a live plain-English summary.
 
-**Conformance:** `npx tsx script/verify-program-filter.ts` — 29 assertions
-covering the fail-closed cases, the injection guard, and the real fenced SQL run
-read-only against the live database. Plus the `zach-fence` section of
-`scripts/api-fence-test.sh`, which checks response **bodies**, not just status
-codes (a 200 on `/camps` is not a pass if the academy is in the list).
+**Conformance:** `npx tsx script/verify-program-filter.ts` — 64 assertions in
+three parts: the filter logic (fail-closed shapes, injection fuzz, write-time
+validation); a **static scan of `server/routes.ts`** asserting every `/api/v1`
+endpoint that filters on `programs.organization_id` also carries the gate — so
+a new endpoint that forgets it fails the suite instead of silently bypassing
+every fence; and the real fenced SQL run read-only against the live database.
+
+Plus the `zach-fence` section of `scripts/api-fence-test.sh`, which checks
+response **bodies**, not just status codes. It derives the permitted set from
+the *rule* rather than from `/camps` (trusting `/camps` would make the
+registration and revenue checks tautological when the fence is off), pages the
+whole year rather than the first 200 rows, classifies on `type` rather than a
+name pattern, and treats an unparseable response as a FAIL rather than a pass.
 
 ## Adding a new scope/endpoint — the checklist
 

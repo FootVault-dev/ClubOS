@@ -19,11 +19,15 @@
 
 import "dotenv/config";
 import { Pool } from "pg";
+import { readFileSync } from "fs";
 import {
   normalizeProgramFilter,
   programFilterSqlCondition,
   programFilterIsEmpty,
   describeProgramFilter,
+  rejectedProgramTokens,
+  unknownProgramTypes,
+  scopesOutsideProgramFilter,
   type ProgramFilter,
 } from "../shared/api-scopes";
 
@@ -57,13 +61,31 @@ function assert(label: string, condition: boolean, detail = "") {
 function partA() {
   console.log("\nA. Filter logic\n");
 
-  // Absence means unrestricted — every key that exists today.
+  // ONLY a literal absence means unrestricted.
   check("null is unrestricted", normalizeProgramFilter(null), null);
   check("undefined is unrestricted", normalizeProgramFilter(undefined), null);
-  check("a bare object with neither key is unrestricted", normalizeProgramFilter({}), null);
-  check("a non-object is unrestricted, not guessed at", normalizeProgramFilter("holiday_camp"), null);
-  check("an array is unrestricted, not guessed at", normalizeProgramFilter(["holiday_camp"]), null);
   check("unrestricted produces no SQL clause", programFilterSqlCondition(null), null);
+
+  // Everything else that fails to parse must fail CLOSED, not open. A value in
+  // this column was put there to restrict a key; if we can't read it, the only
+  // safe interpretation is "restrict everything".
+  const failClosed: [string, unknown][] = [
+    ["{} (no keys)", {}],
+    ["a bare array", ["holiday_camp"]],
+    ["a jsonb string (pg returns it as a JS string)", "holiday_camp"],
+    ["a number", 42],
+    ["the singular typo {type:[...]}", { type: ["holiday_camp"] }],
+    ["a capitalised key {Types:[...]}", { Types: ["holiday_camp"] }],
+    ["an unrelated key {programTypes:[...]}", { programTypes: ["holiday_camp"] }],
+    ["{types:null}", { types: null }],
+    ["{slugs:'u4-u8'} (string, not array)", { slugs: "u4-u8" }],
+    ["all tokens invalid", { types: ["'; DROP TABLE programs; --"] }],
+  ];
+  for (const [label, value] of failClosed) {
+    const norm = normalizeProgramFilter(value);
+    assert(`${label} → restricted, not unrestricted`, norm !== null);
+    check(`${label} → SQL FALSE`, programFilterSqlCondition(norm), "FALSE");
+  }
 
   // The real filter.
   const zach = normalizeProgramFilter({ types: ["holiday_camp"], slugs: ["u4-u8"] });
@@ -71,9 +93,11 @@ function partA() {
   check(
     "Zach's filter builds a type-OR-slug condition",
     programFilterSqlCondition(zach),
-    "(p.type IN ('holiday_camp') OR p.slug IN ('u4-u8'))",
+    "(p.type::text IN ('holiday_camp') OR p.slug IN ('u4-u8'))",
   );
-  check("alias is honoured", programFilterSqlCondition(zach, "prog"), "(prog.type IN ('holiday_camp') OR prog.slug IN ('u4-u8'))");
+  check("alias is honoured", programFilterSqlCondition(zach, "prog"), "(prog.type::text IN ('holiday_camp') OR prog.slug IN ('u4-u8'))");
+  assert("type is compared as text, so an unknown label matches no row instead of raising an enum error",
+    (programFilterSqlCondition(zach) || "").includes(".type::text IN"));
 
   // Fail closed — the property that makes this a fence rather than a hint.
   const empty = normalizeProgramFilter({ types: [], slugs: [] });
@@ -81,9 +105,17 @@ function partA() {
   assert("a present-but-empty filter reports empty", programFilterIsEmpty(empty));
   check("a present-but-empty filter yields FALSE, never an absent clause", programFilterSqlCondition(empty), "FALSE");
 
-  const allJunk = normalizeProgramFilter({ types: ["'; DROP TABLE programs; --"], slugs: ["../../etc"] });
-  check("every token invalid → tokens dropped", allJunk, { types: [], slugs: [] });
-  check("every token invalid → FALSE, never widened to all programmes", programFilterSqlCondition(allJunk), "FALSE");
+  // Write-time validation: what the admin typed must be what gets stored.
+  check("a dropped token is reported, not silently swallowed",
+    rejectedProgramTokens({ types: ["holiday_camp"], slugs: ["u4-u8", "o'brien"] }), ["o'brien"]);
+  check("a clean filter drops nothing", rejectedProgramTokens({ types: ["holiday_camp"], slugs: ["u4-u8"] }), []);
+  check("a type that is not a real programme type is caught",
+    unknownProgramTypes(["holiday_camp", "camps", "u4-u8"]), ["camps", "u4-u8"]);
+  check("the real types pass", unknownProgramTypes(["holiday_camp", "academy"]), []);
+  check("scopes the filter cannot constrain are named",
+    scopesOutsideProgramFilter(["camps:read", "tournament:read", "cic7s:read"]), ["tournament:read", "cic7s:read"]);
+  check("Zach's scopes are all programme-aware",
+    scopesOutsideProgramFilter(["overview:read", "camps:read", "registrations:read"]), []);
 
   // Injection guard — the condition is interpolated into raw SQL.
   const mixed = normalizeProgramFilter({
@@ -92,9 +124,28 @@ function partA() {
   });
   check("dangerous tokens are dropped, safe ones kept", mixed, { types: ["holiday_camp"], slugs: ["u4-u8"] });
   const sqlText = programFilterSqlCondition(mixed) || "";
-  assert("no quote can escape the literal", !/[^a-z0-9_\-'(), .]/i.test(sqlText.replace(/p\.(type|slug) IN/g, "").replace(/ OR /g, "")), sqlText);
+  // The only attacker-influenced part of the string is what sits inside the
+  // quoted literals — assert on exactly that, rather than on the whole clause
+  // (which legitimately contains `::`, parens and dots from our own code).
+  const literals = [...sqlText.matchAll(/'([^']*)'/g)].map(m => m[1]);
+  assert(`every quoted literal is a plain identifier (${literals.length} checked)`,
+    literals.length > 0 && literals.every(l => /^[a-z0-9_-]+$/.test(l)), JSON.stringify(literals));
+  assert("quotes are balanced — no literal can be closed early",
+    (sqlText.match(/'/g) || []).length % 2 === 0, sqlText);
   assert("no semicolon reaches the SQL", !sqlText.includes(";"), sqlText);
   assert("no comment marker reaches the SQL", !sqlText.includes("--"), sqlText);
+
+  // A hostile token that survives normalisation must still not be able to break
+  // out — belt and braces over a wide fuzz set.
+  const hostile = ["a'--", "a';DROP TABLE x;--", "a\nb", "a b", "a/*x*/", "ａ", "K", "ſ", "x".repeat(200), "", "-- ", "';"];
+  for (const h of hostile) {
+    const f = normalizeProgramFilter({ types: ["holiday_camp"], slugs: [h] });
+    const s = programFilterSqlCondition(f) || "";
+    if (s.includes(h) && h.length > 0 && !/^[a-z0-9_-]+$/.test(h)) {
+      failed++; console.log(`  ❌ hostile token reached the SQL: ${JSON.stringify(h)} -> ${s}`);
+    }
+  }
+  passed++; console.log(`  ✅ ${hostile.length} hostile tokens all rejected before the SQL`);
 
   // Case + whitespace + duplicates.
   check(
@@ -106,6 +157,50 @@ function partA() {
   // Human-readable description (shown in the admin UI + audit log).
   check("unrestricted description", describeProgramFilter(null), "All programmes in the allowed workspaces");
   assert("Zach's description names both parts", describeProgramFilter(zach).includes("holiday_camp") && describeProgramFilter(zach).includes("u4-u8"));
+}
+
+// ── A2. Gate coverage — does every programme query actually USE the fence? ───
+//
+// Part A proves the FRAGMENT is correct; it would still pass if every call to
+// programSqlFilter() were deleted from routes.ts. This half reads the source and
+// asserts each /api/v1 endpoint that filters on programs.organization_id also
+// carries the gate — so a new endpoint that forgets it fails the suite instead
+// of silently bypassing every fence.
+
+function partA2() {
+  console.log("\nA2. Gate coverage in server/routes.ts\n");
+
+  const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8").split("\n");
+  const starts: { line: number; name: string }[] = [];
+  src.forEach((l, i) => {
+    const m = l.match(/app\.(?:get|post)\("(\/api\/v1\/[^"]*)"/);
+    if (m) starts.push({ line: i, name: m[1] });
+  });
+  starts.push({ line: src.length, name: "__end__" });
+
+  let checked = 0;
+  for (let i = 0; i < starts.length - 1; i++) {
+    const body = src.slice(starts[i].line, starts[i + 1].line).join("\n");
+    const orgFilters = (body.match(/p\.organization_id (?:=|IN)/g) || []).length;
+    if (orgFilters === 0) continue;
+    const gates = (body.match(/programSqlFilter\(req\)|programSqlCondition\(req\)/g) || []).length;
+    checked++;
+    assert(
+      `${starts[i].name} — all ${orgFilters} programme quer${orgFilters === 1 ? "y is" : "ies are"} gated`,
+      gates >= orgFilters,
+      `${orgFilters - gates} of ${orgFilters} queries have no ${"$"}{programSqlFilter(req)} — that endpoint bypasses every programme fence`,
+    );
+  }
+  assert(`found programme endpoints to check (got ${checked})`, checked >= 9,
+    "the scan matched fewer endpoints than expected — has the v1 section moved or been renamed?");
+
+  // The two admin-route occurrences of the same string must NOT be gated: they
+  // serve logged-in staff, not API keys, and req has no apiKeyProgramFilter.
+  const adminGated = src.filter((l, i) =>
+    /p\.organization_id = \$\{orgId\}/.test(l) &&
+    !starts.some(s => s.line <= i && i < (starts[starts.findIndex(x => x.line === s.line) + 1]?.line ?? 0)) &&
+    /programSqlFilter/.test(l)).length;
+  assert("no non-v1 admin query was gated by mistake", adminGated === 0);
 }
 
 // ── B. Real SQL, read-only, against the live database ────────────────────────
@@ -202,6 +297,7 @@ async function partB() {
 (async () => {
   console.log("API-key programme filter — verification");
   partA();
+  partA2();
   await partB();
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed === 0 ? 0 : 1);

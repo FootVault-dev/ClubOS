@@ -60,31 +60,67 @@ echo "── Zach key: programme fence (holiday camps + u4-u8 ONLY) ──"
 # The scope matrix above proves WHICH ENDPOINTS he reaches. This proves WHAT COMES
 # BACK from the ones he does — a 200 on /camps is not a pass if it lists the academy.
 # Requires ZACH_KEY to carry a program_filter; skipped otherwise.
-prog_check() { # label path jq-expression-that-must-be-empty description
-  local label="$1" path="$2" expr="$3" desc="$4"
-  if [ -z "$ZACH_KEY" ]; then SKIP=$((SKIP+1)); return; fi
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "SKIP  [$label] $desc (jq not installed)"; SKIP=$((SKIP+1)); return
-  fi
-  local body offenders
-  body=$(curl -s -H "Authorization: Bearer $ZACH_KEY" "$BASE$path")
-  offenders=$(echo "$body" | jq -r "$expr" 2>/dev/null)
-  if [ -z "$offenders" ]; then
-    PASS=$((PASS+1)); echo "PASS  [$label] $desc"
-  else
-    FAIL=$((FAIL+1)); echo "FAIL  [$label] $desc — leaked: $(echo "$offenders" | tr '\n' ' ')"
-  fi
-}
+if [ -z "$ZACH_KEY" ]; then
+  echo "SKIP  [zach-fence] no ZACH_KEY set"; SKIP=$((SKIP+1))
+elif ! command -v jq >/dev/null 2>&1; then
+  echo "SKIP  [zach-fence] jq not installed"; SKIP=$((SKIP+1))
+else
+  zget() { curl -s -H "Authorization: Bearer $ZACH_KEY" "$BASE$1"; }
 
-prog_check "zach-fence" "/api/v1/camps" \
-  '.camps[] | select(.type != "holiday_camp" and .slug != "u4-u8") | .slug' \
-  "/camps lists only holiday camps + u4-u8"
-prog_check "zach-fence" "/api/v1/registrations?days=365&limit=200" \
-  '.registrations[] | select(.campSlug != "u4-u8" and (.campName | test("Holiday Camp") | not)) | .campSlug' \
-  "/registrations carries no other programme's families"
-prog_check "zach-fence" "/api/v1/revenue?days=365" \
-  '.camps[] | select(.slug != "u4-u8" and (.campName | test("Holiday Camp") | not)) | .slug' \
-  "/revenue breaks down only his programmes"
+  # The permitted set is derived from the RULE (type is a holiday camp, or the
+  # slug is u4-u8) applied to the programme list — NOT from whatever /camps
+  # happens to return. Taking /camps at its word would make the registration and
+  # revenue checks tautological: with the fence off, every programme is "allowed"
+  # and they would pass while the data leaks. Classifying on `type` rather than a
+  # name pattern also stops a programme called "Academy Holiday Camp" sneaking in.
+  CAMPS_BODY=$(zget "/api/v1/camps")
+  ALLOWED=$(echo "$CAMPS_BODY" | jq -r '.camps[] | select(.type == "holiday_camp" or .slug == "u4-u8") | .slug' 2>/dev/null)
+  if [ -z "$ALLOWED" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL  [zach-fence] /camps returned no parseable programme list — body: $(echo "$CAMPS_BODY" | head -c 200)"
+  else
+    # 1. /camps itself must contain nothing but holiday camps + u4-u8.
+    OFFENDERS=$(echo "$CAMPS_BODY" | jq -r '.camps[] | select(.type != "holiday_camp" and .slug != "u4-u8") | .slug' 2>/dev/null)
+    JQ_RC=$?
+    if [ $JQ_RC -ne 0 ]; then
+      FAIL=$((FAIL+1)); echo "FAIL  [zach-fence] /camps response did not parse (jq rc=$JQ_RC) — an error body must never read as a pass"
+    elif [ -n "$OFFENDERS" ]; then
+      FAIL=$((FAIL+1)); echo "FAIL  [zach-fence] /camps leaked: $(echo "$OFFENDERS" | tr '\n' ' ')"
+    else
+      PASS=$((PASS+1)); echo "PASS  [zach-fence] /camps lists only holiday camps + u4-u8 ($(echo "$ALLOWED" | wc -l | tr -d ' ') programmes)"
+    fi
+
+    # 2. Every registration, paging the WHOLE year — not just the first page.
+    OFF=""; TOTAL=0; OFFSET=0
+    while :; do
+      PAGE=$(zget "/api/v1/registrations?days=365&limit=200&offset=$OFFSET")
+      N=$(echo "$PAGE" | jq -r '.registrations | length' 2>/dev/null)
+      if [ -z "$N" ] || [ "$N" = "null" ]; then
+        FAIL=$((FAIL+1)); echo "FAIL  [zach-fence] /registrations did not parse at offset $OFFSET"; break
+      fi
+      [ "$N" -eq 0 ] && break
+      TOTAL=$((TOTAL+N))
+      BAD=$(echo "$PAGE" | jq -r --argjson allow "$(echo "$ALLOWED" | jq -R . | jq -s .)" \
+            '.registrations[] | select([.campSlug] | inside($allow) | not) | .campSlug' 2>/dev/null | sort -u)
+      [ -n "$BAD" ] && OFF="$OFF $BAD"
+      OFFSET=$((OFFSET+200))
+      [ "$OFFSET" -gt 2000 ] && break   # sanity stop
+    done
+    if [ -n "$(echo "$OFF" | tr -d ' ')" ]; then
+      FAIL=$((FAIL+1)); echo "FAIL  [zach-fence] /registrations leaked families from:$(echo "$OFF" | tr '\n' ' ')"
+    else
+      PASS=$((PASS+1)); echo "PASS  [zach-fence] all $TOTAL registrations (365d, paged) belong to his programmes"
+    fi
+
+    # 3. Revenue breakdown must name only permitted programmes.
+    REVBAD=$(zget "/api/v1/revenue?days=365" | jq -r --argjson allow "$(echo "$ALLOWED" | jq -R . | jq -s .)" \
+             '.camps[] | select([.slug] | inside($allow) | not) | .slug' 2>/dev/null)
+    if [ -n "$REVBAD" ]; then
+      FAIL=$((FAIL+1)); echo "FAIL  [zach-fence] /revenue leaked: $(echo "$REVBAD" | tr '\n' ' ')"
+    else
+      PASS=$((PASS+1)); echo "PASS  [zach-fence] /revenue breaks down only his programmes"
+    fi
+  fi
+fi
 
 echo "── Isaac key (CIC + CIC7s + MFL only) ──"
 check "isaac" "$ISAAC_KEY" "/api/v1/tournament/summary" 200

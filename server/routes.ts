@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents } from "@shared/schema";
-import { isValidApiScope, API_SCOPES, normalizeProgramFilter, programFilterIsEmpty, programFilterSqlCondition, describeProgramFilter, type ProgramFilter } from "@shared/api-scopes";
+import { isValidApiScope, API_SCOPES, normalizeProgramFilter, programFilterIsEmpty, programFilterSqlCondition, describeProgramFilter, rejectedProgramTokens, unknownProgramTypes, scopesOutsideProgramFilter, PROGRAM_TYPES, type ProgramFilter } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
@@ -16491,6 +16491,62 @@ export async function registerRoutes(
   // Tokens were already validated by normalizeProgramFilter; they are validated
   // again here because this string is interpolated into sql.raw, and a row
   // edited straight in the database must never reach the query text.
+  // Everything a programme filter must satisfy before it is stored. Returns an
+  // error message, or null when the filter is good. Shared by create + patch so
+  // the two can't drift apart.
+  function validateProgramFilterInput(raw: unknown, clean: ProgramFilter | null, scopes: string[]): string | null {
+    if (raw == null) return null;
+    if (!clean || programFilterIsEmpty(clean)) {
+      return 'programFilter must name at least one real programme type or slug, e.g. {"types":["holiday_camp"],"slugs":["u4-u8"]}';
+    }
+    // A token we silently dropped would store a fence narrower than the one the
+    // admin typed — they'd believe a programme was included when it isn't.
+    const dropped = rejectedProgramTokens(raw);
+    if (dropped.length > 0) {
+      return `programFilter has unusable entries: ${dropped.join(", ")}. Types and slugs must be lists of plain identifiers (letters, digits, - and _).`;
+    }
+    // A type that isn't a real programme type can never match a row, so the
+    // filter would silently be narrower than intended (or empty).
+    const unknownTypes = unknownProgramTypes(clean.types);
+    if (unknownTypes.length > 0) {
+      return `Unknown programme type(s): ${unknownTypes.join(", ")}. Valid types are ${PROGRAM_TYPES.join(", ")}. Programme names like "u4-u8" go in slugs, not types.`;
+    }
+    // The filter narrows queries over `programs`. League, tournament and CIC 7s
+    // data is reached without touching that table, so the filter cannot
+    // constrain those scopes — and a key showing a "fenced" badge while
+    // returning every CIC 7s registrant's email is worse than an unfenced key.
+    const unconstrained = scopesOutsideProgramFilter(scopes || []);
+    if (unconstrained.length > 0) {
+      return `A programme filter cannot restrict ${unconstrained.join(", ")} — that data is not organised by programme. Either drop ${unconstrained.length > 1 ? "those scopes" : "that scope"} from this key, or issue a separate key for it.`;
+    }
+    return null;
+  }
+
+  // Slugs must name programmes that actually exist in the key's workspaces.
+  // This is what catches the one mistake that silently WIDENS a fence: putting
+  // the type in the Slugs box and a slug in the Types box. `{"types":["academy"],
+  // "slugs":["holiday_camp"]}` is well-formed and passes every other check, but
+  // it grants the entire academy — the exact leak the feature exists to stop.
+  async function unknownProgramSlugs(filter: ProgramFilter | null, orgIds: number[]): Promise<string[]> {
+    const slugs = filter?.slugs || [];
+    if (slugs.length === 0 || orgIds.length === 0) return [];
+    const rows = await db
+      .select({ slug: programs.slug })
+      .from(programs)
+      .where(inArray(programs.organizationId, orgIds));
+    const real = new Set(rows.map((r) => (r.slug || "").toLowerCase()));
+    return slugs.filter((s) => !real.has(s));
+  }
+
+  async function realProgramSlugs(orgIds: number[]): Promise<string[]> {
+    if (orgIds.length === 0) return [];
+    const rows = await db
+      .select({ slug: programs.slug })
+      .from(programs)
+      .where(inArray(programs.organizationId, orgIds));
+    return rows.map((r) => r.slug || "").filter(Boolean).sort();
+  }
+
   // Bare condition, or null when the key is unrestricted. Use this where the
   // query builds an array of conditions joined with AND. The logic itself lives
   // in shared/api-scopes.ts so it can be exercised by script/verify-program-filter.ts.
@@ -16586,16 +16642,11 @@ export async function registerRoutes(
       const { name, organizationId, allowedOrgIds, scopes, expiresInDays, programFilter } = req.body;
       if (!name) return res.status(400).json({ message: "name is required" });
 
-      // Optional programme allow-list. Rejected rather than silently widened if
-      // it was sent but every token was malformed — a filter the admin believed
-      // they set must never come out as "all programmes".
+      // Optional programme allow-list, validated hard on the way in: a stored
+      // filter that isn't what the admin typed is worse than no filter at all.
       const cleanFilter = normalizeProgramFilter(programFilter);
-      if (programFilter != null && cleanFilter === null) {
-        return res.status(400).json({ message: 'programFilter must be an object like {"types":["holiday_camp"],"slugs":["u4-u8"]}' });
-      }
-      if (cleanFilter && programFilterIsEmpty(cleanFilter)) {
-        return res.status(400).json({ message: "programFilter contains no valid programme types or slugs — a key with an empty filter could read nothing" });
-      }
+      const filterError = programFilter == null ? null : validateProgramFilterInput(programFilter, cleanFilter, scopes);
+      if (filterError) return res.status(400).json({ message: filterError });
 
       // Explicit least-privilege: scopes are required and must all be known.
       if (!Array.isArray(scopes) || scopes.length === 0) {
@@ -16615,6 +16666,17 @@ export async function registerRoutes(
       const existingOrgs = await db.select({ id: organizations.id }).from(organizations).where(inArray(organizations.id, bindOrgIds));
       if (existingOrgs.length !== bindOrgIds.length) {
         return res.status(400).json({ message: "One or more organization IDs do not exist" });
+      }
+
+      // Slugs must name real programmes in the bound workspaces — this is the
+      // check that catches a type typed into the Slugs box, which would widen
+      // the fence instead of narrowing it.
+      const badSlugs = await unknownProgramSlugs(cleanFilter, bindOrgIds);
+      if (badSlugs.length > 0) {
+        return res.status(400).json({
+          message: `No programme in these workspaces has the slug(s): ${badSlugs.join(", ")}. Programme TYPES (${PROGRAM_TYPES.join(", ")}) go in types, not slugs.`,
+          validSlugs: await realProgramSlugs(bindOrgIds),
+        });
       }
 
       const { raw, prefix, hash } = generateApiKey();
@@ -16692,6 +16754,7 @@ export async function registerRoutes(
         keyPrefix: prefix,
         scopes: created.scopes,
         allowedOrgIds: created.allowedOrgIds,
+        programFilter: created.programFilter,
         oldKeyExpiresAt: graceExpiry,
         message: `Save this key now — it won't be shown again. The old key keeps working until ${graceExpiry.toISOString()}.`,
       });
@@ -16719,11 +16782,16 @@ export async function registerRoutes(
 
       const raw = req.body.programFilter;
       const cleanFilter = normalizeProgramFilter(raw);
-      if (raw != null && cleanFilter === null) {
-        return res.status(400).json({ message: 'programFilter must be null, or an object like {"types":["holiday_camp"],"slugs":["u4-u8"]}' });
-      }
-      if (cleanFilter && programFilterIsEmpty(cleanFilter)) {
-        return res.status(400).json({ message: "programFilter contains no valid programme types or slugs — that key would be able to read nothing" });
+      const filterError = validateProgramFilterInput(raw, cleanFilter, key.scopes || []);
+      if (filterError) return res.status(400).json({ message: filterError });
+
+      const keyOrgIds: number[] = key.allowedOrgIds && key.allowedOrgIds.length > 0 ? key.allowedOrgIds : [key.organizationId];
+      const badPatchSlugs = await unknownProgramSlugs(cleanFilter, keyOrgIds);
+      if (badPatchSlugs.length > 0) {
+        return res.status(400).json({
+          message: `No programme in this key's workspaces has the slug(s): ${badPatchSlugs.join(", ")}. Programme TYPES (${PROGRAM_TYPES.join(", ")}) go in types, not slugs.`,
+          validSlugs: await realProgramSlugs(keyOrgIds),
+        });
       }
 
       await db.update(apiKeys).set({ programFilter: cleanFilter }).where(eq(apiKeys.id, keyId));

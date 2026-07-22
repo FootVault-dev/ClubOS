@@ -121,18 +121,68 @@ function cleanTokens(value: unknown): string[] {
 
 /**
  * Canonicalise whatever arrived (request body, DB jsonb) into either null
- * (unrestricted) or a filter with validated tokens. Anything that is not an
- * object — including a bare array or a string — is treated as unrestricted
- * absence rather than guessed at.
+ * (unrestricted) or a filter with validated tokens.
+ *
+ * ONLY a literal null/undefined means unrestricted. Every other value that
+ * fails to parse as a filter — a bare array, a jsonb string, `{}`, a key
+ * spelled `type` or `Types` — resolves to an EMPTY filter, which reads
+ * nothing.
+ *
+ * That asymmetry is the whole safety property. A value sitting in this column
+ * was put there by someone intending to restrict a key; if we cannot
+ * understand it, the only safe reading is "restrict everything", never
+ * "restrict nothing". `pg` hands a jsonb string back as a JS string, so
+ * `'"holiday_camp"'::jsonb` in this column is a real shape, not a hypothetical.
  */
 export function normalizeProgramFilter(raw: unknown): ProgramFilter | null {
   if (raw === null || raw === undefined) return null;
-  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return { types: [], slugs: [] };
   const source = raw as Record<string, unknown>;
-  // An object carrying neither key is not a filter anyone authored — treat it
-  // as absent rather than as "see nothing", which would break a key silently.
-  if (!("types" in source) && !("slugs" in source)) return null;
+  if (!("types" in source) && !("slugs" in source)) return { types: [], slugs: [] };
   return { types: cleanTokens(source.types), slugs: cleanTokens(source.slugs) };
+}
+
+/**
+ * Tokens that were thrown away by cleanTokens — malformed, too long, or not a
+ * string. The write endpoints reject a filter that drops any token rather than
+ * storing a fence quietly narrower than the one the admin typed.
+ */
+export function rejectedProgramTokens(raw: unknown): string[] {
+  if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const source = raw as Record<string, unknown>;
+  const bad: string[] = [];
+  for (const key of ["types", "slugs"] as const) {
+    const value = source[key];
+    if (value === null || value === undefined) continue;
+    if (!Array.isArray(value)) { bad.push(`${key} must be an array`); continue; }
+    for (const item of value) {
+      const token = typeof item === "string" ? item.trim().toLowerCase() : "";
+      if (!isValidProgramToken(token)) bad.push(typeof item === "string" ? item : JSON.stringify(item));
+    }
+  }
+  return bad;
+}
+
+// ── Which scopes the programme filter can actually constrain ────────────────
+// The filter works by narrowing queries over the `programs` table. Scopes whose
+// endpoints never touch `programs` — league teams, tournament teams, CIC 7s —
+// reach their data another way, so the filter is a silent no-op on them.
+//
+// A key must therefore not hold both a programme filter and one of these
+// scopes: the admin would see a "fenced" badge on a key that still returns
+// every CIC 7s registrant's email. The write endpoints reject that combination.
+
+export const PROGRAMME_UNAWARE_SCOPES = ["league:read", "tournament:read", "cic7s:read"] as const;
+
+export function scopesOutsideProgramFilter(scopes: string[]): string[] {
+  return scopes.filter((s) => (PROGRAMME_UNAWARE_SCOPES as readonly string[]).includes(s));
+}
+
+/** The programme types a filter may name — anything else can match no row. */
+export const PROGRAM_TYPES = ["holiday_camp", "academy", "trials", "event", "open_training", "league_team"] as const;
+
+export function unknownProgramTypes(types: string[] | undefined): string[] {
+  return (types || []).filter((t) => !(PROGRAM_TYPES as readonly string[]).includes(t));
 }
 
 /** True when the filter permits nothing at all (present, but empty on both axes). */
@@ -161,7 +211,12 @@ export function programFilterSqlCondition(filter: ProgramFilter | null, alias = 
   const types = quoted(filter.types);
   const slugs = quoted(filter.slugs);
   const ors: string[] = [];
-  if (types.length) ors.push(`${alias}.type IN (${types.join(", ")})`);
+  // `programs.type` is a Postgres enum. Comparing it to a literal that is not a
+  // valid label raises "invalid input value for enum program_type" — which every
+  // v1 handler would return to the caller as a 500 carrying the internal type
+  // name. Casting to text compares as strings instead: an unknown type simply
+  // matches no row, which is the fail-closed outcome we want anyway.
+  if (types.length) ors.push(`${alias}.type::text IN (${types.join(", ")})`);
   if (slugs.length) ors.push(`${alias}.slug IN (${slugs.join(", ")})`);
   if (ors.length === 0) return "FALSE";
   return `(${ors.join(" OR ")})`;
