@@ -34,11 +34,14 @@ import { sendServerEvent } from "./meta-capi";
 import {
   shopProducts, shopProductColours, shopProductImages, shopVariants,
   shopShippingOptions, shopDiscountCodes, shopOrders, shopOrderItems, shopOrderShares,
+  whItems,
   type ShopProduct, type ShopProductColour, type ShopProductImage,
   type ShopVariant, type ShopShippingOption, type ShopDiscountCode,
   type ShopOrder, type ShopOrderItem, type ShopOrderShare,
   type ShopKitCustomisation, type ShopSponsorSlot, type ShopUnitPersonalisation,
 } from "@shared/schema";
+// T13 — WMS reservation on payment-confirm (dark-launched, see finalizeShopOrderPaid).
+import { runReserveStock } from "./warehouse";
 
 // ─── Brand registry — add a row per brand to open a new store ──────────────
 
@@ -445,6 +448,22 @@ export async function finalizeShopOrderPaid(orderId: number, paymentIntentId: st
         `);
       } catch (e) {
         console.error(`[Shop] stock decrement failed for variant ${item.variantId}:`, e);
+      }
+      // WMS reservation (T13, dark-launched behind WMS_NATIVE_SYNC) — the
+      // decrement above stays checkout availability's source of truth
+      // unchanged (D11); this is purely additive so a variant mapped to a
+      // wh_item also gets a WMS reservation for scan-at-dispatch to consume.
+      // Best-effort: a reservation failure must never fail the paid order.
+      if (process.env.WMS_NATIVE_SYNC === "1") {
+        try {
+          const [mapped] = await db.select({ id: whItems.id }).from(whItems)
+            .where(eq(whItems.shopVariantId, item.variantId));
+          if (mapped) {
+            await runReserveStock({ itemId: mapped.id, qty: item.qty, ref: { kind: "shop_order", id: order.id } });
+          }
+        } catch (e) {
+          console.error(`[Shop] WMS reserve failed for variant ${item.variantId}:`, e);
+        }
       }
     }
   }
