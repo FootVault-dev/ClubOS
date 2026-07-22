@@ -3019,18 +3019,25 @@ export function registerWarehouseRoutes(app: Express) {
       if (q !== undefined) {
         conditions.push(or(ilike(whItems.sku, `%${q}%`), ilike(whItems.name, `%${q}%`), ilike(whLocations.code, `%${q}%`)));
       }
-      // Plain calendar-date bounds (house rule: never round-trip a date
-      // through a JS Date) — createdAt is a timestamp column, so the bound
-      // is applied against its own ::date truncation, inclusive both ends.
+      // NZ-calendar-date bounds (house rule: never round-trip a date through
+      // a JS Date, and per nzTodayIso()'s own warning — NZ is UTC+12/+13, so
+      // a bare `createdAt::date` truncation reads as the PREVIOUS calendar
+      // day for most of the NZ business day). Same `AT TIME ZONE
+      // 'Pacific/Auckland'` idiom this file already applies to this exact
+      // column in the chargeback-report query above (`to_char(...,
+      // 'YYYY-MM') = month`) — matched here rather than a fresh ::date cast
+      // so both queries agree on what "today" means for the same column.
+      // ISO YYYY-MM-DD strings compare lexicographically the same as
+      // chronologically, so a plain >=/<= on the formatted string is exact.
       const dateFrom = clean(req.query.dateFrom as string | undefined);
       if (dateFrom !== undefined) {
         if (!isValidDateOnly(dateFrom)) throw new WarehouseRouteError("dateFrom must be YYYY-MM-DD");
-        conditions.push(sql`${whMovements.createdAt}::date >= ${dateFrom}::date`);
+        conditions.push(sql`to_char(${whMovements.createdAt} AT TIME ZONE 'Pacific/Auckland', 'YYYY-MM-DD') >= ${dateFrom}`);
       }
       const dateTo = clean(req.query.dateTo as string | undefined);
       if (dateTo !== undefined) {
         if (!isValidDateOnly(dateTo)) throw new WarehouseRouteError("dateTo must be YYYY-MM-DD");
-        conditions.push(sql`${whMovements.createdAt}::date <= ${dateTo}::date`);
+        conditions.push(sql`to_char(${whMovements.createdAt} AT TIME ZONE 'Pacific/Auckland', 'YYYY-MM-DD') <= ${dateTo}`);
       }
 
       const limitRaw = parseInt(String(req.query.limit ?? "200"), 10);
