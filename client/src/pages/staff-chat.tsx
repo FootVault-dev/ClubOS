@@ -1286,7 +1286,7 @@ function Composer(props: {
         </div>
       ) : (
         <div className="flex items-end gap-1.5">
-          <div className="flex-1 flex items-end rounded-2xl border border-white/10 bg-white/[0.04] focus-within:border-white/25 transition-colors">
+          <div className="flex-1 min-w-0 flex items-end rounded-2xl border border-white/10 bg-white/[0.04] focus-within:border-white/25 transition-colors">
             <button
               onClick={() => fileRef.current?.click()}
               title="Attach a file"
@@ -1299,7 +1299,7 @@ function Composer(props: {
               value={text}
               rows={1}
               placeholder={placeholder}
-              className="flex-1 bg-transparent py-3 pr-2 text-[14px] placeholder:text-white/25 focus:outline-none resize-none leading-snug"
+              className="flex-1 min-w-0 bg-transparent py-3 pr-2 text-[14px] placeholder:text-white/25 focus:outline-none resize-none leading-snug"
               onChange={(e) => {
                 setText(e.target.value);
                 updateMentionQuery(e.target.value, e.target.selectionStart);
@@ -1323,7 +1323,7 @@ function Composer(props: {
               <button
                 onClick={() => setRequiresAck(true)}
                 title="Ask everyone to confirm they've seen this"
-                className="w-10 h-11 flex items-center justify-center text-white/35 hover:text-[#c9a43e] shrink-0"
+                className="w-10 h-11 hidden min-[360px]:flex items-center justify-center text-white/35 hover:text-[#c9a43e] shrink-0"
               >
                 <CheckCheck className="w-[18px] h-[18px]" />
               </button>
