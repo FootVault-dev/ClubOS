@@ -67,6 +67,7 @@ import {
   Fingerprint,
   Telescope,
   MessageSquarePlus,
+  MessagesSquare,
   Link2,
   Target,
   Receipt,
@@ -83,6 +84,9 @@ import {
 // Access is gated server-side by requireAuth (not a per-workspace tab grant),
 // so it's appended directly to secondaryNav below, bypassing the tab whitelist.
 const feedbackSecondary = { tab: "feedback", title: "Feedback", url: "/admin/feedback", icon: MessageSquarePlus };
+// Universal "Chat" tab — the in-house Slack (staff channels + DMs). Same
+// universal pattern as Feedback: every workspace, requireAuth-gated.
+const chatSecondary = { tab: "chat", title: "Chat", url: "/admin/chat", icon: MessagesSquare };
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -529,9 +533,32 @@ export function AppSidebar() {
     tabSlug: item.tab,
   });
   const mainNav = allMainNav.filter(navFilter);
-  // Feedback is universal — always show it (no tab-whitelist filtering), for
-  // every staff member in every workspace.
-  const secondaryNav = [...allSecondaryNav.filter(navFilter), feedbackSecondary];
+  // Chat + Feedback are universal — always shown (no tab-whitelist filtering),
+  // for every staff member in every workspace. Chat sits first.
+  const secondaryNav = [...allSecondaryNav.filter(navFilter), chatSecondary, feedbackSecondary];
+
+  // Live unread badge for the Chat item: mentions + DM messages count (gold),
+  // other unreads show as a subtle dot. Polling this ALSO acts as the presence
+  // heartbeat — someone browsing ClubOS sees the badge, so the server rightly
+  // skips the escalation email while they're here.
+  const { data: chatSync } = useQuery<{ channels: { kind: string; joined: boolean; unread: number; mentions: number }[] }>({
+    queryKey: ["/api/admin/chat/sync"],
+    refetchInterval: 60_000,
+    staleTime: 55_000,
+    refetchOnWindowFocus: true,
+  });
+  const chatBadge = (chatSync?.channels ?? []).reduce(
+    (acc, c) => {
+      if (!c.joined) return acc;
+      if (c.kind === "dm") acc.important += c.unread;
+      else {
+        acc.important += c.mentions;
+        acc.other += Math.max(0, c.unread - c.mentions);
+      }
+      return acc;
+    },
+    { important: 0, other: 0 },
+  );
 
   const logoutMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/auth/logout"),
@@ -617,6 +644,14 @@ export function AppSidebar() {
                       <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase()}`}>
                         <item.icon className="w-4 h-4" />
                         <span className="text-[13px] font-medium truncate">{item.title}</span>
+                        {item.tab === "chat" && chatBadge.important > 0 && (
+                          <span className="ml-auto min-w-[18px] h-[18px] px-1 rounded-full bg-[#c9a43e] text-[#0b0b08] text-[10px] font-bold flex items-center justify-center leading-none">
+                            {chatBadge.important > 99 ? "99+" : chatBadge.important}
+                          </span>
+                        )}
+                        {item.tab === "chat" && chatBadge.important === 0 && chatBadge.other > 0 && (
+                          <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white/40" />
+                        )}
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

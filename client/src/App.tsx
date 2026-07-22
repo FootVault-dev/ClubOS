@@ -178,6 +178,7 @@ import PrintUpload from "@/pages/print-upload";
 import ClubDossier from "@/pages/club-dossier";
 import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
+import StaffChat from "@/pages/staff-chat";
 import { Search, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -217,6 +218,9 @@ function AdminRouter() {
   // member, in whatever workspace they have, can reach it. Handle it before the
   // per-workspace switches so it works everywhere from one place.
   if (location.startsWith("/admin/feedback")) return <Feedback />;
+  // Staff Chat (the in-house Slack) is universal for the same reason — one
+  // staff-wide chat, reachable from every workspace's System section.
+  if (location.startsWith("/admin/chat")) return <StaffChat />;
   const isVenue = currentOrg?.slug === "united-sports-centre";
   const isLeague = currentOrg?.slug === "mini-football-leagues";
   const isTournament = currentOrg?.slug === "christchurch-international-cup";
