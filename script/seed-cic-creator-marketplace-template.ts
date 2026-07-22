@@ -85,6 +85,9 @@ export const form = [
 ];
 
 export const settings = {
+  // The Club signs first. Max opens a document we have already signed, and his
+  // signature completes it. Standing rule — see memory feedback_esign_signing_order.
+  clubSignsFirst: true,
   guardianUnder18: true,
   detailsHeading: "Your details",
   counterSignerRole: "The Club",

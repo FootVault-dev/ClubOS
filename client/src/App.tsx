@@ -56,12 +56,20 @@ import GroupCalendar from "@/pages/group-calendar";
 import GroupSponsorship from "@/pages/group-sponsorship";
 import GroupProposals from "@/pages/group-proposals";
 import GroupGrants from "@/pages/group-grants";
+import GroupInvoices from "@/pages/invoices";
 import AdminLicensing from "@/pages/admin-licensing";
 import AdminEvents from "@/pages/admin-events";
 import AdminMembership from "@/pages/admin-membership";
 import AdminDeclarations from "@/pages/admin-declarations";
 import GroupProjects from "@/pages/group-projects";
 import GroupContent from "@/pages/group-content";
+import GroupHiring from "@/pages/group-hiring";
+import GroupVehicles from "@/pages/group-vehicles";
+import GroupSponsors from "@/pages/group-sponsors";
+import GroupVideos from "@/pages/group-videos";
+import GroupVideoRecord from "@/pages/group-video-record";
+import GroupVideoDetail from "@/pages/group-video-detail";
+import VideoShare from "@/pages/video-share";
 import GroupBudget from "@/pages/group-budget";
 import GroupBudgetXero from "@/pages/group-budget-xero";
 import GroupBudgetCostCentre from "@/pages/group-budget-cost-centre";
@@ -73,6 +81,8 @@ import AttributionPage from "@/pages/attribution";
 import BehaviorPage from "@/pages/behavior";
 import VenueFacilities from "@/pages/venue-facilities";
 import VenueAddons from "@/pages/venue-addons";
+import VenueHousing from "@/pages/venue-housing";
+import VenueMaintenance from "@/pages/venue-maintenance";
 import VenuePeople from "@/pages/venue-people";
 import VenuePayments from "@/pages/venue-payments";
 import VenueSettings from "@/pages/venue-settings";
@@ -90,6 +100,9 @@ import LeaguePayments from "@/pages/league-payments";
 import LeagueMailer from "@/pages/league-mailer";
 import LeagueRewards from "@/pages/league-rewards";
 import LeagueLoyalty from "@/pages/league-loyalty";
+import FmHistory from "@/pages/fm-history";
+import FmCompetitions from "@/pages/fm-competitions";
+import CufcOpenTrainings from "@/pages/cufc-open-trainings";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
 import LeagueBusinessPlan from "@/pages/league-business-plan";
@@ -104,6 +117,19 @@ import MediaLibrary from "@/pages/media-library";
 import CicMailer from "@/pages/cic-mailer";
 import CicPush from "@/pages/cic-push";
 import CicWatch from "@/pages/cic-watch";
+import ContentMarketplace from "@/pages/content-marketplace";
+import CicReferees from "@/pages/cic-referees";
+import CicScoreGame from "@/pages/cic-score-game";
+import RefHome from "@/pages/ref/RefHome";
+import RefSignup from "@/pages/ref/RefSignup";
+import RefGameDetail from "@/pages/ref/RefGameDetail";
+import MflReferees from "@/pages/mfl-referees";
+import MflGameFeedPage from "@/pages/mfl-game-feed";
+import MflScoreGame from "@/pages/mfl-score-game";
+import MflMedia from "@/pages/mfl-media";
+import MflRefHome from "@/pages/mfl-ref/MflRefHome";
+import MflRefSignup from "@/pages/mfl-ref/MflRefSignup";
+import MflRefGameDetail from "@/pages/mfl-ref/MflRefGameDetail";
 import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
 import CugcFreeSessions from "@/pages/cugc-free-sessions";
@@ -136,12 +162,15 @@ import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
 import PrintsCRM from "@/pages/prints-crm";
+import PrintsSales from "@/pages/prints-sales";
 import PrintsOrders from "@/pages/prints-orders";
 import PrintsProjects from "@/pages/prints-projects";
+import PrintsManagement from "@/pages/prints-management";
 import PrintsAnalytics from "@/pages/prints-analytics";
 import PrintsLanding from "@/pages/prints-landing";
 import PrintsEmail from "@/pages/prints-email";
 import PrintsJobs from "@/pages/prints-jobs";
+import PrintsQuotes from "@/pages/prints-quotes";
 import PrintsOrderDetail from "@/pages/prints-order-detail";
 import PrintsMaterials from "@/pages/prints-materials";
 import PrintsIntegrations from "@/pages/prints-integrations";
@@ -164,6 +193,7 @@ import PrintUpload from "@/pages/print-upload";
 import ClubDossier from "@/pages/club-dossier";
 import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
+import StaffChat from "@/pages/staff-chat";
 import { Search, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -203,6 +233,9 @@ function AdminRouter() {
   // member, in whatever workspace they have, can reach it. Handle it before the
   // per-workspace switches so it works everywhere from one place.
   if (location.startsWith("/admin/feedback")) return <Feedback />;
+  // Staff Chat (the in-house Slack) is universal for the same reason — one
+  // staff-wide chat, reachable from every workspace's System section.
+  if (location.startsWith("/admin/chat")) return <StaffChat />;
   const isVenue = currentOrg?.slug === "united-sports-centre";
   const isLeague = currentOrg?.slug === "mini-football-leagues";
   const isTournament = currentOrg?.slug === "christchurch-international-cup";
@@ -227,11 +260,14 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={PrintsDashboard} />
+        <Route path="/admin/print-management" component={PrintsManagement} />
         <Route path="/admin/print-jobs" component={PrintsJobs} />
+        <Route path="/admin/print-quotes" component={PrintsQuotes} />
         <Route path="/admin/print-orders/:id" component={PrintsOrderDetail} />
         <Route path="/admin/print-orders" component={PrintsOrders} />
         <Route path="/admin/print-materials" component={PrintsMaterials} />
         <Route path="/admin/print-crm" component={PrintsCRM} />
+        <Route path="/admin/print-sales" component={PrintsSales} />
         <Route path="/admin/print-projects" component={PrintsProjects} />
         <Route path="/admin/print-analytics" component={PrintsAnalytics} />
         <Route path="/admin/print-landing" component={PrintsLanding} />
@@ -271,13 +307,20 @@ function AdminRouter() {
         <Route path="/admin/calendar" component={GroupCalendar} />
         <Route path="/admin/projects" component={GroupProjects} />
         <Route path="/admin/content" component={GroupContent} />
+        <Route path="/admin/hiring" component={GroupHiring} />
         <Route path="/admin/sponsorship" component={GroupSponsorship} />
         <Route path="/admin/proposals" component={GroupProposals} />
         <Route path="/admin/grants" component={GroupGrants} />
+        <Route path="/admin/invoices" component={GroupInvoices} />
         <Route path="/admin/budget/cost-centres/:slug" component={GroupBudgetCostCentre} />
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
         <Route path="/admin/cashflow" component={GroupCashflow} />
+        <Route path="/admin/vehicles" component={GroupVehicles} />
+        <Route path="/admin/sponsor-traffic" component={GroupSponsors} />
+        <Route path="/admin/videos/record" component={GroupVideoRecord} />
+        <Route path="/admin/videos/:id" component={GroupVideoDetail} />
+        <Route path="/admin/videos" component={GroupVideos} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -349,6 +392,9 @@ function AdminRouter() {
         <Route path="/admin/cic-logo-consents" component={CicLogoConsents} />
         <Route path="/admin/cic-watch" component={CicWatch} />
         <Route path="/admin/media" component={MediaLibrary} />
+        <Route path="/admin/cic-content-marketplace" component={ContentMarketplace} />
+        <Route path="/admin/cic-referees" component={CicReferees} />
+        <Route path="/admin/cic-score/:id" component={CicScoreGame} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -372,6 +418,10 @@ function AdminRouter() {
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />
+        <Route path="/admin/mfl-referees" component={MflReferees} />
+        <Route path="/admin/mfl-game-feed" component={MflGameFeedPage} />
+        <Route path="/admin/mfl-score/:id" component={MflScoreGame} />
+        <Route path="/admin/mfl-media" component={MflMedia} />
         <Route path="/admin/payments" component={LeaguePayments} />
         <Route path="/admin/mailer" component={LeagueMailer} />
         <Route path="/admin/rewards" component={LeagueRewards} />
@@ -409,6 +459,8 @@ function AdminRouter() {
         <Route path="/admin/analytics" component={VenueAnalytics} />
         <Route path="/admin/facilities" component={VenueFacilities} />
         <Route path="/admin/addons" component={VenueAddons} />
+        <Route path="/admin/housing" component={VenueHousing} />
+        <Route path="/admin/maintenance" component={VenueMaintenance} />
         <Route path="/admin/people" component={VenuePeople} />
         <Route path="/admin/payments" component={VenuePayments} />
         <Route path="/admin/venue-settings" component={VenueSettings} />
@@ -445,6 +497,11 @@ function AdminRouter() {
       <Route path="/admin/mailer" component={AdminMailer} />
       <Route path="/admin/cufc-mailer" component={CufcMailer} />
       <Route path="/admin/predictor" component={Predictor} />
+      {/* Friendly Manager History — CUFC's 10-year archive (default/camps
+          workspace Switch: CUFC has no is* flag, it lands here). */}
+      <Route path="/admin/fm-history" component={FmHistory} />
+      <Route path="/admin/fm-competitions" component={FmCompetitions} />
+      <Route path="/admin/open-trainings" component={CufcOpenTrainings} />
       <Route path="/admin/football-institute" component={FootballInstitute} />
       <Route path="/admin/analytics" component={CampAnalytics} />
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
@@ -546,9 +603,19 @@ function App() {
                 const isVenueHost = host.startsWith("book.");
                 const isPrintHost = host.startsWith("order.") || host.includes("unitedprints.co.nz");
                 const isMflHost = host.includes("minifootball");
+                // ref.cicyouth.com / ref.minifootball.co.nz = the referee
+                // platforms (login/signup/dashboard). MUST come before BOTH
+                // the minifootball check and the cicyouth check below —
+                // otherwise the "minifootball"/"cicyouth" substring sends a
+                // ref.* host to the league landing page / Skills Challenge
+                // page instead. join.cicyouth.com stays Skills Challenge;
+                // minifootball.co.nz (no "ref." prefix) stays the league page.
+                const isRefHost = host.startsWith("ref.");
+                const isMflRefHost = isRefHost && isMflHost;
                 const isCicHost = host.includes("cicyouth");
                 if (isVenueHost) return <VenueBookPage />;
                 if (isPrintHost) return <PrintHub />;
+                if (isRefHost) return <Redirect to={isMflRefHost ? "/mfl-ref" : "/login"} />;
                 if (isMflHost) return <Redirect to="/league" />;
                 if (isCicHost) return <Redirect to="/skills" />;
                 return <Redirect to={isAdminHost ? "/admin/login" : "/fundamentals-camp"} />;
@@ -565,7 +632,48 @@ function App() {
             {/* USG Studio — public proposal pages (unlisted, no auth). Must
                 precede the 2-segment /:slug/* and 1-segment /:slug routes. */}
             <Route path="/p/:token" component={StudioPublicPage} />
+            {/* Staff Videos — the in-house Loom's public share pages. Random
+                non-enumerable tokens; visibility enforced by the public API. */}
+            <Route path="/v/:token" component={VideoShare} />
             <Route path="/studio-preview" component={StudioPreviewPage} />
+            {/* CIC referee scoring — the mobile app referees use to score their
+                games. Referee token-auth (never a staff session); same-origin.
+                Clean URLs on ref.cicyouth.com (/login, /signup, /game/:id) —
+                old /ref* paths kept as redirects since links were already shared.
+                ref.minifootball.co.nz shares these SAME clean paths but redirects
+                into the /mfl-ref/* namespace below — one URL shape, two brands,
+                picked by hostname (cicyouth.com behaviour is untouched). */}
+            <Route path="/login">
+              {() => {
+                const host = typeof window !== "undefined" ? window.location.hostname : "";
+                if (host.startsWith("ref.") && host.includes("minifootball")) return <Redirect to="/mfl-ref" />;
+                return <RefHome />;
+              }}
+            </Route>
+            <Route path="/signup">
+              {() => {
+                const host = typeof window !== "undefined" ? window.location.hostname : "";
+                if (host.startsWith("ref.") && host.includes("minifootball")) return <Redirect to="/mfl-ref/signup" />;
+                return <RefSignup />;
+              }}
+            </Route>
+            <Route path="/game/:id">
+              {(params) => {
+                const host = typeof window !== "undefined" ? window.location.hostname : "";
+                if (host.startsWith("ref.") && host.includes("minifootball")) return <Redirect to={`/mfl-ref/game/${params.id}`} />;
+                return <RefGameDetail />;
+              }}
+            </Route>
+            <Route path="/ref/signup"><Redirect to="/signup" /></Route>
+            <Route path="/ref/game/:id">{(params) => <Redirect to={`/game/${params.id}`} />}</Route>
+            <Route path="/ref"><Redirect to="/login" /></Route>
+            {/* MFL referee scoring — separate namespace, own gold-on-black
+                brand (client/src/pages/mfl-ref/*). Reached directly at
+                /mfl-ref/* on app.usg.co.nz, or via the clean-URL redirect
+                above on ref.minifootball.co.nz. */}
+            <Route path="/mfl-ref" component={MflRefHome} />
+            <Route path="/mfl-ref/signup" component={MflRefSignup} />
+            <Route path="/mfl-ref/game/:id" component={MflRefGameDetail} />
             <Route path="/book" component={VenueBookPage} />
             <Route path="/book/success" component={VenueBookSuccess} />
             <Route path="/book/split/:code" component={VenueSplitPage} />

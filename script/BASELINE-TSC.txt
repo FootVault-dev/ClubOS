@@ -3,6 +3,7 @@ client/src/pages/admin-camp-detail.tsx 1
 client/src/pages/admin-mailer.tsx 1
 client/src/pages/admin-registrations.tsx 3
 client/src/pages/cic-watch.tsx 1
+client/src/pages/fm-competitions.tsx 1
 client/src/pages/group-calendar.tsx 3
 client/src/pages/group-sponsorship.tsx 1
 client/src/pages/tournament-detail.tsx 1
@@ -12,12 +13,15 @@ client/src/pages/venue-facilities.tsx 1
 server/attribution-reports.ts 1
 server/cugc-stripe.ts 1
 server/feedback-routes.ts 2
+server/fm-competitions-routes.ts 1
+server/fm-history-routes.ts 1
 server/index.ts 1
-server/routes.ts 261
+server/routes.ts 264
+server/split-pay.ts 3
 server/storage.ts 91
 server/stripe.ts 1
 server/tournament-brackets.ts 2
 server/tournament-schedule.ts 2
 shared/attribution-models.ts 5
 shared/meta-insights.ts 1
-shared/schema.ts 154
+shared/schema.ts 175

@@ -404,6 +404,108 @@ export async function sendCufcContactNotification(params: {
   });
 }
 
+// ── CUFC Open Trainings ───────────────────────────────────────────────────────
+// The invite-only funnel's three emails: parent acknowledgement at submit,
+// staff notification to the academy office, and the approval confirmation.
+// Same navy shell as the contact notification above.
+
+const cufcShellWrap = (heading: string, inner: string) => `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#030711;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:#7d95ff;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United FC</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">${heading}</h1>
+      </div>
+      <div style="background:#0c1226;border:1px solid #1d2a55;border-radius:18px;padding:24px;color:#e6e6e6;font-size:14px;line-height:1.65;">
+        ${inner}
+      </div>
+      <p style="text-align:center;color:#5a6480;font-size:11px;line-height:1.7;margin:20px 0 0;">
+        Christchurch United Football Club · Christchurch, New Zealand
+      </p>
+    </div>
+  </div>`;
+
+const cufcInfoRow = (label: string, value: string) =>
+  `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:130px;vertical-align:top;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
+
+const esc = (v: string) => String(v || "").replace(/</g, "&lt;");
+
+/** Parent acknowledgement — sent the moment a request lands. Promises a
+ *  review, not a booking: nothing is confirmed until staff approve it. */
+export async function sendCufcOpenTrainingReceived(params: {
+  to: string; guardianName: string; childName: string; groupLabel: string;
+}): Promise<boolean> {
+  const html = cufcShellWrap("Open Training Request Received", `
+    <p style="margin:0 0 14px;">Kia ora ${esc(params.guardianName)},</p>
+    <p style="margin:0 0 14px;">Thanks for requesting a free open training for <strong>${esc(params.childName)}</strong> (${esc(params.groupLabel)}).</p>
+    <p style="margin:0 0 14px;">Our academy staff review every request. Once yours is approved you'll get an email from us confirming the session details.</p>
+    <p style="margin:0;">Open trainings are free of charge. If anything changes in the meantime, just reply to this email.</p>
+  `);
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: "academy@cufc.co.nz",
+    subject: `Open training request received — ${params.childName}`,
+    html,
+  });
+}
+
+/** Staff notification → the academy office inbox. */
+export async function sendCufcOpenTrainingNotification(params: {
+  to: string; childName: string; dob: string; grade: number | null; groupLabel: string;
+  guardianName: string; email: string; phone: string;
+  currentClub?: string | null; notes?: string | null; sourceUrl?: string;
+}): Promise<boolean> {
+  const rows = [
+    cufcInfoRow("Player", esc(params.childName)),
+    cufcInfoRow("Date of birth", esc(params.dob) + (params.grade != null ? ` (U${params.grade})` : "")),
+    cufcInfoRow("Age group", esc(params.groupLabel)),
+    cufcInfoRow("Parent / guardian", esc(params.guardianName)),
+    cufcInfoRow("Email", esc(params.email)),
+    cufcInfoRow("Phone", esc(params.phone)),
+    ...(params.currentClub ? [cufcInfoRow("Current club", esc(params.currentClub))] : []),
+  ].join("");
+  const html = cufcShellWrap("New Open Training Request", `
+    <table style="width:100%;border-collapse:collapse;">${rows}</table>
+    ${params.notes ? `<p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:18px 0 0;white-space:pre-wrap;">${esc(params.notes)}</p>` : ""}
+    <p style="color:#7d8ba8;font-size:12px;margin:18px 0 0;">Review it in ClubOS → Christchurch United → Open Trainings.</p>
+    ${params.sourceUrl ? `<p style="color:#7d8ba8;font-size:11px;margin:8px 0 0;">via ${esc(params.sourceUrl)}</p>` : ""}
+  `);
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: params.email || CUFC_REPLY_TO,
+    subject: `Open training request — ${params.childName} (${params.groupLabel})`,
+    html,
+  });
+}
+
+/** Approval confirmation — sent on the transition into `approved`. If staff
+ *  entered session details they're included verbatim; otherwise the email
+ *  promises a follow-up rather than inventing a time or venue. */
+export async function sendCufcOpenTrainingConfirmed(params: {
+  to: string; guardianName: string; childName: string; sessionDetails?: string | null;
+}): Promise<boolean> {
+  const html = cufcShellWrap("Open Training Confirmed", `
+    <p style="margin:0 0 14px;">Kia ora ${esc(params.guardianName)},</p>
+    <p style="margin:0 0 14px;">Good news — <strong>${esc(params.childName)}</strong>'s open training request has been approved.</p>
+    ${params.sessionDetails
+      ? `<div style="background:#101a3a;border:1px solid #2a3a6b;border-radius:12px;padding:16px;margin:0 0 14px;">
+           <p style="color:#7d95ff;margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;">Session details</p>
+           <p style="color:#ffffff;font-size:14px;line-height:1.65;margin:0;white-space:pre-wrap;">${esc(params.sessionDetails)}</p>
+         </div>`
+      : `<p style="margin:0 0 14px;">Our academy staff will be in touch shortly with the session details.</p>`}
+    <p style="margin:0;">The session is free of charge. If you have any questions, just reply to this email.</p>
+  `);
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: "academy@cufc.co.nz",
+    subject: `Open training confirmed — ${params.childName}`,
+    html,
+  });
+}
+
 /**
  * CUFC broadcast / newsletter — wraps the composer's rich HTML in the navy
  * Christchurch United shell with the subject as the heading and a
@@ -504,15 +606,27 @@ export async function sendLeagueConfirmationEmail(params: {
   });
 }
 
-/** Split Pay — a squad member's share has been charged. Their personal receipt. */
+/** Split Pay — a squad member's share has been charged. Their personal receipt.
+ *  While the squad is still short, the receipt also carries the team's share
+ *  link so ANY paid member can pass it on (not just the captain). */
 export async function sendSplitShareReceiptEmail(params: {
   to: string;
   memberName: string;
   teamName: string;
   amountCents: number;
   registrationId?: number;
+  shareUrl?: string | null;      // included while the split is still open
+  paidCount?: number;
+  targetCount?: number | null;
 }): Promise<boolean> {
   const amount = `$${(params.amountCents / 100).toFixed(2)} NZD`;
+  const shareBlock = params.shareUrl
+    ? `
+    <p style="color:#b9b9b9; font-size:13px; line-height:1.6; margin:22px 0 8px;">
+      ${params.paidCount != null && params.targetCount ? `<strong style="color:#d1b96e;">${params.paidCount} of ${params.targetCount}</strong> shares are in so far. ` : ""}The team's spot is confirmed once the whole squad has paid — pass this link to anyone who hasn't yet:
+    </p>
+    <p style="margin:0; word-break:break-all;"><a href="${params.shareUrl}" style="color:#d1b96e; font-size:13px;">${params.shareUrl}</a></p>`
+    : "";
   const bodyHtml = `
     <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.memberName},</p>
     <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">
@@ -523,7 +637,7 @@ export async function sendSplitShareReceiptEmail(params: {
         ${mflRow("Team", params.teamName)}
         ${mflRow("Your share", amount, true)}
       </table>
-    </div>`;
+    </div>${shareBlock}`;
   return sendEmail({
     to: params.to,
     from: MFL_FROM,
@@ -531,6 +645,65 @@ export async function sendSplitShareReceiptEmail(params: {
     subject: `Your share is paid — ${params.teamName}`,
     html: mflShell({ heading: "Share paid ✓", bodyHtml }),
     ...(params.registrationId ? { registrationId: params.registrationId } : {}),
+  });
+}
+
+/** Player Pay — the captain's copy of the team share link. Sent once when the
+ *  split is created ('created') and again by the reminder sweep / an admin
+ *  resend ('reminder') until the squad completes. The raw URL is printed in
+ *  full on purpose: it makes the email findable by searching "player pay" or
+ *  the team name, and the link copyable — the exact failure this fixes is a
+ *  captain losing the link with no way to get it back. */
+export async function sendSplitShareLinkEmail(params: {
+  to: string;
+  captainName: string;
+  teamName: string;
+  shareUrl: string;
+  shareCents: number;
+  paidCount: number;
+  targetCount: number | null;
+  kind: "created" | "reminder";
+  registrationId?: number;
+  programId?: number;
+}): Promise<boolean> {
+  const share = `$${(params.shareCents / 100).toFixed(2)}`;
+  const target = params.targetCount && params.targetCount > 0 ? params.targetCount : null;
+  const progress = target ? `${params.paidCount} of ${target}` : `${params.paidCount}`;
+  const isCreated = params.kind === "created";
+
+  const intro = isCreated
+    ? `Your team's registration is in — now it's over to the squad. Everyone pays their own share (<strong style="color:#d1b96e;">${share}</strong> each) on the page below, and <strong>${params.teamName}</strong> is confirmed the moment ${target ? `all ${target}` : "everyone"} have paid. Send the link to your team chat and keep this email — it's your team's payment page whenever you need it.`
+    : `Quick nudge — <strong>${params.teamName}</strong> has <strong style="color:#d1b96e;">${progress}</strong> shares paid${target ? "" : " so far"}. The team's spot is only confirmed once the whole squad is in, so fire the link below into your team chat again for anyone who hasn't paid yet.`;
+
+  const rows = [
+    mflRow("Team", params.teamName),
+    mflRow("Each share", `${share} NZD`),
+    ...(target ? [mflRow("Paid so far", progress, true)] : []),
+  ].join("");
+
+  const bodyHtml = `
+    <p style="color:#ffffff; font-size:17px; font-weight:600; margin:0 0 6px;">Hi ${params.captainName},</p>
+    <p style="color:#b9b9b9; font-size:14px; line-height:1.65; margin:0 0 22px;">${intro}</p>
+    <div style="background:#000000; border:1px solid #232323; border-radius:14px; padding:18px 20px;">
+      <table style="width:100%; border-collapse:collapse;">${rows}</table>
+    </div>
+    <a href="${params.shareUrl}" style="display:inline-block; margin:22px 0 0; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">Open your team's payment page →</a>
+    <p style="color:#7d7d7d; font-size:12px; line-height:1.6; margin:16px 0 0;">
+      Your team's Player Pay link (share it with the squad):<br/>
+      <a href="${params.shareUrl}" style="color:#d1b96e; word-break:break-all;">${params.shareUrl}</a>
+    </p>`;
+
+  return sendEmail({
+    to: params.to,
+    from: MFL_FROM,
+    replyTo: MFL_REPLY_TO,
+    subject: isCreated
+      ? `Your Player Pay link — ${params.teamName}`
+      : `${params.teamName}: ${progress}${target ? "" : ` share${params.paidCount === 1 ? "" : "s"}`} paid — share your Player Pay link`,
+    html: mflShell({ heading: isCreated ? "Your Player Pay link" : `${progress} paid`, bodyHtml }),
+    ...(params.programId ? { campId: params.programId } : {}),
+    ...(params.registrationId ? { registrationId: params.registrationId } : {}),
+    utm: { medium: "transactional", campaign: isCreated ? "league-split-link" : "league-split-reminder" },
   });
 }
 
@@ -1258,6 +1431,52 @@ export async function sendChatReplyNotification(params: {
     from: `${params.brandName} <${params.fromEmail}>`,
     replyTo: params.replyTo || params.fromEmail,
     subject: `${params.agentName ? params.agentName + " replied" : "You have a reply"} — ${params.brandName}`,
+    html,
+  });
+}
+
+/** Staff Chat (the in-house Slack) — away-escalation email for a mention / DM /
+ *  opted-in channel message. Sent ONLY when the recipient has no active chat
+ *  session (away ≥5 min), never in NZ quiet hours, max one per channel per
+ *  15 min — the durable safety net under in-app badges. Org-agnostic system
+ *  mail → sends from cufc.co.nz per shared/org-domains doctrine. */
+export async function sendStaffChatNotification(params: {
+  to: string; recipientName: string; senderName: string;
+  /** "#match-day-ops" or "a direct message" */
+  context: string; messageExcerpt: string; mentioned?: boolean; chatUrl: string;
+}): Promise<boolean> {
+  const accent = "#c9a43e";
+  const isDm = !params.context.startsWith("#");
+  const headline = params.mentioned
+    ? `${params.senderName} mentioned you`
+    : isDm
+      ? `${params.senderName} messaged you`
+      : `New message in ${params.context}`;
+  const whereLine = params.mentioned
+    ? `${params.senderName} mentioned you in ${params.context}:`
+    : isDm
+      ? `${params.senderName} sent you a direct message:`
+      : `${params.senderName} posted in ${params.context}:`;
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:520px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:${accent};margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">United Sports Group · Staff Chat</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">${headline.replace(/</g, "&lt;")}</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.6;margin:0 0 14px;">Hi ${params.recipientName.split(" ")[0].replace(/</g, "&lt;")},</p>
+        <p style="color:#9aa0a6;font-size:13px;margin:0 0 6px;">${whereLine.replace(/</g, "&lt;")}</p>
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.65;margin:0;white-space:pre-wrap;border-left:3px solid ${accent};padding:2px 0 2px 14px;">${(params.messageExcerpt || "").replace(/</g, "&lt;")}</p>
+        <div style="text-align:center;margin:24px 0 4px;"><a href="${params.chatUrl}" style="display:inline-block;background:${accent};color:#0b0b08;font-weight:700;font-size:14px;text-decoration:none;padding:11px 22px;border-radius:10px;">Open Chat</a></div>
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">You get these only when you're away from ClubOS. Mute any channel from its header — mentions still reach you.</p>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: "ClubOS Chat <noreply@cufc.co.nz>",
+    subject: `${headline} — Staff Chat`,
     html,
   });
 }
@@ -2155,5 +2374,232 @@ export async function sendLeagueBalanceFailedEmail(params: {
     html: mflShell({ heading: "Balance Payment Needed", bodyHtml }),
     campId: params.programId,
     registrationId: params.registrationId,
+  });
+}
+
+// ── Hiring — a new job application landed ────────────────────────────────────
+// Sent to whoever the job names in `notify_email`, falling back to the club
+// inbox. Best-effort at the call site: a Resend outage must never cost us an
+// application. Nothing about a minor beyond what a reviewer needs to make
+// contact — the child's answers stay in ClubOS, behind the tab.
+const HIRING_NOTIFY_TO = "info@cufc.co.nz";
+const HIRING_APP_URL = process.env.APP_URL || "https://app.usg.co.nz";
+
+function hiringRow(label: string, value: string): string {
+  if (!value) return "";
+  return `<tr>
+    <td style="color:#8a93b8; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; padding:7px 0; vertical-align:top; white-space:nowrap;">${label}</td>
+    <td style="color:#0c1640; font-size:14px; font-weight:500; padding:7px 0 7px 16px; text-align:right;">${value}</td>
+  </tr>`;
+}
+
+const hiringEscape = (v: string): string =>
+  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+export async function sendHiringApplicationNotification(params: {
+  to?: string;
+  jobTitle: string;
+  jobSlug: string;
+  applicationId: number;
+  applicantName: string;
+  email: string;
+  phone: string;
+  city?: string;
+  guardianRequired: boolean;
+  guardianName?: string;
+  guardianPhone?: string;
+  auditionUrl?: string;
+  hasAuditionFile: boolean;
+  answers: Record<string, string | boolean>;
+  questions: { id: string; label: string; type: string }[];
+}): Promise<boolean> {
+  const link = `${HIRING_APP_URL}/admin/hiring`;
+
+  const contactRows = [
+    hiringRow("Applicant", hiringEscape(params.applicantName)),
+    hiringRow("Email", `<a href="mailto:${hiringEscape(params.email)}" style="color:#263996;">${hiringEscape(params.email)}</a>`),
+    hiringRow("Phone", `<a href="tel:${hiringEscape(params.phone)}" style="color:#263996;">${hiringEscape(params.phone)}</a>`),
+    hiringRow("Location", hiringEscape(params.city || "")),
+    params.guardianRequired
+      ? hiringRow("Guardian", `${hiringEscape(params.guardianName || "—")}${params.guardianPhone ? ` · ${hiringEscape(params.guardianPhone)}` : ""}`)
+      : "",
+  ].join("");
+
+  const auditionRows = [
+    params.auditionUrl
+      ? hiringRow("Audition link", `<a href="${hiringEscape(params.auditionUrl)}" style="color:#263996;">${hiringEscape(params.auditionUrl.slice(0, 60))}</a>`)
+      : "",
+    params.hasAuditionFile ? hiringRow("Audition file", "Uploaded — play it in ClubOS") : "",
+  ].join("");
+
+  // Long written answers read better as blocks than as table rows.
+  const written = params.questions
+    .filter((q) => q.type === "textarea" && typeof params.answers[q.id] === "string")
+    .map((q) => {
+      const body = hiringEscape(String(params.answers[q.id])).replace(/\n/g, "<br/>");
+      return `<div style="margin-top:18px;">
+        <div style="color:#8a93b8; font-size:11px; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:6px;">${hiringEscape(q.label)}</div>
+        <div style="color:#0c1640; font-size:14px; line-height:1.6; background:#f7f8fb; border:1px solid #e3e7f0; border-radius:10px; padding:12px 14px;">${body}</div>
+      </div>`;
+    })
+    .join("");
+
+  const guardianFlag = params.guardianRequired
+    ? `<div style="margin-top:16px; padding:12px 14px; border-radius:10px; background:#fff6e5; border:1px solid #f0a91e;">
+         <strong style="color:#0c1640; font-size:13px;">Under 16 — guardian consent given.</strong>
+         <div style="color:#5b6480; font-size:13px; margin-top:3px;">Contact the guardian, not the applicant, to arrange anything.</div>
+       </div>`
+    : "";
+
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width:600px; margin:0 auto; background:#ffffff;">
+    <div style="background:#0c1640; padding:26px 28px;">
+      <div style="color:#d4af37; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;">New application</div>
+      <div style="color:#ffffff; font-size:22px; font-weight:700; margin-top:6px;">${hiringEscape(params.jobTitle)}</div>
+    </div>
+    <div style="padding:24px 28px;">
+      <table style="width:100%; border-collapse:collapse;">${contactRows}${auditionRows}</table>
+      ${guardianFlag}
+      ${written}
+      <div style="margin-top:26px;">
+        <a href="${link}" style="display:inline-block; background:#263996; color:#ffffff; text-decoration:none; font-weight:700; font-size:14px; padding:12px 22px; border-radius:999px;">Review in ClubOS</a>
+      </div>
+      <div style="color:#8a93b8; font-size:12px; margin-top:18px;">Application #${params.applicationId} · ${hiringEscape(params.jobSlug)}</div>
+    </div>
+  </div>`;
+
+  return sendEmail({
+    to: params.to || HIRING_NOTIFY_TO,
+    from: fromForOrg(7, "United Sports Group"),
+    // Reply goes to the guardian when there is one — never straight to a child.
+    replyTo: params.guardianRequired ? undefined : params.email,
+    subject: `New ${params.jobTitle} application — ${params.applicantName}`,
+    html,
+  });
+}
+
+// ── CIC referee accounts ──────────────────────────────────────────────────────
+const REFEREE_NOTIFY_TO = process.env.CIC_REFEREE_NOTIFY_EMAIL || "info@cicyouth.com";
+const REFEREE_APP_BASE = (process.env.REFEREE_APP_URL || "https://app.usg.co.nz").replace(/\/+$/, "");
+
+// Heads-up to CIC staff that someone signed up to referee — so they can approve
+// them promptly in the ClubOS Referees tab. Best-effort; never blocks signup.
+export async function sendRefereeSignupNotification(params: {
+  orgId: number;
+  refereeName: string;
+  email: string;
+  phone: string;
+}): Promise<boolean> {
+  const link = `${REFEREE_APP_BASE}/admin/cic-referees`;
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width:600px; margin:0 auto; background:#ffffff;">
+    <div style="background:#0e0e10; padding:26px 28px;">
+      <div style="color:#c9a43e; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;">New referee sign-up</div>
+      <div style="color:#ffffff; font-size:22px; font-weight:700; margin-top:6px;">${hiringEscape(params.refereeName)}</div>
+    </div>
+    <div style="padding:24px 28px;">
+      <table style="width:100%; border-collapse:collapse;">
+        <tr><td style="color:#8a8a8a; font-size:13px; padding:6px 0;">Email</td><td style="color:#0c0c0c; font-size:14px; padding:6px 0;"><a href="mailto:${hiringEscape(params.email)}" style="color:#946a00;">${hiringEscape(params.email)}</a></td></tr>
+        <tr><td style="color:#8a8a8a; font-size:13px; padding:6px 0;">Phone</td><td style="color:#0c0c0c; font-size:14px; padding:6px 0;"><a href="tel:${hiringEscape(params.phone)}" style="color:#946a00;">${hiringEscape(params.phone)}</a></td></tr>
+      </table>
+      <div style="color:#5b5b5b; font-size:13px; margin-top:16px;">They can't score anything until you approve them.</div>
+      <div style="margin-top:22px;">
+        <a href="${link}" style="display:inline-block; background:#c9a43e; color:#0e0e10; text-decoration:none; font-weight:700; font-size:14px; padding:12px 22px; border-radius:999px;">Review in ClubOS</a>
+      </div>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: REFEREE_NOTIFY_TO,
+    from: fromForOrg(params.orgId, "Christchurch International Cup"),
+    replyTo: params.email,
+    subject: `New CIC referee sign-up — ${params.refereeName}`,
+    html,
+  });
+}
+
+// Tell an approved referee they're in, with the link to sign in and score.
+export async function sendRefereeApprovedEmail(params: {
+  orgId: number;
+  to: string;
+  refereeName: string;
+}): Promise<boolean> {
+  const link = `${REFEREE_APP_BASE}/login`;
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width:600px; margin:0 auto; background:#ffffff;">
+    <div style="background:#0e0e10; padding:26px 28px;">
+      <div style="color:#c9a43e; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase;">You're approved</div>
+      <div style="color:#ffffff; font-size:22px; font-weight:700; margin-top:6px;">CIC Referee Scoring</div>
+    </div>
+    <div style="padding:24px 28px;">
+      <div style="color:#0c0c0c; font-size:15px; line-height:1.6;">Hi ${hiringEscape(params.refereeName)},</div>
+      <div style="color:#3a3a3a; font-size:14px; line-height:1.7; margin-top:10px;">Your referee account is active. You can now sign in and score your Christchurch International Cup games from your phone — score, goalscorers, cards, MVP, golden glove and penalty shootouts, all in one place.</div>
+      <div style="margin-top:22px;">
+        <a href="${link}" style="display:inline-block; background:#c9a43e; color:#0e0e10; text-decoration:none; font-weight:700; font-size:15px; padding:13px 26px; border-radius:999px;">Open referee scoring</a>
+      </div>
+      <div style="color:#8a8a8a; font-size:12px; margin-top:18px;">Sign in with the email and password you used to sign up. Tip: add the page to your home screen for one-tap access.</div>
+    </div>
+  </div>`;
+  return sendEmail({
+    to: params.to,
+    from: fromForOrg(params.orgId, "Christchurch International Cup"),
+    subject: "You're approved — CIC referee scoring",
+    html,
+  });
+}
+
+// ── MFL referee accounts (Mini Football Leagues) ──────────────────────────────
+// Clone of the two CIC referee emails above, for the league's own referee
+// scoring system (server/league-referee-routes.ts). MFL-branded (black + gold,
+// reuses the mflShell/mflRow helpers already defined in this file) rather than
+// the CIC one-off HTML, and sent from org 3's verified domain via fromForOrg.
+const MFL_REFEREE_NOTIFY_TO = process.env.MFL_REFEREE_NOTIFY_EMAIL || "info@minifootball.co.nz";
+// A dedicated ref.minifootball.co.nz host is coming; today's login lives on
+// the shared ClubOS app domain, same as the CIC referee login.
+const MFL_REFEREE_LOGIN_URL = "https://app.usg.co.nz/mfl-ref";
+
+// Heads-up to MFL staff that someone signed up to referee — so they can
+// approve them promptly in the ClubOS Referees tab. Best-effort; never blocks
+// signup.
+export async function sendMflRefereeSignupNotification(params: {
+  orgId: number;
+  refereeName: string;
+  email: string;
+  phone: string;
+}): Promise<boolean> {
+  const link = `${REFEREE_APP_BASE}/admin/mfl-referees`;
+  const body = `
+    <table style="width:100%; border-collapse:collapse;">
+      ${mflRow("Name", hiringEscape(params.refereeName))}
+      ${mflRow("Email", `<a href="mailto:${hiringEscape(params.email)}" style="color:#d1b96e;">${hiringEscape(params.email)}</a>`)}
+      ${mflRow("Phone", `<a href="tel:${hiringEscape(params.phone)}" style="color:#d1b96e;">${hiringEscape(params.phone)}</a>`)}
+    </table>
+    <div style="color:#9a9a9a; font-size:13px; margin-top:16px;">They can't score anything until you approve them.</div>
+    <div style="margin-top:22px;">
+      <a href="${link}" style="display:inline-block; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:999px;">Review in ClubOS</a>
+    </div>`;
+  return sendEmail({
+    to: MFL_REFEREE_NOTIFY_TO,
+    from: fromForOrg(params.orgId, "Mini Football Leagues"),
+    replyTo: params.email,
+    subject: `New MFL referee sign-up — ${params.refereeName}`,
+    html: mflShell({ heading: "New referee sign-up", bodyHtml: body }),
+  });
+}
+
+// Tell an approved referee they're in, with the link to sign in and score.
+export async function sendMflRefereeApprovedEmail(params: {
+  orgId: number;
+  to: string;
+  refereeName: string;
+}): Promise<boolean> {
+  const body = `
+    <div style="color:#e6e6e6; font-size:15px; line-height:1.6;">Hi ${hiringEscape(params.refereeName)},</div>
+    <div style="color:#b7b7b7; font-size:14px; line-height:1.7; margin-top:10px;">Your referee account is active. You can now sign in and score your Mini Football Leagues games from your phone — score, goalscorers and cards, all in one place.</div>
+    <div style="margin-top:22px;">
+      <a href="${MFL_REFEREE_LOGIN_URL}" style="display:inline-block; background:#d1b96e; color:#000000; text-decoration:none; font-weight:700; font-size:15px; padding:13px 26px; border-radius:999px;">Open referee scoring</a>
+    </div>
+    <div style="color:#7d7d7d; font-size:12px; margin-top:18px;">Sign in with the email and password you used to sign up. A dedicated ref.minifootball.co.nz address is coming — this link works today. Tip: add the page to your home screen for one-tap access.</div>`;
+  return sendEmail({
+    to: params.to,
+    from: fromForOrg(params.orgId, "Mini Football Leagues"),
+    subject: "You're approved — MFL referee scoring",
+    html: mflShell({ heading: "You're approved", bodyHtml: body }),
   });
 }

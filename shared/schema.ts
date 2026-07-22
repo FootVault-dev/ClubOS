@@ -2,9 +2,15 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, integer, bigint, smallint, boolean, timestamp, date, decimal, numeric, doublePrecision, real, pgEnum, uniqueIndex, unique, index, time, jsonb, serial, uuid } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { HiringQuestion } from "./hiring";
+import type { InvoiceLine, InvoiceSpendSummary } from "./invoice-types";
+import type { StaffChatAttachment } from "./staff-chat";
 
 export const roleEnum = pgEnum("role_type", ["super_admin", "admin", "team_member", "manager", "coach", "finance", "marketing", "registrar"]);
-export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor"]);
+// "tenant" is for someone who exists in ClubOS only because they rent a room in
+// the residency houses. A player or staff member who also rents keeps their own
+// type — the tenancy links to the contact, not to its type.
+export const contactTypeEnum = pgEnum("contact_type", ["player", "guardian", "staff", "volunteer", "sponsor", "tenant"]);
 export const genderEnum = pgEnum("gender_type", ["male", "female", "other"]);
 export const programTypeEnum = pgEnum("program_type", ["holiday_camp", "academy", "trials", "event", "open_training", "league_team"]);
 export const registrationStatusEnum = pgEnum("registration_status", ["pending", "confirmed", "waitlisted", "cancelled", "refunded", "partially_refunded"]);
@@ -518,6 +524,9 @@ export const emailCampaigns = pgTable("email_campaigns", {
   sentCount: integer("sent_count").default(0),
   failedCount: integer("failed_count").default(0),
   status: text("status").notNull().default("draft"),
+  // When set + status "scheduled", the mailer-schedule worker dispatches the
+  // send at/after this time (atomic claim → "sending"). Null = send immediately.
+  scheduledAt: timestamp("scheduled_at"),
   sentAt: timestamp("sent_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -817,6 +826,13 @@ export const facilityBookings = pgTable("facility_bookings", {
   source: text("source"),
   createdByUserId: integer("created_by_user_id").references(() => users.id),
   createdByName: text("created_by_name"),
+  // Marketing attribution — where a PUBLIC booking originated, captured from a
+  // ?source= / utm_* param on the booking URL (e.g. the cufc.co.nz "Field Hire"
+  // menu link arrives with ?source=field-hire-mainmenu). NULL for manual/member
+  // bookings and for public bookings that arrived untagged. Kept separate from
+  // `source` (the manual|public|member_request channel) so that audit taxonomy
+  // is untouched.
+  attributionSource: text("attribution_source"),
   // Waiver acceptance for bookings made through the public booking site —
   // stamped at checkout (see shared/usc-waiver.ts). Admin-created and
   // member-request bookings leave these at their defaults (the member flow
@@ -932,6 +948,10 @@ export const leagueCompetitions = pgTable("league_competitions", {
   contactWebsite: text("contact_website"),
   bannerImageUrl: text("banner_image_url"),
   active: boolean("active").notNull().default(true),
+  // Referee scoring app (clone of tournaments.gameDurationMinutes /
+  // breakBetweenMinutes) — leagues run their own match lengths.
+  halfLengthMinutes: integer("half_length_minutes").notNull().default(20),
+  breakMinutes: integer("break_minutes").notNull().default(5),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1055,6 +1075,11 @@ export const splitSessions = pgTable("split_sessions", {
   fundingType: text("funding_type").notNull().default("registration"),
   // The facility booking group this split funds (when fundingType = 'booking').
   facilityBookingGroupId: text("facility_booking_group_id"),
+  // Share-link reminder emails to the captain (open registration splits only) —
+  // count + last-sent drive the sweep cadence and cap; a manual admin resend
+  // stamps lastReminderAt but never consumes the cap.
+  reminderCount: integer("reminder_count").notNull().default(0),
+  lastReminderAt: timestamp("last_reminder_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   uniqueShareCode: uniqueIndex("split_sessions_share_code_unique").on(t.shareCode),
@@ -1109,6 +1134,18 @@ export const leagueGames = pgTable("league_games", {
   status: text("status").notNull().default("scheduled"),
   homeScore: integer("home_score"),
   awayScore: integer("away_score"),
+  // Referee scoring app: accountability stamp (mirrors tournament_games) — which
+  // referee last saved a score, and when. FK ON DELETE SET NULL: removing a
+  // referee must never erase the history that a game was scored.
+  lastScoredByRefereeId: integer("last_scored_by_referee_id").references(() => leagueReferees.id, { onDelete: "set null" }),
+  lastScoredAt: timestamp("last_scored_at"),
+  // Live match timer (Score Game) — same phase machine as tournament_games, but
+  // leagues have no brackets and no isLive column: status='in_progress' plays
+  // the "is this game live right now" role instead.
+  timerPhase: text("timer_phase").notNull().default("pre"), // pre|first_half|half_time|second_half|finished
+  timerRunning: boolean("timer_running").notNull().default(false),
+  timerStartedAt: timestamp("timer_started_at"),
+  timerBaseSeconds: integer("timer_base_seconds").notNull().default(0),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -1125,6 +1162,97 @@ export const leagueCoupons = pgTable("league_coupons", {
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ── MFL referee scoring (clone of the CIC referee system, shared/schema.ts
+// `cicReferees` / `cicRefereeAssignments`) ──────────────────────────────────
+// Referees are a SEPARATE identity from ClubOS staff `users` AND from
+// `leagueGameReferees` (a ClubOS user assigned as ref, used by the older
+// session-based /api/league/games/:id/score path) — see
+// server/league-referee-routes.ts for the full reasoning. Public signup writes
+// a 'pending' row; an MFL staffer approves it before it can log in. Statuses
+// validated app-side in shared/league-referees.ts (no DB enum).
+export const leagueReferees = pgTable("league_referees", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  status: text("status").notNull().default("pending"), // pending | approved | suspended | declined
+  approvedBy: integer("approved_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at"),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  // Invoice/payment details — the MFL coordinator fills a per-ref invoice
+  // fortnightly and needs each ref's bank account to pay into. Captured at
+  // signup, editable any time by the ref (PATCH /api/public/mfl-referees/me,
+  // server/league-referee-routes.ts). All nullable: refs who signed up before
+  // 2026-07-13 have none, and the admin UI says so plainly rather than
+  // guessing.
+  bankAccountName: text("bank_account_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankName: text("bank_name"),
+  address: text("address"),
+  gstNumber: text("gst_number"),
+});
+
+// Soft assignment of a referee to a game — drives the ref's default "My games"
+// view. Any approved ref can still score any MFL game (flexibility as fixtures
+// shift); assignment is organisation + accountability, not a hard lock.
+export const leagueRefereeAssignments = pgTable("league_referee_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  refereeId: integer("referee_id").notNull().references(() => leagueReferees.id, { onDelete: "cascade" }),
+  gameId: integer("game_id").notNull().references(() => leagueGames.id, { onDelete: "cascade" }),
+  assignedBy: integer("assigned_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqAssignment: unique().on(t.refereeId, t.gameId),
+}));
+
+// Goals — unlike CIC's tournamentGoals, MFL has no player-roster table
+// (tournamentPlayers), so the scorer is free text. teamId is the CREDITED team
+// (an own goal sends the opponent's teamId — the client computes the flip).
+export const leagueGoals = pgTable("league_goals", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => leagueGames.id, { onDelete: "cascade" }),
+  teamId: integer("team_id").references(() => leagueTeams.id, { onDelete: "set null" }),
+  playerName: text("player_name").notNull(),
+  minute: integer("minute"),
+  isOwnGoal: boolean("is_own_goal").notNull().default(false),
+  isPenalty: boolean("is_penalty").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  gameIdx: index("league_goals_game_idx").on(t.gameId),
+}));
+
+// Disciplinary cards — same free-text-player shape as leagueGoals.
+export const leagueCards = pgTable("league_cards", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  gameId: integer("game_id").notNull().references(() => leagueGames.id, { onDelete: "cascade" }),
+  teamId: integer("team_id").references(() => leagueTeams.id, { onDelete: "set null" }),
+  playerName: text("player_name").notNull(),
+  cardType: text("card_type").notNull(), // 'yellow' | 'red'
+  minute: integer("minute"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  gameIdx: index("league_cards_game_idx").on(t.gameId),
+}));
+
+// Photos/highlights for an MFL competition — a staged gallery (unpublished rows
+// let an admin queue images before they go live).
+export const leagueMedia = pgTable("league_media", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  competitionId: integer("competition_id").references(() => leagueCompetitions.id, { onDelete: "set null" }),
+  url: text("url").notNull(),
+  caption: text("caption"),
+  takenAt: date("taken_at"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  published: boolean("published").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgPublishedIdx: index("league_media_org_published_idx").on(t.organizationId, t.published),
+}));
 
 export const tournaments = pgTable("tournaments", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -1301,6 +1429,18 @@ export const tournamentGames = pgTable("tournament_games", {
   awayScore: integer("away_score"),
   homePenalties: integer("home_penalties"),
   awayPenalties: integer("away_penalties"),
+  // Referee scoring app: which referee last saved a score here, and when. Set
+  // server-side on every referee write so the office always knows who touched a
+  // game. FK ON DELETE SET NULL — removing a referee never erases the history.
+  lastScoredByRefereeId: integer("last_scored_by_referee_id").references(() => cicReferees.id, { onDelete: "set null" }),
+  lastScoredAt: timestamp("last_scored_at"),
+  // Live match timer (Score Game). Phase machine; the clock is DERIVED, never
+  // stored ticking. first_half/second_half count UP to the half length
+  // (tournament game_duration_minutes); half_time counts DOWN from the break.
+  timerPhase: text("timer_phase").notNull().default("pre"), // pre|first_half|half_time|second_half|finished
+  timerRunning: boolean("timer_running").notNull().default(false),
+  timerStartedAt: timestamp("timer_started_at"),
+  timerBaseSeconds: integer("timer_base_seconds").notNull().default(0),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -1369,6 +1509,41 @@ export const tournamentPenaltyKicks = pgTable("tournament_penalty_kicks", {
   playerId: integer("player_id").references(() => tournamentPlayers.id, { onDelete: "set null" }), // optional taker
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ── CIC referee accounts (match scoring) ──────────────────────────────────────
+// Referees are a SEPARATE identity from ClubOS staff `users`: they must never
+// hold a staff session, because many /api/admin/* routes carry no org check. A
+// referee credential (an HMAC token carrying a referee id, see
+// server/cic-referee-routes.ts) only ever reaches the CIC referee scoring
+// endpoints. Public signup writes a 'pending' row; a CIC staffer approves it
+// before it can log in. Statuses validated in shared/referees.ts (no DB enum).
+export const cicReferees = pgTable("cic_referees", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  status: text("status").notNull().default("pending"), // pending | approved | suspended | declined
+  approvedBy: integer("approved_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at"),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Soft assignment of a referee to a game — drives the ref's default "My games"
+// view. Any approved ref can still score any CIC game (flexibility as fixtures
+// shift); assignment is organisation + accountability, not a hard lock. The
+// case-insensitive one-account-per-email index lives in the migration SQL.
+export const cicRefereeAssignments = pgTable("cic_referee_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  refereeId: integer("referee_id").notNull().references(() => cicReferees.id, { onDelete: "cascade" }),
+  gameId: integer("game_id").notNull().references(() => tournamentGames.id, { onDelete: "cascade" }),
+  assignedBy: integer("assigned_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqAssignment: unique().on(t.refereeId, t.gameId),
+}));
 
 export const analyticsEvents = pgTable("analytics_events", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -1606,6 +1781,11 @@ export const insertLeagueTeamSchema = createInsertSchema(leagueTeams).omit({ id:
 export const insertLeagueGameSchema = createInsertSchema(leagueGames).omit({ id: true, createdAt: true });
 export const insertLeagueCouponSchema = createInsertSchema(leagueCoupons).omit({ id: true, createdAt: true });
 export const insertLeagueWaitlistSchema = createInsertSchema(leagueWaitlist).omit({ id: true, createdAt: true });
+export const insertLeagueRefereeSchema = createInsertSchema(leagueReferees).omit({ id: true, createdAt: true });
+export const insertLeagueRefereeAssignmentSchema = createInsertSchema(leagueRefereeAssignments).omit({ id: true, createdAt: true });
+export const insertLeagueGoalSchema = createInsertSchema(leagueGoals).omit({ id: true, createdAt: true });
+export const insertLeagueCardSchema = createInsertSchema(leagueCards).omit({ id: true, createdAt: true });
+export const insertLeagueMediaSchema = createInsertSchema(leagueMedia).omit({ id: true, createdAt: true });
 export const insertSplitSessionSchema = createInsertSchema(splitSessions).omit({ id: true, createdAt: true });
 export const insertSplitMemberSchema = createInsertSchema(splitMembers).omit({ id: true, joinedAt: true });
 
@@ -1785,6 +1965,16 @@ export type InsertLeagueCoupon = z.infer<typeof insertLeagueCouponSchema>;
 export type LeagueCoupon = typeof leagueCoupons.$inferSelect;
 export type InsertLeagueWaitlist = z.infer<typeof insertLeagueWaitlistSchema>;
 export type LeagueWaitlistEntry = typeof leagueWaitlist.$inferSelect;
+export type InsertLeagueReferee = z.infer<typeof insertLeagueRefereeSchema>;
+export type LeagueReferee = typeof leagueReferees.$inferSelect;
+export type InsertLeagueRefereeAssignment = z.infer<typeof insertLeagueRefereeAssignmentSchema>;
+export type LeagueRefereeAssignment = typeof leagueRefereeAssignments.$inferSelect;
+export type InsertLeagueGoal = z.infer<typeof insertLeagueGoalSchema>;
+export type LeagueGoal = typeof leagueGoals.$inferSelect;
+export type InsertLeagueCard = z.infer<typeof insertLeagueCardSchema>;
+export type LeagueCard = typeof leagueCards.$inferSelect;
+export type InsertLeagueMedia = z.infer<typeof insertLeagueMediaSchema>;
+export type LeagueMedia = typeof leagueMedia.$inferSelect;
 export type InsertSplitSession = z.infer<typeof insertSplitSessionSchema>;
 export type SplitSession = typeof splitSessions.$inferSelect;
 export type InsertSplitMember = z.infer<typeof insertSplitMemberSchema>;
@@ -2908,6 +3098,68 @@ export const insertPrintOrderEventSchema = createInsertSchema(printOrderEvents).
 export type InsertPrintOrderEvent = z.infer<typeof insertPrintOrderEventSchema>;
 export type PrintOrderEvent = typeof printOrderEvents.$inferSelect;
 
+// Quotes submitted from the unitedprints.co.nz "Instant Quote" page — indicative
+// self-serve totals awaiting Dima's Approve/Reject. Approve materialises a
+// quote into a real printOrders row (+ items + a 'created' event) so it enters
+// the existing Orders/production pipeline; Reject just closes it out. Status is
+// app-validated text, not a pgEnum, to avoid the prod enum-drift the hiring/
+// vehicles/housing tables already dodge this way.
+export const printQuotes = pgTable("print_quotes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // Random 48-hex token, for a future customer-facing quote view.
+  token: text("token").notNull().unique(),
+
+  status: text("status").notNull().default("new"), // new | approved | rejected
+
+  customerName: text("customer_name"),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+
+  source: text("source"),
+  sourceUrl: text("source_url"),
+
+  subtotalCents: integer("subtotal_cents").notNull().default(0),
+  gstCents: integer("gst_cents").notNull().default(0),
+  totalCents: integer("total_cents").notNull().default(0),
+
+  // Always true today — the website only ever sends an indicative self-serve
+  // total, never a confirmed price.
+  indicative: boolean("indicative").notNull().default(true),
+
+  note: text("note"),
+
+  reviewedBy: integer("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at"),
+  rejectedReason: text("rejected_reason"),
+  promotedOrderId: integer("promoted_order_id").references(() => printOrders.id, { onDelete: "set null" }),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertPrintQuoteSchema = createInsertSchema(printQuotes).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPrintQuote = z.infer<typeof insertPrintQuoteSchema>;
+export type PrintQuote = typeof printQuotes.$inferSelect;
+
+export const printQuoteItems = pgTable("print_quote_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  quoteId: integer("quote_id").notNull().references(() => printQuotes.id, { onDelete: "cascade" }),
+
+  designName: text("design_name"),
+  material: text("material"),
+  sizeLabel: text("size_label"),
+  areaM2: decimal("area_m2", { precision: 10, scale: 4 }),
+  quantity: integer("quantity").notNull().default(1),
+  lineExGstCents: integer("line_ex_gst_cents").notNull().default(0),
+  designFileName: text("design_file_name"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertPrintQuoteItemSchema = createInsertSchema(printQuoteItems).omit({ id: true, createdAt: true });
+export type InsertPrintQuoteItem = z.infer<typeof insertPrintQuoteItemSchema>;
+export type PrintQuoteItem = typeof printQuoteItems.$inferSelect;
+
 export const printProjectStatusEnum = pgEnum("print_project_status", ["planning", "active", "on_hold", "completed", "archived"]);
 
 export const printProjects = pgTable("print_projects", {
@@ -3253,6 +3505,10 @@ export const skillsChallengeEntries = pgTable("skills_challenge_entries", {
   ageGroup: text("age_group").notNull(), // "U10" | "U11"
   challenge: text("challenge").notNull(), // "juggling" | "dribble_pass_finish"
   score: decimal("score", { precision: 8, scale: 2 }),
+  // Terminal, no-score outcomes (Olympic convention): "dns" | "dnf" | "dsq".
+  // Mutually exclusive with `score` — an entry is pending, scored, or one of
+  // these. Null for a normal entry.
+  status: text("status"),
   scoredByUserId: integer("scored_by_user_id").references(() => users.id, { onDelete: "set null" }),
   scoredAt: timestamp("scored_at"),
   source: text("source").notNull().default("public"), // "public" | "admin"
@@ -3447,6 +3703,41 @@ export const cugcFreeSessions = pgTable("cugc_free_sessions", {
 export const insertCugcFreeSessionSchema = createInsertSchema(cugcFreeSessions).omit({ id: true, createdAt: true });
 export type InsertCugcFreeSession = z.infer<typeof insertCugcFreeSessionSchema>;
 export type CugcFreeSession = typeof cugcFreeSessions.$inferSelect;
+
+// ---- CUFC Open Trainings ----
+// Free open-training requests from cufc.co.nz (2026-07-21). U9–U20 academy
+// programmes are invite-only: the public form replaces the direct checkout,
+// staff approve or decline each request in the CUFC workspace "Open Trainings"
+// tab, and an approval sends the family a confirmation email. The age band is
+// DERIVED server-side from the child's date of birth (NZF rule: grade =
+// season year − birth year), never trusted from the browser. DOB is ISO text —
+// a `date` column read through node-postgres comes back a day out in NZ.
+export const cufcOpenTrainings = pgTable("cufc_open_trainings", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  ageGroup: text("age_group").notNull(), // 'u4-u8' | 'u9-u12' | 'u13-plus' — app-validated, no CHECK (prod enum drift)
+  childFirstName: text("child_first_name").notNull(),
+  childLastName: text("child_last_name").notNull(),
+  childDob: text("child_dob").notNull(), // ISO date, e.g. "2015-04-09"
+  ageGrade: integer("age_grade"),        // NZF grade at request time (season − birth year)
+  guardianName: text("guardian_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),        // club rule: phone is mandatory
+  currentClub: text("current_club"),
+  notes: text("notes"),                  // anything the parent told us
+  status: text("status").notNull().default("pending"), // 'pending' | 'approved' | 'declined' — app-validated
+  sessionDetails: text("session_details"), // staff-entered; included in the approval email
+  staffNotes: text("staff_notes"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  decidedBy: text("decided_by"),
+  source: text("source"),
+  sourceUrl: text("source_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const insertCufcOpenTrainingSchema = createInsertSchema(cufcOpenTrainings).omit({ id: true, createdAt: true });
+export type InsertCufcOpenTraining = z.infer<typeof insertCufcOpenTrainingSchema>;
+export type CufcOpenTraining = typeof cufcOpenTrainings.$inferSelect;
 
 // ---- Football Institute Applications ----
 // Enrolment enquiries for the Football Institute (Christchurch United × Ao
@@ -3679,6 +3970,11 @@ export const esignSigners = pgTable("esign_signers", {
   ip: text("ip"),
   userAgent: text("user_agent"),
   declineReason: text("decline_reason"),
+  // Native docs: which signer fills the details schedule (name/DOB/bank/IRD…).
+  // Deliberately SEPARATE from signingOrder so the Club can sign FIRST while the
+  // counterparty still supplies their own details. Backfilled true for every
+  // signingOrder=0 row, so pre-existing documents behave exactly as before.
+  isFormSigner: boolean("is_form_signer").notNull().default(false),
   formData: jsonb("form_data").$type<Record<string, any> | null>(), // native docs: signer-filled details (incl. guardian block for under-18s)
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -4228,6 +4524,69 @@ export const proposalEvents = pgTable("proposal_events", {
 export const insertProposalEventSchema = createInsertSchema(proposalEvents).omit({ id: true, occurredAt: true });
 export type InsertProposalEvent = z.infer<typeof insertProposalEventSchema>;
 export type ProposalEvent = typeof proposalEvents.$inferSelect;
+
+// ── Sponsor Traffic (group / USG workspace) ───────────────────────────────────
+// Tracks how much website traffic the club sends to its sponsors' sites via
+// tracked redirect links (app.usg.co.nz/s/{shortCode}), plus a sponsor-site
+// health check — born because a sponsor's site went down and we only found out
+// when a friend mentioned it. One row = one PLACEMENT (a sponsor on one brand
+// site) — a shared sponsor (e.g. Moana Skies on both CUFC and SIU) gets a row
+// per brand because the destination URL and tracked link differ per brand.
+export const sponsors = pgTable("sponsors", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  brand: text("brand").notNull(),                 // cufc | siu | mfl | cic | …
+  websiteUrl: text("website_url").notNull(),       // their real destination
+  shortCode: text("short_code").notNull().unique(), // tracked-link code → /s/{shortCode}
+  logoUrl: text("logo_url"),
+  tier: text("tier"),                              // partner | Principal partner | …
+  // Sponsor-site health check — button-triggered (POST .../:id/check or
+  // .../check-all). No cron yet; a daily scheduled sweep is a natural future
+  // enhancement once this proves useful.
+  siteStatus: text("site_status").notNull().default("unknown"), // ok | down | unknown
+  siteStatusCode: integer("site_status_code"),
+  siteCheckedAt: timestamp("site_checked_at"),
+  active: boolean("active").notNull().default(true),
+  notes: text("notes"),
+  openCount: integer("open_count").notNull().default(0), // denormalised (non-internal clicks)
+  lastOpenedAt: timestamp("last_opened_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("sponsors_org_idx").on(t.organizationId),
+  brandIdx: index("sponsors_brand_idx").on(t.brand),
+}));
+
+export const insertSponsorSchema = createInsertSchema(sponsors).omit({ id: true, createdAt: true, updatedAt: true, openCount: true, lastOpenedAt: true });
+export type InsertSponsor = z.infer<typeof insertSponsorSchema>;
+export type Sponsor = typeof sponsors.$inferSelect;
+
+// One row per tracked-link touch on a sponsor's link. Same shape as
+// proposal_events plus `source` — the optional `?src=` query param, so a click
+// can be attributed to the page/section that sent it even if the referrer
+// header is stripped (common on mobile / in-app browsers).
+export const sponsorLinkEvents = pgTable("sponsor_link_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  sponsorId: integer("sponsor_id").notNull().references(() => sponsors.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull().default("click"),
+  visitorId: text("visitor_id"),
+  device: text("device"),                          // mobile | tablet | desktop
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  source: text("source"),                          // from ?src= — which page/section sent it
+  country: text("country"),                         // coarse geo only — no raw IP
+  isInternal: boolean("is_internal").notNull().default(false),
+  metaJson: jsonb("meta_json").$type<Record<string, any> | null>(),
+  occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+}, (t) => ({
+  sponsorOccurredIdx: index("sponsor_link_events_sponsor_idx").on(t.sponsorId, t.occurredAt),
+  sponsorKindIdx: index("sponsor_link_events_kind_idx").on(t.sponsorId, t.kind),
+}));
+
+export const insertSponsorLinkEventSchema = createInsertSchema(sponsorLinkEvents).omit({ id: true, occurredAt: true });
+export type InsertSponsorLinkEvent = z.infer<typeof insertSponsorLinkEventSchema>;
+export type SponsorLinkEvent = typeof sponsorLinkEvents.$inferSelect;
 
 // ── Content Calendar / Media Production (group / USG workspace) ───────────────
 // The media & marketing team's Monday.com-style home. Each content_item runs a
@@ -5119,3 +5478,1110 @@ export const whSyncState = pgTable("wh_sync_state", {
 export const insertWhSyncStateSchema = createInsertSchema(whSyncState); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
 export type InsertWhSyncState = z.infer<typeof insertWhSyncStateSchema>;
 export type WhSyncState = typeof whSyncState.$inferSelect;
+
+// ── Hiring — job postings + applications ─────────────────────────────────────
+// The careers engine behind every brand site's job adverts. A job is owned by
+// the workspace that MANAGES it (organizationId — USG hires for the group) and
+// advertised under a public `brand` key (cufc, mfl, cic…), which is what the
+// brand site's form posts to. So one Hiring tab can run recruitment for every
+// brand without each brand needing its own workspace tab.
+//
+// NOT the Volunteers module: a volunteer signs up once and is rostered onto
+// task-types by day; an applicant applies to one posting and moves through a
+// selection pipeline for it. See shared/hiring.ts.
+//
+// Named hiring_* because bare `jobs` already means print-production jobs and
+// bare `applications` already means grant + Football Institute applications.
+export const hiringJobs = pgTable("hiring_jobs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  brand: text("brand").notNull(),                          // public brand key — cufc | mfl | cic | cugc | unitedprints | siu
+  slug: text("slug").notNull(),                            // url-safe, unique within a brand
+  title: text("title").notNull(),
+  tagline: text("tagline"),
+  description: text("description"),                        // optional long copy (the advert can also live on the brand site)
+  employmentType: text("employment_type"),                 // "Paid casual — one fixture", "Part-time", "Volunteer"…
+  positions: integer("positions").notNull().default(1),
+  payLabel: text("pay_label"),                             // free text — "$50 per commentator". Never a number: pay is not always money.
+  location: text("location"),
+  status: text("status").notNull().default("draft"),       // draft | open | closed  (validated app-side, no pg enum)
+  closesAt: timestamp("closes_at", { withTimezone: true }),
+  advertUrl: text("advert_url"),                           // where the public advert lives
+  notifyEmail: text("notify_email"),                       // who gets pinged on a new application
+  // [{ id, label, type, required?, help?, placeholder?, options?, minLength?, maxLength?, accept?, maxBytes? }]
+  questions: jsonb("questions").$type<HiringQuestion[]>().notNull().default(sql`'[]'::jsonb`),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  brandSlugUnq: uniqueIndex("hiring_jobs_brand_slug_unq").on(t.brand, t.slug),
+  orgIdx: index("hiring_jobs_org_idx").on(t.organizationId, t.createdAt),
+}));
+
+export const hiringApplications = pgTable("hiring_applications", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  jobId: integer("job_id").notNull().references(() => hiringJobs.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),                          // phone is mandatory on every form we run
+  dateOfBirth: date("date_of_birth"),
+  city: text("city"),
+
+  // Under-16s need a parent/guardian. `guardianRequired` is decided SERVER-side
+  // from the date of birth — never trusted from the browser.
+  guardianRequired: boolean("guardian_required").notNull().default(false),
+  guardianName: text("guardian_name"),
+  guardianRelationship: text("guardian_relationship"),
+  guardianEmail: text("guardian_email"),
+  guardianPhone: text("guardian_phone"),
+  guardianConsent: boolean("guardian_consent").notNull().default(false),
+
+  // Answers to the job's custom questions, keyed by question id.
+  answers: jsonb("answers").$type<Record<string, string | boolean>>().notNull().default(sql`'{}'::jsonb`),
+
+  // The audition: a pasted link, or a file in object storage, or both.
+  // auditionObjectPath is "/objects/uploads/<uuid>.<ext>" — private, and only
+  // ever streamed back through the tab-gated admin endpoint.
+  auditionUrl: text("audition_url"),
+  auditionObjectPath: text("audition_object_path"),
+  auditionFilename: text("audition_filename"),
+  auditionMime: text("audition_mime"),
+  auditionBytes: integer("audition_bytes"),
+
+  status: text("status").notNull().default("new"),         // new | reviewing | shortlisted | trial | offered | hired | declined | withdrawn
+  rating: integer("rating"),                               // 1–5, reviewer's score
+  reviewerNotes: text("reviewer_notes"),
+  reviewedBy: integer("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+
+  consentContact: boolean("consent_contact").notNull().default(false),
+  consentBroadcast: boolean("consent_broadcast").notNull().default(false),
+  rightToWork: boolean("right_to_work").notNull().default(false),
+
+  sourceUrl: text("source_url"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  jobIdx: index("hiring_applications_job_idx").on(t.jobId, t.createdAt),
+  orgIdx: index("hiring_applications_org_idx").on(t.organizationId, t.createdAt),
+  // One application per email per job. A second attempt is a friendly 409, not a duplicate row.
+  jobEmailUnq: uniqueIndex("hiring_applications_job_email_unq").on(t.jobId, t.email),
+}));
+
+export const insertHiringJobSchema = createInsertSchema(hiringJobs).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertHiringJob = z.infer<typeof insertHiringJobSchema>;
+export type HiringJob = typeof hiringJobs.$inferSelect;
+
+export const insertHiringApplicationSchema = createInsertSchema(hiringApplications).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertHiringApplication = z.infer<typeof insertHiringApplicationSchema>;
+export type HiringApplication = typeof hiringApplications.$inferSelect;
+
+// ── USG Invoices — tracked, payable invoices (United Sports Group, org 7) ────
+// The public payable page (apps/invoices, a separate Vercel app) calls
+// /api/public/invoices/:token* here; ClubOS is the system of record. Named
+// usg_* (not bare `invoices`) to dodge this schema's documented naming-
+// collision history — see the hiring_* comment above for the same reasoning.
+//
+// Deliberately NO 'overdue' status: overdue is DERIVED at read time from
+// dueOn (see shared/invoice-types.ts deriveInvoiceStatus) — a stored
+// "overdue" goes stale the moment a scheduled job doesn't run, and pushing a
+// due date out would need its own reversal logic. status is one of
+// draft | sent | paid | void, validated in the app — no pg enum (this schema
+// has documented enum drift in prod; do NOT reuse the orphaned
+// invoiceStatusEnum above, which has a DIFFERENT vocabulary and is unused).
+//
+// token is the public identifier — unguessable (an invoice carries bank
+// details, so it must never be enumerable). id/organizationId never leave
+// the admin surface; the public GET response is hand-shaped in
+// server/invoice-routes.ts, never `res.json(row)`.
+export const usgInvoices = pgTable("usg_invoices", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  token: text("token").notNull().unique(),
+  number: text("number").notNull().unique(),
+  status: text("status").notNull().default("draft"),        // draft | sent | paid | void
+
+  brand: text("brand").notNull().default("siu"),             // siu | cufc — see SUPPLIER_BY_BRAND
+
+  recipientName: text("recipient_name").notNull(),
+  recipientEmail: text("recipient_email"),
+  recipientAddress: jsonb("recipient_address").$type<string[]>(),
+
+  title: text("title").notNull(),
+  intro: text("intro"),
+
+  spendSummary: jsonb("spend_summary").$type<InvoiceSpendSummary>(),
+  lines: jsonb("lines").$type<InvoiceLine[]>().notNull(),
+  notes: jsonb("notes").$type<string[]>(),
+
+  gstTreatment: text("gst_treatment").notNull().default("inclusive"), // inclusive | exclusive
+
+  // Server-computed from lines + gstTreatment on every create/update — NEVER
+  // trusted from the client. See shared/invoice-money.ts.
+  subtotalCents: integer("subtotal_cents").notNull(),
+  gstCents: integer("gst_cents").notNull(),
+  totalCents: integer("total_cents").notNull(),
+
+  issuedOn: date("issued_on").notNull(),
+  dueOn: date("due_on").notNull(),
+  termsLabel: text("terms_label"),
+
+  cardEnabled: boolean("card_enabled").notNull().default(false),
+
+  isDraft: boolean("is_draft").notNull().default(true),
+  draftReasons: jsonb("draft_reasons").$type<string[]>(),
+
+  bankAccountName: text("bank_account_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankReference: text("bank_reference"),
+  bankParticulars: text("bank_particulars"),
+  bankCode: text("bank_code"),
+
+  paidAt: timestamp("paid_at"),
+  paidMethod: text("paid_method"),                            // card | bank
+  paidAmountCents: integer("paid_amount_cents"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  tokenUnq: uniqueIndex("usg_invoices_token_unq").on(t.token),
+  orgStatusIdx: index("usg_invoices_org_status_idx").on(t.organizationId, t.status),
+}));
+
+// Append-only audit/tracking log behind the admin timeline (created → sent →
+// opened ×N → reminder_sent → paid/voided). Same shape as the Proposal
+// Tracker's proposal_events.
+export const usgInvoiceEvents = pgTable("usg_invoice_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  invoiceId: integer("invoice_id").notNull().references(() => usgInvoices.id, { onDelete: "cascade" }),
+
+  kind: text("kind").notNull(),                               // opened | sent | reminder_sent | paid | voided | created
+  at: timestamp("at").defaultNow().notNull(),
+
+  ipHash: text("ip_hash"),                                    // sha256(ip + salt) — never the raw IP
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  isStaff: boolean("is_staff").notNull().default(false),      // our own opens don't pollute the count
+  meta: jsonb("meta"),
+}, (t) => ({
+  invoiceAtIdx: index("usg_invoice_events_invoice_at_idx").on(t.invoiceId, t.at),
+}));
+
+export const insertUsgInvoiceSchema = createInsertSchema(usgInvoices).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertUsgInvoice = z.infer<typeof insertUsgInvoiceSchema>;
+export type UsgInvoice = typeof usgInvoices.$inferSelect;
+
+export const insertUsgInvoiceEventSchema = createInsertSchema(usgInvoiceEvents).omit({ id: true, at: true });
+export type InsertUsgInvoiceEvent = z.infer<typeof insertUsgInvoiceEventSchema>;
+export type UsgInvoiceEvent = typeof usgInvoiceEvents.$inferSelect;
+// ─────────────────────────────────────────────────────────────────────────────
+// FLEET — company vehicles (USG workspace, super-admin only).
+//
+// Prefixed `fleet_` for the same reason Hiring took `hiring_jobs`: bare
+// `assignments`, `costs` and `service_records` are names a future feature will
+// want, and bare `vehicles` reads like it could be anything.
+//
+// Derived, never stored: compliance status (expired / due soon) is computed
+// from the dates on read by `vehicleCompliance()` in shared/vehicles.ts. A
+// stored `is_expired` flag is only true until the day nobody runs the job —
+// the same rule the invoice pages follow for `overdue`.
+//
+// Retire, never delete: a vehicle is `disposed` and an assignment gets a
+// `returned_on`. Who was driving the van in March is a question the club will
+// eventually need to answer — an insurance claim, a speeding ticket, an FBT
+// review — and a DELETE destroys the only record of it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const fleetVehicles = pgTable("fleet_vehicles", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // Identity
+  plate: text("plate").notNull(),                       // NZ registration plate, stored upper-cased
+  make: text("make").notNull(),
+  model: text("model").notNull(),
+  variant: text("variant"),
+  year: integer("year"),
+  colour: text("colour"),
+  vin: text("vin"),
+  engineNumber: text("engine_number"),
+  vehicleType: text("vehicle_type").notNull().default("car"),   // car|van|minibus|ute|truck|trailer|other (validated app-side, no pg enum)
+  fuelType: text("fuel_type").notNull().default("petrol"),      // petrol|diesel|hybrid|plug_in_hybrid|electric|lpg|other
+  transmission: text("transmission"),
+  seats: integer("seats"),
+
+  // An odometer reading is a fact about a moment, not a property of the vehicle,
+  // so the reading carries the date it was taken. RUC status is untrustworthy
+  // without it.
+  odometerKm: integer("odometer_km"),
+  odometerAt: date("odometer_at"),
+
+  // Compliance. A vehicle carries a WOF or a COF, never both.
+  complianceType: text("compliance_type").notNull().default("wof"), // wof|cof
+  wofExpiresOn: date("wof_expires_on"),
+  cofExpiresOn: date("cof_expires_on"),
+  regoExpiresOn: date("rego_expires_on"),
+
+  // RUC expires at an odometer reading, not a date. `ruc_required` is seeded
+  // from fuel type but a human owns it — the rules change and we are not NZTA.
+  rucRequired: boolean("ruc_required").notNull().default(false),
+  rucValidToKm: integer("ruc_valid_to_km"),
+
+  // Ownership
+  ownership: text("ownership").notNull().default("owned"),       // owned|leased|financed
+  lessor: text("lessor"),
+  leaseEndsOn: date("lease_ends_on"),
+  leaseMonthlyCents: integer("lease_monthly_cents"),
+  purchasedOn: date("purchased_on"),
+  purchasePriceCents: integer("purchase_price_cents"),
+  supplier: text("supplier"),
+  disposedOn: date("disposed_on"),
+  disposalPriceCents: integer("disposal_price_cents"),
+
+  status: text("status").notNull().default("active"),            // active|in_workshop|off_road|disposed
+
+  // Servicing — the NEXT due is set by a human (you can know a van is due in
+  // October before you've ever logged a service), and updated when one is logged.
+  nextServiceDueOn: date("next_service_due_on"),
+  nextServiceDueKm: integer("next_service_due_km"),
+
+  // FBT. In NZ a vehicle *available* for private use attracts Fringe Benefit
+  // Tax — availability, not use, is the test. We record the position; the
+  // accountant rules on it.
+  fbtPrivateUse: boolean("fbt_private_use").notNull().default(false),
+  fbtExemption: text("fbt_exemption").notNull().default("none"), // none|work_related_vehicle|emergency_call|other
+  fbtNotes: text("fbt_notes"),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // A plate is unique in New Zealand, but it can be transferred off a disposed
+  // vehicle onto a new one — so the uniqueness is among LIVE vehicles only.
+  // That partial index can't be expressed here; it lives in the migration.
+  orgStatusIdx: index("fleet_vehicles_org_status_idx").on(t.organizationId, t.status),
+  orgPlateIdx: index("fleet_vehicles_org_plate_idx").on(t.organizationId, t.plate),
+}));
+export const insertFleetVehicleSchema = createInsertSchema(fleetVehicles).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetVehicle = z.infer<typeof insertFleetVehicleSchema>;
+export type FleetVehicle = typeof fleetVehicles.$inferSelect;
+
+/** Who has the vehicle, and who had it. `holder_user_id` links a ClubOS login
+ *  where one exists, but `holder_name` is the authority — part-time coaches and
+ *  contractors drive club vans without ever having an account. */
+export const fleetAssignments = pgTable("fleet_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  holderUserId: integer("holder_user_id").references(() => users.id, { onDelete: "set null" }),
+  holderName: text("holder_name").notNull(),
+  holderEmail: text("holder_email"),
+  holderPhone: text("holder_phone"),
+  licenceClass: text("licence_class"),
+  licenceExpiresOn: date("licence_expires_on"),
+
+  assignedOn: date("assigned_on").notNull(),
+  returnedOn: date("returned_on"),                     // NULL = they still have it
+  odometerStartKm: integer("odometer_start_km"),
+  odometerEndKm: integer("odometer_end_km"),
+
+  purpose: text("purpose"),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // One OPEN assignment per vehicle is enforced by a partial unique index in
+  // the migration — two people cannot hold the same van at once, and the
+  // database says so rather than the application hoping so.
+  vehicleIdx: index("fleet_assignments_vehicle_idx").on(t.vehicleId, t.assignedOn),
+  orgIdx: index("fleet_assignments_org_idx").on(t.organizationId),
+}));
+export const insertFleetAssignmentSchema = createInsertSchema(fleetAssignments).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetAssignment = z.infer<typeof insertFleetAssignmentSchema>;
+export type FleetAssignment = typeof fleetAssignments.$inferSelect;
+
+/** One row per vehicle per policy period. A fleet-wide policy is simply the
+ *  same `policy_number` across several vehicles — which keeps the "is this van
+ *  insured today" query a single indexed lookup instead of a union. */
+export const fleetInsurancePolicies = pgTable("fleet_insurance_policies", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  insurer: text("insurer").notNull(),
+  policyNumber: text("policy_number").notNull(),
+  coverType: text("cover_type").notNull().default("comprehensive"), // comprehensive|third_party_fire_theft|third_party|mechanical_breakdown|other
+  startsOn: date("starts_on").notNull(),
+  expiresOn: date("expires_on").notNull(),
+  excessCents: integer("excess_cents"),
+  premiumCents: integer("premium_cents"),
+  agreedValueCents: integer("agreed_value_cents"),
+  contactName: text("contact_name"),
+  contactPhone: text("contact_phone"),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  vehicleExpiryIdx: index("fleet_insurance_vehicle_expiry_idx").on(t.vehicleId, t.expiresOn),
+  orgIdx: index("fleet_insurance_org_idx").on(t.organizationId),
+}));
+export const insertFleetInsurancePolicySchema = createInsertSchema(fleetInsurancePolicies).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetInsurancePolicy = z.infer<typeof insertFleetInsurancePolicySchema>;
+export type FleetInsurancePolicy = typeof fleetInsurancePolicies.$inferSelect;
+
+export const fleetServiceRecords = pgTable("fleet_service_records", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  servicedOn: date("serviced_on").notNull(),
+  serviceType: text("service_type").notNull().default("service"), // service|repair|wof_check|cof_check|tyres|recall|other
+  provider: text("provider"),
+  odometerKm: integer("odometer_km"),
+  description: text("description"),
+  costCents: integer("cost_cents"),
+  invoiceRef: text("invoice_ref"),
+  nextServiceDueOn: date("next_service_due_on"),
+  nextServiceDueKm: integer("next_service_due_km"),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  vehicleIdx: index("fleet_service_vehicle_idx").on(t.vehicleId, t.servicedOn),
+  orgIdx: index("fleet_service_org_idx").on(t.organizationId),
+}));
+export const insertFleetServiceRecordSchema = createInsertSchema(fleetServiceRecords).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetServiceRecord = z.infer<typeof insertFleetServiceRecordSchema>;
+export type FleetServiceRecord = typeof fleetServiceRecords.$inferSelect;
+
+/** Running costs. `amount_cents` is GST-inclusive, as it appears on the docket —
+ *  the coding of GST is Xero's job, not this tab's. Litres is a real number
+ *  (never money), so it can be a float without the cents discipline. */
+export const fleetCosts = pgTable("fleet_costs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  vehicleId: integer("vehicle_id").notNull().references(() => fleetVehicles.id, { onDelete: "cascade" }),
+
+  incurredOn: date("incurred_on").notNull(),
+  category: text("category").notNull(),                 // fuel|ruc|rego|wof|cof|insurance|service|repair|tyres|cleaning|fine|toll|parking|lease|other
+  amountCents: integer("amount_cents").notNull(),
+  supplier: text("supplier"),
+  reference: text("reference"),
+  odometerKm: integer("odometer_km"),
+  litres: doublePrecision("litres"),                    // fuel only; enables c/km and L/100km
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  vehicleIdx: index("fleet_costs_vehicle_idx").on(t.vehicleId, t.incurredOn),
+  orgCategoryIdx: index("fleet_costs_org_category_idx").on(t.organizationId, t.category),
+}));
+export const insertFleetCostSchema = createInsertSchema(fleetCosts).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFleetCost = z.infer<typeof insertFleetCostSchema>;
+export type FleetCost = typeof fleetCosts.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOUSING — residency houses, rooms, tenants, rent and utilities (USC, org 4).
+//
+// See migrations/2026-07-10_usc_housing.sql for the reasoning. Two things are
+// deliberately absent as columns because they are DERIVED on read:
+//   * a charge's `overdue` state  (paid_on IS NULL AND due_on < today-in-NZ)
+//   * a room's occupancy          (does it have an active tenancy today?)
+// Kinds/frequencies are validated TEXT (shared/housing.ts), never pg enums.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const housingHouses = pgTable("housing_houses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  address: text("address"),
+  notes: text("notes"),
+  // Archive, never delete — a house with tenancy history is a financial record.
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("housing_houses_org_idx").on(t.organizationId),
+}));
+
+export const housingRooms = pgTable("housing_rooms", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  houseId: integer("house_id").notNull().references(() => housingHouses.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  roomType: text("room_type").notNull().default("single"),
+  // The room's ASKING rent. The tenancy carries the rent actually agreed, so a
+  // later price rise never rewrites what a sitting tenant owes.
+  defaultRentCents: integer("default_rent_cents").notNull().default(0),
+  defaultRentFrequency: text("default_rent_frequency").notNull().default("weekly"),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  houseIdx: index("housing_rooms_house_idx").on(t.houseId),
+  orgIdx: index("housing_rooms_org_idx").on(t.organizationId),
+}));
+
+export const housingTenancies = pgTable("housing_tenancies", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  roomId: integer("room_id").notNull().references(() => housingRooms.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // RESTRICT: deleting a person must never silently erase the rent they owed.
+  contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+  rentCents: integer("rent_cents").notNull().default(0),
+  rentFrequency: text("rent_frequency").notNull().default("weekly"),
+  startDate: date("start_date").notNull(),
+  /** NULL = ongoing. INCLUSIVE — the tenant's last night. */
+  endDate: date("end_date"),
+  bondCents: integer("bond_cents").notNull().default(0),
+  bondReturnedOn: date("bond_returned_on"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  roomIdx: index("housing_tenancies_room_idx").on(t.roomId),
+  contactIdx: index("housing_tenancies_contact_idx").on(t.contactId),
+  orgIdx: index("housing_tenancies_org_idx").on(t.organizationId),
+  // NB: the real guarantee is the `housing_tenancies_no_overlap` EXCLUDE
+  // constraint in the migration — drizzle cannot express it, so it is not here.
+}));
+
+export const housingRentCharges = pgTable("housing_rent_charges", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenancyId: integer("tenancy_id").notNull().references(() => housingTenancies.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  periodStart: date("period_start").notNull(),
+  periodEnd: date("period_end").notNull(),
+  /** Rent in advance: the first day of the period it covers. */
+  dueOn: date("due_on").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  paidOn: date("paid_on"),
+  paidAmountCents: integer("paid_amount_cents"),
+  method: text("method"),
+  reference: text("reference"),
+  waived: boolean("waived").notNull().default(false),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // Makes re-running the charge generator idempotent instead of double-charging.
+  tenancyDueUnq: uniqueIndex("housing_rent_charges_tenancy_due_unq").on(t.tenancyId, t.dueOn),
+  orgDueIdx: index("housing_rent_charges_org_due_idx").on(t.organizationId, t.dueOn),
+}));
+
+export const housingUtilityAccounts = pgTable("housing_utility_accounts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  houseId: integer("house_id").notNull().references(() => housingHouses.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),                 // power | internet | water | gas | rates | insurance | waste | other
+  provider: text("provider"),
+  accountNumber: text("account_number"),
+  billingFrequency: text("billing_frequency").notNull().default("monthly"),
+  /** A budgeting hint only — never what actually gets paid. */
+  expectedAmountCents: integer("expected_amount_cents").notNull().default(0),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  houseIdx: index("housing_utility_accounts_house_idx").on(t.houseId),
+  orgIdx: index("housing_utility_accounts_org_idx").on(t.organizationId),
+}));
+
+export const housingUtilityBills = pgTable("housing_utility_bills", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  utilityAccountId: integer("utility_account_id").notNull().references(() => housingUtilityAccounts.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  periodLabel: text("period_label"),
+  dueOn: date("due_on").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  paidOn: date("paid_on"),
+  paidAmountCents: integer("paid_amount_cents"),
+  method: text("method"),
+  reference: text("reference"),
+  waived: boolean("waived").notNull().default(false),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  accountIdx: index("housing_utility_bills_account_idx").on(t.utilityAccountId),
+  orgDueIdx: index("housing_utility_bills_org_due_idx").on(t.organizationId, t.dueOn),
+}));
+
+export type HousingHouse = typeof housingHouses.$inferSelect;
+export type HousingRoom = typeof housingRooms.$inferSelect;
+export type HousingTenancy = typeof housingTenancies.$inferSelect;
+export type HousingRentCharge = typeof housingRentCharges.$inferSelect;
+export type HousingUtilityAccount = typeof housingUtilityAccounts.$inferSelect;
+export type HousingUtilityBill = typeof housingUtilityBills.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAINTENANCE — cleaning/consumable supplies + machines & equipment (USC, org 4).
+//
+// See migrations/2026-07-21_usc_maintenance.sql for the reasoning. Two things
+// are deliberately absent as columns because they are DERIVED on read:
+//   * a supply's stock status    (out / low / no_level / ok — qty vs reorder level)
+//   * a machine's service status (overdue / due_soon / unknown / ok — vs today)
+// Categories/statuses/reasons/kinds are validated TEXT (shared/maintenance.ts),
+// never pg enums.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const maintSupplies = pgTable("maint_supplies", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  category: text("category").notNull().default("other"),
+  unit: text("unit"),
+  qtyOnHand: integer("qty_on_hand").notNull().default(0),
+  reorderLevel: integer("reorder_level"),
+  location: text("location"),
+  supplier: text("supplier"),
+  // A reference unit cost, not a purchasing ledger.
+  costCents: integer("cost_cents"),
+  notes: text("notes"),
+  // Archive, never delete — a supply with movement history keeps its trail.
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("maint_supplies_org_idx").on(t.organizationId),
+}));
+
+export const maintStockMovements = pgTable("maint_stock_movements", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  supplyId: integer("supply_id").notNull().references(() => maintSupplies.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  delta: integer("delta").notNull(),          // +received / -used
+  reason: text("reason").notNull(),           // received|used|adjusted|stocktake
+  note: text("note"),
+  recordedBy: text("recorded_by"),            // staff email/name from session
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  supplyIdx: index("maint_stock_movements_supply_idx").on(t.supplyId),
+  orgIdx: index("maint_stock_movements_org_idx").on(t.organizationId),
+}));
+
+export const maintAssets = pgTable("maint_assets", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  category: text("category").notNull().default("other"),  // mower|tractor|trailer|power_tool|appliance|other
+  make: text("make"),
+  model: text("model"),
+  serial: text("serial"),
+  location: text("location"),
+  purchaseDate: date("purchase_date"),
+  purchaseCostCents: integer("purchase_cost_cents"),
+  lastServicedOn: date("last_serviced_on"),
+  nextServiceDueOn: date("next_service_due_on"),
+  // Archive, never delete — a retired asset keeps its service history.
+  status: text("status").notNull().default("active"),     // active|retired
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("maint_assets_org_idx").on(t.organizationId),
+}));
+
+export const maintServiceRecords = pgTable("maint_service_records", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  assetId: integer("asset_id").notNull().references(() => maintAssets.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  servicedOn: date("serviced_on").notNull(),
+  kind: text("kind").notNull().default("service"),         // service|repair|inspection
+  performedBy: text("performed_by"),
+  costCents: integer("cost_cents"),
+  nextDueOn: date("next_due_on"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  assetIdx: index("maint_service_records_asset_idx").on(t.assetId),
+  orgIdx: index("maint_service_records_org_idx").on(t.organizationId),
+}));
+
+export type MaintSupply = typeof maintSupplies.$inferSelect;
+export type MaintStockMovement = typeof maintStockMovements.$inferSelect;
+export type MaintAsset = typeof maintAssets.$inferSelect;
+export type MaintServiceRecord = typeof maintServiceRecords.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MANAGEMENT — the planning workspace behind the "Management" tab (first home:
+// United Prints, org 8; org-scoped and generic by design). Projects →
+// per-project workflow statuses → tasks (+ checklists, finish-to-start
+// dependencies for the Gantt, comments). Migration
+// migrations/2026-07-22_up_management.sql; vocab/derivation in
+// shared/management.ts. Overdue is DERIVED (due < today-NZ and not in a
+// done-kind status), never stored; completed_at is stamped server-side when a
+// task enters a done-kind column. Vocab columns are validated TEXT, never
+// pg enums / CHECK gates.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const planProjects = pgTable("plan_projects", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  color: text("color").notNull().default("#6366f1"),
+  status: text("status").notNull().default("active"), // active|completed|archived
+  startDate: date("start_date"),
+  targetDate: date("target_date"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  // What any tab-holder gets when not an explicit collaborator:
+  // none|viewer|commenter|editor|admin. 'admin' = pre-collaborators behavior.
+  defaultRole: text("default_role").notNull().default("admin"),
+  createdBy: integer("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("plan_projects_org_idx").on(t.organizationId),
+}));
+
+export const planCollaborators = pgTable("plan_collaborators", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => planProjects.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull(),
+  role: text("role").notNull().default("editor"), // viewer|commenter|editor|admin
+  addedBy: integer("added_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index("plan_collaborators_project_idx").on(t.projectId),
+  userIdx: index("plan_collaborators_user_idx").on(t.userId),
+  orgIdx: index("plan_collaborators_org_idx").on(t.organizationId),
+  uq: unique("plan_collaborators_uq").on(t.projectId, t.userId),
+}));
+
+export type PlanCollaborator = typeof planCollaborators.$inferSelect;
+
+export const planStatuses = pgTable("plan_statuses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => planProjects.id, { onDelete: "cascade" }),
+  label: text("label").notNull(),
+  color: text("color").notNull().default("#64748b"),
+  kind: text("kind").notNull().default("todo"), // todo|active|done
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index("plan_statuses_project_idx").on(t.projectId),
+  orgIdx: index("plan_statuses_org_idx").on(t.organizationId),
+}));
+
+export const planTasks = pgTable("plan_tasks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => planProjects.id, { onDelete: "cascade" }),
+  statusId: integer("status_id").notNull().references(() => planStatuses.id, { onDelete: "restrict" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  priority: text("priority").notNull().default("medium"), // low|medium|high|urgent
+  assigneeId: integer("assignee_id"),
+  startDate: date("start_date"),
+  dueDate: date("due_date"),
+  milestone: boolean("milestone").notNull().default(false),
+  progress: integer("progress"), // manual owner estimate 0–100; checklist shows done/total instead
+  tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+  sortOrder: integer("sort_order").notNull().default(0),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index("plan_tasks_project_idx").on(t.projectId),
+  orgIdx: index("plan_tasks_org_idx").on(t.organizationId),
+  statusIdx: index("plan_tasks_status_idx").on(t.statusId),
+  assigneeIdx: index("plan_tasks_assignee_idx").on(t.assigneeId),
+}));
+
+export const planTaskDeps = pgTable("plan_task_deps", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  predecessorId: integer("predecessor_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  successorId: integer("successor_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  succIdx: index("plan_task_deps_succ_idx").on(t.successorId),
+  orgIdx: index("plan_task_deps_org_idx").on(t.organizationId),
+  edgeUq: unique("plan_task_deps_edge_uq").on(t.predecessorId, t.successorId),
+}));
+
+export const planChecklistItems = pgTable("plan_checklist_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  done: boolean("done").notNull().default(false),
+  assigneeId: integer("assignee_id"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  taskIdx: index("plan_checklist_task_idx").on(t.taskId),
+  orgIdx: index("plan_checklist_org_idx").on(t.organizationId),
+}));
+
+export const planComments = pgTable("plan_comments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").notNull().references(() => planTasks.id, { onDelete: "cascade" }),
+  authorId: integer("author_id"),
+  authorName: text("author_name"), // denormalized snapshot (recordedBy doctrine)
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  taskIdx: index("plan_comments_task_idx").on(t.taskId),
+  orgIdx: index("plan_comments_org_idx").on(t.organizationId),
+}));
+
+export type PlanProject = typeof planProjects.$inferSelect;
+export type PlanStatus = typeof planStatuses.$inferSelect;
+export type PlanTask = typeof planTasks.$inferSelect;
+export type PlanTaskDep = typeof planTaskDeps.$inferSelect;
+export type PlanChecklistItem = typeof planChecklistItems.$inferSelect;
+export type PlanComment = typeof planComments.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SALES — United Print prospect database + sales pipeline (prints workspace).
+//
+// A prospect is a researched company that could buy what United Print sells
+// (merch, trophies/medals, banners/signage, design). Rows arrive from the
+// grounded research fleet (evidence_url + fetched_at on every row — provenance
+// is the product, same rule as market_research_snapshots) or by hand.
+//
+// The pipeline stage lives on the prospect and only moves through the server's
+// moveStage(), which always writes a sales_activities trail and promotes a won
+// deal into print_contacts (the CRM tab) exactly once. Stage/tier/region are
+// validated app-side in shared/sales.ts — deliberately NO DB CHECK, a stale
+// CHECK is how the MFL checkout 500'd. "Follow-up due" is DERIVED from
+// next_follow_up_on vs today, never stored.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const salesProspects = pgTable("sales_prospects", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  name: text("name").notNull(),
+  website: text("website"),
+  city: text("city"),
+  region: text("region"),
+  category: text("category"),
+  subcategory: text("subcategory"),
+  whyFit: text("why_fit"),
+  servicesMatch: jsonb("services_match"),
+
+  contactName: text("contact_name"),
+  contactRole: text("contact_role"),
+  email: text("email"),
+  phone: text("phone"),
+
+  evidenceUrl: text("evidence_url"),
+  fetchedAt: date("fetched_at"),
+  linkStatus: text("link_status"),
+
+  fitScore: integer("fit_score"),
+  volumeScore: integer("volume_score"),
+  accessScore: integer("access_score"),
+  localityScore: integer("locality_score"),
+  totalScore: integer("total_score"),
+  tier: text("tier"),
+  rank: integer("rank"),
+
+  source: text("source").notNull().default("manual"),
+  stage: text("stage").notNull().default("new"),
+  stageChangedAt: timestamp("stage_changed_at", { withTimezone: true }),
+  nextFollowUpOn: date("next_follow_up_on"),
+  declinedReason: text("declined_reason"),
+  dealValueCents: integer("deal_value_cents"),
+  promotedContactId: integer("promoted_contact_id").references(() => printContacts.id, { onDelete: "set null" }),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgStageIdx: index("sales_prospects_org_stage_idx").on(t.organizationId, t.stage),
+  orgTierIdx: index("sales_prospects_org_tier_idx").on(t.organizationId, t.tier),
+  orgFollowupIdx: index("sales_prospects_org_followup_idx").on(t.organizationId, t.nextFollowUpOn),
+  orgScoreIdx: index("sales_prospects_org_score_idx").on(t.organizationId, t.totalScore),
+  // The dedupe unique index (organization_id, lower(website)) WHERE website IS
+  // NOT NULL lives in the SQL migration only — drizzle can't express lower().
+}));
+
+export const salesActivities = pgTable("sales_activities", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  prospectId: integer("prospect_id").notNull().references(() => salesProspects.id, { onDelete: "cascade" }),
+
+  type: text("type").notNull(),
+  outcome: text("outcome"),
+  note: text("note"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  prospectIdx: index("sales_activities_prospect_idx").on(t.prospectId, t.occurredAt),
+  orgIdx: index("sales_activities_org_idx").on(t.organizationId, t.occurredAt),
+}));
+
+export const insertSalesProspectSchema = createInsertSchema(salesProspects).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSalesProspect = z.infer<typeof insertSalesProspectSchema>;
+export type SalesProspect = typeof salesProspects.$inferSelect;
+export const insertSalesActivitySchema = createInsertSchema(salesActivities).omit({ id: true, createdAt: true });
+export type InsertSalesActivity = z.infer<typeof insertSalesActivitySchema>;
+export type SalesActivity = typeof salesActivities.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STAFF VIDEOS — the in-house Loom (2026-07-20). Record screen/camera in the
+// browser, store on Cloudflare Stream, share at /v/{token}. `token` is the
+// public share id — random and non-enumerable (invoice-pages doctrine: a video
+// may show internal systems, so the set of videos must not be guessable).
+// A TRIM swaps stream_uid in place so share links survive trims; the old asset
+// is remembered in prev_stream_uid and deleted from Stream to free quota.
+// status/visibility/source are app-validated strings — deliberately NO CHECK
+// constraints (a stale CHECK is how the MFL checkout once 500'd).
+// ─────────────────────────────────────────────────────────────────────────────
+export const staffVideos = pgTable(
+  "staff_videos",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id").notNull().references(() => organizations.id),
+    createdBy: integer("created_by").notNull().references(() => users.id),
+    token: varchar("token", { length: 24 }).notNull(),
+    title: text("title").notNull().default("Untitled video"),
+    description: text("description"),
+    streamUid: varchar("stream_uid", { length: 64 }),
+    prevStreamUid: varchar("prev_stream_uid", { length: 64 }),
+    status: varchar("status", { length: 20 }).notNull().default("uploading"), // uploading | processing | ready | error
+    source: varchar("source", { length: 16 }).notNull().default("recording"), // recording | upload | clip
+    visibility: varchar("visibility", { length: 16 }).notNull().default("link"), // link | staff | private
+    allowDownload: boolean("allow_download").notNull().default(true),
+    allowComments: boolean("allow_comments").notNull().default(true),
+    durationSeconds: doublePrecision("duration_seconds"),
+    width: integer("width"),
+    height: integer("height"),
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
+    thumbnailUrl: text("thumbnail_url"),
+    playbackHlsUrl: text("playback_hls_url"),
+    downloadUrl: text("download_url"),
+    captionsStatus: varchar("captions_status", { length: 20 }),
+    viewCount: integer("view_count").notNull().default(0),
+    clippedFromId: integer("clipped_from_id"),
+    deletedAt: timestamp("deleted_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("staff_videos_token_key").on(t.token),
+    index("staff_videos_org_idx").on(t.organizationId, t.createdAt),
+    index("staff_videos_owner_idx").on(t.createdBy),
+  ],
+);
+
+export const staffVideoEvents = pgTable(
+  "staff_video_events",
+  {
+    id: serial("id").primaryKey(),
+    videoId: integer("video_id").notNull().references(() => staffVideos.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 16 }).notNull(), // view | play | milestone
+    viewerKey: varchar("viewer_key", { length: 64 }),
+    percent: integer("percent"),
+    positionSeconds: doublePrecision("position_seconds"),
+    isStaff: boolean("is_staff").notNull().default(false),
+    device: varchar("device", { length: 16 }),
+    referrer: text("referrer"),
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("staff_video_events_video_idx").on(t.videoId, t.kind, t.createdAt),
+    index("staff_video_events_viewer_idx").on(t.videoId, t.viewerKey),
+  ],
+);
+
+// Comments AND emoji reactions in one table: an emoji-only row is a reaction
+// (optionally pinned to at_seconds, Loom-style); a row with body is a comment.
+export const staffVideoComments = pgTable(
+  "staff_video_comments",
+  {
+    id: serial("id").primaryKey(),
+    videoId: integer("video_id").notNull().references(() => staffVideos.id, { onDelete: "cascade" }),
+    authorUserId: integer("author_user_id").references(() => users.id),
+    authorName: varchar("author_name", { length: 120 }),
+    body: text("body"),
+    emoji: varchar("emoji", { length: 16 }),
+    atSeconds: doublePrecision("at_seconds"),
+    isStaff: boolean("is_staff").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("staff_video_comments_video_idx").on(t.videoId, t.createdAt)],
+);
+
+export type StaffVideo = typeof staffVideos.$inferSelect;
+export type StaffVideoEvent = typeof staffVideoEvents.$inferSelect;
+export type StaffVideoComment = typeof staffVideoComments.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Staff Chat — the in-house Slack (replaces the WhatsApp staff groups).
+//
+// Distinct from chat_conversations/chat_messages (the VISITOR live-chat widget
+// on the brand sites) — staff chat is staff↔staff, org-wide, universal tab.
+// Design: channels + DMs, no threads; unread = a per-membership pointer
+// (Campfire model), never per-message receipt rows; mentions are explicit rows
+// written at send time (powers badges + away-email escalation); presence is a
+// single heartbeat row per user, server-side only (no green dots).
+// Pure logic in shared/staff-chat.ts. Migration 2026-07-22_staff_chat.sql.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const staffChannels = pgTable(
+  "staff_channels",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    kind: text("kind").notNull().default("channel"), // 'channel' | 'dm'
+    // Channels only. Slack-style normalized ("match-day-ops"); null for DMs.
+    name: text("name"),
+    topic: text("topic"),
+    // Private channel = invite-only, hidden from the browse list.
+    isPrivate: boolean("is_private").notNull().default(false),
+    // Default channels auto-join every active staff member (e.g. general,
+    // announcements) — nobody has to discover them.
+    isDefault: boolean("is_default").notNull().default(false),
+    // 'anyone' | 'leadership' — announcements channels are leadership-post-only.
+    postPolicy: text("post_policy").notNull().default("anyone"),
+    // DMs only: sorted participant ids "4:17:23". Same people → same DM
+    // (partial unique index in the migration).
+    dmKey: text("dm_key"),
+    createdBy: integer("created_by"),
+    archivedAt: timestamp("archived_at"), // archive, never delete — history survives
+    lastMessageAt: timestamp("last_message_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("staff_channels_kind_idx").on(t.kind, t.lastMessageAt)],
+);
+
+export const staffChannelMembers = pgTable(
+  "staff_channel_members",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    channelId: integer("channel_id").notNull().references(() => staffChannels.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    role: text("role").notNull().default("member"), // 'owner' | 'member'
+    // 'all' = email/badge on every message · 'mentions' (default — research-
+    // backed quiet default) · 'muted' = badge only, never escalate.
+    notifyLevel: text("notify_level").notNull().default("mentions"),
+    // THE unread pointer: everything newer than this is unread. Null = never
+    // opened (unread since join).
+    lastReadAt: timestamp("last_read_at"),
+    // Debounce for the away-email escalation (≤1 email / channel / 15 min).
+    lastEmailedAt: timestamp("last_emailed_at"),
+    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+    // Leave/retire keeps the row — history of who was in the room survives.
+    leftAt: timestamp("left_at"),
+  },
+  (t) => [
+    uniqueIndex("staff_channel_members_unq").on(t.channelId, t.userId),
+    index("staff_channel_members_user_idx").on(t.userId),
+  ],
+);
+
+export const staffMessages = pgTable(
+  "staff_messages",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    channelId: integer("channel_id").notNull().references(() => staffChannels.id, { onDelete: "cascade" }),
+    authorId: integer("author_id").notNull(),
+    body: text("body").notNull().default(""),
+    // [{url,name,contentType,size,kind:'image'|'voice'|'file',durationSec?}]
+    attachments: jsonb("attachments").$type<StaffChatAttachment[] | null>(),
+    // Client-generated id → retry-safe idempotent sends (partial unique index).
+    clientMessageId: text("client_message_id"),
+    // Leadership can request explicit confirmation ("Confirm you've seen this")
+    // — the read-acknowledgment WhatsApp structurally can't do.
+    requiresAck: boolean("requires_ack").notNull().default(false),
+    editedAt: timestamp("edited_at"),
+    // Soft delete: row stays (channel history + "message removed" stub), body
+    // is blanked and attachments cleared at delete time.
+    deletedAt: timestamp("deleted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("staff_messages_channel_idx").on(t.channelId, t.id)],
+);
+
+// One row per person actually mentioned in a message (explicit ids from the
+// composer, or fan-out of a leadership @channel). Powers the mention badge and
+// the email escalation — no free-text re-parsing ever.
+export const staffMessageMentions = pgTable(
+  "staff_message_mentions",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    messageId: integer("message_id").notNull().references(() => staffMessages.id, { onDelete: "cascade" }),
+    channelId: integer("channel_id").notNull(),
+    userId: integer("user_id").notNull(),
+    kind: text("kind").notNull().default("user"), // 'user' | 'channel'
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("staff_message_mentions_unq").on(t.messageId, t.userId),
+    index("staff_message_mentions_user_idx").on(t.userId, t.channelId, t.createdAt),
+  ],
+);
+
+export const staffMessageReactions = pgTable(
+  "staff_message_reactions",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    messageId: integer("message_id").notNull().references(() => staffMessages.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull(),
+    emoji: text("emoji").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("staff_message_reactions_unq").on(t.messageId, t.userId, t.emoji),
+    index("staff_message_reactions_msg_idx").on(t.messageId),
+  ],
+);
+
+// Explicit "I've seen this" confirmations on requires_ack messages.
+export const staffMessageAcks = pgTable(
+  "staff_message_acks",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    messageId: integer("message_id").notNull().references(() => staffMessages.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull(),
+    ackedAt: timestamp("acked_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("staff_message_acks_unq").on(t.messageId, t.userId),
+    index("staff_message_acks_msg_idx").on(t.messageId),
+  ],
+);
+
+// One heartbeat row per user, upserted by the sync poll. Server-side ONLY —
+// decides "away → escalate to email". Never rendered as a green dot.
+export const staffChatPresence = pgTable("staff_chat_presence", {
+  userId: integer("user_id").primaryKey(),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+});
+
+export type StaffChannel = typeof staffChannels.$inferSelect;
+export type StaffChannelMember = typeof staffChannelMembers.$inferSelect;
+export type StaffMessage = typeof staffMessages.$inferSelect;
+export type StaffMessageMention = typeof staffMessageMentions.$inferSelect;
+export type StaffMessageReaction = typeof staffMessageReactions.$inferSelect;
+export type StaffMessageAck = typeof staffMessageAcks.$inferSelect;

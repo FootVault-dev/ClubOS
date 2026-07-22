@@ -12,6 +12,8 @@ import { centsToDollarInput, dollarInputToCents } from "@/lib/format";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CicGameFeed } from "@/components/cic-game-feed";
 import type { Tournament } from "@shared/schema";
 
 function TournamentModal({ tournament, orgId, onClose }: { tournament?: Tournament; orgId: number; onClose: () => void }) {
@@ -202,110 +204,129 @@ export default function TournamentList() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white" data-testid="text-tournaments-title">Tournaments</h1>
-          <p className="text-sm text-white/40 mt-1">{tournaments.length} tournament{tournaments.length !== 1 ? "s" : ""}</p>
-        </div>
-        <Button onClick={() => { setEditing(undefined); setShowModal(true); }} className="bg-blue-600 hover:bg-blue-700 text-white gap-2" data-testid="button-new-tournament">
-          <Plus className="w-4 h-4" />
-          New Tournament
-        </Button>
-      </div>
+      <Tabs defaultValue="categories" className="w-full">
+        <TabsList className="inline-flex h-auto sm:h-10" data-testid="tournament-view-tabs">
+          <TabsTrigger value="categories" className="min-h-[44px] sm:min-h-0" data-testid="tab-tournament-categories">
+            Tournament Categories
+          </TabsTrigger>
+          <TabsTrigger value="feed" className="min-h-[44px] sm:min-h-0" data-testid="tab-game-feed">
+            Game Feed
+          </TabsTrigger>
+        </TabsList>
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" />
-          <Input placeholder="Search tournaments..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 premium-input text-white" data-testid="input-search-tournaments" />
-        </div>
-        <div className="flex items-center gap-2">
-          <Switch checked={showArchived} onCheckedChange={setShowArchived} />
-          <span className="text-xs text-white/30">Show Archived</span>
-        </div>
-      </div>
+        <TabsContent value="categories" className="mt-4">
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-white" data-testid="text-tournaments-title">Tournaments</h1>
+                <p className="text-sm text-white/40 mt-1">{tournaments.length} tournament{tournaments.length !== 1 ? "s" : ""}</p>
+              </div>
+              <Button onClick={() => { setEditing(undefined); setShowModal(true); }} className="bg-blue-600 hover:bg-blue-700 text-white gap-2" data-testid="button-new-tournament">
+                <Plus className="w-4 h-4" />
+                New Tournament
+              </Button>
+            </div>
 
-      {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map(i => <div key={i} className="h-20 rounded-2xl bg-white/[0.02] animate-pulse" />)}
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] p-5">
-          <div className="flex flex-col items-center justify-center py-16 text-white/20">
-            <Award className="w-12 h-12 mb-3" />
-            <p className="text-sm">{showArchived ? "No archived tournaments" : "No tournaments yet"}</p>
-            <p className="text-xs mt-1">Create a new tournament to get started</p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" />
+                <Input placeholder="Search tournaments..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 premium-input text-white" data-testid="input-search-tournaments" />
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch checked={showArchived} onCheckedChange={setShowArchived} />
+                <span className="text-xs text-white/30">Show Archived</span>
+              </div>
+            </div>
+
+            {isLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map(i => <div key={i} className="h-20 rounded-2xl bg-white/[0.02] animate-pulse" />)}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] p-5">
+                <div className="flex flex-col items-center justify-center py-16 text-white/20">
+                  <Award className="w-12 h-12 mb-3" />
+                  <p className="text-sm">{showArchived ? "No archived tournaments" : "No tournaments yet"}</p>
+                  <p className="text-xs mt-1">Create a new tournament to get started</p>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] overflow-hidden">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-white/5">
+                      <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Tournament</th>
+                      <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden sm:table-cell">Age</th>
+                      <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden sm:table-cell">Dates</th>
+                      <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Format</th>
+                      <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Status</th>
+                      <th className="w-10" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map(t => (
+                      <tr
+                        key={t.id}
+                        className="border-b border-white/[0.03] hover:bg-white/[0.02] cursor-pointer transition-colors"
+                        data-testid={`tournament-row-${t.id}`}
+                        onClick={() => setLocation(`/admin/tournaments/${t.id}`)}
+                      >
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-blue-500/15 flex items-center justify-center flex-shrink-0">
+                              <Award className="w-4 h-4 text-blue-400" />
+                            </div>
+                            <span className="text-sm font-medium text-white/80">{t.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3.5 text-sm text-white/50 hidden sm:table-cell">{t.ageGroup || "—"}</td>
+                        <td className="px-5 py-3.5 text-sm text-white/40 hidden sm:table-cell">
+                          {t.startDate ? new Date(t.startDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" }) : "—"}
+                        </td>
+                        <td className="px-5 py-3.5 text-xs text-white/40">{t.numGroups} groups · {t.teamsPerGroup}/grp</td>
+                        <td className="px-5 py-3.5">
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            t.status === "active" ? "bg-green-500/15 text-green-400" :
+                            t.status === "completed" ? "bg-blue-500/15 text-blue-400" :
+                            "bg-white/5 text-white/30"
+                          }`}>
+                            {t.status.charAt(0).toUpperCase() + t.status.slice(1)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3.5 relative">
+                          <button
+                            onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === t.id ? null : t.id); }}
+                            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white/5 text-white/30"
+                            data-testid={`button-tournament-menu-${t.id}`}
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+                          {menuOpen === t.id && (
+                            <>
+                              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(null)} />
+                              <div className="absolute right-3 top-full z-50 bg-[#0a0e1a] border border-blue-500/15 rounded-xl shadow-xl py-1 w-40">
+                                <button onClick={e => { e.stopPropagation(); setEditing(t); setShowModal(true); setMenuOpen(null); }} className="w-full px-3 py-2 text-sm text-white/60 hover:bg-white/5 text-left">Edit</button>
+                                <button onClick={e => { e.stopPropagation(); archiveMut.mutate(t); setMenuOpen(null); }} className="w-full px-3 py-2 text-sm text-white/60 hover:bg-white/5 text-left flex items-center gap-2"><Archive className="w-3.5 h-3.5" />{t.archived ? "Unarchive" : "Archive"}</button>
+                                <button onClick={e => { e.stopPropagation(); deleteMut.mutate(t.id); setMenuOpen(null); }} className="w-full px-3 py-2 text-sm text-red-400/70 hover:bg-red-500/10 text-left flex items-center gap-2"><Trash2 className="w-3.5 h-3.5" />Delete</button>
+                              </div>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {showModal && <TournamentModal tournament={editing} orgId={orgId!} onClose={() => { setShowModal(false); setEditing(undefined); }} />}
           </div>
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-blue-500/10 bg-white/[0.02] overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-white/5">
-                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Tournament</th>
-                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden sm:table-cell">Age</th>
-                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3 hidden sm:table-cell">Dates</th>
-                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Format</th>
-                <th className="text-left text-[10px] text-white/30 uppercase tracking-wider font-semibold px-5 py-3">Status</th>
-                <th className="w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(t => (
-                <tr
-                  key={t.id}
-                  className="border-b border-white/[0.03] hover:bg-white/[0.02] cursor-pointer transition-colors"
-                  data-testid={`tournament-row-${t.id}`}
-                  onClick={() => setLocation(`/admin/tournaments/${t.id}`)}
-                >
-                  <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-blue-500/15 flex items-center justify-center flex-shrink-0">
-                        <Award className="w-4 h-4 text-blue-400" />
-                      </div>
-                      <span className="text-sm font-medium text-white/80">{t.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-5 py-3.5 text-sm text-white/50 hidden sm:table-cell">{t.ageGroup || "—"}</td>
-                  <td className="px-5 py-3.5 text-sm text-white/40 hidden sm:table-cell">
-                    {t.startDate ? new Date(t.startDate + "T12:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short" }) : "—"}
-                  </td>
-                  <td className="px-5 py-3.5 text-xs text-white/40">{t.numGroups} groups · {t.teamsPerGroup}/grp</td>
-                  <td className="px-5 py-3.5">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      t.status === "active" ? "bg-green-500/15 text-green-400" :
-                      t.status === "completed" ? "bg-blue-500/15 text-blue-400" :
-                      "bg-white/5 text-white/30"
-                    }`}>
-                      {t.status.charAt(0).toUpperCase() + t.status.slice(1)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3.5 relative">
-                    <button
-                      onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === t.id ? null : t.id); }}
-                      className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white/5 text-white/30"
-                      data-testid={`button-tournament-menu-${t.id}`}
-                    >
-                      <MoreVertical className="w-4 h-4" />
-                    </button>
-                    {menuOpen === t.id && (
-                      <>
-                        <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(null)} />
-                        <div className="absolute right-3 top-full z-50 bg-[#0a0e1a] border border-blue-500/15 rounded-xl shadow-xl py-1 w-40">
-                          <button onClick={e => { e.stopPropagation(); setEditing(t); setShowModal(true); setMenuOpen(null); }} className="w-full px-3 py-2 text-sm text-white/60 hover:bg-white/5 text-left">Edit</button>
-                          <button onClick={e => { e.stopPropagation(); archiveMut.mutate(t); setMenuOpen(null); }} className="w-full px-3 py-2 text-sm text-white/60 hover:bg-white/5 text-left flex items-center gap-2"><Archive className="w-3.5 h-3.5" />{t.archived ? "Unarchive" : "Archive"}</button>
-                          <button onClick={e => { e.stopPropagation(); deleteMut.mutate(t.id); setMenuOpen(null); }} className="w-full px-3 py-2 text-sm text-red-400/70 hover:bg-red-500/10 text-left flex items-center gap-2"><Trash2 className="w-3.5 h-3.5" />Delete</button>
-                        </div>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+        </TabsContent>
 
-      {showModal && <TournamentModal tournament={editing} orgId={orgId!} onClose={() => { setShowModal(false); setEditing(undefined); }} />}
+        <TabsContent value="feed" className="mt-4">
+          <CicGameFeed />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

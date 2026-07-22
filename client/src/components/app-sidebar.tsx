@@ -17,6 +17,7 @@ import {
   Tent,
   ClipboardCheck,
   ListChecks,
+  Home,
   Users,
   Mail,
   Settings,
@@ -58,6 +59,7 @@ import {
   BellRing,
   CalendarCheck,
   Waves,
+  Briefcase,
   Clapperboard,
   MessageCircle,
   Radio,
@@ -65,11 +67,20 @@ import {
   Fingerprint,
   Telescope,
   MessageSquarePlus,
+  MessagesSquare,
   Link2,
   Target,
   Activity,
   Images,
   Warehouse,
+  Receipt,
+  Car,
+  PhoneCall,
+  Share2,
+  History as HistoryIcon,
+  Video,
+  Wrench,
+  ClipboardList,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -77,6 +88,9 @@ import {
 // Access is gated server-side by requireAuth (not a per-workspace tab grant),
 // so it's appended directly to secondaryNav below, bypassing the tab whitelist.
 const feedbackSecondary = { tab: "feedback", title: "Feedback", url: "/admin/feedback", icon: MessageSquarePlus };
+// Universal "Chat" tab — the in-house Slack (staff channels + DMs). Same
+// universal pattern as Feedback: every workspace, requireAuth-gated.
+const chatSecondary = { tab: "chat", title: "Chat", url: "/admin/chat", icon: MessagesSquare };
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -115,6 +129,11 @@ const campsNav = [
   // here so it doesn't collide with the camps "Mailer" item (nav keys by title).
   { tab: "cufc-mailer", title: "Newsletters", url: "/admin/cufc-mailer", icon: Send },
   { tab: "predictor", title: "Play Predictor", url: "/admin/predictor", icon: Trophy },
+  // 10 years of Friendly Manager registrations + payments (imported 2026-07-14).
+  { tab: "fm-history", title: "History", url: "/admin/fm-history", icon: HistoryIcon },
+  { tab: "fm-competitions", title: "Competitions", url: "/admin/fm-competitions", icon: Trophy },
+  // Free open-training requests from cufc.co.nz (invite-only funnel, U9–U20).
+  { tab: "open-trainings", title: "Open Trainings", url: "/admin/open-trainings", icon: CalendarCheck },
   { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
@@ -123,7 +142,8 @@ const campsNav = [
 // South Island United shares the camps workspace type with CUFC but adds its own
 // club-building tools (must NOT show for CUFC).
 const siuNav = [
-  ...campsNav,
+  // FM History + Open Trainings are CUFC's (org 1) — keep them out of SIU's sidebar.
+  ...campsNav.filter((t) => t.tab !== "fm-history" && t.tab !== "fm-competitions" && t.tab !== "open-trainings"),
   { tab: "licensing", title: "OFC Licensing", url: "/admin/licensing", icon: Award },
   { tab: "declarations", title: "Declarations", url: "/admin/declarations", icon: FileSignature },
   { tab: "events", title: "Community Events", url: "/admin/events", icon: Calendar },
@@ -142,6 +162,8 @@ const venueNav = [
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "facilities", title: "Facilities", url: "/admin/facilities", icon: Shield },
   { tab: "addons", title: "Add-ons", url: "/admin/addons", icon: Puzzle },
+  { tab: "housing", title: "Housing", url: "/admin/housing", icon: Home },
+  { tab: "maintenance", title: "Maintenance", url: "/admin/maintenance", icon: Wrench },
   { tab: "people", title: "People & Access", url: "/admin/people", icon: Users },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
 ];
@@ -207,6 +229,8 @@ const tournamentNav = [
   { tab: "cic-logo-consents", title: "Logo Consents", url: "/admin/cic-logo-consents", icon: ClipboardCheck },
   { tab: "cic-watch", title: "Watch", url: "/admin/cic-watch", icon: Radio },
   { tab: "media", title: "Media", url: "/admin/media", icon: Images },
+  { tab: "cic-content-marketplace", title: "Content Marketplace", url: "/admin/cic-content-marketplace", icon: BarChart3 },
+  { tab: "cic-referees", title: "Referees", url: "/admin/cic-referees", icon: ClipboardCheck },
 ];
 
 const tournamentSecondary = [
@@ -252,11 +276,18 @@ const groupNav = [
   { tab: "calendar", title: "Calendar", url: "/admin/calendar", icon: Calendar },
   { tab: "projects", title: "Projects", url: "/admin/projects", icon: ClipboardCheck },
   { tab: "content", title: "Content", url: "/admin/content", icon: Clapperboard },
+  { tab: "hiring", title: "Hiring", url: "/admin/hiring", icon: Briefcase },
   { tab: "sponsorship", title: "Sponsorship", url: "/admin/sponsorship", icon: Handshake },
   { tab: "proposals", title: "Proposals", url: "/admin/proposals", icon: Send },
   { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
+  { tab: "invoices", title: "Invoices", url: "/admin/invoices", icon: Receipt },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
+  // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
+  { tab: "vehicles", title: "Vehicles", url: "/admin/vehicles", icon: Car },
+  { tab: "sponsor-traffic", title: "Sponsor Traffic", url: "/admin/sponsor-traffic", icon: Share2 },
+  // `Video`, not `Clapperboard` — Content owns Clapperboard in this nav.
+  { tab: "videos", title: "Videos", url: "/admin/videos", icon: Video },
 ];
 
 const groupSecondary = [
@@ -269,13 +300,16 @@ const groupSecondary = [
 
 const printsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
+  { tab: "management", title: "Management", url: "/admin/print-management", icon: ClipboardList },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
   { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "behavior", title: "Behavior", url: "/admin/behavior", icon: Activity },
   { tab: "jobs", title: "Jobs", url: "/admin/print-jobs", icon: FolderKanban },
+  { tab: "quotes", title: "Quotes", url: "/admin/print-quotes", icon: Receipt },
   { tab: "orders", title: "Orders", url: "/admin/print-orders", icon: ShoppingCart },
   { tab: "materials", title: "Materials", url: "/admin/print-materials", icon: FileText },
   { tab: "crm", title: "CRM", url: "/admin/print-crm", icon: Users },
+  { tab: "sales", title: "Sales", url: "/admin/print-sales", icon: PhoneCall },
   { tab: "print-livechat", title: "Live Chat", url: "/admin/print-livechat", icon: MessageCircle },
   { tab: "projects", title: "Projects", url: "/admin/print-projects", icon: FolderKanban },
   { tab: "analytics", title: "Analytics", url: "/admin/print-analytics", icon: BarChart3 },
@@ -514,9 +548,32 @@ export function AppSidebar() {
     tabSlug: item.tab,
   });
   const mainNav = allMainNav.filter(navFilter);
-  // Feedback is universal — always show it (no tab-whitelist filtering), for
-  // every staff member in every workspace.
-  const secondaryNav = [...allSecondaryNav.filter(navFilter), feedbackSecondary];
+  // Chat + Feedback are universal — always shown (no tab-whitelist filtering),
+  // for every staff member in every workspace. Chat sits first.
+  const secondaryNav = [...allSecondaryNav.filter(navFilter), chatSecondary, feedbackSecondary];
+
+  // Live unread badge for the Chat item: mentions + DM messages count (gold),
+  // other unreads show as a subtle dot. Polling this ALSO acts as the presence
+  // heartbeat — someone browsing ClubOS sees the badge, so the server rightly
+  // skips the escalation email while they're here.
+  const { data: chatSync } = useQuery<{ channels: { kind: string; joined: boolean; unread: number; mentions: number }[] }>({
+    queryKey: ["/api/admin/chat/sync"],
+    refetchInterval: 60_000,
+    staleTime: 55_000,
+    refetchOnWindowFocus: true,
+  });
+  const chatBadge = (chatSync?.channels ?? []).reduce(
+    (acc, c) => {
+      if (!c.joined) return acc;
+      if (c.kind === "dm") acc.important += c.unread;
+      else {
+        acc.important += c.mentions;
+        acc.other += Math.max(0, c.unread - c.mentions);
+      }
+      return acc;
+    },
+    { important: 0, other: 0 },
+  );
 
   const logoutMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/auth/logout"),
@@ -602,6 +659,14 @@ export function AppSidebar() {
                       <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase()}`}>
                         <item.icon className="w-4 h-4" />
                         <span className="text-[13px] font-medium truncate">{item.title}</span>
+                        {item.tab === "chat" && chatBadge.important > 0 && (
+                          <span className="ml-auto min-w-[18px] h-[18px] px-1 rounded-full bg-[#c9a43e] text-[#0b0b08] text-[10px] font-bold flex items-center justify-center leading-none">
+                            {chatBadge.important > 99 ? "99+" : chatBadge.important}
+                          </span>
+                        )}
+                        {item.tab === "chat" && chatBadge.important === 0 && chatBadge.other > 0 && (
+                          <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white/40" />
+                        )}
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

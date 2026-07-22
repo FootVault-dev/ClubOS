@@ -91,7 +91,8 @@ export default function VenueBookings() {
         (b.customerEmail || "").toLowerCase().includes(q) ||
         (b.customerClub || "").toLowerCase().includes(q) ||
         (b.facility?.name || "").toLowerCase().includes(q) ||
-        (b.createdByName || "").toLowerCase().includes(q)
+        (b.createdByName || "").toLowerCase().includes(q) ||
+        (b.attributionSource || "").toLowerCase().includes(q)
       );
     }
     return list.slice().sort((a, b) =>
@@ -100,6 +101,18 @@ export default function VenueBookings() {
         : b.bookingDate.localeCompare(a.bookingDate) || b.startTime.localeCompare(a.startTime)
     );
   }, [bookings, source, search, sort]);
+
+  // Live count + paid revenue for the CURRENT filtered/searched view — so
+  // filtering (or searching a campaign tag like "field-hire") answers "how many
+  // booked, and how much revenue" at a glance. Revenue = money actually captured
+  // (status "paid"); pending holds and $0 staff blocks don't count.
+  const summary = useMemo(() => {
+    let paidCents = 0, paidCount = 0;
+    for (const b of rows) {
+      if (b.status === "paid") { paidCents += (b.totalCents ?? 0); paidCount++; }
+    }
+    return { count: rows.length, paidCount, paidRevenue: paidCents / 100 };
+  }, [rows]);
 
   const FILTERS: { key: SourceFilter; label: string }[] = [
     { key: "all", label: `All (${counts.all})` },
@@ -116,6 +129,12 @@ export default function VenueBookings() {
           <h1 className="text-2xl font-bold text-white" data-testid="text-bookings-title">Bookings</h1>
           <p className="text-sm text-white/40">Every booking — paid online, added by staff, or approved from a member request — with a record of who added each one.</p>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm" data-testid="bookings-summary">
+        <div><span className="text-white/40">Showing</span> <span className="text-white font-semibold">{summary.count}</span> <span className="text-white/40">booking{summary.count === 1 ? "" : "s"}</span></div>
+        <div><span className="text-white/40">Paid</span> <span className="text-white font-semibold">{summary.paidCount}</span></div>
+        <div><span className="text-white/40">Revenue collected</span> <span className="text-green-300 font-semibold">${summary.paidRevenue.toFixed(2)}</span></div>
       </div>
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -141,7 +160,7 @@ export default function VenueBookings() {
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search name, email, facility…"
+              placeholder="Search name, email, facility, tag…"
               className="bg-transparent text-xs text-white placeholder:text-white/30 outline-none w-44"
               data-testid="input-bookings-search"
             />
@@ -221,6 +240,7 @@ export default function VenueBookings() {
                         {sr
                           ? <span className={`inline-block text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full border ${sr.cls}`}>{sr.label}</span>
                           : <span className="text-xs text-white/30">—</span>}
+                        {b.attributionSource && <div className="text-[10px] text-white/40 truncate mt-1" title={`Came from: ${b.attributionSource}`}>{b.attributionSource}</div>}
                       </td>
                       <td className="px-3 py-2.5 text-xs text-white/55 truncate" title={attribution(b)}>
                         {attribution(b)}

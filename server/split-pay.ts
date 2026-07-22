@@ -22,13 +22,22 @@
 // pattern as confirmRegistrationOnce / claimBalance), Stripe idempotency keys.
 
 import crypto from "crypto";
-import { and, asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, lt, ne } from "drizzle-orm";
 import { db } from "./db";
 import { splitSessions, splitMembers, registrations, leagueDivisions, facilityBookings, type SplitSession, type SplitMember } from "@shared/schema";
 import { getOrCreateCustomer, createOffSessionPaymentIntent, createPaymentIntent, createRefund, stripe } from "./stripe";
 import { equalSplit } from "@shared/league-pricing";
 
 const SESSION_TTL_DAYS = 30;
+const MFL_PUBLIC_URL = process.env.MFL_PUBLIC_URL || "https://join.minifootball.co.nz";
+
+// The public share link for a split (the hub page the squad pays on). MFL
+// registration splits only — venue-booking splits live on the USC-branded hub
+// and hold for 48h, so they never enter the email/reminder flow.
+export function splitShareUrl(s: Pick<SplitSession, "shareCode"> & { fundingType?: string | null }): string | null {
+  if ((s.fundingType || "registration") !== "registration") return null;
+  return `${MFL_PUBLIC_URL}/league/split/${s.shareCode}`;
+}
 
 // V1 (PayShare model): each player pays a FIXED equal share = team fee ÷ squad
 // size, on the spot, the moment they add their card. No captain "lock" step. The
@@ -169,6 +178,11 @@ export async function createSplitForRegistration(opts: {
     idempotencyKey: `split-${session.id}-member-${captainMember.id}-pay`,
   });
   await db.update(splitMembers).set({ stripePaymentIntentId: pi.id }).where(eq(splitMembers.id, captainMember.id));
+
+  // Land the share link in the captain's inbox from second zero — the hub link
+  // is otherwise only ever on-screen, and a captain who loses it has no way
+  // back in (bit us live: Charity FC, 2026-07-17). Fire-and-forget.
+  void sendCaptainShareLink(session, "created");
 
   return { sessionId: session.id, shareCode, organiserToken, memberToken, paymentClientSecret: pi.client_secret, customerId: customer.id };
 }
@@ -723,14 +737,14 @@ export async function sweepExpiredBookingSplits(organizationId: number): Promise
 // removed members; emails/phones come straight off split_members.
 export async function listSplitMembersForOrg(organizationId: number, competitionId?: number): Promise<Array<{
   name: string | null; email: string; phone: string | null; role: string; status: string;
-  teamName: string | null; divisionName: string | null;
+  teamName: string | null; divisionId: number | null; divisionName: string | null;
 }>> {
   const conds = [eq(splitSessions.organizationId, organizationId), ne(splitMembers.status, "removed")];
   if (competitionId) conds.push(eq(leagueDivisions.competitionId, competitionId));
   return db.select({
     name: splitMembers.name, email: splitMembers.email, phone: splitMembers.phone,
     role: splitMembers.role, status: splitMembers.status,
-    teamName: splitSessions.teamName, divisionName: leagueDivisions.name,
+    teamName: splitSessions.teamName, divisionId: leagueDivisions.id, divisionName: leagueDivisions.name,
   })
     .from(splitMembers)
     .innerJoin(splitSessions, eq(splitMembers.splitSessionId, splitSessions.id))
@@ -789,17 +803,147 @@ export async function getSplitDetail(sessionId: number) {
 }
 
 // MFL-branded "your share is paid" receipt to a member. Fire-and-forget.
+// While the squad is still short of its target the receipt carries the share
+// link too, so every paid player can chase the rest — not just the captain.
 async function sendMemberReceipt(s: SplitSession, m: SplitMember, amountCents: number): Promise<void> {
   try {
     const { sendSplitShareReceiptEmail } = await import("./email");
+    let shareUrl: string | null = null;
+    let paidCount: number | undefined;
+    if (splitShareUrl(s)) {
+      // Re-count fresh (this fires just after a payment): only include the
+      // link if the squad genuinely still has shares outstanding.
+      const active = (await membersOf(s.id)).filter((x) => x.status !== "removed");
+      paidCount = active.filter((x) => x.status === "paid").length;
+      const target = s.targetCount && s.targetCount > 0 ? s.targetCount : null;
+      if (target && paidCount < target) shareUrl = splitShareUrl(s);
+    }
     await sendSplitShareReceiptEmail({
       to: m.email,
       memberName: m.name || "there",
       teamName: s.teamName || "your team",
       amountCents,
       registrationId: s.registrationId ?? undefined,
+      shareUrl,
+      paidCount,
+      targetCount: s.targetCount,
     });
   } catch (e: any) {
     console.error(`[SplitPay] member receipt email failed member=${m.id}:`, e?.message);
   }
+}
+
+// ── Captain share-link email + reminder sweep ────────────────────────────────
+
+// Email the captain their team's share link ('created' at split creation;
+// 'reminder' from the sweep or an admin resend). Registration splits only.
+export async function sendCaptainShareLink(s: SplitSession, kind: "created" | "reminder"): Promise<boolean> {
+  try {
+    const shareUrl = splitShareUrl(s);
+    if (!shareUrl) return false;
+    const members = await membersOf(s.id);
+    const organiser = members.find((m) => m.role === "organiser" && m.status !== "removed");
+    if (!organiser?.email) return false;
+    const paidCount = members.filter((m) => m.status !== "removed" && m.status === "paid").length;
+    const { sendSplitShareLinkEmail } = await import("./email");
+    return await sendSplitShareLinkEmail({
+      to: organiser.email,
+      captainName: organiser.name?.split(" ")[0] || "there",
+      teamName: s.teamName || "your team",
+      shareUrl,
+      shareCents: memberShareCents(s),
+      paidCount,
+      targetCount: s.targetCount,
+      kind,
+      registrationId: s.registrationId ?? undefined,
+      programId: s.programId ?? undefined,
+    });
+  } catch (e: any) {
+    console.error(`[SplitPay] captain share-link email failed session=${s.id}:`, e?.message);
+    return false;
+  }
+}
+
+// Reminder cadence: first nudge 24h after creation, then every 3 days, capped
+// at REMINDER_MAX — an open split either completes, gets cancelled, or goes
+// quiet before the cap. Sends only in NZ waking hours. Race-safe across the
+// two Fly machines: an optimistic conditional UPDATE claims the send, so only
+// one machine emails per tick.
+const REMINDER_FIRST_AFTER_MS = 24 * 3600_000;
+const REMINDER_EVERY_MS = 72 * 3600_000;
+const REMINDER_MAX = 6;
+
+export async function sweepSplitShareReminders(): Promise<number> {
+  const nzHour = Number(new Intl.DateTimeFormat("en-NZ", {
+    timeZone: "Pacific/Auckland", hour: "2-digit", hour12: false,
+  }).format(new Date()));
+  if (nzHour < 9 || nzHour >= 20) return 0;
+
+  const now = Date.now();
+  const candidates = await db.select().from(splitSessions).where(and(
+    eq(splitSessions.status, "open"),
+    eq(splitSessions.fundingType, "registration"),
+    lt(splitSessions.reminderCount, REMINDER_MAX),
+  ));
+
+  // A captain who re-registers leaves abandoned duplicate splits behind (live
+  // in prod: one captain, THREE open splits for the same team). Reminding on a
+  // dead one would point the squad at the wrong payment page — so per
+  // (captain, team) only the split with the most payments (tie: newest) gets
+  // reminders. The losers stay open and untouched; admin can cancel them.
+  const byKey = new Map<string, { s: SplitSession; paid: number }[]>();
+  for (const s of candidates) {
+    const members = await membersOf(s.id);
+    const organiser = members.find((m) => m.role === "organiser" && m.status !== "removed");
+    const paid = members.filter((m) => m.status !== "removed" && m.status === "paid").length;
+    const key = `${(organiser?.email || `session-${s.id}`).toLowerCase()}::${(s.teamName || "").trim().toLowerCase()}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push({ s, paid });
+  }
+  const winners = new Set<number>();
+  for (const group of byKey.values()) {
+    group.sort((a, b) => b.paid - a.paid || new Date(b.s.createdAt).getTime() - new Date(a.s.createdAt).getTime());
+    winners.add(group[0].s.id);
+  }
+
+  let sent = 0;
+  for (const s of candidates) {
+    if (!winners.has(s.id)) continue;
+    if (now - new Date(s.createdAt).getTime() < REMINDER_FIRST_AFTER_MS) continue;
+    if (s.expiresAt && new Date(s.expiresAt).getTime() < now) continue;
+    if (s.lastReminderAt && now - new Date(s.lastReminderAt).getTime() < REMINDER_EVERY_MS) continue;
+
+    // Claim: reminderCount equality is the optimistic lock — if another machine
+    // (or an admin resend racing us) already moved it, we lose and skip.
+    const [claimed] = await db.update(splitSessions)
+      .set({ reminderCount: (s.reminderCount ?? 0) + 1, lastReminderAt: new Date() })
+      .where(and(
+        eq(splitSessions.id, s.id),
+        eq(splitSessions.status, "open"),
+        eq(splitSessions.reminderCount, s.reminderCount ?? 0),
+      ))
+      .returning({ id: splitSessions.id });
+    if (!claimed) continue;
+
+    if (await sendCaptainShareLink(s, "reminder")) sent++;
+  }
+  if (sent > 0) console.log(`[SplitPay] share-link reminders sent: ${sent}`);
+  return sent;
+}
+
+// Admin resend ("captain lost the link") — sends immediately, stamps
+// lastReminderAt so the sweep doesn't double-nudge the same day, but does NOT
+// consume the automated reminder cap.
+export async function adminSendShareLink(sessionId: number): Promise<{ ok?: boolean; error?: string; to?: string }> {
+  const [s] = await db.select().from(splitSessions).where(eq(splitSessions.id, sessionId));
+  if (!s) return { error: "not_found" };
+  if (!splitShareUrl(s)) return { error: "not_a_registration_split" };
+  if (s.status === "cancelled") return { error: "cancelled" };
+  if (s.status === "settled") return { error: "already_settled" }; // fully paid — nothing to chase
+  const organiser = (await membersOf(s.id)).find((m) => m.role === "organiser" && m.status !== "removed");
+  if (!organiser?.email) return { error: "no_captain_email" };
+  const ok = await sendCaptainShareLink(s, "reminder");
+  if (!ok) return { error: "send_failed" };
+  await db.update(splitSessions).set({ lastReminderAt: new Date() }).where(eq(splitSessions.id, sessionId));
+  return { ok: true, to: organiser.email };
 }

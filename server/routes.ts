@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents } from "@shared/schema";
 import { isValidApiScope, API_SCOPES } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -15,7 +15,7 @@ import * as watch from "./watch-supabase";
 import { buildConversionAttribution } from "./attribution-stamp";
 import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
 import { resolveBehaviorRange, behaviorOverview, behaviorPageDetail, behaviorJourneys, behaviorHours } from "./behavior-reports";
-import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte } from "drizzle-orm";
+import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte, lte, like } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
@@ -26,6 +26,7 @@ import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNot
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
+import { markInvoicePaidByPaymentIntent } from "./invoice-routes";
 import * as rewards from "./rewards";
 import * as loyalty from "./loyalty";
 import { handleLeagueBalanceSuccess, handleLeagueBalanceFailed, claimBalance } from "./league-balance-cron";
@@ -2749,11 +2750,26 @@ export async function registerRoutes(
 
       // ── 8. Registration row (pending until Stripe says otherwise) ───────────
       // Attribution is stamped from the PARENT only. Never the child.
+      //
+      // `buildConversionAttribution` reads cookies and the BODY — never the
+      // query string — so `body.utm` is what lets it classify the channel at
+      // all. The raw values are also persisted below: the cookie tells us WHO,
+      // the utm tells us WHICH MESSAGE, and comparing two creatives needs the
+      // second. Capped, because these are strings from a URL a stranger controls.
       const attribution = await buildConversionAttribution(req, {
         email,
         firstName: String(guardianIn.firstName).trim(),
         lastName: String(guardianIn.lastName).trim(),
       });
+
+      const utmIn = body.utm && typeof body.utm === "object" ? (body.utm as Record<string, unknown>) : null;
+      const utmVal = (k: string) => {
+        const v = utmIn?.[k];
+        return typeof v === "string" && v.trim() ? v.trim().slice(0, 200) : null;
+      };
+      const sourceIn = typeof body.source === "string" && body.source.trim()
+        ? body.source.trim().slice(0, 100)
+        : null;
 
       const now = new Date();
       const reg = await storage.createRegistration({
@@ -2777,6 +2793,13 @@ export async function registerRoutes(
         policyVersion: ACADEMY_POLICY_VERSION,
         nzfConsentAt: now,
         notes: body.notes ? String(body.notes).trim() : null,
+        source: sourceIn,
+        utmSource: utmVal("source"),
+        utmMedium: utmVal("medium"),
+        utmCampaign: utmVal("campaign"),
+        utmContent: utmVal("content"),
+        fbclid: utmVal("fbclid"),
+        gclid: utmVal("gclid"),
         ...attribution,
       } as any);
 
@@ -4441,6 +4464,273 @@ export async function registerRoutes(
     }
   });
 
+  // ============ SPONSOR TRAFFIC (group / USG workspace) ============
+  // Tracks how much website traffic the club sends to its sponsors' sites via
+  // tracked redirect links (app.usg.co.nz/s/{shortCode}), with a per-sponsor
+  // traffic report and a sponsor-site health check. Built because a sponsor's
+  // site went down and we only found out because a friend told us.
+  //
+  // One `sponsors` row = one PLACEMENT (a sponsor on one brand site) — a shared
+  // sponsor (e.g. Moana Skies on both CUFC and SIU) gets a row per brand
+  // because the destination URL and tracked link differ per brand.
+
+  const withProtocol = (url: string): string => {
+    const u = url.trim();
+    return /^https?:\/\//i.test(u) ? u : `https://${u}`;
+  };
+
+  // Deterministic-ish short code for sponsors created from the UI: {brand}-{slug}.
+  // (Seeded sponsors carry their own curated codes straight from the manifest.)
+  const genSponsorCode = (brand: string, name: string): string => {
+    const brandSlug = String(brand || "sponsor").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "sponsor";
+    const nameSlug = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 24) || "sponsor";
+    return `${brandSlug}-${nameSlug}`;
+  };
+
+  // Whitelist + coerce the mutable sponsor fields.
+  const pickSponsorFields = (b: any) => {
+    const out: any = {};
+    for (const f of ["name", "brand", "websiteUrl"]) {
+      if (b[f] !== undefined && String(b[f]).trim() !== "") out[f] = String(b[f]).trim();
+    }
+    for (const f of ["tier", "logoUrl", "notes"]) {
+      if (b[f] !== undefined) out[f] = b[f] === null || b[f] === "" ? null : String(b[f]);
+    }
+    if (b.active !== undefined) out.active = !!b.active;
+    return out;
+  };
+
+  // List sponsors for a workspace, each with real click stats (staff/self
+  // clicks excluded) — a 30-day aggregate + all-time total (open_count) + a
+  // 30-day daily breakdown for the leaderboard sparkline.
+  app.get("/api/admin/sponsor-traffic", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.query.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(sponsors)
+        .where(eq(sponsors.organizationId, orgId))
+        .orderBy(desc(sponsors.openCount));
+      const ids = rows.map(r => r.id);
+      const statsById: Record<number, any> = {};
+      const byDayBySponsor: Record<number, { day: string; clicks: number }[]> = {};
+      if (ids.length) {
+        const agg = await db.execute(sql`
+          SELECT sponsor_id,
+                 COUNT(*) FILTER (WHERE occurred_at > now() - interval '30 days') AS clicks_30d,
+                 COUNT(DISTINCT COALESCE(visitor_id, 'e'||id::text)) FILTER (WHERE occurred_at > now() - interval '30 days') AS unique_30d,
+                 MAX(occurred_at) AS last_click
+          FROM sponsor_link_events
+          WHERE sponsor_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND is_internal = false
+          GROUP BY sponsor_id`);
+        for (const r of (agg.rows as any[])) statsById[r.sponsor_id] = r;
+
+        const days = await db.execute(sql`
+          SELECT sponsor_id, to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, COUNT(*) AS clicks
+          FROM sponsor_link_events
+          WHERE sponsor_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND is_internal = false
+            AND occurred_at > now() - interval '30 days'
+          GROUP BY sponsor_id, day ORDER BY day`);
+        for (const r of (days.rows as any[])) {
+          const sid = Number(r.sponsor_id);
+          (byDayBySponsor[sid] ||= []).push({ day: r.day, clicks: Number(r.clicks) });
+        }
+      }
+      res.json(rows.map(r => ({
+        ...r,
+        stats: {
+          clicks30d: Number(statsById[r.id]?.clicks_30d ?? 0),
+          unique30d: Number(statsById[r.id]?.unique_30d ?? 0),
+          totalClicks: r.openCount,
+          lastClick: statsById[r.id]?.last_click ?? r.lastOpenedAt ?? null,
+          byDay: byDayBySponsor[r.id] ?? [],
+        },
+      })));
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/sponsor-traffic", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const name = String(req.body.name || "").trim();
+      const brand = String(req.body.brand || "").trim();
+      const websiteUrl = String(req.body.websiteUrl || "").trim();
+      if (!name || !brand || !websiteUrl) return res.status(400).json({ message: "name, brand and websiteUrl are required" });
+      let shortCode = genSponsorCode(brand, name);
+      for (let i = 0; i < 5; i++) {
+        const dupe = await db.select({ id: sponsors.id }).from(sponsors).where(eq(sponsors.shortCode, shortCode)).limit(1);
+        if (!dupe.length) break;
+        shortCode = `${genSponsorCode(brand, name)}-${crypto.randomBytes(2).toString("hex")}`;
+      }
+      const fields = pickSponsorFields(req.body);
+      const [row] = await db.insert(sponsors).values({
+        organizationId: orgId,
+        name, brand, websiteUrl,
+        tier: fields.tier ?? null,
+        logoUrl: fields.logoUrl ?? null,
+        notes: fields.notes ?? null,
+        active: fields.active ?? true,
+        shortCode,
+        updatedAt: new Date(),
+      }).returning();
+      res.status(201).json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.patch("/api/admin/sponsor-traffic/:id", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const fields = pickSponsorFields(req.body);
+      const [row] = await db.update(sponsors).set({ ...fields, updatedAt: new Date() }).where(eq(sponsors.id, id)).returning();
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  app.delete("/api/admin/sponsor-traffic/:id", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      await db.delete(sponsors).where(eq(sponsors.id, id));
+      res.json({ ok: true });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Per-sponsor link analytics — clicks, unique visitors, device split, which
+  // of our pages sent them (referrer + source), and a 30-day sparkline.
+  app.get("/api/admin/sponsor-traffic/:id/analytics", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [s] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!s) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, s.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const internalFilter = req.query.includeInternal === "1" ? sql`` : sql` AND is_internal = false`;
+      const summary = await db.execute(sql`
+        SELECT COUNT(*) AS clicks,
+               COUNT(DISTINCT COALESCE(visitor_id,'e'||id::text)) AS unique_visitors,
+               MIN(occurred_at) AS first_click,
+               MAX(occurred_at) AS last_click
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}`);
+      const byDay = await db.execute(sql`
+        SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, COUNT(*) AS clicks
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter} AND occurred_at > now() - interval '30 days'
+        GROUP BY day ORDER BY day`);
+      const byDevice = await db.execute(sql`
+        SELECT COALESCE(device,'unknown') AS device, COUNT(*) AS n
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        GROUP BY device ORDER BY n DESC`);
+      const byReferrer = await db.execute(sql`
+        SELECT COALESCE(NULLIF(referrer,''),'direct') AS referrer, COUNT(*) AS n
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        GROUP BY referrer ORDER BY n DESC LIMIT 8`);
+      const bySource = await db.execute(sql`
+        SELECT COALESCE(NULLIF(source,''),'(none)') AS source, COUNT(*) AS n
+        FROM sponsor_link_events WHERE sponsor_id = ${id}${internalFilter}
+        GROUP BY source ORDER BY n DESC LIMIT 8`);
+      const timeline = await db.execute(sql`
+        SELECT kind, occurred_at, device, referrer, source, country, is_internal
+        FROM sponsor_link_events WHERE sponsor_id = ${id}
+        ORDER BY occurred_at DESC LIMIT 100`);
+      res.json({
+        summary: (summary.rows as any[])[0] ?? {},
+        byDay: byDay.rows, byDevice: byDevice.rows, byReferrer: byReferrer.rows, bySource: bySource.rows,
+        timeline: timeline.rows,
+      });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // ── Sponsor site health check ────────────────────────────────────────────
+  // GET (not HEAD — many sites 405 HEAD), short timeout, wrapped so one bad
+  // URL never throws the batch. No cron yet — button-triggered is enough for
+  // now; a daily scheduled sweep is a natural future enhancement.
+  const checkSponsorSite = async (s: { id: number; websiteUrl: string }) => {
+    let status: "ok" | "down" = "down";
+    let statusCode: number | null = null;
+    try {
+      const resp = await fetch(withProtocol(s.websiteUrl), {
+        method: "GET",
+        redirect: "follow",
+        signal: AbortSignal.timeout(8000),
+      });
+      statusCode = resp.status;
+      status = resp.status < 400 ? "ok" : "down";
+    } catch {
+      status = "down";
+      statusCode = null;
+    }
+    const [row] = await db.update(sponsors)
+      .set({ siteStatus: status, siteStatusCode: statusCode, siteCheckedAt: new Date(), updatedAt: new Date() })
+      .where(eq(sponsors.id, s.id)).returning();
+    return row;
+  };
+
+  app.post("/api/admin/sponsor-traffic/:id/check", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [existing] = await db.select().from(sponsors).where(eq(sponsors.id, id)).limit(1);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!(await checkUserOrg(req.session.userId!, existing.organizationId))) return res.status(403).json({ message: "Forbidden" });
+      const row = await checkSponsorSite(existing);
+      res.json(row);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/sponsor-traffic/check-all", requireAuth, requireTab("sponsor-traffic"), async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body.organizationId));
+      if (!orgId) return res.status(400).json({ message: "organizationId required" });
+      if (!(await checkUserOrg(req.session.userId!, orgId))) return res.status(403).json({ message: "Forbidden" });
+      const rows = await db.select().from(sponsors).where(eq(sponsors.organizationId, orgId));
+      const results = await Promise.allSettled(rows.map(s => checkSponsorSite(s)));
+      const updated = results.map(r => r.status === "fulfilled" ? r.value : null).filter(Boolean) as (typeof rows)[number][];
+      const okCount = updated.filter((r: any) => r.siteStatus === "ok").length;
+      const downCount = updated.filter((r: any) => r.siteStatus === "down").length;
+      res.json({ checked: updated.length, ok: okCount, down: downCount, sponsors: updated });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Public tracked sponsor link — logs the click, then 302s to the sponsor's
+  // real site. Same cookie/device/internal logic as /r/:code, plus an optional
+  // ?src= query param so a click can be attributed to the page/section that
+  // sent it even if the referrer header gets stripped (common in-app/mobile).
+  app.get("/s/:code", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim();
+      const [s] = await db.select().from(sponsors).where(eq(sponsors.shortCode, code)).limit(1);
+      if (!s || !s.websiteUrl) return res.status(404).type("html").send("<h1>Link not found</h1><p>This tracked link is no longer active.</p>");
+      const target = withProtocol(s.websiteUrl);
+      let vid = readReqCookie(req, "usg_pv");
+      if (!vid) {
+        vid = "pv_" + crypto.randomBytes(12).toString("hex");
+        res.cookie("usg_pv", vid, { httpOnly: true, sameSite: "lax", maxAge: 1000 * 60 * 60 * 24 * 365, path: "/" });
+      }
+      const isInternal = !!req.session?.userId || req.query.preview === "1";
+      await db.insert(sponsorLinkEvents).values({
+        sponsorId: s.id, kind: "click", visitorId: vid,
+        device: deviceFromUA(req.headers["user-agent"] as string),
+        userAgent: String(req.headers["user-agent"] || "").slice(0, 400),
+        referrer: String(req.headers["referer"] || "").slice(0, 400),
+        source: req.query.src ? String(req.query.src).slice(0, 120) : null,
+        country: coarseGeo(req), isInternal,
+      });
+      if (!isInternal) {
+        await db.update(sponsors)
+          .set({ openCount: sql`${sponsors.openCount} + 1`, lastOpenedAt: new Date() })
+          .where(eq(sponsors.id, s.id));
+      }
+      res.redirect(302, target);
+    } catch (error: any) {
+      console.error("[/s/:code] error", error);
+      res.status(500).type("html").send("Something went wrong.");
+    }
+  });
+
   // ============ GLOBAL SEARCH ============
   // One fuzzy, typo-tolerant, case-insensitive search across ClubOS. pg_trgm
   // similarity + ILIKE. Org-scoped for non-super-admins; the org-less shared
@@ -4505,6 +4795,40 @@ export async function registerRoutes(
     return result.rows as any[];
   };
 
+  // Tournament players. Not in SEARCH_ENTITIES because a useful result needs a
+  // join (team → club → tournament) for the club logo + age group + team name,
+  // and org-scoping goes through the tournament's org, not a column on the player.
+  // Child PII → never leadership-global: only members of the tournament's
+  // workspace (and super admins) can surface a player. Deep-links to the team
+  // roster via meta = "{tournamentId}:{teamId}".
+  const runPlayerSearch = async (q: string, like: string, orgIds: number[], isSuperAdmin: boolean, perLimit: number) => {
+    if (!isSuperAdmin && orgIds.length === 0) return [];
+    const fullName = sql`(p.first_name || ' ' || p.last_name)`;
+    const score = sql`GREATEST(
+      similarity(lower(p.first_name), lower(${q})),
+      similarity(lower(p.last_name), lower(${q})),
+      similarity(lower(${fullName}), lower(${q})))`;
+    let where = sql`(p.first_name ILIKE ${like} OR p.last_name ILIKE ${like} OR ${fullName} ILIKE ${like} OR (${score}) >= 0.2)`;
+    if (!isSuperAdmin) where = sql`${where} AND t.organization_id IN (${sql.join(orgIds.map(i => sql`${i}`), sql`, `)})`;
+    const query = sql`
+      SELECT 'tournament_player'::text AS type, p.id::text AS id,
+             (${fullName})::text AS label,
+             (COALESCE(NULLIF(t.age_group, ''), t.name) || ' · ' || tt.name)::text AS sublabel,
+             (t.id::text || ':' || tt.id::text) AS meta,
+             t.organization_id AS org_id,
+             COALESCE(NULLIF(tt.logo_url, ''), NULLIF(c.logo_url, '')) AS image,
+             (${score}) AS score
+      FROM tournament_players p
+      JOIN tournament_teams tt ON tt.id = p.team_id
+      JOIN tournaments t ON t.id = tt.tournament_id
+      LEFT JOIN clubs c ON c.id = tt.club_id
+      WHERE ${where}
+      ORDER BY score DESC NULLS LAST
+      LIMIT ${perLimit}`;
+    const result = await db.execute(query);
+    return result.rows as any[];
+  };
+
   app.get("/api/search", requireAuth, async (req, res) => {
     try {
       const q = String(req.query.q || "").trim();
@@ -4524,14 +4848,21 @@ export async function registerRoutes(
         for (const o of allOrgs) orgSlugById[o.id] = o.slug;
       }
       const entities = SEARCH_ENTITIES.filter(e => (e.leadershipOnly ? isLeadership : true));
-      const settled = await Promise.allSettled(entities.map(e => runEntitySearch(e, q, like, orgIds, isSuperAdmin, 6)));
+      // Generic single-table entities + the join-backed tournament-player search,
+      // run together. `label` per task so a rejection logs which one failed.
+      const tasks: Array<{ label: string; run: Promise<any[]> }> = [
+        ...entities.map(e => ({ label: e.type, run: runEntitySearch(e, q, like, orgIds, isSuperAdmin, 6) })),
+        { label: "tournament_player", run: runPlayerSearch(q, like, orgIds, isSuperAdmin, 6) },
+      ];
+      const settled = await Promise.allSettled(tasks.map(t => t.run));
       const byType: Record<string, any[]> = {};
       settled.forEach((s, i) => {
-        if (s.status === "rejected") { console.error("[search]", entities[i].type, s.reason?.message); return; }
+        if (s.status === "rejected") { console.error("[search]", tasks[i].label, s.reason?.message); return; }
         for (const r of s.value) {
           (byType[r.type] ||= []).push({
             type: r.type, id: r.id, label: r.label || "(untitled)", sublabel: r.sublabel || null,
             meta: r.meta || null,
+            image: r.image || null,
             orgId: r.org_id != null ? Number(r.org_id) : null,
             orgSlug: r.org_id != null ? (orgSlugById[Number(r.org_id)] || null) : null,
             score: r.score == null ? 0 : Number(r.score),
@@ -5484,6 +5815,10 @@ export async function registerRoutes(
     // Liability Waiver — enforced here too so a hand-crafted request can't
     // skip it. Acceptance is stamped on every created booking row.
     waiverAccepted: z.literal(true),
+    // Marketing attribution — where the booking came from (e.g. the cufc.co.nz
+    // "Field Hire" menu link → "field-hire-mainmenu"). Optional; only public
+    // bookings that arrived with a ?source=/utm tag carry one.
+    attributionSource: z.string().max(120).optional().nullable(),
   });
 
   app.post("/api/public/venue/:orgId/bookings/checkout", async (req, res) => {
@@ -5535,6 +5870,7 @@ export async function registerRoutes(
           discountCents: line.totalCents - lineTotalCents,
           status: "pending" as const,
           source: "public" as const,
+          attributionSource: parsed.attributionSource ?? null,
           bookingGroupId: groupId,
           notes: parsed.customer.notes || null,
           waiverAccepted: true,
@@ -5664,7 +6000,7 @@ export async function registerRoutes(
           subtotalCents: lineTotalCents - lineGstCents, gstCents: lineGstCents, totalCents: lineTotalCents,
           totalAmount: (lineTotalCents / 100).toFixed(2), gstAmount: (lineGstCents / 100).toFixed(2),
           discountCode: quote.discount?.code || null, discountCents: line.totalCents - lineTotalCents,
-          status: "pending" as const, source: "public" as const, bookingGroupId: groupId,
+          status: "pending" as const, source: "public" as const, attributionSource: parsed.attributionSource ?? null, bookingGroupId: groupId,
           notes: parsed.customer.notes || null, waiverAccepted: true, waiverVersion: USC_WAIVER_VERSION, waiverAcceptedAt: new Date(),
         };
       });
@@ -5803,6 +6139,7 @@ export async function registerRoutes(
           gstAmount: (lineGstCents / 100).toFixed(2),
           status: "pending" as const,
           source: "public" as const,
+          attributionSource: parsed.attributionSource ?? null,
           bookingGroupId: groupId,
           notes: parsed.customer.notes
             ? `${parsed.customer.notes}\n[Recurring weekly · ${idx + 1}/${parsed.items.length}]`
@@ -6597,6 +6934,14 @@ export async function registerRoutes(
       res.json(r);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
+  // Resend the team's share link to the captain ("I lost the link").
+  app.post("/api/admin/league/splits/:id/send-link", requireAuth, async (req, res) => {
+    try {
+      const r = await splitPay.adminSendShareLink(parseInt(req.params.id));
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
 
   // ── MFL Mailer / CRM ────────────────────────────────────────────────────────
   // The full MFL contact database (captains + Player Pay squad players), deduped
@@ -6604,7 +6949,8 @@ export async function registerRoutes(
   app.get("/api/admin/league/mailer/contacts", requireAuth, async (req, res) => {
     try {
       const compId = req.query.competitionId ? parseInt(String(req.query.competitionId)) : null;
-      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: "all" });
+      const divisionId = req.query.divisionId ? parseInt(String(req.query.divisionId)) : null;
+      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: "all", divisionId });
       const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
       const contacts = recipients.map((r) => ({ ...r, unsubscribed: unsub.has(r.email) }));
       res.json({ contacts, total: contacts.length, unsubscribedCount: contacts.filter((c) => c.unsubscribed).length });
@@ -6623,8 +6969,9 @@ export async function registerRoutes(
   app.post("/api/admin/league/mailer/preview", requireAuth, async (req, res) => {
     try {
       const compId = req.body.competitionId ? parseInt(String(req.body.competitionId)) : null;
+      const divisionId = req.body.divisionId ? parseInt(String(req.body.divisionId)) : null;
       const audience = req.body.audience === "all" ? "all" : "captains";
-      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience });
+      const recipients = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience, divisionId });
       const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
       res.json({ count: recipients.filter((r) => !unsub.has(r.email)).length });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
@@ -6649,24 +6996,50 @@ export async function registerRoutes(
   // Send the broadcast to the resolved audience (batched, MFL-branded, logged).
   app.post("/api/admin/league/mailer/send", requireAuth, async (req, res) => {
     try {
-      const { subject, body, competitionId, audience, replyTo } = req.body || {};
+      const { subject, body, competitionId, audience, replyTo, divisionId, scheduledAt } = req.body || {};
       const subj = String(subject || "").trim();
       if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
       if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
       const aud = audience === "all" ? "all" : "captains";
       const compId = competitionId ? parseInt(String(competitionId)) : null;
+      const divId = divisionId ? parseInt(String(divisionId)) : null;
 
-      const all = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: aud });
+      // Parse an optional schedule time. Must be a valid future time (with a
+      // small grace so "in 1 min" clicks don't get rejected by clock skew).
+      let scheduleFor: Date | null = null;
+      if (scheduledAt) {
+        const d = new Date(scheduledAt);
+        if (isNaN(d.getTime())) return res.status(400).json({ message: "Invalid schedule time" });
+        if (d.getTime() < Date.now() - 60_000) return res.status(400).json({ message: "Schedule time is in the past" });
+        scheduleFor = d;
+      }
+
+      const all = await resolveMflAudience(MFL_ORG_ID, { competitionId: compId, audience: aud, divisionId: divId });
       const unsub = await getUnsubscribedEmails(MFL_ORG_ID);
       const recipients = all.filter((r) => !unsub.has(r.email));
       if (recipients.length === 0) return res.status(400).json({ message: "No recipients in this audience" });
+
+      const segmentConfig = JSON.stringify({ orgId: MFL_ORG_ID, competitionId: compId, divisionId: divId, audience: aud, replyTo: replyTo || null });
+
+      // Scheduled: store it and let the mailer-schedule worker dispatch it at the
+      // due time (recipients are re-resolved then, so it reflects the latest
+      // audience). recipientCount here is an at-schedule estimate for the UI.
+      if (scheduleFor) {
+        const [campaign] = await db.insert(emailCampaigns).values({
+          subject: subj, body: String(body),
+          fromEmail: "Mini Football Leagues <noreply@minifootball.co.nz>",
+          replyTo: replyTo || "minifootball@cufc.co.nz",
+          segmentType: `league_${aud}`, segmentConfig,
+          recipientCount: recipients.length, status: "scheduled", scheduledAt: scheduleFor,
+        }).returning();
+        return res.json({ scheduled: true, scheduledAt: scheduleFor.toISOString(), recipientCount: recipients.length, campaignId: campaign.id });
+      }
 
       const [campaign] = await db.insert(emailCampaigns).values({
         subject: subj, body: String(body),
         fromEmail: "Mini Football Leagues <noreply@minifootball.co.nz>",
         replyTo: replyTo || "minifootball@cufc.co.nz",
-        segmentType: `league_${aud}`,
-        segmentConfig: JSON.stringify({ orgId: MFL_ORG_ID, competitionId: compId, audience: aud }),
+        segmentType: `league_${aud}`, segmentConfig,
         recipientCount: recipients.length, status: "sending",
       }).returning();
 
@@ -6684,6 +7057,21 @@ export async function registerRoutes(
       console.error("[League mailer send] error:", e);
       res.status(400).json({ message: e.message });
     }
+  });
+
+  // Cancel a scheduled send (only while still "scheduled" — once the worker has
+  // claimed it to "sending" it's already going out and can't be recalled).
+  app.post("/api/admin/league/mailer/campaigns/:id/cancel", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const [row] = await db.update(emailCampaigns)
+        .set({ status: "canceled" })
+        .where(and(eq(emailCampaigns.id, id), eq(emailCampaigns.status, "scheduled")))
+        .returning();
+      if (!row) return res.status(409).json({ message: "Not cancellable — it may have already started sending." });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // ── League Builders (referral rewards) — admin ──────────────────────────────
@@ -11813,6 +12201,14 @@ export async function registerRoutes(
         awayScore: g.awayScore,
         homePenalties: g.homePenalties,
         awayPenalties: g.awayPenalties,
+        // Live match clock (Score Game). The website derives MM:SS from these +
+        // the half length / break below (never a stored ticking value).
+        timerPhase: g.timerPhase ?? "pre",
+        timerRunning: g.timerRunning ?? false,
+        timerStartedAt: g.timerStartedAt ?? null,
+        timerBaseSeconds: g.timerBaseSeconds ?? 0,
+        halfLengthMinutes: t.gameDurationMinutes ?? 20,
+        breakMinutes: t.breakBetweenMinutes ?? 5,
         groupId: g.groupId,
         groupName: g.group?.name || null,
       })));
@@ -11894,6 +12290,9 @@ export async function registerRoutes(
   const SKILLS_ORG_SLUG = "christchurch-international-cup";
   const SKILLS_AGE_GROUPS = ["U10", "U11"] as const;
   const SKILLS_CHALLENGES = ["juggling", "dribble_pass_finish"] as const;
+  // Terminal, no-score outcomes (Olympic convention). Mutually exclusive with a
+  // numeric score: an entry is pending, scored, or one of these.
+  const SKILLS_STATUSES = ["dns", "dnf", "dsq"] as const;
 
   let skillsOrgIdCache: number | null = null;
   async function skillsOrgId(): Promise<number> {
@@ -11924,6 +12323,7 @@ export async function registerRoutes(
       ageGroup: e.ageGroup,
       challenge: e.challenge,
       score: e.score == null ? null : Number(e.score),
+      status: e.status ?? null,
       scoredAt: e.scoredAt,
       source: e.source,
       createdAt: e.createdAt,
@@ -11949,10 +12349,52 @@ export async function registerRoutes(
           lastRank = rank;
           return { ...e, rank };
         });
-        categories.push({ challenge, ageGroup, entries: ranked, registeredCount: all.length, scoredCount: scored.length });
+        // `lineup` is every contestant, scored or not — the public results page
+        // shows who is competing before anyone has a score. `entries` stays
+        // scored-only because the CIC Youth app reads it as a leaderboard.
+        const rankById = new Map(ranked.map(r => [r.id, r.rank]));
+        const lineup = all
+          .map(e => ({
+            id: e.id,
+            playerName: e.playerName,
+            clubName: e.clubName,
+            score: e.score == null ? null : Number(e.score),
+            status: e.status ?? null, // "dns" | "dnf" | "dsq" | null
+            rank: rankById.get(e.id) ?? null,
+          }))
+          .sort((a, b) => {
+            if (a.rank != null && b.rank != null) return a.rank - b.rank;
+            if (a.rank != null) return -1;
+            if (b.rank != null) return 1;
+            return a.playerName.localeCompare(b.playerName);
+          });
+        // A contestant is "resolved" once they have a score OR a terminal status
+        // (DNS/DNF/DSQ). The category is decided when everyone is resolved —
+        // scoredCount alone would never reach registered when someone DNF'd.
+        const resolvedCount = all.filter(e => e.score != null || e.status).length;
+        categories.push({ challenge, ageGroup, entries: ranked, lineup, registeredCount: all.length, scoredCount: scored.length, resolvedCount });
       }
     }
     return categories;
+  }
+
+  // cicyouth.com/skills-challenge flips from the registration form to the live
+  // results board at 12:00 NZST on Saturday 11 July 2026 — the managers' meeting
+  // runs that morning, so last-minute entries stay open until noon. New Zealand
+  // has no daylight saving in July, so 12:00 NZST is exactly 00:00 UTC.
+  //
+  // The instant is decided HERE, not in the browser: a phone with a wrong clock
+  // would otherwise show the wrong page. Move it without a deploy:
+  //     fly secrets set SKILLS_RESULTS_FROM=2026-07-11T02:00:00Z -a clubos
+  const SKILLS_RESULTS_FROM_DEFAULT = "2026-07-11T00:00:00Z";
+  function skillsResultsFrom(): Date {
+    const raw = (process.env.SKILLS_RESULTS_FROM || "").trim();
+    if (raw) {
+      const d = new Date(raw);
+      if (!Number.isNaN(d.getTime())) return d;
+      console.warn(`[skills] SKILLS_RESULTS_FROM="${raw}" is not a valid date — falling back to ${SKILLS_RESULTS_FROM_DEFAULT}`);
+    }
+    return new Date(SKILLS_RESULTS_FROM_DEFAULT);
   }
 
   // Bearer tokens for the mobile app — `userId.expiry.hmac`, signed with the
@@ -12060,18 +12502,29 @@ export async function registerRoutes(
       if (!(SKILLS_CHALLENGES as readonly string[]).includes(v)) return { error: "Unknown challenge" };
       updates.challenge = v;
     }
-    if ("score" in body) {
-      if (body.score == null || body.score === "") {
-        updates.score = null;
-        updates.scoredByUserId = null;
-        updates.scoredAt = null;
-      } else {
-        const n = Number(body.score);
-        if (!Number.isFinite(n) || n < 0 || n > 999999) return { error: "Score must be a positive number" };
-        updates.score = n.toFixed(2);
-        updates.scoredByUserId = userId;
-        updates.scoredAt = new Date();
-      }
+    // Score and status are mutually exclusive: an entry is pending, scored, or
+    // one of DNS/DNF/DSQ, and setting either clears the other. A terminal status
+    // is checked first so that {score, status} can never persist both.
+    if ("status" in body && body.status != null && body.status !== "") {
+      const st = String(body.status).trim().toLowerCase();
+      if (!(SKILLS_STATUSES as readonly string[]).includes(st)) return { error: "Status must be DNS, DNF or DSQ" };
+      updates.status = st;
+      updates.score = null;
+      updates.scoredByUserId = userId; // who marked it, and when
+      updates.scoredAt = new Date();
+    } else if ("score" in body && body.score != null && body.score !== "") {
+      const n = Number(body.score);
+      if (!Number.isFinite(n) || n < 0 || n > 999999) return { error: "Score must be a positive number" };
+      updates.score = n.toFixed(2);
+      updates.status = null; // a real score overrides any prior DNS/DNF/DSQ
+      updates.scoredByUserId = userId;
+      updates.scoredAt = new Date();
+    } else if ("score" in body || "status" in body) {
+      // An empty score or empty status clears the entry back to pending.
+      updates.score = null;
+      updates.status = null;
+      updates.scoredByUserId = null;
+      updates.scoredAt = null;
     }
     if (Object.keys(updates).length === 0) return { error: "Nothing to update" };
     const orgId = await skillsOrgId();
@@ -12115,6 +12568,15 @@ export async function registerRoutes(
   app.post("/api/public/skills-challenge/register", async (req, res) => {
     setSkillsCors(req, res);
     try {
+      // Entries close the moment the board goes live. This is not cosmetic: a
+      // stale tab submitting at 3pm would push registeredCount above
+      // scoredCount, and a category that had already crowned its champion would
+      // silently un-crown them. Staff can still add walk-ups from ClubOS.
+      if (Date.now() >= skillsResultsFrom().getTime()) {
+        return res.status(403).json({
+          message: "Entries for the Skills Challenge have closed. Live scores are at cicyouth.com/skills-challenge.",
+        });
+      }
       const result = await skillsCreateEntry(req.body, "public", null);
       if ("error" in result) return res.status(400).json({ message: result.error });
       res.json({ ok: true, id: result.entry.id, alreadyRegistered: result.alreadyRegistered });
@@ -12127,7 +12589,18 @@ export async function registerRoutes(
     setSkillsCors(req, res);
     try {
       const entries = await skillsListEntries();
-      res.json({ categories: skillsLeaderboards(entries) });
+      const from = skillsResultsFrom();
+      const now = new Date();
+      // A live scoreboard must never be served from a cache, and the phase flip
+      // must not be pinned by one either.
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      res.json({
+        categories: skillsLeaderboards(entries),
+        // The website obeys this rather than the visitor's device clock.
+        phase: now.getTime() >= from.getTime() ? "results" : "registration",
+        resultsLiveFrom: from.toISOString(),
+        serverTime: now.toISOString(),
+      });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
@@ -15420,6 +15893,10 @@ export async function registerRoutes(
           // without this guard the generic registrationId branch below would treat
           // a membership payment as a camp registration. Idempotent.
           await finalizeMembershipPayment(Number(paymentIntent.metadata.memberId), paymentIntent.id);
+        } else if (paymentIntent.metadata?.kind === "invoice" && paymentIntent.metadata?.invoiceToken) {
+          // USG Invoices — card payment on a tracked invoice. Idempotent
+          // (atomic status-flip guard inside), so a webhook retry is a no-op.
+          await markInvoicePaidByPaymentIntent(paymentIntent);
         } else if (regType === "league_balance" && registrationId) {
           // MFL instalment balance collected.
           await handleLeagueBalanceSuccess(registrationId, paymentIntent.id);
@@ -18428,20 +18905,35 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // Derived "is this game live right now" — leagues have no isLive column
+  // (unlike tournament_games): the timer phase or an in_progress status plays
+  // that role instead. Referee scoring app: server/league-referee-routes.ts.
+  const leagueGameIsLive = (g: { timerPhase: string; status: string }): boolean =>
+    g.timerPhase === "first_half" || g.timerPhase === "half_time" || g.timerPhase === "second_half" || g.status === "in_progress";
+
   app.get("/api/public/league/competitions/:id/games", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      const [comp] = await db.select().from(leagueCompetitions).where(eq(leagueCompetitions.id, id));
+      const halfLengthMinutes = comp?.halfLengthMinutes ?? 20;
+      const breakMinutes = comp?.breakMinutes ?? 5;
+      const withTimer = (g: typeof leagueGames.$inferSelect) => ({
+        ...g,
+        halfLengthMinutes,
+        breakMinutes,
+        isLive: leagueGameIsLive(g),
+      });
       const filters: any[] = [eq(leagueGames.competitionId, id)];
       if (req.query.divisionId) filters.push(eq(leagueGames.divisionId, parseInt(req.query.divisionId as string)));
       if (req.query.teamId) {
         const teamId = parseInt(req.query.teamId as string);
         const all = await db.select().from(leagueGames).where(and(...filters)).orderBy(asc(leagueGames.gameDate), asc(leagueGames.startTime));
-        return res.json(all.filter(g => g.homeTeamId === teamId || g.awayTeamId === teamId));
+        return res.json(all.filter(g => g.homeTeamId === teamId || g.awayTeamId === teamId).map(withTimer));
       }
       const rows = await db.select().from(leagueGames)
         .where(and(...filters))
         .orderBy(asc(leagueGames.gameDate), asc(leagueGames.startTime));
-      res.json(rows);
+      res.json(rows.map(withTimer));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -18483,6 +18975,7 @@ export async function registerRoutes(
       const id = parseInt(req.params.id);
       const [game] = await db.select().from(leagueGames).where(eq(leagueGames.id, id));
       if (!game) return res.status(404).json({ message: "Not found" });
+      const [comp] = await db.select().from(leagueCompetitions).where(eq(leagueCompetitions.id, game.competitionId));
       const teamIds = [game.homeTeamId, game.awayTeamId].filter((x): x is number => x != null);
       const teams = teamIds.length > 0
         ? await db.select().from(leagueTeams).where(inArray(leagueTeams.id, teamIds))
@@ -18492,7 +18985,43 @@ export async function registerRoutes(
         ...game,
         homeTeam: game.homeTeamId ? byId.get(game.homeTeamId) ?? null : null,
         awayTeam: game.awayTeamId ? byId.get(game.awayTeamId) ?? null : null,
+        halfLengthMinutes: comp?.halfLengthMinutes ?? 20,
+        breakMinutes: comp?.breakMinutes ?? 5,
+        isLive: leagueGameIsLive(game),
       });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Goals for a single game — public, read-only (mirrors the game/standings
+  // endpoints above). Gated to MFL games via the game's competition, same as
+  // every other public league route in this block.
+  app.get("/api/public/league/games/:id/goals", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [game] = await db.select().from(leagueGames).where(eq(leagueGames.id, id));
+      if (!game) return res.status(404).json({ message: "Not found" });
+      const [comp] = await db.select().from(leagueCompetitions).where(eq(leagueCompetitions.id, game.competitionId));
+      if (!comp || comp.organizationId !== MFL_ORG_ID) return res.status(404).json({ message: "Not found" });
+      const rows = await db.select().from(leagueGoals)
+        .where(eq(leagueGoals.gameId, id))
+        // Nulls-last on minute (a goal without a recorded minute still shows,
+        // just at the end), then insertion order.
+        .orderBy(sql`${leagueGoals.minute} IS NULL`, asc(leagueGoals.minute), asc(leagueGoals.createdAt));
+      res.json({ goals: rows });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Photo/highlight gallery for an MFL competition — published only.
+  app.get("/api/public/league/media", async (req, res) => {
+    try {
+      const orgId = req.query.organizationId ? parseInt(req.query.organizationId as string) : MFL_ORG_ID;
+      const filters: any[] = [eq(leagueMedia.organizationId, orgId), eq(leagueMedia.published, true)];
+      if (req.query.competitionId) filters.push(eq(leagueMedia.competitionId, parseInt(req.query.competitionId as string)));
+      const rows = await db.select().from(leagueMedia)
+        .where(and(...filters))
+        .orderBy(asc(leagueMedia.sortOrder), desc(leagueMedia.takenAt))
+        .limit(200);
+      res.json({ media: rows });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -22837,31 +23366,34 @@ async function getUnsubscribedEmails(orgId: number): Promise<Set<string>> {
   return new Set(rows.map((r) => (r.email || "").trim().toLowerCase()));
 }
 
-type MflContact = { name: string; email: string; phone: string; role: string; team: string; term: string };
+type MflContact = { name: string; email: string; phone: string; role: string; team: string; league: string; term: string };
 
 // Build the MFL contact database: captains (from team registrations) + squad
 // players (from Player Pay splits), deduped by email. audience 'captains' skips
-// players. competitionId null = every term.
-async function resolveMflAudience(orgId: number, opts: { competitionId: number | null; audience: "captains" | "all" }): Promise<MflContact[]> {
+// players. competitionId null = every term. divisionId set = only that league.
+async function resolveMflAudience(orgId: number, opts: { competitionId: number | null; audience: "captains" | "all"; divisionId?: number | null }): Promise<MflContact[]> {
   const comps = await storage.getLeagueCompetitions(orgId);
   const targetComps = opts.competitionId ? comps.filter((c) => c.id === opts.competitionId) : comps;
+  const divisionId = opts.divisionId || null;
   const byEmail = new Map<string, MflContact>();
 
   for (const comp of targetComps) {
     const regs = await storage.getLeagueRegistrations(comp.id);
     for (const r of regs) {
+      if (divisionId && r.divisionId !== divisionId) continue;
       const email = String(r.captainEmail || "").trim().toLowerCase();
       if (!email) continue;
       if (!byEmail.has(email)) {
-        byEmail.set(email, { name: r.captainName || "", email, phone: r.captainPhone || "", role: "Captain", team: r.teamName || "", term: comp.name });
+        byEmail.set(email, { name: r.captainName || "", email, phone: r.captainPhone || "", role: "Captain", team: r.teamName || "", league: r.divisionName || "", term: comp.name });
       }
     }
     if (opts.audience === "all") {
       const members = await splitPay.listSplitMembersForOrg(orgId, comp.id);
       for (const m of members) {
+        if (divisionId && m.divisionId !== divisionId) continue;
         const email = String(m.email || "").trim().toLowerCase();
         if (!email || byEmail.has(email)) continue;
-        byEmail.set(email, { name: m.name || "", email, phone: m.phone || "", role: m.role === "organiser" ? "Captain" : "Player", team: m.teamName || "", term: comp.name });
+        byEmail.set(email, { name: m.name || "", email, phone: m.phone || "", role: m.role === "organiser" ? "Captain" : "Player", team: m.teamName || "", league: m.divisionName || "", term: comp.name });
       }
     }
   }
@@ -22913,6 +23445,71 @@ async function runBroadcastQueue(campaignId: number, recipients: string[], sendO
   }
   await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed, status: "sent", sentAt: new Date() })
     .where(eq(emailCampaigns.id, campaignId));
+}
+
+// ── Scheduled mailer dispatch ───────────────────────────────────────────────
+// Sends campaigns whose scheduled_at has arrived. Runs on EVERY app instance
+// (both Fly machines), so each due campaign is claimed atomically: a conditional
+// UPDATE flips status scheduled→sending and only one machine's UPDATE matches
+// the row (the other sees 0 rows). Recipients are re-resolved at dispatch time
+// so the send reflects the latest audience. Handles the league mailer today
+// (segment_type "league_*"); other mailers can opt in the same way later.
+let mailerSchedulerStarted = false;
+let mailerDispatching = false;
+async function dispatchDueScheduledCampaigns(): Promise<void> {
+  if (mailerDispatching) return; // never overlap on the same machine
+  mailerDispatching = true;
+  try {
+    const claimed = await db.update(emailCampaigns)
+      .set({ status: "sending" })
+      .where(and(
+        eq(emailCampaigns.status, "scheduled"),
+        lte(emailCampaigns.scheduledAt, new Date()),
+        like(emailCampaigns.segmentType, "league_%"),
+      ))
+      .returning();
+
+    for (const c of claimed) {
+      try {
+        const cfg = JSON.parse(c.segmentConfig || "{}");
+        const orgId = cfg.orgId || 3; // MFL
+        const aud = cfg.audience === "all" ? "all" : "captains";
+        const all = await resolveMflAudience(orgId, { competitionId: cfg.competitionId ?? null, audience: aud, divisionId: cfg.divisionId ?? null });
+        const unsub = await getUnsubscribedEmails(orgId);
+        const recipients = all.filter((r) => !unsub.has(r.email));
+
+        if (recipients.length === 0) {
+          await db.update(emailCampaigns).set({ status: "sent", recipientCount: 0, sentCount: 0, sentAt: new Date() }).where(eq(emailCampaigns.id, c.id));
+          continue;
+        }
+        // Refresh the count to the true at-send figure before dispatching.
+        await db.update(emailCampaigns).set({ recipientCount: recipients.length }).where(eq(emailCampaigns.id, c.id));
+
+        await runBroadcastQueue(c.id, recipients.map((r) => r.email), (email) =>
+          sendLeagueBroadcastEmail({
+            to: email, subject: c.subject, bodyHtml: c.body, replyTo: cfg.replyTo || undefined,
+            unsubscribeUrl: mflUnsubUrl(orgId, email), orgId, campaignId: c.id,
+          }),
+        );
+        console.log(`[Mailer scheduler] dispatched campaign ${c.id} → ${recipients.length} recipients`);
+      } catch (e) {
+        // Leave it 'sending' with whatever progress landed — a human can inspect.
+        // Do NOT reset to 'scheduled' (that would re-send to those already done).
+        console.error(`[Mailer scheduler] campaign ${c.id} failed mid-dispatch:`, e);
+      }
+    }
+  } finally {
+    mailerDispatching = false;
+  }
+}
+
+export function startMflMailerScheduler(): void {
+  if (mailerSchedulerStarted) return;
+  mailerSchedulerStarted = true;
+  const tick = () => { dispatchDueScheduledCampaigns().catch((e) => console.error("[Mailer scheduler] tick error:", e)); };
+  setInterval(tick, 60 * 1000); // sweep every minute
+  setTimeout(tick, 15 * 1000);  // and once shortly after boot
+  console.log("[Mailer scheduler] started (60s interval)");
 }
 
 // Parse a manually-entered recipient list (textarea or array) — split on

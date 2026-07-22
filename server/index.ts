@@ -108,6 +108,109 @@ app.use(attributionCookieMiddleware);
   const { registerWarehouseSyncRoutes } = await import("./warehouse-sync");
   registerWarehouseSyncRoutes(app);
 
+  // Staff Chat — the in-house Slack (channels + DMs, replaces the WhatsApp
+  // staff groups). Universal tab like Feedback: requireAuth only, every
+  // workspace. See migrations/2026-07-22_staff_chat.sql + shared/staff-chat.ts.
+  const { registerStaffChatRoutes } = await import("./staff-chat-routes");
+  registerStaffChatRoutes(app);
+
+  // Hiring — job postings + applications. Admin side is gated by
+  // requireTab("hiring") to the USG workspace; the public apply endpoints are
+  // CORS-allow-listed to our own brand sites and carry no session.
+  const { registerHiringRoutes } = await import("./hiring-routes");
+  registerHiringRoutes(app);
+
+  // Print Quotes — indicative quotes from unitedprints.co.nz's Instant Quote
+  // page, approved/rejected into the existing Orders pipeline. Admin side is
+  // gated by requireTab("quotes") to the United Prints workspace; the public
+  // submit endpoint is CORS-allow-listed to unitedprints.co.nz and carries no
+  // session.
+  const { registerPrintQuoteRoutes } = await import("./print-quote-routes");
+  registerPrintQuoteRoutes(app);
+
+  // USG Invoices — tracked, payable invoices (org 7, super-admin only). Admin
+  // side is gated by requireTab("invoices"); public endpoints are CORS-allow-
+  // listed to usg-invoices.vercel.app and carry no session.
+  const { registerInvoiceRoutes } = await import("./invoice-routes");
+  registerInvoiceRoutes(app);
+  // Fleet — company vehicles, assignments, insurance, servicing, running costs.
+  // Gated by requireTab("vehicles"), which is in SUPER_ADMIN_ONLY_TABS: the
+  // records tie a named staff member to an insurance policy and an FBT
+  // private-use position, so it is Daniel-only until he says otherwise.
+  const { registerVehicleRoutes } = await import("./vehicles-routes");
+  registerVehicleRoutes(app);
+
+  // Staff Videos — the in-house Loom. Recorder + library gated by
+  // requireTab("videos") in the USG workspace; the /v/{token} share pages hit
+  // public endpoints (random non-enumerable tokens, staff opens excluded from
+  // analytics). Video bytes live on Cloudflare Stream, never in our DB.
+  const { registerVideoRoutes } = await import("./videos-routes");
+  registerVideoRoutes(app);
+
+  // Housing — the residency houses at the United Sports Centre: rooms, tenants,
+  // rent and utility bills. Admin-only, gated by requireTab("housing") to the
+  // venue workspace. No public surface: rent arrears are not a public fact.
+  const { registerHousingRoutes } = await import("./housing-routes");
+  registerHousingRoutes(app);
+
+  // Maintenance — the United Sports Centre's cleaning/consumable supplies and
+  // its machines & equipment. Admin-only, gated by requireTab("maintenance") to
+  // the venue workspace. Sibling of Housing, built for Riley (grounds staff).
+  const { registerMaintenanceRoutes } = await import("./maintenance-routes");
+  registerMaintenanceRoutes(app);
+
+  // Open Trainings — free open-training requests from cufc.co.nz. The
+  // invite-only funnel for U9–U20 academy programmes (2026-07-21): public
+  // POST + the CUFC workspace tab where staff approve/decline each request.
+  const { registerOpenTrainingRoutes } = await import("./open-training-routes");
+  registerOpenTrainingRoutes(app);
+
+  // Management — the planning workspace (projects → statuses → tasks with
+  // board/table/calendar/Gantt views). First home: United Prints (org 8);
+  // org-scoped and generic by design.
+  const { registerManagementRoutes } = await import("./management-routes");
+  registerManagementRoutes(app);
+
+  // Sales — the United Print prospect database + pipeline (prints workspace).
+  // Gated by requireTab("sales"), which is in SUPER_ADMIN_ONLY_TABS while
+  // Daniel shapes it. No public surface: a prospect list is a sales asset.
+  const { registerSalesRoutes } = await import("./sales-routes");
+  registerSalesRoutes(app);
+
+  // Friendly Manager History — 10 years of CUFC registrations + payments,
+  // imported 2026-07-14 (fm_registration_history / fm_payment_history).
+  // Read-only, gated by requireTab("fm-history") which is SUPER_ADMIN_ONLY:
+  // children's enrolment records and family payment history, Daniel-only
+  // until he opens it up.
+  const { registerFmHistoryRoutes } = await import("./fm-history-routes");
+  registerFmHistoryRoutes(app);
+
+  // FM Competitions — 11yr tournaments + social leagues (fm_competition_*).
+  // Read-only, requireTab("fm-competitions") ∈ SUPER_ADMIN_ONLY.
+  const { registerFmCompetitionsRoutes } = await import("./fm-competitions-routes");
+  registerFmCompetitionsRoutes(app);
+
+  // CIC Content Marketplace — live sales + engagement analytics for the CIC
+  // photo store (content.cicyouth.com). Reads the usg-meet photos_* tables;
+  // gated by requireTab("cic-content-marketplace") to the CIC workspace.
+  const { registerContentMarketplaceRoutes } = await import("./content-marketplace-routes");
+  registerContentMarketplaceRoutes(app);
+
+  // CIC referee scoring — referees score their CIC games from their phones.
+  // Public referee sign-up/login + token-scoped scoring endpoints (resolve CIC
+  // org 5 server-side, never a staff session); admin approval + assignment gated
+  // by requireTab("cic-referees") in the CIC workspace.
+  const { registerCicRefereeRoutes } = await import("./cic-referee-routes");
+  registerCicRefereeRoutes(app);
+
+  // MFL referee scoring — clone of the CIC referee system for Mini Football
+  // Leagues. Public referee sign-up/login + token-scoped scoring endpoints
+  // (resolve MFL org server-side, never a staff session); admin approval gated
+  // by requireTab("mfl-referees"), scheduling/assignment/media gated by
+  // requireTab("competitions") — both in the MFL workspace.
+  const { registerLeagueRefereeRoutes } = await import("./league-referee-routes");
+  registerLeagueRefereeRoutes(app);
+
   // Periodically sweep abandoned facility-booking carts: cancel any pending bookings older
   // than 30 minutes and cancel their Stripe PaymentIntent so a late webhook can never flip
   // them back to paid (which would otherwise risk double-booking the slot).
@@ -199,6 +302,10 @@ app.use(attributionCookieMiddleware);
   // MFL instalments: charge scheduled team-registration balances on their due date.
   const { startLeagueBalanceCron } = await import("./league-balance-cron");
   startLeagueBalanceCron();
+
+  // Mailer: dispatch scheduled newsletter sends when their time arrives.
+  const { startMflMailerScheduler } = await import("./routes");
+  startMflMailerScheduler();
 
   // External API security: nightly retention pruning of the key audit tables.
   const { startApiSecurityJobs } = await import("./api-security");

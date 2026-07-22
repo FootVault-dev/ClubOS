@@ -16,6 +16,22 @@ import { XeroClient, type Invoice, type LineItem, type Phone, type Contact } fro
 import { db } from "./db";
 import { orgIntegrations, printXeroInvoices, type OrgIntegration, type PrintOrder, type PrintOrderItem } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
+import { nzTodayIso } from "@shared/academy";
+
+// ── Posting safety ───────────────────────────────────────────────────────────
+// Nothing posts straight into the club's live ledger without a human saying so.
+// Invoices are created as DRAFT unless XERO_AUTOPOST=1 is explicitly set, so
+// connecting Xero can never silently start writing AUTHORISED invoices.
+//
+// The account codes below used to be hardcoded to Xero's NZ demo defaults
+// ("200" Sales, "090" Business Bank Account). Those codes are not guaranteed to
+// exist in CUFC's chart, and "090" is a BANK account — posting the gross invoice
+// against it can never reconcile, because Stripe settles NET of its fees. Until a
+// real Stripe clearing account exists in Xero and Victor confirms the codes, we
+// refuse to guess.
+const AUTOPOST = process.env.XERO_AUTOPOST === "1";
+const SALES_ACCOUNT_CODE = process.env.XERO_SALES_ACCOUNT_CODE || "";
+const CLEARING_ACCOUNT_CODE = process.env.XERO_CLEARING_ACCOUNT_CODE || "";
 
 const REDIRECT_URI = process.env.XERO_REDIRECT_URI || "https://app.usg.co.nz/api/integrations/xero/callback";
 const SCOPES = [
@@ -153,7 +169,30 @@ export async function disconnectIntegration(orgId: number, provider: "xero" | "s
 // reference.
 export async function pushPaidOrderToXero(order: PrintOrder, items: PrintOrderItem[]): Promise<{ invoiceId: string; invoiceNumber: string }> {
   if (!order.organizationId) throw new Error("Order has no organization");
+
+  // Refuse to guess an account code. A wrong code silently books revenue to the
+  // wrong place in a real ledger, and nobody notices until year end.
+  if (!SALES_ACCOUNT_CODE) {
+    throw new Error(
+      "XERO_SALES_ACCOUNT_CODE is not set. Refusing to post to a guessed account code. " +
+      "Ask Victor for the correct sales account, then set XERO_SALES_ACCOUNT_CODE.",
+    );
+  }
+
+  // Idempotency at the Xero boundary. The caller's `if (status === 'paid') return`
+  // is a read-then-write check, so a webhook/self-heal race can reach here twice.
+  // A duplicate AUTHORISED invoice in a live ledger is expensive to unwind.
+  const [existing] = await db.select().from(printXeroInvoices)
+    .where(eq(printXeroInvoices.printOrderId, order.id));
+  if (existing?.xeroInvoiceId) {
+    return { invoiceId: existing.xeroInvoiceId, invoiceNumber: existing.xeroInvoiceNumber ?? "" };
+  }
+
   const { xero, tenantId } = await getXeroForOrg(order.organizationId);
+
+  // NZ date, not UTC. `new Date().toISOString()` reports YESTERDAY in New Zealand
+  // from midday UTC onward, which would date-stamp invoices into the wrong period.
+  const today = nzTodayIso();
 
   // Build/find the contact
   const contactName = order.customerCompany || order.customerName;
@@ -171,7 +210,7 @@ export async function pushPaidOrderToXero(order: PrintOrder, items: PrintOrderIt
   };
 
   // Build line items — each print_order_item becomes one Xero line.
-  // Subtotals are pre-GST (Tax Type INPUT2 = NZ GST 15% on Income).
+  // Subtotals are pre-GST. OUTPUT2 = NZ GST 15% on income (INPUT2 is purchases).
   const lineItems: LineItem[] = items.map(it => {
     const description = it.widthMm
       ? `${it.materialName} — ${it.widthMm}×${it.heightMm}mm × ${it.quantity}${it.sides === 2 ? " (double-sided)" : ""}`
@@ -180,7 +219,7 @@ export async function pushPaidOrderToXero(order: PrintOrder, items: PrintOrderIt
       description,
       quantity: 1,                           // We bundle qty into the unit amount via subtotal
       unitAmount: it.subtotalCents / 100,
-      accountCode: "200",                    // Default sales account — Dima can re-map later in Xero
+      accountCode: SALES_ACCOUNT_CODE,
       taxType: "OUTPUT2",                    // NZ GST 15% on outgoing income
     };
   });
@@ -188,12 +227,13 @@ export async function pushPaidOrderToXero(order: PrintOrder, items: PrintOrderIt
   const invoice: Invoice = {
     type: "ACCREC" as any,                   // Accounts receivable
     contact,
-    date: new Date().toISOString().split("T")[0],
-    dueDate: new Date().toISOString().split("T")[0],
+    date: today,
+    dueDate: today,
     invoiceNumber: order.orderNumber ?? undefined,
     reference: order.orderNumber ?? undefined,
     lineItems,
-    status: "AUTHORISED" as any,
+    // DRAFT unless a human has explicitly turned on auto-posting.
+    status: (AUTOPOST ? "AUTHORISED" : "DRAFT") as any,
     lineAmountTypes: "Exclusive" as any,
   };
 
@@ -201,39 +241,52 @@ export async function pushPaidOrderToXero(order: PrintOrder, items: PrintOrderIt
   const created = invoicesRes.body.invoices?.[0];
   if (!created || !created.invoiceID) throw new Error("Xero did not return an invoice ID");
 
-  // Attach a Payment so the invoice shows as paid (Stripe is the actual
-  // payment account — we'll use a generic Bank account code, Dima can
-  // re-map after first push).
+  // Attach a Payment so the invoice shows as paid.
+  //
+  // This MUST hit a Stripe clearing account, never the bank account directly.
+  // The invoice is GROSS; Stripe deposits NET of its fee. Posting the gross
+  // amount against the bank leaves the bank reconciliation permanently short by
+  // the fee. The clearing account holds gross-in, and is cleared by the payout
+  // (net) plus the fee expense — and should net to zero.
+  //
+  // A payment cannot be attached to a DRAFT invoice in Xero, so this only runs
+  // when auto-posting is on and a clearing account has been configured.
   const paymentAmount = order.totalCents / 100;
-  if (paymentAmount > 0 && order.status === "paid") {
-    try {
-      await xero.accountingApi.createPayments(tenantId, {
-        payments: [{
-          invoice: { invoiceID: created.invoiceID },
-          // Account: Stripe clearing account. If the user hasn't set one up,
-          // fall back to default bank account "090". They can re-classify
-          // in Xero post-fact.
-          account: { code: "090" },
-          date: new Date().toISOString().split("T")[0],
-          amount: paymentAmount,
-          reference: `Stripe ${order.stripePaymentIntentId ?? ""}`,
-        }],
-      });
-    } catch (e: any) {
-      // Don't fail the whole push if just the payment attachment fails —
-      // the invoice itself is in Xero, Dima can mark it paid manually.
-      console.warn(`[Xero] Invoice ${created.invoiceNumber} created but payment record failed: ${e.message}`);
+  if (paymentAmount > 0 && order.status === "paid" && AUTOPOST) {
+    if (!CLEARING_ACCOUNT_CODE) {
+      console.warn(
+        `[Xero] Invoice ${created.invoiceNumber} created but NO payment attached: ` +
+        `XERO_CLEARING_ACCOUNT_CODE is unset. Refusing to post gross revenue against a bank account.`,
+      );
+    } else {
+      try {
+        await xero.accountingApi.createPayments(tenantId, {
+          payments: [{
+            invoice: { invoiceID: created.invoiceID },
+            account: { code: CLEARING_ACCOUNT_CODE },
+            date: today,
+            amount: paymentAmount,
+            reference: `Stripe ${order.stripePaymentIntentId ?? ""}`,
+          }],
+        });
+      } catch (e: any) {
+        // Don't fail the whole push if just the payment attachment fails —
+        // the invoice itself is in Xero, Dima can mark it paid manually.
+        console.warn(`[Xero] Invoice ${created.invoiceNumber} created but payment record failed: ${e.message}`);
+      }
     }
   }
 
-  // Persist the link
+  // Persist the link. Record what actually happened in Xero, not what we hoped:
+  // a DRAFT invoice with no payment attached is not "paid".
+  const postedPaid = AUTOPOST && !!CLEARING_ACCOUNT_CODE && order.status === "paid";
   await db.insert(printXeroInvoices).values({
     printOrderId: order.id,
     xeroInvoiceId: created.invoiceID,
     xeroInvoiceNumber: created.invoiceNumber,
-    status: order.status === "paid" ? "paid" : "sent",
+    status: postedPaid ? "paid" : AUTOPOST ? "sent" : "draft",
     pushedAt: new Date(),
-    paidAt: order.status === "paid" ? new Date() : null,
+    paidAt: postedPaid ? new Date() : null,
   } as any);
 
   await db.update(orgIntegrations)
