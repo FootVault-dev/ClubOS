@@ -162,6 +162,7 @@ import PrintsCRM from "@/pages/prints-crm";
 import PrintsSales from "@/pages/prints-sales";
 import PrintsOrders from "@/pages/prints-orders";
 import PrintsProjects from "@/pages/prints-projects";
+import PrintsManagement from "@/pages/prints-management";
 import PrintsAnalytics from "@/pages/prints-analytics";
 import PrintsLanding from "@/pages/prints-landing";
 import PrintsEmail from "@/pages/prints-email";
@@ -241,6 +242,7 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={PrintsDashboard} />
+        <Route path="/admin/print-management" component={PrintsManagement} />
         <Route path="/admin/print-jobs" component={PrintsJobs} />
         <Route path="/admin/print-quotes" component={PrintsQuotes} />
         <Route path="/admin/print-orders/:id" component={PrintsOrderDetail} />

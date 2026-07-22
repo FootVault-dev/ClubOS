@@ -213,6 +213,10 @@ const groupTabs: TabDef[] = [
 
 const printsTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  // The planning workspace (projects/board/table/calendar/Gantt) — the
+  // Monday-style layer ABOVE the production pipeline (Jobs). NOT
+  // super-admin-locked: grant to Dima via Team like Quotes/Maintenance.
+  { slug: "management", title: "Management", url: "/admin/print-management" },
   { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "jobs", title: "Jobs", url: "/admin/print-jobs" },
