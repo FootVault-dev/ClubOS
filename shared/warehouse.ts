@@ -568,6 +568,36 @@ export interface LocationMoveLeg {
   allowNegative: boolean;
 }
 
+// ── Pick queue + dispatch (T8) ──────────────────────────────────────────────
+// Three places stock can be promised to leave the building, unified behind
+// one dispatch endpoint (server/warehouse-routes.ts): a paid **native** shop
+// order (this app's own commerce engine — shop_orders/shop_order_items), a
+// **Shopify** order (we hold NO local order row for these at all — Shopify is
+// the order's system of record, so the ONLY local trace is an active
+// wh_reservations row with ref_kind='shopify_order', created by T12's future
+// webhook path or T5's manual reservation endpoint today), or an approved
+// staff **requisition** (D13 — never carries a wh_reservations row at all,
+// their trail is movements-only, so a 'requisition' dispatch skips the
+// reserve/consume path entirely and posts a plain 'pick' movement instead).
+// This just discriminates which shape a dispatch request body carries — the
+// three flows share nothing else in common at the pure-logic level (unlike
+// putaway/transfer's shared two-leg shape), so there's no equivalent
+// "buildXLegs" helper here.
+export const DISPATCH_SOURCE_KINDS = ["shop_order", "shopify_order", "requisition"] as const;
+export type DispatchSourceKind = (typeof DISPATCH_SOURCE_KINDS)[number];
+export function isDispatchSourceKind(v: unknown): v is DispatchSourceKind {
+  return typeof v === "string" && (DISPATCH_SOURCE_KINDS as readonly string[]).includes(v);
+}
+
+/** Once every WMS-mapped item on a native shop order has been dispatched,
+ *  the order advances past 'paid' into the existing fulfilment pipeline
+ *  (server/shop-routes.ts's ADMIN_SETTABLE_STATUSES) — 'shipped' when its
+ *  shipping option requires a delivery address, 'ready_for_pickup'
+ *  otherwise (no shipping option at all, or a pickup-style option). */
+export function nextOrderStatusAfterDispatch(shippingRequiresAddress: boolean | null | undefined): "shipped" | "ready_for_pickup" {
+  return shippingRequiresAddress ? "shipped" : "ready_for_pickup";
+}
+
 export function buildLocationMoveLegs(
   item: { id: number; allowNegative: boolean },
   fromLocation: { id: number; code: string },

@@ -30,6 +30,7 @@ import {
   availableQty, wouldGoNegative, legsSumToZero,
   stripLocationPrefix, scanActionsForItem, scanActionsForLocation,
   scanQuantityToUnits, buildLocationMoveLegs,
+  DISPATCH_SOURCE_KINDS, isDispatchSourceKind, nextOrderStatusAfterDispatch,
 } from "../shared/warehouse";
 
 let passed = 0;
@@ -389,6 +390,26 @@ ok("buildLocationMoveLegs: propagates allowNegative: true to both legs", () => {
   const legs = buildLocationMoveLegs({ id: 2, allowNegative: true }, { id: 11, code: "B" }, { id: 21, code: "C" }, 3);
   assert.equal(legs[0].allowNegative, true);
   assert.equal(legs[1].allowNegative, true);
+});
+
+ok("isDispatchSourceKind: accepts all three real pick-queue sources", () => {
+  for (const s of DISPATCH_SOURCE_KINDS) assert.equal(isDispatchSourceKind(s), true, s);
+});
+ok("isDispatchSourceKind: rejects junk / near-miss strings and non-strings", () => {
+  assert.equal(isDispatchSourceKind("shop_ordr"), false);
+  assert.equal(isDispatchSourceKind("requisitions"), false);
+  assert.equal(isDispatchSourceKind(""), false);
+  assert.equal(isDispatchSourceKind(123), false);
+  assert.equal(isDispatchSourceKind(undefined), false);
+});
+
+ok("nextOrderStatusAfterDispatch: an address-requiring order ships", () => {
+  assert.equal(nextOrderStatusAfterDispatch(true), "shipped");
+});
+ok("nextOrderStatusAfterDispatch: no address requirement (pickup, or no shipping option at all) is ready for pickup", () => {
+  assert.equal(nextOrderStatusAfterDispatch(false), "ready_for_pickup");
+  assert.equal(nextOrderStatusAfterDispatch(null), "ready_for_pickup");
+  assert.equal(nextOrderStatusAfterDispatch(undefined), "ready_for_pickup");
 });
 
 console.log(`\n✅ warehouse (shared): ${passed} assertions passed`);

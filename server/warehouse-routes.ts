@@ -26,10 +26,14 @@
 // are caught and turned into clean 409s rather than raw 500s.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Express, Request, Response } from "express";
-import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
-import { whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines } from "@shared/schema";
+import {
+  whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines,
+  whRequisitions, whRequisitionLines,
+  shopOrders, shopOrderItems,
+} from "@shared/schema";
 import {
   ITEM_KINDS, isItemKind,
   BRAND_OWNERS, isBrandOwner,
@@ -48,6 +52,7 @@ import {
   computeReceiveDiscrepancy, receiveDiscrepancyNote, derivePoStatusFromLines,
   QUARANTINE_ZONE,
   buildLocationMoveLegs,
+  DISPATCH_SOURCE_KINDS, isDispatchSourceKind, nextOrderStatusAfterDispatch,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
   type RefKind, type MovementType, type ReasonCode, type PoStatus,
 } from "@shared/warehouse";
@@ -1319,6 +1324,290 @@ export function registerWarehouseRoutes(app: Express) {
       res.json({ labels: rows.map((r) => ({ id: r.id, code: r.code, payload: locationBarcodePayload(r.code) })) });
     } catch (e: any) {
       handleWarehouseError(res, e, "location labels");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Pick queue + dispatch (T8) — see shared/warehouse.ts's DISPATCH_SOURCE_
+  // KINDS comment for the three-source design (native paid orders, Shopify
+  // reservations, approved requisitions).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/admin/warehouse/pick-queue", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      // ── Native shop orders (MFL/CIC) ────────────────────────────────
+      const mappedItems = await db
+        .select({ id: whItems.id, sku: whItems.sku, name: whItems.name, shopVariantId: whItems.shopVariantId })
+        .from(whItems)
+        .where(isNotNull(whItems.shopVariantId));
+      const itemByVariantId = new Map(mappedItems.map((i) => [i.shopVariantId as number, i]));
+
+      let nativeOrders: any[] = [];
+      if (mappedItems.length > 0) {
+        const paidOrders = await db
+          .select({ id: shopOrders.id, orderNumber: shopOrders.orderNumber, firstName: shopOrders.firstName, lastName: shopOrders.lastName, createdAt: shopOrders.createdAt })
+          .from(shopOrders)
+          .where(eq(shopOrders.status, "paid"))
+          .orderBy(asc(shopOrders.createdAt))
+          .limit(200);
+
+        if (paidOrders.length > 0) {
+          const orderIds = paidOrders.map((o) => o.id);
+          const variantIds = mappedItems.map((i) => i.shopVariantId as number);
+          const lines = await db
+            .select({ orderId: shopOrderItems.orderId, variantId: shopOrderItems.variantId, qty: shopOrderItems.qty })
+            .from(shopOrderItems)
+            .where(and(inArray(shopOrderItems.orderId, orderIds), inArray(shopOrderItems.variantId, variantIds)));
+
+          const reservations = await db
+            .select({ refId: whReservations.refId, itemId: whReservations.itemId, status: whReservations.status })
+            .from(whReservations)
+            .where(and(eq(whReservations.refKind, "shop_order"), inArray(whReservations.refId, orderIds)));
+          const reservationStatus = new Map(reservations.map((r) => [`${r.refId}:${r.itemId}`, r.status]));
+
+          const byOrder = new Map<number, any[]>();
+          for (const line of lines) {
+            if (line.variantId === null) continue;
+            const item = itemByVariantId.get(line.variantId);
+            if (!item) continue;
+            const status = reservationStatus.get(`${line.orderId}:${item.id}`);
+            if (status === "consumed") continue; // already dispatched
+            const arr = byOrder.get(line.orderId) ?? [];
+            arr.push({ itemId: item.id, sku: item.sku, name: item.name, qty: line.qty, reserved: status === "active" });
+            byOrder.set(line.orderId, arr);
+          }
+          nativeOrders = paidOrders
+            .filter((o) => byOrder.has(o.id))
+            .map((o) => ({
+              sourceKind: "shop_order" as const,
+              orderId: o.id,
+              orderNumber: o.orderNumber,
+              customerName: `${o.firstName} ${o.lastName}`.trim(),
+              createdAt: o.createdAt,
+              items: byOrder.get(o.id)!,
+            }));
+        }
+      }
+
+      // ── Shopify-reserved orders (SIU/CUFC) ──────────────────────────
+      const shopifyReservations = await db
+        .select({ refId: whReservations.refId, itemId: whReservations.itemId, qty: whReservations.qty, itemSku: whItems.sku, itemName: whItems.name })
+        .from(whReservations)
+        .innerJoin(whItems, eq(whReservations.itemId, whItems.id))
+        .where(and(eq(whReservations.refKind, "shopify_order"), eq(whReservations.status, "active")))
+        .orderBy(asc(whReservations.createdAt));
+      const shopifyByOrder = new Map<number, any[]>();
+      for (const r of shopifyReservations) {
+        const arr = shopifyByOrder.get(r.refId) ?? [];
+        arr.push({ itemId: r.itemId, sku: r.itemSku, name: r.itemName, qty: Number(r.qty), reserved: true });
+        shopifyByOrder.set(r.refId, arr);
+      }
+      const shopifyOrders = Array.from(shopifyByOrder.entries()).map(([refId, items]) => ({
+        sourceKind: "shopify_order" as const,
+        orderId: refId,
+        items,
+      }));
+
+      // ── Approved requisitions ────────────────────────────────────────
+      const approved = await db.select().from(whRequisitions).where(eq(whRequisitions.status, "approved")).orderBy(asc(whRequisitions.neededBy));
+      let requisitions: any[] = [];
+      if (approved.length > 0) {
+        const reqIds = approved.map((r) => r.id);
+        const lines = await db
+          .select({ requisitionId: whRequisitionLines.requisitionId, itemId: whRequisitionLines.itemId, qtyRequested: whRequisitionLines.qtyRequested, qtyPicked: whRequisitionLines.qtyPicked, itemSku: whItems.sku, itemName: whItems.name })
+          .from(whRequisitionLines)
+          .innerJoin(whItems, eq(whRequisitionLines.itemId, whItems.id))
+          .where(inArray(whRequisitionLines.requisitionId, reqIds));
+        const byReq = new Map<number, any[]>();
+        for (const l of lines) {
+          const remaining = Number(l.qtyRequested) - Number(l.qtyPicked ?? 0);
+          if (remaining <= 0) continue;
+          const arr = byReq.get(l.requisitionId) ?? [];
+          arr.push({ itemId: l.itemId, sku: l.itemSku, name: l.itemName, qtyRemaining: remaining });
+          byReq.set(l.requisitionId, arr);
+        }
+        requisitions = approved
+          .filter((r) => byReq.has(r.id))
+          .map((r) => ({
+            sourceKind: "requisition" as const,
+            requisitionId: r.id,
+            chargeTo: r.chargeTo,
+            neededBy: r.neededBy,
+            requestedBy: r.requestedBy,
+            items: byReq.get(r.id)!,
+          }));
+      }
+
+      res.json({ nativeOrders, shopifyOrders, requisitions });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "pick queue");
+    }
+  });
+
+  // Shopify fulfilment is stubbed behind an env flag — T12's warehouse-sync.ts
+  // owns the real GraphQL fulfillmentCreate call once it exists (TODO-verify
+  // (live) against current shopify.dev syntax then). T8's job is only to
+  // prove dispatch calls out at the right moment.
+  async function notifyShopifyFulfilled(refId: number, itemId: number): Promise<void> {
+    if (process.env.WH_SHOPIFY_FULFIL !== "1") return;
+    console.log(`[Warehouse] (stub) would mark Shopify order ${refId} item ${itemId} fulfilled`);
+  }
+
+  // Body: { sourceKind, sourceId, itemId, locationId, qty?, idempotencyKey?,
+  // note? }. sourceId is the order id (shop_order/shopify_order) or the
+  // requisition id. See shared/warehouse.ts's DISPATCH_SOURCE_KINDS comment
+  // for why requisitions skip the reservation path entirely.
+  app.post("/api/admin/warehouse/dispatch", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const sourceKind = clean(b.sourceKind);
+      if (!sourceKind || !isDispatchSourceKind(sourceKind)) {
+        throw new WarehouseRouteError(`sourceKind must be one of: ${DISPATCH_SOURCE_KINDS.join(", ")}`);
+      }
+      const sourceId = parseId(b.sourceId);
+      if (sourceId === null) throw new WarehouseRouteError("sourceId is required");
+      const itemId = parseId(b.itemId);
+      if (itemId === null) throw new WarehouseRouteError("itemId is required");
+      // allowNegative (D16) matters here — unlike the receiving/putaway
+      // legs elsewhere in this file, a requisition draw builds its leg
+      // directly below (not via buildLocationMoveLegs/consumeReservation),
+      // so it must fetch + apply the item's own flag itself or a bulk
+      // material with allow_negative=true would wrongly hit the
+      // non-negative guard on an internal stock draw.
+      const [item] = await db.select({ id: whItems.id, allowNegative: whItems.allowNegative }).from(whItems).where(eq(whItems.id, itemId));
+      if (!item) throw new WarehouseRouteError("itemId does not reference a real item");
+
+      const location = await resolveRealLocationForMove(b.locationId, "locationId");
+      const operatorUserId = req.session.userId!;
+      const idempotencyKey = clean(b.idempotencyKey) ?? null;
+      const note = clean(b.note) ?? null;
+
+      if (sourceKind === "requisition") {
+        // The whole point of the approval step (D13) is that stock can't
+        // leave the building on a requisition nobody signed off on — so
+        // this needs its own status gate here, at the point stock actually
+        // moves, the same way T6's receive endpoint gates on
+        // RECEIVABLE_PO_STATUSES. This mirrors GET /pick-queue's own
+        // "approved requisitions" filter exactly (T9 owns the actual
+        // approve/decline/picking/ready/collected status transitions —
+        // this only refuses to dispatch against one that isn't currently
+        // approved).
+        const [requisition] = await db.select({ status: whRequisitions.status }).from(whRequisitions).where(eq(whRequisitions.id, sourceId));
+        if (!requisition) throw new WarehouseRouteError("sourceId does not reference a real requisition");
+        if (requisition.status !== "approved") {
+          throw new WarehouseRouteError(`This requisition is ${requisition.status} — it can't be picked against right now.`);
+        }
+
+        const [line] = await db
+          .select()
+          .from(whRequisitionLines)
+          .where(and(eq(whRequisitionLines.requisitionId, sourceId), eq(whRequisitionLines.itemId, itemId)));
+        if (!line) throw new WarehouseRouteError("No requisition line for this item on this requisition");
+        const alreadyPicked = Number(line.qtyPicked ?? 0);
+        const remaining = Number(line.qtyRequested) - alreadyPicked;
+        if (remaining <= 0) throw new WarehouseRouteError("This line has already been fully picked");
+        const qty = b.qty !== undefined ? Number(b.qty) : remaining;
+        if (!Number.isFinite(qty) || qty <= 0) throw new WarehouseRouteError("qty must be a positive number");
+        if (qty > remaining) throw new WarehouseRouteError(`Only ${remaining} remaining to pick on this line`);
+
+        const movement = await runMovementGroup({
+          legs: [{ itemId, locationId: location.id, locationCode: location.code, delta: -qty, allowNegative: item.allowNegative }],
+          movementType: "pick",
+          ref: { kind: "requisition", id: sourceId },
+          operatorUserId,
+          idempotencyKey,
+          note,
+        });
+        if (!movement.alreadyProcessed) {
+          await db.update(whRequisitionLines).set({ qtyPicked: String(alreadyPicked + qty) }).where(eq(whRequisitionLines.id, line.id));
+        }
+        return res.status(movement.alreadyProcessed ? 200 : 201).json({ movement, sourceKind, sourceId, itemId, qty });
+      }
+
+      if (sourceKind === "shopify_order") {
+        const [reservation] = await db
+          .select({ id: whReservations.id })
+          .from(whReservations)
+          .where(and(
+            eq(whReservations.refKind, "shopify_order"),
+            eq(whReservations.refId, sourceId),
+            eq(whReservations.itemId, itemId),
+            eq(whReservations.status, "active"),
+          ));
+        if (!reservation) throw new WarehouseRouteError("No active reservation for this Shopify order + item");
+
+        const result = await runConsumeReservation({
+          reservationId: reservation.id,
+          locationId: location.id,
+          locationCode: location.code,
+          movementType: "dispatch",
+          operatorUserId,
+          idempotencyKey,
+          note,
+        });
+        if (!result.movement.alreadyProcessed) await notifyShopifyFulfilled(sourceId, itemId);
+        return res.status(result.movement.alreadyProcessed ? 200 : 201).json({ ...result, sourceKind, sourceId });
+      }
+
+      // sourceKind === "shop_order" — no reservation exists yet (T13 hasn't
+      // wired payment-time reserveStock); reserve (idempotent, T5) then
+      // consume in the same call, backfilling what T13 will one day do
+      // earlier in the order's life.
+      const [order] = await db.select().from(shopOrders).where(eq(shopOrders.id, sourceId));
+      if (!order) throw new WarehouseRouteError("sourceId does not reference a real order");
+      if (order.status !== "paid") throw new WarehouseRouteError(`Order is ${order.status}, not paid — nothing to dispatch`);
+
+      const [line] = await db
+        .select({ qty: shopOrderItems.qty })
+        .from(shopOrderItems)
+        .innerJoin(whItems, eq(whItems.shopVariantId, shopOrderItems.variantId))
+        .where(and(eq(shopOrderItems.orderId, sourceId), eq(whItems.id, itemId)));
+      if (!line) throw new WarehouseRouteError("This item isn't on this order (or isn't WMS-mapped)");
+
+      const reserved = await runReserveStock({ itemId, qty: line.qty, ref: { kind: "shop_order", id: sourceId } });
+      const result = await runConsumeReservation({
+        reservationId: reserved.reservationId,
+        locationId: location.id,
+        locationCode: location.code,
+        movementType: "dispatch",
+        operatorUserId,
+        idempotencyKey,
+        note,
+      });
+
+      // Mark source: once every WMS-mapped item on the order is dispatched,
+      // advance it past 'paid' into shop-routes.ts's existing fulfilment
+      // pipeline. A partially-dispatched order stays 'paid' so its
+      // remaining lines still surface in this same pick queue.
+      if (!result.movement.alreadyProcessed) {
+        const orderItems = await db.select({ variantId: shopOrderItems.variantId }).from(shopOrderItems).where(eq(shopOrderItems.orderId, sourceId));
+        const variantIds = orderItems.map((o) => o.variantId).filter((v): v is number => v !== null);
+        const mappedOrderItemIds = variantIds.length > 0
+          ? await db.select({ id: whItems.id }).from(whItems).where(inArray(whItems.shopVariantId, variantIds))
+          : [];
+        const consumedReservations = await db
+          .select({ itemId: whReservations.itemId })
+          .from(whReservations)
+          .where(and(eq(whReservations.refKind, "shop_order"), eq(whReservations.refId, sourceId), eq(whReservations.status, "consumed")));
+        const consumedIds = new Set(consumedReservations.map((r) => r.itemId));
+        const fullyDispatched = mappedOrderItemIds.length > 0 && mappedOrderItemIds.every((i) => consumedIds.has(i.id));
+        if (fullyDispatched) {
+          // Same convention shop-routes.ts itself already uses in three
+          // places (admin order detail, order-share view, resend-
+          // confirmation) to tell a shipped order from a pickup one — a
+          // pickup/no-shipping order never has addressLine1 populated.
+          // Cheaper and more consistent than joining shop_shipping_options,
+          // which can lag/disagree with what was actually captured at
+          // checkout time.
+          const requiresAddress = !!order.addressLine1;
+          const nextStatus = nextOrderStatusAfterDispatch(requiresAddress);
+          await db.update(shopOrders).set({ status: nextStatus, updatedAt: new Date() }).where(eq(shopOrders.id, sourceId));
+        }
+      }
+
+      res.status(result.movement.alreadyProcessed ? 200 : 201).json({ ...result, sourceKind, sourceId });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "dispatch");
     }
   });
 }
