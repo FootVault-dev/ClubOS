@@ -34,7 +34,7 @@ import {
   whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines,
   whRequisitions, whRequisitionLines, whMovements,
   whLoans, whLoanLines,
-  whStock, whCounts, whCountLines, whSyncState,
+  whStock, whCounts, whCountLines, whSyncState, whShopifyVariantLinks,
   shopOrders, shopOrderItems,
   printOrders,
   users, contacts,
@@ -67,9 +67,11 @@ import {
   isValidCountTransition, shouldHideExpectedQty,
   countLineNeedsRecount, countLineResolution, countLineVarianceQty,
   canApproveCount, buildCountAdjustmentLegs,
+  SHOPIFY_STORES, isShopifyStoreKey,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
   type RefKind, type MovementType, type ReasonCode, type PoStatus, type RequisitionStatus,
   type LoanStatus, type ConditionGrade, type CountStatus, type CountLineResolution,
+  type ShopifyStoreKey,
 } from "@shared/warehouse";
 import {
   runReserveStock,
@@ -86,6 +88,18 @@ import {
   InsufficientStockError,
   type MovementLeg,
 } from "./warehouse";
+// Manual sync triggers (T16c) over T12's engine — a plain top-level import is
+// safe here (T13's own lesson): warehouse-routes.ts is only ever loaded by
+// the real running server (always has DATABASE_URL), never by a DB-free
+// `tsx script/test-warehouse-*.ts` run, so none of warehouse-sync.ts's own
+// lazy-`db`-import ceremony is needed on THIS side of the import.
+import {
+  isSyncEnabled,
+  getShopifyPushConfig,
+  pushItemNow,
+  runReconcilePoll,
+  getPendingPushItemIds,
+} from "./warehouse-sync";
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -2961,6 +2975,219 @@ export function registerWarehouseRoutes(app: Express) {
       res.json({ ...updatedCount, lines: await loadCountLines(id), movement });
     } catch (e: any) {
       handleWarehouseError(res, e, "count approve");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Ledger (T16c) — the full cross-item movement audit trail. The one
+  // scoped-to-an-item variant (GET /items/:id/movements, T16a) already noted
+  // this general endpoint as "T16c's job" in its own comment. Read-only
+  // (the ledger is append-only, AGENTS.md) — this route never posts.
+  // ═══════════════════════════════════════════════════════════════════════
+  app.get("/api/admin/warehouse/movements", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const conditions: any[] = [];
+
+      const itemIdRaw = clean(req.query.itemId as string | undefined);
+      if (itemIdRaw !== undefined) {
+        const id = parseId(itemIdRaw);
+        if (id === null) throw new WarehouseRouteError("itemId must be a number");
+        conditions.push(eq(whMovements.itemId, id));
+      }
+      const locationIdRaw = clean(req.query.locationId as string | undefined);
+      if (locationIdRaw !== undefined) {
+        const id = parseId(locationIdRaw);
+        if (id === null) throw new WarehouseRouteError("locationId must be a number");
+        conditions.push(eq(whMovements.locationId, id));
+      }
+      const movementType = clean(req.query.movementType as string | undefined);
+      if (movementType !== undefined) {
+        if (!isMovementType(movementType)) throw new WarehouseRouteError(`movementType must be one of: ${MOVEMENT_TYPES.join(", ")}`);
+        conditions.push(eq(whMovements.movementType, movementType));
+      }
+      const reasonCode = clean(req.query.reasonCode as string | undefined);
+      if (reasonCode !== undefined) {
+        if (!isReasonCode(reasonCode)) throw new WarehouseRouteError(`reasonCode must be one of: ${REASON_CODES.join(", ")}`);
+        conditions.push(eq(whMovements.reasonCode, reasonCode));
+      }
+      const refKind = clean(req.query.refKind as string | undefined);
+      if (refKind !== undefined) {
+        if (!isRefKind(refKind)) throw new WarehouseRouteError(`refKind must be one of: ${REF_KINDS.join(", ")}`);
+        conditions.push(eq(whMovements.refKind, refKind));
+      }
+      const q = clean(req.query.q as string | undefined);
+      if (q !== undefined) {
+        conditions.push(or(ilike(whItems.sku, `%${q}%`), ilike(whItems.name, `%${q}%`), ilike(whLocations.code, `%${q}%`)));
+      }
+      // Plain calendar-date bounds (house rule: never round-trip a date
+      // through a JS Date) — createdAt is a timestamp column, so the bound
+      // is applied against its own ::date truncation, inclusive both ends.
+      const dateFrom = clean(req.query.dateFrom as string | undefined);
+      if (dateFrom !== undefined) {
+        if (!isValidDateOnly(dateFrom)) throw new WarehouseRouteError("dateFrom must be YYYY-MM-DD");
+        conditions.push(sql`${whMovements.createdAt}::date >= ${dateFrom}::date`);
+      }
+      const dateTo = clean(req.query.dateTo as string | undefined);
+      if (dateTo !== undefined) {
+        if (!isValidDateOnly(dateTo)) throw new WarehouseRouteError("dateTo must be YYYY-MM-DD");
+        conditions.push(sql`${whMovements.createdAt}::date <= ${dateTo}::date`);
+      }
+
+      const limitRaw = parseInt(String(req.query.limit ?? "200"), 10);
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 200;
+
+      const rows = await db
+        .select({
+          id: whMovements.id,
+          groupId: whMovements.groupId,
+          itemId: whMovements.itemId,
+          locationId: whMovements.locationId,
+          delta: whMovements.delta,
+          movementType: whMovements.movementType,
+          reasonCode: whMovements.reasonCode,
+          refKind: whMovements.refKind,
+          refId: whMovements.refId,
+          note: whMovements.note,
+          createdAt: whMovements.createdAt,
+          itemSku: whItems.sku,
+          itemName: whItems.name,
+          locationCode: whLocations.code,
+          operatorFirst: users.firstName,
+          operatorLast: users.lastName,
+        })
+        .from(whMovements)
+        .innerJoin(whItems, eq(whMovements.itemId, whItems.id))
+        .innerJoin(whLocations, eq(whMovements.locationId, whLocations.id))
+        .leftJoin(users, eq(whMovements.operatorUserId, users.id))
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(desc(whMovements.id))
+        .limit(limit);
+
+      res.json(
+        rows.map(({ operatorFirst, operatorLast, ...m }) => ({
+          ...m,
+          operatorName: fullName(operatorFirst, operatorLast),
+        })),
+      );
+    } catch (e: any) {
+      handleWarehouseError(res, e, "movements list");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Sync (T16c, D9/§4.3) — read-only mapping + push-state + drift visibility
+  // over T12's server/warehouse-sync.ts engine, plus two manual triggers
+  // ("push now" for one item, "run reconcile poll" for every mapped item).
+  // WMS is always master here (D9): both triggers only ever REASSERT our own
+  // computed `available` — neither can write a number Shopify sent us into
+  // our own stock. `pendingPush` reads the in-process debounce queue
+  // (getPendingPushItemIds, T12) rather than wh_sync_state.pending, which
+  // that table's own schema comment says is deliberately always false.
+  // ═══════════════════════════════════════════════════════════════════════
+  app.get("/api/admin/warehouse/sync-state", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const mappedItems = await db
+        .select({
+          id: whItems.id,
+          sku: whItems.sku,
+          name: whItems.name,
+          shopVariantId: whItems.shopVariantId,
+          shopifyStore: whItems.shopifyStore,
+          shopifyVariantId: whItems.shopifyVariantId,
+        })
+        .from(whItems)
+        .where(
+          or(
+            isNotNull(whItems.shopVariantId),
+            and(isNotNull(whItems.shopifyStore), isNotNull(whItems.shopifyVariantId)),
+          ),
+        )
+        .orderBy(asc(whItems.sku));
+
+      const stateRows = await db.select().from(whSyncState);
+      const stateByKey = new Map(stateRows.map((s) => [`${s.itemId}-${s.store}`, s]));
+      const pendingItemIds = new Set(getPendingPushItemIds());
+
+      const rows: Array<{
+        itemId: number; itemSku: string; itemName: string; store: string;
+        lastPushedQty: number | null; lastPushedAt: Date | null;
+        lastDriftAt: Date | null; driftNote: string | null; pendingPush: boolean;
+      }> = [];
+      for (const item of mappedItems) {
+        const targets: string[] = [];
+        if (item.shopVariantId != null) targets.push("native");
+        if (item.shopifyStore && isShopifyStoreKey(item.shopifyStore) && item.shopifyVariantId) targets.push(item.shopifyStore);
+        for (const store of targets) {
+          const state = stateByKey.get(`${item.id}-${store}`);
+          rows.push({
+            itemId: item.id,
+            itemSku: item.sku,
+            itemName: item.name,
+            store,
+            lastPushedQty: state?.lastPushedQty != null ? Number(state.lastPushedQty) : null,
+            lastPushedAt: state?.lastPushedAt ?? null,
+            lastDriftAt: state?.lastDriftAt ?? null,
+            driftNote: state?.driftNote ?? null,
+            pendingPush: pendingItemIds.has(item.id),
+          });
+        }
+      }
+
+      const siblingLinks = await db
+        .select({
+          id: whShopifyVariantLinks.id,
+          itemId: whShopifyVariantLinks.itemId,
+          store: whShopifyVariantLinks.store,
+          shopifyVariantId: whShopifyVariantLinks.shopifyVariantId,
+          shopifyInventoryItemId: whShopifyVariantLinks.shopifyInventoryItemId,
+          note: whShopifyVariantLinks.note,
+          itemSku: whItems.sku,
+          itemName: whItems.name,
+        })
+        .from(whShopifyVariantLinks)
+        .innerJoin(whItems, eq(whShopifyVariantLinks.itemId, whItems.id))
+        .orderBy(asc(whItems.sku));
+
+      const driftLog = rows
+        .filter((r) => r.lastDriftAt !== null)
+        .sort((a, b) => new Date(b.lastDriftAt as Date).getTime() - new Date(a.lastDriftAt as Date).getTime());
+
+      res.json({
+        enabled: isSyncEnabled(),
+        stores: SHOPIFY_STORES.map((store) => ({ store, configured: getShopifyPushConfig(store) !== null })),
+        rows,
+        siblingLinks,
+        driftLog,
+      });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "sync state");
+    }
+  });
+
+  // Manual "push now" for one item — reasserts our own computed `available`
+  // to whichever channel(s) it's mapped to (T12's pushItemUsing, unchanged).
+  app.post("/api/admin/warehouse/sync-state/:itemId/push", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const itemId = parseId(req.params.itemId);
+      if (itemId === null) return res.status(400).json({ message: "Bad id" });
+      const [item] = await db.select({ id: whItems.id }).from(whItems).where(eq(whItems.id, itemId));
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      const outcome = await pushItemNow(itemId);
+      res.json(outcome);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "manual push");
+    }
+  });
+
+  // Manual "run reconcile poll now" — the same drift check the (not yet
+  // cron-wired, per T12's own comment) 10-min poll would run, over every
+  // mapped item in one go.
+  app.post("/api/admin/warehouse/reconcile-poll", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const result = await runReconcilePoll();
+      res.json(result);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "reconcile poll");
     }
   });
 }
