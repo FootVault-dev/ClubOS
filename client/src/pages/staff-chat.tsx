@@ -817,6 +817,11 @@ function MessageRow(props: {
   const mentionsMe = msg.mentionedUserIds.includes(me);
   const [editText, setEditText] = useState(msg.body);
   const [ackOpen, setAckOpen] = useState(false);
+  // The emoji picker lives inside the hover-actions bar. While it's open the
+  // bar MUST stay mounted — if `group-hover` stops matching (mouse moves into
+  // the portalled popover), the trigger goes display:none and Radix loses its
+  // anchor, dumping the popover at the viewport's top-left corner.
+  const [reactOpen, setReactOpen] = useState(false);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: historyKey });
 
@@ -972,8 +977,10 @@ function MessageRow(props: {
 
       {/* Hover actions */}
       {!msg.pending && !msg.failed && !editing && (
-        <div className="absolute -top-3 right-2 hidden group-hover:flex items-center gap-0.5 bg-[#16171a] border border-white/10 rounded-xl p-0.5 shadow-xl">
-          <Popover>
+        <div
+          className={`absolute -top-3 right-2 ${reactOpen ? "flex" : "hidden group-hover:flex"} items-center gap-0.5 bg-[#16171a] border border-white/10 rounded-xl p-0.5 shadow-xl`}
+        >
+          <Popover open={reactOpen} onOpenChange={setReactOpen}>
             <PopoverTrigger asChild>
               <button className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]" title="React">
                 <SmilePlus className="w-3.5 h-3.5" />
@@ -981,7 +988,14 @@ function MessageRow(props: {
             </PopoverTrigger>
             <PopoverContent className="w-auto p-1.5 flex gap-1" align="end">
               {QUICK_EMOJIS.map((e) => (
-                <button key={e} onClick={() => react(e)} className="w-8 h-8 text-[17px] rounded-lg hover:bg-white/[0.08]">
+                <button
+                  key={e}
+                  onClick={() => {
+                    setReactOpen(false);
+                    react(e);
+                  }}
+                  className="w-8 h-8 text-[17px] rounded-lg hover:bg-white/[0.08]"
+                >
                   {e}
                 </button>
               ))}
