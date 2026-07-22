@@ -36,6 +36,7 @@ import {
   whLoans, whLoanLines,
   whStock, whCounts, whCountLines,
   shopOrders, shopOrderItems,
+  printOrders,
   users, contacts,
 } from "@shared/schema";
 import {
@@ -1318,6 +1319,63 @@ export function registerWarehouseRoutes(app: Express) {
   app.post("/api/admin/warehouse/transfer", requireAuth, requireTab("warehouse"), (req, res) =>
     handleLocationMove(req, res, "transfer"),
   );
+
+  // Body: { itemId, locationId, qty, printOrderId, reasonCode?, note?,
+  // idempotencyKey? }. Materials consumed against a print job (SPEC
+  // §4.4's "Consume→print job", §4.5's v1 scope: a human scans/enters what a
+  // job used — no automated BOM consumption yet). One outbound leg, no
+  // incoming leg — the same "stock leaves the building with nothing local
+  // absorbing it" shape as T8's requisition pick / shop-order dispatch, just
+  // referencing ref_kind 'print_order' instead. Not in scanActionsForItem's
+  // advisory list (that only covers what T7 itself wired up) — T15's scan
+  // station always offers "Consume" for any resolved item and this endpoint
+  // is what it calls. reasonCode is optional and, if given, must be one of
+  // the existing D15 codes (store_use fits production use best) — no new
+  // taxonomy invented for this, same discipline as T6's damaged-only-
+  // quarantine call.
+  app.post("/api/admin/warehouse/consume", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const itemId = parseId(b.itemId);
+      if (itemId === null) throw new WarehouseRouteError("itemId is required");
+      const [item] = await db
+        .select({ id: whItems.id, allowNegative: whItems.allowNegative })
+        .from(whItems)
+        .where(eq(whItems.id, itemId));
+      if (!item) throw new WarehouseRouteError("itemId does not reference a real item");
+
+      const location = await resolveRealLocationForMove(b.locationId, "locationId");
+
+      const qty = Number(b.qty);
+      if (!Number.isFinite(qty) || qty <= 0) throw new WarehouseRouteError("qty must be a positive number");
+
+      const printOrderId = parseId(b.printOrderId);
+      if (printOrderId === null) throw new WarehouseRouteError("printOrderId is required");
+      const [printOrder] = await db.select({ id: printOrders.id }).from(printOrders).where(eq(printOrders.id, printOrderId));
+      if (!printOrder) throw new WarehouseRouteError("printOrderId does not reference a real print order");
+
+      let reasonCode: ReasonCode | null = null;
+      if (b.reasonCode !== undefined && b.reasonCode !== null && b.reasonCode !== "") {
+        const rc = clean(b.reasonCode);
+        if (!rc || !isReasonCode(rc)) throw new WarehouseRouteError(`reasonCode must be one of: ${REASON_CODES.join(", ")}`);
+        reasonCode = rc;
+      }
+
+      const operatorUserId = req.session.userId!;
+      const movement = await runMovementGroup({
+        legs: [{ itemId, locationId: location.id, locationCode: location.code, delta: -qty, allowNegative: item.allowNegative, reasonCode }],
+        movementType: "consume",
+        ref: { kind: "print_order", id: printOrderId },
+        operatorUserId,
+        idempotencyKey: clean(b.idempotencyKey) ?? null,
+        note: clean(b.note) ?? null,
+      });
+
+      res.status(movement.alreadyProcessed ? 200 : 201).json({ movement, itemId, locationId: location.id, qty, printOrderId });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "consume");
+    }
+  });
 
   // ═══════════════════════════════════════════════════════════════════════
   // Label-payload endpoints — bulk lookup by id so an admin can select
