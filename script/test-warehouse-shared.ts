@@ -31,6 +31,8 @@ import {
   COUNT_LINE_RESOLUTIONS, isCountLineResolution,
   COUNT_VARIANCE_PERCENT_THRESHOLD, COUNT_VARIANCE_CENTS_THRESHOLD,
   countLineNeedsRecount,
+  COUNT_TRANSITIONS, isValidCountTransition, shouldHideExpectedQty,
+  countLineResolution, countLineVarianceQty, canApproveCount, buildCountAdjustmentLegs,
   availableQty, wouldGoNegative, legsSumToZero,
   stripLocationPrefix, scanActionsForItem, scanActionsForLocation,
   scanQuantityToUnits, buildLocationMoveLegs,
@@ -454,6 +456,89 @@ ok("expected zero falls back to 100% relative variance on any diff", () => {
   assert.equal(countLineNeedsRecount(0, 1, null), true);
 });
 ok("expected zero and counted zero is no variance", () => assert.equal(countLineNeedsRecount(0, 0, 500), false));
+
+// ── Cycle counts: session lifecycle + approval (T11) ─────────────────────
+ok("COUNT_TRANSITIONS is a strictly linear open->submitted->approved chain", () => {
+  assert.deepEqual(COUNT_TRANSITIONS.open, ["submitted"]);
+  assert.deepEqual(COUNT_TRANSITIONS.submitted, ["approved"]);
+  assert.deepEqual(COUNT_TRANSITIONS.approved, []);
+});
+ok("isValidCountTransition follows the chain, no skipping or reopening", () => {
+  assert.equal(isValidCountTransition("open", "submitted"), true);
+  assert.equal(isValidCountTransition("submitted", "approved"), true);
+  assert.equal(isValidCountTransition("open", "approved"), false);
+  assert.equal(isValidCountTransition("approved", "open"), false);
+  assert.equal(isValidCountTransition("approved", "submitted"), false);
+});
+
+ok("shouldHideExpectedQty: a blind session hides it while open and submitted", () => {
+  assert.equal(shouldHideExpectedQty(true, "open"), true);
+  assert.equal(shouldHideExpectedQty(true, "submitted"), true);
+});
+ok("shouldHideExpectedQty: even a blind session shows it once approved (audit trail)", () => {
+  assert.equal(shouldHideExpectedQty(true, "approved"), false);
+});
+ok("shouldHideExpectedQty: a non-blind session never hides it at any status", () => {
+  assert.equal(shouldHideExpectedQty(false, "open"), false);
+  assert.equal(shouldHideExpectedQty(false, "submitted"), false);
+  assert.equal(shouldHideExpectedQty(false, "approved"), false);
+});
+
+ok("countLineResolution: no meaningful variance resolves 'accepted'", () => {
+  assert.equal(countLineResolution(50, 50, 500), "accepted");
+  assert.equal(countLineResolution(50, 49, 500), "accepted");
+});
+ok("countLineResolution: a variance over threshold resolves 'recount'", () => {
+  assert.equal(countLineResolution(50, 44, null), "recount");
+  assert.equal(countLineResolution(1000, 997, 5000), "recount");
+});
+
+ok("countLineVarianceQty: signed counted-minus-expected, matching postMovementGroup's delta direction", () => {
+  assert.equal(countLineVarianceQty(50, 44), -6);
+  assert.equal(countLineVarianceQty(50, 53), 3);
+  assert.equal(countLineVarianceQty(50, 50), 0);
+});
+
+ok("canApproveCount: rejects when the session isn't submitted yet", () => {
+  assert.equal(canApproveCount({ status: "open", countedBy: 1 }, 2), false);
+  assert.equal(canApproveCount({ status: "approved", countedBy: 1 }, 2), false);
+});
+ok("canApproveCount: rejects the counter approving their own session", () => {
+  assert.equal(canApproveCount({ status: "submitted", countedBy: 7 }, 7), false);
+});
+ok("canApproveCount: allows a different approver on a submitted session", () => {
+  assert.equal(canApproveCount({ status: "submitted", countedBy: 7 }, 9), true);
+});
+ok("canApproveCount: a session nobody was assigned to count has no counter to conflict with", () => {
+  assert.equal(canApproveCount({ status: "submitted", countedBy: null }, 9), true);
+});
+
+ok("buildCountAdjustmentLegs: one leg per line that actually varied, matching delta direction", () => {
+  const legs = buildCountAdjustmentLegs([
+    { itemId: 1, locationId: 10, locationCode: "A-01-1", expectedQty: 50, countedQty: 44, allowNegative: false },
+    { itemId: 2, locationId: 11, locationCode: "A-01-2", expectedQty: 20, countedQty: 20, allowNegative: false },
+    { itemId: 3, locationId: 12, locationCode: "A-01-3", expectedQty: 5, countedQty: 8, allowNegative: false },
+  ]);
+  assert.deepEqual(legs, [
+    { itemId: 1, locationId: 10, locationCode: "A-01-1", delta: -6, allowNegative: false },
+    { itemId: 3, locationId: 12, locationCode: "A-01-3", delta: 3, allowNegative: false },
+  ]);
+});
+ok("buildCountAdjustmentLegs: a line that was never actually counted is excluded, never treated as zero variance", () => {
+  const legs = buildCountAdjustmentLegs([
+    { itemId: 1, locationId: 10, locationCode: "A-01-1", expectedQty: 50, countedQty: null, allowNegative: false },
+  ]);
+  assert.deepEqual(legs, []);
+});
+ok("buildCountAdjustmentLegs: propagates the item's own allowNegative onto its leg", () => {
+  const legs = buildCountAdjustmentLegs([
+    { itemId: 1, locationId: 10, locationCode: "A-01-1", expectedQty: 50, countedQty: 40, allowNegative: true },
+  ]);
+  assert.equal(legs[0].allowNegative, true);
+});
+ok("buildCountAdjustmentLegs: an empty line list produces no legs", () => {
+  assert.deepEqual(buildCountAdjustmentLegs([]), []);
+});
 
 // ── Stock math ────────────────────────────────────────────────────────────
 ok("available = on_hand - reserved", () => assert.equal(availableQty(10, 3), 7));

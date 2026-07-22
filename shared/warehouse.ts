@@ -595,6 +595,104 @@ export function countLineNeedsRecount(
   return false;
 }
 
+/** Strictly linear (open -> submitted -> approved, no reopen/decline branch)
+ *  — unlike REQUISITION_TRANSITIONS there's no alternate path, but the same
+ *  explicit-graph shape is kept for consistency and so a future admin UI can
+ *  ask "what can this session do next" the same way it asks for requisitions. */
+export const COUNT_TRANSITIONS: Record<CountStatus, readonly CountStatus[]> = {
+  open: ["submitted"],
+  submitted: ["approved"],
+  approved: [],
+};
+export function isValidCountTransition(from: CountStatus, to: CountStatus): boolean {
+  return COUNT_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
+ * Blind counting (D12) only means something WHILE the session is in
+ * progress — a counter entering figures must never see expected_qty, but
+ * once a session is `approved` the whole point is a transparent audit trail,
+ * so expected_qty (and the variance it implies) is shown freely. A
+ * non-blind session (`blind:false`, an explicit choice at creation) never
+ * hides it at all — that is what "not blind" means.
+ */
+export function shouldHideExpectedQty(blind: boolean, status: CountStatus): boolean {
+  return blind && status !== "approved";
+}
+
+/** Turns the raw variance check into the line's STORED `resolution` (D12) —
+ *  the one place that decision is made, so the count-entry route and any
+ *  future recount UI always agree on what a variance means. */
+export function countLineResolution(
+  expectedQty: number,
+  countedQty: number,
+  unitCostCents?: number | null,
+): CountLineResolution {
+  return countLineNeedsRecount(expectedQty, countedQty, unitCostCents) ? "recount" : "accepted";
+}
+
+/** The signed quantity change an approved count line turns into on the
+ *  ledger (D12: "approved variance posts an adjustment movement") — counted
+ *  minus expected, in the same direction postMovementGroup's `delta` already
+ *  expects. Zero means the count simply confirmed what was on record — no
+ *  movement gets posted for that line at all (see buildCountAdjustmentLegs). */
+export function countLineVarianceQty(expectedQty: number, countedQty: number): number {
+  return countedQty - expectedQty;
+}
+
+/** The approval guard D12 asks for by name — "counter ≠ approver" — plus the
+ *  status-chain check (isValidCountTransition), folded into one call so a
+ *  route only has to ask ONE question to know whether an approve attempt is
+ *  allowed. Enforced app-side (both columns are the same `users` FK — a
+ *  same-table CHECK can't express "these two columns must differ" here any
+ *  more than it could elsewhere in this schema). A session nobody was ever
+ *  assigned to count (`countedBy` null) has no counter to conflict with, so
+ *  any operator may approve it. */
+export function canApproveCount(
+  count: { status: CountStatus; countedBy: number | null },
+  approverUserId: number,
+): boolean {
+  if (!isValidCountTransition(count.status, "approved")) return false;
+  if (count.countedBy != null && count.countedBy === approverUserId) return false;
+  return true;
+}
+
+/** Input to the approval step (server/warehouse-routes.ts's counts/:id/
+ *  approve) — one row per counted line: what loadCountLines already projects
+ *  plus the item's own allowNegative (D16) for the movement guard. */
+export interface CountLineForApproval {
+  itemId: number;
+  locationId: number;
+  locationCode: string;
+  expectedQty: number;
+  countedQty: number | null;
+  allowNegative: boolean;
+}
+
+/**
+ * D12's "approved variance posts an adjustment movement" turned into the
+ * legs postMovementGroup needs — one per line whose count genuinely differs
+ * from what was expected (delta = counted − expected), skipping any line
+ * that matched exactly (nothing to correct) or was never actually counted
+ * (shouldn't be reachable post-submit — the submit endpoint requires every
+ * line counted first — but a missing count must never be silently treated
+ * as "0 variance" rather than simply excluded). Returns the SAME shape as
+ * buildLocationMoveLegs's `LocationMoveLeg` (no per-leg reasonCode override
+ * needed — the whole adjustment group shares one reason, 'count_variance',
+ * set once at the group level by the caller) rather than inventing a
+ * near-duplicate type.
+ */
+export function buildCountAdjustmentLegs(lines: CountLineForApproval[]): LocationMoveLeg[] {
+  const legs: LocationMoveLeg[] = [];
+  for (const l of lines) {
+    if (l.countedQty === null) continue;
+    const delta = countLineVarianceQty(l.expectedQty, l.countedQty);
+    if (delta === 0) continue;
+    legs.push({ itemId: l.itemId, locationId: l.locationId, locationCode: l.locationCode, delta, allowNegative: l.allowNegative });
+  }
+  return legs;
+}
+
 // ── Stock math ─────────────────────────────────────────────────────────────────
 
 /**

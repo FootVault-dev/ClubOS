@@ -26,7 +26,7 @@
 // are caught and turned into clean 409s rather than raw 500s.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Express, Request, Response } from "express";
-import { and, asc, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
 import { nzTodayIso } from "@shared/academy";
@@ -34,6 +34,7 @@ import {
   whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines,
   whRequisitions, whRequisitionLines, whMovements,
   whLoans, whLoanLines,
+  whStock, whCounts, whCountLines,
   shopOrders, shopOrderItems,
   users, contacts,
 } from "@shared/schema";
@@ -61,9 +62,13 @@ import {
   LOAN_STATUSES, isLoanStatus, isLoanOverdue,
   deriveLoanStatusFromLines, reasonCodeForConditionGrade,
   CONDITION_GRADES, isConditionGrade,
+  COUNT_STATUSES, isCountStatus,
+  isValidCountTransition, shouldHideExpectedQty,
+  countLineNeedsRecount, countLineResolution, countLineVarianceQty,
+  canApproveCount, buildCountAdjustmentLegs,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
   type RefKind, type MovementType, type ReasonCode, type PoStatus, type RequisitionStatus,
-  type LoanStatus, type ConditionGrade,
+  type LoanStatus, type ConditionGrade, type CountStatus, type CountLineResolution,
 } from "@shared/warehouse";
 import {
   runReserveStock,
@@ -2307,6 +2312,367 @@ export function registerWarehouseRoutes(app: Express) {
       res.status(movement.alreadyProcessed ? 200 : 201).json({ ...withOverdue(updatedLoan), lines: await loadLoanLines(id), movement });
     } catch (e: any) {
       handleWarehouseError(res, e, "loan return");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Cycle counts (T11, D12) — blind sessions, snapshot-then-count, variance
+  // review, counter≠approver, approved variance posts adjustment movements.
+  //
+  // Session lifecycle is the short chain in shared/warehouse.ts
+  // (COUNT_TRANSITIONS/isValidCountTransition): open -> submitted -> approved,
+  // no reopen. `expected_qty` is snapshotted from wh_stock the INSTANT the
+  // session is created (never recomputed later, even if other movements land
+  // in the same bins while counting is in progress — a count is a snapshot
+  // of a moment, not a live query) and is hidden from every line the API
+  // returns whenever shouldHideExpectedQty(blind, status) says so — the ONE
+  // place that decision is made, so no route accidentally leaks it a
+  // different way. A separate, ALWAYS-full "variance" endpoint exists
+  // for the approver's review before deciding whether to approve (PLAN's own
+  // "variance list" deliverable) — both endpoints are still requireTab
+  // ("warehouse")-gated staff-only; the blind/full split is a process
+  // safeguard against the counter anchoring on the expected number, not an
+  // access-control boundary between two kinds of login.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  async function loadCountLines(countId: number) {
+    const rows = await db
+      .select({
+        id: whCountLines.id,
+        countId: whCountLines.countId,
+        itemId: whCountLines.itemId,
+        locationId: whCountLines.locationId,
+        expectedQty: whCountLines.expectedQty,
+        countedQty: whCountLines.countedQty,
+        resolution: whCountLines.resolution,
+        itemSku: whItems.sku,
+        itemName: whItems.name,
+        costCents: whItems.costCents,
+        allowNegative: whItems.allowNegative,
+        locationCode: whLocations.code,
+      })
+      .from(whCountLines)
+      .innerJoin(whItems, eq(whCountLines.itemId, whItems.id))
+      .innerJoin(whLocations, eq(whCountLines.locationId, whLocations.id))
+      .where(eq(whCountLines.countId, countId))
+      .orderBy(asc(whLocations.code), asc(whItems.sku));
+
+    return rows.map((r) => {
+      const expectedQty = Number(r.expectedQty);
+      const countedQty = r.countedQty != null ? Number(r.countedQty) : null;
+      return {
+        id: r.id,
+        countId: r.countId,
+        itemId: r.itemId,
+        locationId: r.locationId,
+        locationCode: r.locationCode,
+        itemSku: r.itemSku,
+        itemName: r.itemName,
+        costCents: r.costCents,
+        allowNegative: r.allowNegative,
+        expectedQty,
+        countedQty,
+        resolution: r.resolution as CountLineResolution | null,
+        varianceQty: countedQty !== null ? countLineVarianceQty(expectedQty, countedQty) : null,
+        needsRecount: countedQty !== null ? countLineNeedsRecount(expectedQty, countedQty, r.costCents) : false,
+      };
+    });
+  }
+
+  /** Strips everything that would leak (or let a counter reverse-engineer)
+   *  the expected quantity — used whenever shouldHideExpectedQty says the
+   *  session is still blind and in progress. */
+  function blindCountLine(l: Awaited<ReturnType<typeof loadCountLines>>[number]) {
+    return {
+      id: l.id, countId: l.countId, itemId: l.itemId, locationId: l.locationId,
+      locationCode: l.locationCode, itemSku: l.itemSku, itemName: l.itemName,
+      countedQty: l.countedQty,
+    };
+  }
+
+  function presentCountLines(lines: Awaited<ReturnType<typeof loadCountLines>>, count: { blind: boolean; status: string }) {
+    return shouldHideExpectedQty(count.blind, count.status as CountStatus) ? lines.map(blindCountLine) : lines;
+  }
+
+  // ── Create session (scope zone/class, blind default true) ───────────────
+  // Auto-populates lines from CURRENT wh_stock in the given scope — the
+  // scope selects which EXISTING (item, location) stock rows get
+  // snapshotted, never a synthetic full cross-product of every item against
+  // every bin, and never a virtual location (no printed label anyone would
+  // ever count against). Validated non-empty BEFORE any insert so a scope
+  // matching nothing never creates an orphaned, lineless session.
+  app.post("/api/admin/warehouse/counts", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const scopeZone = clean(b.scopeZone) ?? null;
+      const scopeClass = clean(b.scopeClass) ?? null;
+      const blindFlag = toBool(b.blind, true);
+
+      let countedBy: number | null = req.session.userId!;
+      if (b.countedBy !== undefined && b.countedBy !== null && b.countedBy !== "") {
+        const cid = parseId(b.countedBy);
+        if (cid === null) throw new WarehouseRouteError("countedBy must be a number");
+        const [user] = await db.select({ id: users.id }).from(users).where(eq(users.id, cid));
+        if (!user) throw new WarehouseRouteError("countedBy does not reference a real user");
+        countedBy = cid;
+      }
+
+      const scopeConditions = [ne(whLocations.kind, "virtual")];
+      if (scopeZone) scopeConditions.push(eq(whLocations.zone, scopeZone));
+      if (scopeClass) scopeConditions.push(eq(whItems.category, scopeClass));
+      const stockRows = await db
+        .select({ itemId: whStock.itemId, locationId: whStock.locationId, onHand: whStock.onHand })
+        .from(whStock)
+        .innerJoin(whLocations, eq(whStock.locationId, whLocations.id))
+        .innerJoin(whItems, eq(whStock.itemId, whItems.id))
+        .where(and(...scopeConditions));
+      if (stockRows.length === 0) {
+        throw new WarehouseRouteError("No stock found matching that scope — nothing to count");
+      }
+
+      const { created, lineCount } = await db.transaction(async (tx) => {
+        const [countRow] = await tx
+          .insert(whCounts)
+          .values({ scopeZone, scopeClass, blind: blindFlag, countedBy, status: "open" })
+          .returning();
+        const lines = await tx
+          .insert(whCountLines)
+          .values(
+            stockRows.map((r) => ({
+              countId: countRow.id,
+              itemId: r.itemId,
+              locationId: r.locationId,
+              expectedQty: r.onHand, // already the numeric column's string form — no round-trip needed
+            })),
+          )
+          .returning({ id: whCountLines.id });
+        return { created: countRow, lineCount: lines.length };
+      });
+
+      res.status(201).json({ ...created, lineCount });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "count create");
+    }
+  });
+
+  // ── List + detail ─────────────────────────────────────────────────────────
+  app.get("/api/admin/warehouse/counts", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const statusRaw = clean(req.query.status as string | undefined);
+      const scopeZone = clean(req.query.scopeZone as string | undefined);
+      const scopeClass = clean(req.query.scopeClass as string | undefined);
+
+      const conditions = [];
+      if (statusRaw) {
+        if (!isCountStatus(statusRaw)) throw new WarehouseRouteError(`status must be one of: ${COUNT_STATUSES.join(", ")}`);
+        conditions.push(eq(whCounts.status, statusRaw));
+      }
+      if (scopeZone) conditions.push(eq(whCounts.scopeZone, scopeZone));
+      if (scopeClass) conditions.push(eq(whCounts.scopeClass, scopeClass));
+
+      const rows = await db
+        .select()
+        .from(whCounts)
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(desc(whCounts.createdAt));
+
+      const countIds = rows.map((r) => r.id);
+      const agg = new Map<number, { lineCount: number; countedLineCount: number; recountLineCount: number }>();
+      if (countIds.length > 0) {
+        const aggRows = await db
+          .select({
+            countId: whCountLines.countId,
+            lineCount: sql<string>`COUNT(*)`,
+            countedLineCount: sql<string>`COUNT(*) FILTER (WHERE ${whCountLines.countedQty} IS NOT NULL)`,
+            recountLineCount: sql<string>`COUNT(*) FILTER (WHERE ${whCountLines.resolution} = 'recount')`,
+          })
+          .from(whCountLines)
+          .where(inArray(whCountLines.countId, countIds))
+          .groupBy(whCountLines.countId);
+        for (const r of aggRows) {
+          agg.set(r.countId, {
+            lineCount: Number(r.lineCount),
+            countedLineCount: Number(r.countedLineCount),
+            recountLineCount: Number(r.recountLineCount),
+          });
+        }
+      }
+
+      res.json(rows.map((r) => ({ ...r, ...(agg.get(r.id) ?? { lineCount: 0, countedLineCount: 0, recountLineCount: 0 }) })));
+    } catch (e: any) {
+      handleWarehouseError(res, e, "counts list");
+    }
+  });
+
+  app.get("/api/admin/warehouse/counts/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [count] = await db.select().from(whCounts).where(eq(whCounts.id, id));
+      if (!count) return res.status(404).json({ message: "Count not found" });
+      const lines = await loadCountLines(id);
+      res.json({ ...count, lines: presentCountLines(lines, count) });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "count get");
+    }
+  });
+
+  // ── Variance list (D12) — the approver's ALWAYS-full review, regardless
+  // of blind/status. This is deliberately a SEPARATE endpoint from the
+  // detail GET above (which honours shouldHideExpectedQty) rather than a
+  // query flag on it — a query-param toggle on the same route would make
+  // "show me the expected quantity" one character away for whoever built the
+  // counter-facing screen, where a distinct URL has to be deliberately
+  // called by the approval screen instead. ─────────────────────────────────
+  app.get("/api/admin/warehouse/counts/:id/variance", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [count] = await db.select().from(whCounts).where(eq(whCounts.id, id));
+      if (!count) return res.status(404).json({ message: "Count not found" });
+      const lines = await loadCountLines(id);
+      const varianceLines = lines.filter((l) => l.varianceQty !== null && l.varianceQty !== 0);
+      res.json({
+        ...count,
+        lines: varianceLines,
+        recountFlaggedCount: varianceLines.filter((l) => l.resolution === "recount").length,
+      });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "count variance");
+    }
+  });
+
+  // ── Record counted quantities (counter, one or more lines per call) ─────
+  app.post("/api/admin/warehouse/counts/:id/count", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [count] = await db.select().from(whCounts).where(eq(whCounts.id, id));
+      if (!count) return res.status(404).json({ message: "Count not found" });
+      if (count.status === "approved") throw new WarehouseRouteError("This count has already been approved");
+
+      const rawLines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+      if (rawLines.length === 0) throw new WarehouseRouteError("At least one line is required");
+      const rawLineIds = rawLines.map((raw: any) => raw?.lineId);
+      if (new Set(rawLineIds).size !== rawLineIds.length) {
+        throw new WarehouseRouteError("The same lineId was given more than once in this call");
+      }
+
+      const existingById = new Map((await loadCountLines(id)).map((l) => [l.id, l]));
+      const updates: { lineId: number; countedQty: number; resolution: CountLineResolution }[] = [];
+      for (const raw of rawLines) {
+        const lineId = parseId(raw?.lineId);
+        if (lineId === null) throw new WarehouseRouteError("Every line needs a lineId");
+        const existing = existingById.get(lineId);
+        if (!existing) throw new WarehouseRouteError(`lineId ${lineId} does not reference a line on this count`);
+        const countedQty = Number(raw?.countedQty);
+        if (!Number.isFinite(countedQty) || countedQty < 0) {
+          throw new WarehouseRouteError(`${existing.itemSku} at ${existing.locationCode}: countedQty must be a non-negative number`);
+        }
+        updates.push({
+          lineId,
+          countedQty,
+          resolution: countLineResolution(existing.expectedQty, countedQty, existing.costCents),
+        });
+      }
+
+      for (const u of updates) {
+        await db
+          .update(whCountLines)
+          .set({ countedQty: String(u.countedQty), resolution: u.resolution })
+          .where(eq(whCountLines.id, u.lineId));
+      }
+
+      const updatedLines = await loadCountLines(id);
+      const touchedIds = new Set(updates.map((u) => u.lineId));
+      const touched = updatedLines.filter((l) => touchedIds.has(l.id));
+      res.json({ id: count.id, status: count.status, lines: presentCountLines(touched, count) });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "count record");
+    }
+  });
+
+  // ── Submit (open -> submitted) — every line must have a count on file ───
+  app.post("/api/admin/warehouse/counts/:id/submit", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [count] = await db.select().from(whCounts).where(eq(whCounts.id, id));
+      if (!count) return res.status(404).json({ message: "Count not found" });
+      if (!isValidCountTransition(count.status as CountStatus, "submitted")) {
+        throw new WarehouseRouteError(`This count is ${count.status} — it can't be submitted right now.`, 409);
+      }
+
+      const lines = await loadCountLines(id);
+      const uncounted = lines.filter((l) => l.countedQty === null);
+      if (uncounted.length > 0) {
+        throw new WarehouseRouteError(`${uncounted.length} line(s) still need a count before this session can be submitted`);
+      }
+
+      const [updated] = await db
+        .update(whCounts)
+        .set({ status: "submitted", submittedAt: new Date() })
+        .where(eq(whCounts.id, id))
+        .returning();
+      res.json({ ...updated, lines: presentCountLines(lines, updated) });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "count submit");
+    }
+  });
+
+  // ── Approve (submitted -> approved) — counter ≠ approver (D12); posts ONE
+  // adjustment movement group (reason 'count_variance') for every line whose
+  // count actually differed, then flips the session's own status. The
+  // movement post and the status flip share ONE db.transaction() (not
+  // runMovementGroup's self-contained one) so a retry after a partial
+  // failure can never re-post the same adjustments — approve takes no
+  // client idempotencyKey at all, same reasoning as requisition approve/
+  // decline/collect: canApproveCount's status check is what makes a second
+  // call a clean 409 once the first one has actually committed. ──────────
+  app.post("/api/admin/warehouse/counts/:id/approve", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [count] = await db.select().from(whCounts).where(eq(whCounts.id, id));
+      if (!count) return res.status(404).json({ message: "Count not found" });
+
+      const approverUserId = req.session.userId!;
+      if (!canApproveCount({ status: count.status as CountStatus, countedBy: count.countedBy }, approverUserId)) {
+        if (!isValidCountTransition(count.status as CountStatus, "approved")) {
+          throw new WarehouseRouteError(`This count is ${count.status} — it can't be approved right now.`, 409);
+        }
+        throw new WarehouseRouteError("The person who counted this session can't also approve it — get a different approver.", 409);
+      }
+
+      const lines = await loadCountLines(id);
+      const legs = buildCountAdjustmentLegs(lines);
+      const note = clean(req.body?.note) ?? null;
+
+      const { movement, updatedCount } = await db.transaction(async (tx) => {
+        let movementResult: Awaited<ReturnType<typeof postMovementGroup>> | null = null;
+        if (legs.length > 0) {
+          movementResult = await postMovementGroup(warehouseDbFromTx(tx), {
+            legs,
+            movementType: "adjustment",
+            reasonCode: "count_variance",
+            ref: { kind: "count", id },
+            operatorUserId: approverUserId,
+            idempotencyKey: null,
+            note,
+          });
+        }
+        const [saved] = await tx
+          .update(whCounts)
+          .set({ status: "approved", approvedBy: approverUserId, approvedAt: new Date() })
+          .where(eq(whCounts.id, id))
+          .returning();
+        return { movement: movementResult, updatedCount: saved };
+      });
+      if (movement && !movement.alreadyProcessed) notifyMovementCommitted(movement.affectedItemIds);
+
+      res.json({ ...updatedCount, lines: await loadCountLines(id), movement });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "count approve");
     }
   });
 }
