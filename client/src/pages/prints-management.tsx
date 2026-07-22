@@ -83,6 +83,19 @@ export default function PrintsManagement() {
   const deps = useMemo(() => taskData?.deps ?? [], [taskData]);
   const today = taskData?.today || projData?.today || "";
 
+  // ?task=<id> deep-links straight into a task's modal (shareable with staff;
+  // also how the preflight gate exercises the modal at every viewport).
+  const [openedFromUrl, setOpenedFromUrl] = useState(false);
+  useEffect(() => {
+    if (openedFromUrl || !allTasks.length) return;
+    const id = Number(new URLSearchParams(window.location.search).get("task"));
+    if (Number.isInteger(id) && id > 0) {
+      const t = allTasks.find((x) => x.id === id);
+      if (t) setTaskModal({ mode: "edit", task: t });
+    }
+    setOpenedFromUrl(true);
+  }, [allTasks, openedFromUrl]);
+
   const invProjects = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/management/projects"] });
   const invTasks = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/management/tasks"] });
 
@@ -388,16 +401,22 @@ const FieldLabel = ({ children }: any) => <Label className="text-xs text-white/6
 const inputCls = "bg-white/[0.04] border-white/10 text-white";
 const selCls = "w-full h-9 rounded-md bg-white/[0.04] border border-white/10 px-2 text-sm";
 
+// Short-viewport safety (Dima's Windows laptop, 2026-07-22): NEVER
+// `items-center` a modal that can outgrow the screen — a centred flex child
+// that overflows a scrollable overlay clips its TOP off-screen, unreachable
+// by scrolling. `m-auto` on the card centres it when it fits and degrades to
+// normal top-anchored scrolling when it doesn't. The footer is sticky so
+// Save/Cancel stay on screen however short the laptop.
 function ModalShell({ title, color, onClose, children, footer, maxW = "max-w-lg" }: any) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150" onClick={onClose}>
-      <div className={`w-full ${maxW} my-4 bg-[#0a0e1a] border border-white/10 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-2 duration-200`} onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 bg-black/70 flex p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150" onClick={onClose}>
+      <div className={`w-full ${maxW} m-auto bg-[#0a0e1a] border border-white/10 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-2 duration-200`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between sticky top-0 bg-[#0a0e1a] rounded-t-2xl z-10">
           <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full shrink-0" style={{ background: color }} /><h2 className="text-base font-semibold">{title}</h2></div>
           <button onClick={onClose} className="w-7 h-7 rounded-lg text-white/40 hover:text-white hover:bg-white/[0.06] flex items-center justify-center"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-5 space-y-4">{children}</div>
-        {footer && <div className="px-5 py-4 border-t border-white/[0.06] flex items-center justify-between gap-2">{footer}</div>}
+        {footer && <div className="px-5 py-4 border-t border-white/[0.06] flex items-center justify-between gap-2 sticky bottom-0 bg-[#0a0e1a] rounded-b-2xl z-10">{footer}</div>}
       </div>
     </div>
   );
