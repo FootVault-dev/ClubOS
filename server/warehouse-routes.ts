@@ -26,7 +26,7 @@
 // are caught and turned into clean 409s rather than raw 500s.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Express, Request, Response } from "express";
-import { and, asc, desc, eq, ilike, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
 import { nzTodayIso } from "@shared/academy";
@@ -34,7 +34,7 @@ import {
   whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines,
   whRequisitions, whRequisitionLines, whMovements,
   whLoans, whLoanLines,
-  whStock, whCounts, whCountLines,
+  whStock, whCounts, whCountLines, whSyncState,
   shopOrders, shopOrderItems,
   printOrders,
   users, contacts,
@@ -312,6 +312,163 @@ async function handleLocationMove(req: Request, res: Response, movementType: "pu
 }
 
 export function registerWarehouseRoutes(app: Express) {
+  // ═══════════════════════════════════════════════════════════════════════
+  // Dashboard (T16a) — one aggregated read for the /admin/warehouse landing
+  // page: stock health, pending requisitions, overdue loans, sync drift
+  // alerts, and the ledger's recent tail. Every number is computed fresh on
+  // each call (no cached "stats" row) — this is an admin page loaded a
+  // handful of times a day, not a hot path, and nothing here writes.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/admin/warehouse/dashboard", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const today = nzTodayIso();
+
+      // Low stock — Σ on_hand across REAL (non-virtual) locations vs the
+      // item's own min_qty reorder threshold. An item with no min_qty set
+      // has opted out of this alert (not everything needs reordering); a
+      // computed multi-row aggregate joined across 3 tables isn't something
+      // the query builder expresses cleanly (same reasoning as T6's
+      // getPoLineReceiptTotals), so this is one raw SQL statement.
+      const lowStockResult = await db.execute(sql`
+        SELECT i.id, i.sku, i.name, i.brand_owner, i.min_qty,
+          COALESCE(SUM(s.on_hand) FILTER (WHERE l.kind <> 'virtual'), 0) AS on_hand
+        FROM wh_items i
+        LEFT JOIN wh_stock s ON s.item_id = i.id
+        LEFT JOIN wh_locations l ON l.id = s.location_id
+        WHERE i.active = true AND i.min_qty IS NOT NULL
+        GROUP BY i.id
+        HAVING COALESCE(SUM(s.on_hand) FILTER (WHERE l.kind <> 'virtual'), 0) < i.min_qty
+        ORDER BY i.sku
+      `);
+      const lowStockItems = (
+        lowStockResult.rows as Array<{
+          id: number; sku: string; name: string; brand_owner: string; min_qty: string; on_hand: string;
+        }>
+      ).map((r) => ({
+        id: r.id,
+        sku: r.sku,
+        name: r.name,
+        brandOwner: r.brand_owner,
+        minQty: Number(r.min_qty),
+        onHand: Number(r.on_hand),
+      }));
+
+      const [{ count: activeItemCountRaw }] = await db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(whItems)
+        .where(eq(whItems.active, true));
+
+      // Pending requisitions — anything not yet collected or declined.
+      const PENDING_REQUISITION_STATUSES: RequisitionStatus[] = ["submitted", "approved", "picking", "ready"];
+      const pendingReqRows = await db
+        .select({
+          id: whRequisitions.id,
+          chargeTo: whRequisitions.chargeTo,
+          status: whRequisitions.status,
+          neededBy: whRequisitions.neededBy,
+          createdAt: whRequisitions.createdAt,
+          requesterFirst: users.firstName,
+          requesterLast: users.lastName,
+        })
+        .from(whRequisitions)
+        .leftJoin(users, eq(whRequisitions.requestedBy, users.id))
+        .where(inArray(whRequisitions.status, PENDING_REQUISITION_STATUSES))
+        .orderBy(asc(whRequisitions.neededBy))
+        .limit(10);
+      const pendingRequisitions = pendingReqRows.map(({ requesterFirst, requesterLast, ...r }) => ({
+        ...r,
+        requesterName: fullName(requesterFirst, requesterLast),
+      }));
+      const [{ count: pendingRequisitionsCountRaw }] = await db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(whRequisitions)
+        .where(inArray(whRequisitions.status, PENDING_REQUISITION_STATUSES));
+
+      // Overdue loans — status='out' AND due_on < today (D14's own derived
+      // definition, isLoanOverdue — filtered directly in SQL for this
+      // advisory top-10 rather than loading every 'out' loan into JS first).
+      const overdueLoanCondition = and(eq(whLoans.status, "out"), lt(whLoans.dueOn, today));
+      const overdueLoanRows = await db
+        .select()
+        .from(whLoans)
+        .where(overdueLoanCondition)
+        .orderBy(asc(whLoans.dueOn))
+        .limit(10);
+      const overdueLoans = overdueLoanRows.map(withOverdue);
+      const [{ count: overdueLoansCountRaw }] = await db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(whLoans)
+        .where(overdueLoanCondition);
+
+      // Drift alerts — wh_sync_state rows where the sync engine (T12) has
+      // logged a genuine unexplained mismatch (never our own echo).
+      const driftRows = await db
+        .select({
+          itemId: whSyncState.itemId,
+          store: whSyncState.store,
+          lastPushedQty: whSyncState.lastPushedQty,
+          lastDriftAt: whSyncState.lastDriftAt,
+          driftNote: whSyncState.driftNote,
+          itemSku: whItems.sku,
+          itemName: whItems.name,
+        })
+        .from(whSyncState)
+        .innerJoin(whItems, eq(whSyncState.itemId, whItems.id))
+        .where(isNotNull(whSyncState.lastDriftAt))
+        .orderBy(desc(whSyncState.lastDriftAt))
+        .limit(10);
+      const [{ count: driftAlertsCountRaw }] = await db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(whSyncState)
+        .where(isNotNull(whSyncState.lastDriftAt));
+
+      // Recent movements feed — the ledger's own tail, newest first.
+      const recentMovementRows = await db
+        .select({
+          id: whMovements.id,
+          groupId: whMovements.groupId,
+          delta: whMovements.delta,
+          movementType: whMovements.movementType,
+          reasonCode: whMovements.reasonCode,
+          refKind: whMovements.refKind,
+          refId: whMovements.refId,
+          note: whMovements.note,
+          createdAt: whMovements.createdAt,
+          itemSku: whItems.sku,
+          itemName: whItems.name,
+          locationCode: whLocations.code,
+          operatorFirst: users.firstName,
+          operatorLast: users.lastName,
+        })
+        .from(whMovements)
+        .innerJoin(whItems, eq(whMovements.itemId, whItems.id))
+        .innerJoin(whLocations, eq(whMovements.locationId, whLocations.id))
+        .leftJoin(users, eq(whMovements.operatorUserId, users.id))
+        .orderBy(desc(whMovements.id))
+        .limit(20);
+      const recentMovements = recentMovementRows.map(({ operatorFirst, operatorLast, ...m }) => ({
+        ...m,
+        operatorName: fullName(operatorFirst, operatorLast),
+      }));
+
+      res.json({
+        activeItemCount: Number(activeItemCountRaw),
+        lowStockItems,
+        lowStockCount: lowStockItems.length,
+        pendingRequisitions,
+        pendingRequisitionsCount: Number(pendingRequisitionsCountRaw),
+        overdueLoans,
+        overdueLoansCount: Number(overdueLoansCountRaw),
+        driftAlerts: driftRows,
+        driftAlertsCount: Number(driftAlertsCountRaw),
+        recentMovements,
+      });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "dashboard");
+    }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════
   // Locations — bins, named zones, virtual locations (D8).
   // ═══════════════════════════════════════════════════════════════════════
@@ -768,6 +925,79 @@ export function registerWarehouseRoutes(app: Express) {
       res.json({ ok: true });
     } catch (e: any) {
       handleWarehouseError(res, e, "alias delete");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Item detail extras (T16a) — per-location stock breakdown + movement
+  // history for the Items admin page's detail view. Read-only, no engine
+  // involvement (same "master data never touches wh_stock/wh_movements
+  // directly" doctrine as the rest of this section — these two endpoints
+  // only ever SELECT).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/admin/warehouse/items/:id/stock", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const rows = await db
+        .select({
+          locationId: whStock.locationId,
+          onHand: whStock.onHand,
+          updatedAt: whStock.updatedAt,
+          locationCode: whLocations.code,
+          locationZone: whLocations.zone,
+          locationKind: whLocations.kind,
+        })
+        .from(whStock)
+        .innerJoin(whLocations, eq(whStock.locationId, whLocations.id))
+        .where(eq(whStock.itemId, id))
+        .orderBy(asc(whLocations.code));
+      res.json(rows);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "item stock");
+    }
+  });
+
+  // The ledger filtered to one item, newest first — the full cross-item
+  // audit trail (any item/location/date) is T16c's warehouse-ledger.tsx.
+  app.get("/api/admin/warehouse/items/:id/movements", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const limitRaw = parseInt(String(req.query.limit ?? "100"), 10);
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 100;
+
+      const rows = await db
+        .select({
+          id: whMovements.id,
+          groupId: whMovements.groupId,
+          delta: whMovements.delta,
+          movementType: whMovements.movementType,
+          reasonCode: whMovements.reasonCode,
+          refKind: whMovements.refKind,
+          refId: whMovements.refId,
+          note: whMovements.note,
+          createdAt: whMovements.createdAt,
+          locationCode: whLocations.code,
+          operatorFirst: users.firstName,
+          operatorLast: users.lastName,
+        })
+        .from(whMovements)
+        .innerJoin(whLocations, eq(whMovements.locationId, whLocations.id))
+        .leftJoin(users, eq(whMovements.operatorUserId, users.id))
+        .where(eq(whMovements.itemId, id))
+        .orderBy(desc(whMovements.id))
+        .limit(limit);
+
+      res.json(
+        rows.map(({ operatorFirst, operatorLast, ...m }) => ({
+          ...m,
+          operatorName: fullName(operatorFirst, operatorLast),
+        })),
+      );
+    } catch (e: any) {
+      handleWarehouseError(res, e, "item movements");
     }
   });
 
