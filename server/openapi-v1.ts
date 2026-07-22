@@ -19,12 +19,17 @@ export const OPENAPI_V1_SPEC = {
   openapi: "3.0.3",
   info: {
     title: "ClubOS External API",
-    version: "1.2.0",
+    version: "1.3.0",
     description:
       "Read-only external API for Christchurch United FC's club platform (ClubOS). " +
       "Every endpoint requires a scoped API key (Authorization: Bearer clubos_...). " +
       "Keys are bound to named scopes and specific workspaces; requests outside a key's " +
-      "grant return 403. All requests are audit-logged and rate-limited (240/min/key); " +
+      "grant return 403. A key may additionally be limited to particular programmes within " +
+      "its workspaces — where it is, programme-scoped endpoints (camps, registrations, " +
+      "revenue, analytics, order timing, customers) return only those programmes and their " +
+      "data, and totals are computed over that subset. This is invisible in the responses: " +
+      "there is no error, the excluded programmes simply are not present. " +
+      "All requests are audit-logged and rate-limited (240/min/key); " +
       "repeated invalid keys from one IP are blocked (brute-force protection). " +
       "No endpoint exposes medical information, payment identifiers, or player ID documents. " +
       "Versioning policy: /api/v1 is stable — fields are only ever ADDED, never renamed or " +
