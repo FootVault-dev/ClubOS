@@ -199,6 +199,7 @@ const printsTabs: TabDef[] = [
   { slug: "analytics", title: "Analytics", url: "/admin/print-analytics" },
   { slug: "landing", title: "Landing Pages", url: "/admin/print-landing" },
   { slug: "email", title: "Email Sender", url: "/admin/print-email" },
+  { slug: "warehouse", title: "Warehouse", url: "/admin/warehouse" },
   { slug: "integrations", title: "Integrations", url: "/admin/integrations", secondary: true },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
@@ -263,6 +264,7 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "market-research", // Sandbox — competitor & category intelligence. Daniel only while it's shaped.
   "store", // MFL Store (native e-commerce, Shopify replacement pilot) — dark launch, Daniel only. Remove to open to admins/managers.
   "media", // CIC Media Library — dark launch while Daniel shapes it with Max. Remove to open to Max (admin/manager).
+  "warehouse", // WMS v1 — dark launch while Daniel shapes it with Dima. Remove to open to Print managers.
 ]);
 
 /**

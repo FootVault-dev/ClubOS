@@ -69,6 +69,7 @@ import {
   Target,
   Activity,
   Images,
+  Warehouse,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -280,6 +281,7 @@ const printsNav = [
   { tab: "analytics", title: "Analytics", url: "/admin/print-analytics", icon: BarChart3 },
   { tab: "landing", title: "Landing Pages", url: "/admin/print-landing", icon: FileText },
   { tab: "email", title: "Email Sender", url: "/admin/print-email", icon: Send },
+  { tab: "warehouse", title: "Warehouse", url: "/admin/warehouse", icon: Warehouse },
 ];
 
 const printsSecondary = [

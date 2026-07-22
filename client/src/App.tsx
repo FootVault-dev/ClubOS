@@ -145,6 +145,17 @@ import PrintsJobs from "@/pages/prints-jobs";
 import PrintsOrderDetail from "@/pages/prints-order-detail";
 import PrintsMaterials from "@/pages/prints-materials";
 import PrintsIntegrations from "@/pages/prints-integrations";
+import WarehouseDashboard from "@/pages/warehouse-dashboard";
+import WarehouseItems from "@/pages/warehouse-items";
+import WarehouseLocations from "@/pages/warehouse-locations";
+import WarehousePOs from "@/pages/warehouse-pos";
+import WarehouseRequisitions from "@/pages/warehouse-requisitions";
+import WarehouseLoans from "@/pages/warehouse-loans";
+import WarehouseCounts from "@/pages/warehouse-counts";
+import WarehouseSync from "@/pages/warehouse-sync";
+import WarehouseLedger from "@/pages/warehouse-ledger";
+import WarehouseScan from "@/pages/warehouse-scan";
+import WarehouseLabels from "@/pages/warehouse-labels";
 import PrintHub from "@/pages/print-hub";
 import PrintConfigure from "@/pages/print-configure";
 import PrintCheckout from "@/pages/print-checkout";
@@ -226,6 +237,17 @@ function AdminRouter() {
         <Route path="/admin/print-landing" component={PrintsLanding} />
         <Route path="/admin/print-email" component={PrintsEmail} />
         <Route path="/admin/integrations" component={PrintsIntegrations} />
+        <Route path="/admin/warehouse" component={WarehouseDashboard} />
+        <Route path="/admin/warehouse/items" component={WarehouseItems} />
+        <Route path="/admin/warehouse/locations" component={WarehouseLocations} />
+        <Route path="/admin/warehouse/pos" component={WarehousePOs} />
+        <Route path="/admin/warehouse/requisitions" component={WarehouseRequisitions} />
+        <Route path="/admin/warehouse/loans" component={WarehouseLoans} />
+        <Route path="/admin/warehouse/counts" component={WarehouseCounts} />
+        <Route path="/admin/warehouse/sync" component={WarehouseSync} />
+        <Route path="/admin/warehouse/ledger" component={WarehouseLedger} />
+        <Route path="/admin/warehouse/scan" component={WarehouseScan} />
+        <Route path="/admin/warehouse/labels" component={WarehouseLabels} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
