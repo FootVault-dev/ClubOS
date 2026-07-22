@@ -12,7 +12,7 @@ import {
 import {
   PRIORITY_META, TASK_PRIORITIES, addDaysIso, daysBetween, taskBarRange,
   dueBucket, memberName, initials, fmtDate, taskProgress, parseLocalDate,
-  toLocalDateStr, dueTone, DUE_TONE_CLASSES,
+  toLocalDateStr, dueTone, DUE_TONE_CLASSES, canEdit,
   type PlanProjectRow, type PlanStatusRow, type PlanTaskRow, type TeamMember,
   type TaskPriority, type DueBucket,
 } from "@/lib/management";
@@ -237,6 +237,7 @@ function ProjectBoard({ project, tasks, team, today, showTitle, onTask, onPositi
   const [over, setOver] = useState<{ statusId: number; index: number } | null>(null);
   const [adding, setAdding] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  const editable = canEdit(project);
 
   const drop = () => {
     if (dragId != null && over) onPosition(dragId, over.statusId, over.index);
@@ -249,6 +250,7 @@ function ProjectBoard({ project, tasks, team, today, showTitle, onTask, onPositi
         <div className="flex items-center gap-2 mb-2">
           <span className="w-3 h-3 rounded-sm" style={{ background: project.color }} />
           <span className="text-sm font-semibold">{project.name}</span>
+          {!editable && <span className="text-[9px] uppercase tracking-wide text-white/30 bg-white/[0.05] px-1.5 py-0.5 rounded">view only</span>}
         </div>
       )}
       <div className="flex gap-3 overflow-x-auto pb-2">
@@ -257,8 +259,8 @@ function ProjectBoard({ project, tasks, team, today, showTitle, onTask, onPositi
             .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
           return (
             <div key={col.id}
-              onDragOver={(e) => { e.preventDefault(); if (over?.statusId !== col.id) setOver({ statusId: col.id, index: colTasks.length }); }}
-              onDrop={(e) => { e.preventDefault(); drop(); }}
+              onDragOver={editable ? (e) => { e.preventDefault(); if (over?.statusId !== col.id) setOver({ statusId: col.id, index: colTasks.length }); } : undefined}
+              onDrop={editable ? (e) => { e.preventDefault(); drop(); } : undefined}
               className={`w-[264px] shrink-0 rounded-xl border flex flex-col ${over?.statusId === col.id ? "border-indigo-500/50 bg-indigo-500/[0.04]" : "border-white/[0.06] bg-white/[0.015]"}`}>
               <div className="px-3 py-2 flex items-center justify-between border-b border-white/[0.06]">
                 <div className="flex items-center gap-2 text-xs font-semibold">
@@ -268,11 +270,11 @@ function ProjectBoard({ project, tasks, team, today, showTitle, onTask, onPositi
               </div>
               <div className="p-2 space-y-2 flex-1 min-h-[80px]">
                 {colTasks.map((t, i) => (
-                  <div key={t.id} draggable
-                    onDragStart={() => setDragId(t.id)}
-                    onDragEnd={() => { setDragId(null); setOver(null); }}
-                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setOver({ statusId: col.id, index: i }); }}
-                    onDrop={(e) => { e.preventDefault(); e.stopPropagation(); drop(); }}
+                  <div key={t.id} draggable={editable}
+                    onDragStart={editable ? () => setDragId(t.id) : undefined}
+                    onDragEnd={editable ? () => { setDragId(null); setOver(null); } : undefined}
+                    onDragOver={editable ? (e) => { e.preventDefault(); e.stopPropagation(); setOver({ statusId: col.id, index: i }); } : undefined}
+                    onDrop={editable ? (e) => { e.preventDefault(); e.stopPropagation(); drop(); } : undefined}
                     onClick={() => onTask(t)}
                     className={`rounded-lg border bg-white/[0.03] hover:bg-white/[0.05] hover:border-white/15 p-2.5 cursor-pointer ${dragId === t.id ? "opacity-40" : ""} ${over?.statusId === col.id && over.index === i && dragId !== t.id ? "border-t-2 border-t-indigo-400 border-white/[0.06]" : "border-white/[0.06]"}`}>
                     <div className="text-[13px] font-medium leading-snug mb-1.5 flex items-start gap-1.5">
@@ -299,7 +301,7 @@ function ProjectBoard({ project, tasks, team, today, showTitle, onTask, onPositi
                 {dragId != null && !colTasks.length && <div className="text-[11px] text-indigo-300/60 text-center py-4 rounded border border-dashed border-indigo-500/30">Drop here</div>}
               </div>
               <div className="p-2 pt-0">
-                {adding === col.id ? (
+                {!editable ? null : adding === col.id ? (
                   <Input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && draft.trim()) { onQuickAdd(project.id, col.id, draft.trim()); setDraft(""); }
@@ -391,6 +393,7 @@ export function TableView({ projects, tasks, team, today, onTask, onPatch, onDel
             (statusOrder.get(a.statusId) ?? 0) - (statusOrder.get(b.statusId) ?? 0) || a.sortOrder - b.sortOrder || a.id - b.id);
           const isCollapsed = !!collapsed[p.id];
           const done = rows.filter((t) => statusIn(p, t.statusId)?.kind === "done").length;
+          const editable = canEdit(p);
           return (
             <div key={p.id} className="rounded-xl border border-white/[0.06] overflow-hidden">
               <button onClick={() => toggleCollapse(p.id)}
@@ -399,6 +402,7 @@ export function TableView({ projects, tasks, team, today, onTask, onPatch, onDel
                 {isCollapsed ? <ChevronRight className="w-4 h-4 text-white/40" /> : <ChevronDown className="w-4 h-4 text-white/40" />}
                 <span className="text-sm font-semibold" style={{ color: p.color }}>{p.name}</span>
                 <span className="text-[11px] text-white/40">{done}/{rows.length} done</span>
+                {!editable && <span className="text-[9px] uppercase tracking-wide text-white/30 bg-white/[0.05] px-1.5 py-0.5 rounded">view only</span>}
                 {p.targetDate && <span className="text-[10px] text-white/30 ml-auto">target {fmtDate(p.targetDate)}</span>}
               </button>
               {!isCollapsed && (
@@ -423,7 +427,7 @@ export function TableView({ projects, tasks, team, today, onTask, onPatch, onDel
                         return (
                           <tr key={t.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
                             <td className="px-2 py-1.5 text-center">
-                              <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSel(t.id)} className="accent-indigo-500 w-3.5 h-3.5 align-middle" />
+                              {editable && <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSel(t.id)} className="accent-indigo-500 w-3.5 h-3.5 align-middle" />}
                             </td>
                             <td className="px-2 py-1.5 cursor-pointer" onClick={() => onTask(t)}>
                               <div className={`font-medium flex items-center gap-1.5 ${done2 ? "line-through text-white/40" : ""}`}>
@@ -436,39 +440,39 @@ export function TableView({ projects, tasks, team, today, onTask, onPatch, onDel
                               {!!t.tags.length && <div className="flex gap-1 mt-0.5">{t.tags.slice(0, 4).map((tag) => <span key={tag} className="text-[9px] text-white/40 bg-white/[0.05] px-1 rounded">{tag}</span>)}</div>}
                             </td>
                             <td className="px-2 py-1.5">
-                              <select value={t.statusId} onChange={(e) => onPatch(t.id, { statusId: Number(e.target.value) })}
-                                className="h-7 rounded-md border-0 px-1.5 text-xs font-semibold cursor-pointer w-full"
+                              <select value={t.statusId} disabled={!editable} onChange={(e) => onPatch(t.id, { statusId: Number(e.target.value) })}
+                                className="h-7 rounded-md border-0 px-1.5 text-xs font-semibold cursor-pointer w-full disabled:cursor-default disabled:appearance-none"
                                 style={{ background: `${st?.color ?? "#64748b"}22`, color: st?.color ?? "#94a3b8" }}>
                                 {p.statuses.map((s) => <option key={s.id} value={s.id} className="bg-[#0a0e1a] text-white">{s.label}</option>)}
                               </select>
                             </td>
                             <td className="px-2 py-1.5">
-                              <select value={t.assigneeId ?? ""} onChange={(e) => onPatch(t.id, { assigneeId: e.target.value ? Number(e.target.value) : null })}
-                                className="h-7 rounded-md bg-transparent border border-transparent hover:border-white/15 px-1 text-xs text-white/70 w-full cursor-pointer">
+                              <select value={t.assigneeId ?? ""} disabled={!editable} onChange={(e) => onPatch(t.id, { assigneeId: e.target.value ? Number(e.target.value) : null })}
+                                className="h-7 rounded-md bg-transparent border border-transparent hover:border-white/15 px-1 text-xs text-white/70 w-full cursor-pointer disabled:cursor-default disabled:appearance-none">
                                 <option value="" className="bg-[#0a0e1a]">—</option>
                                 {team.map((m) => <option key={m.id} value={m.id} className="bg-[#0a0e1a]">{m.first_name} {m.last_name}</option>)}
                               </select>
                             </td>
                             <td className="px-2 py-1.5">
-                              <select value={t.priority} onChange={(e) => onPatch(t.id, { priority: e.target.value })}
-                                className="h-7 rounded-md bg-transparent border border-transparent hover:border-white/15 px-1 text-xs w-full cursor-pointer"
+                              <select value={t.priority} disabled={!editable} onChange={(e) => onPatch(t.id, { priority: e.target.value })}
+                                className="h-7 rounded-md bg-transparent border border-transparent hover:border-white/15 px-1 text-xs w-full cursor-pointer disabled:cursor-default disabled:appearance-none"
                                 style={{ color: PRIORITY_META[t.priority as TaskPriority]?.color }}>
                                 {TASK_PRIORITIES.map((pr) => <option key={pr} value={pr} className="bg-[#0a0e1a] text-white">{PRIORITY_META[pr].label}</option>)}
                               </select>
                             </td>
                             <td className="px-2 py-1.5">
-                              <input type="date" value={t.startDate ?? ""} max={t.dueDate ?? undefined}
+                              <input type="date" value={t.startDate ?? ""} max={t.dueDate ?? undefined} disabled={!editable}
                                 onChange={(e) => onPatch(t.id, { startDate: e.target.value || null })} className={dateCls} />
                             </td>
                             <td className="px-2 py-1.5">
-                              <input type="date" value={t.dueDate ?? ""} min={t.startDate ?? undefined}
+                              <input type="date" value={t.dueDate ?? ""} min={t.startDate ?? undefined} disabled={!editable}
                                 onChange={(e) => onPatch(t.id, { dueDate: e.target.value || null })}
                                 className={`${dateCls} ${dueTone(t.dueDate, done2, today) === "overdue" ? "!text-red-300" : ""}`} />
                             </td>
                           </tr>
                         );
                       })}
-                      <tr>
+                      {editable && <tr>
                         <td className="px-2 py-1.5"></td>
                         <td colSpan={6} className="px-2 py-1.5">
                           <Input value={drafts[p.id] ?? ""} onChange={(e) => setDrafts({ ...drafts, [p.id]: e.target.value })}
@@ -479,7 +483,7 @@ export function TableView({ projects, tasks, team, today, onTask, onPatch, onDel
                             placeholder="+ Add task, Enter to save"
                             className="bg-transparent border-transparent hover:border-white/10 focus:border-white/15 text-white h-8 text-sm max-w-[360px]" />
                         </td>
-                      </tr>
+                      </tr>}
                     </tbody>
                   </table>
                 </div>
@@ -563,6 +567,8 @@ export function CalendarView({ projects, tasks, today, onTask, onPatch, onNewOnD
   const [dragTaskId, setDragTaskId] = useState<number | null>(null);
   const [overDay, setOverDay] = useState<string | null>(null);
   const [dayPanel, setDayPanel] = useState<string | null>(null);
+  const editableIds = useMemo(() => new Set(projects.filter(canEdit).map((p) => p.id)), [projects]);
+  const canCreate = editableIds.size > 0;
 
   const dated = useMemo(() => tasks
     .map((t) => ({ task: t, range: taskBarRange(t) }))
@@ -623,11 +629,11 @@ export function CalendarView({ projects, tasks, today, onTask, onPatch, onNewOnD
                     const extra = overflow.get(dayStr) ?? 0;
                     return (
                       <div key={di}
-                        onClick={() => onNewOnDay(dayStr)}
+                        onClick={canCreate ? () => onNewOnDay(dayStr) : undefined}
                         onDragOver={(e) => { e.preventDefault(); setOverDay(dayStr); }}
                         onDragLeave={() => setOverDay((d) => (d === dayStr ? null : d))}
                         onDrop={(e) => { e.preventDefault(); dropOn(dayStr); }}
-                        className={`relative border-r border-white/[0.04] last:border-0 cursor-pointer transition-colors
+                        className={`relative border-r border-white/[0.04] last:border-0 ${canCreate ? "cursor-pointer" : ""} transition-colors
                           ${inMonth ? "" : "opacity-35"} ${weekend ? "bg-white/[0.015]" : ""}
                           ${overDay === dayStr ? "bg-indigo-500/[0.08]" : "hover:bg-white/[0.02]"}`}>
                         <div className={`text-[11px] m-1 px-1 inline-flex items-center justify-center ${isToday ? "w-5 h-5 rounded-full bg-indigo-600 text-white font-bold" : "text-white/40"}`}>{day.getDate()}</div>
@@ -644,11 +650,12 @@ export function CalendarView({ projects, tasks, today, onTask, onPatch, onNewOnD
                   const p = projectById.get(seg.task.projectId);
                   const done = isDone(p, seg.task);
                   const color = p?.color ?? "#6366f1";
+                  const segEditable = editableIds.has(seg.task.projectId);
                   return (
                     <button key={seg.task.id + "-" + seg.lane}
-                      draggable
-                      onDragStart={() => setDragTaskId(seg.task.id)}
-                      onDragEnd={() => { setDragTaskId(null); setOverDay(null); }}
+                      draggable={segEditable}
+                      onDragStart={segEditable ? () => setDragTaskId(seg.task.id) : undefined}
+                      onDragEnd={segEditable ? () => { setDragTaskId(null); setOverDay(null); } : undefined}
                       onClick={(e) => { e.stopPropagation(); onTask(seg.task); }}
                       className={`absolute h-[22px] text-left text-[11px] px-1.5 flex items-center gap-1 truncate hover:brightness-125 ${dragTaskId === seg.task.id ? "opacity-40" : ""} ${seg.clipLeft ? "rounded-l-none" : "rounded-l-md"} ${seg.clipRight ? "rounded-r-none" : "rounded-r-md"}`}
                       style={{
@@ -682,12 +689,13 @@ export function CalendarView({ projects, tasks, today, onTask, onPatch, onNewOnD
           <div className="p-2 space-y-1.5 max-h-[420px] overflow-y-auto">
             {unscheduled.map((t) => {
               const p = projectById.get(t.projectId);
+              const tEditable = editableIds.has(t.projectId);
               return (
-                <div key={t.id} draggable
-                  onDragStart={() => setDragTaskId(t.id)}
-                  onDragEnd={() => { setDragTaskId(null); setOverDay(null); }}
+                <div key={t.id} draggable={tEditable}
+                  onDragStart={tEditable ? () => setDragTaskId(t.id) : undefined}
+                  onDragEnd={tEditable ? () => { setDragTaskId(null); setOverDay(null); } : undefined}
                   onClick={() => onTask(t)}
-                  className={`rounded-md border border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.05] px-2 py-1.5 text-[12px] cursor-grab flex items-center gap-1.5 ${dragTaskId === t.id ? "opacity-40" : ""}`}
+                  className={`rounded-md border border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.05] px-2 py-1.5 text-[12px] ${tEditable ? "cursor-grab" : "cursor-pointer"} flex items-center gap-1.5 ${dragTaskId === t.id ? "opacity-40" : ""}`}
                   style={{ borderLeft: `2px solid ${p?.color ?? "#6366f1"}` }}>
                   <span className="truncate flex-1">{t.title}</span>
                   <PriorityFlag priority={t.priority} />

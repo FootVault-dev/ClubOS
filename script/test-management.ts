@@ -11,6 +11,7 @@ import {
   isProjectStatus, isStatusKind, isTaskPriority,
   isIsoDate, nzTodayIso, addDaysIso, daysBetween,
   taskBarRange, isOverdue, dueBucket, wouldCreateCycle,
+  COLLAB_ROLES, isCollabRole, isProjectDefaultRole, roleAtLeast, effectiveRole,
 } from "../shared/management";
 
 let passed = 0;
@@ -108,5 +109,35 @@ ok("parallel edge direction matters (2→1 exists, adding 2→1 again is not a c
   assert.equal(wouldCreateCycle([E(2, 1)], 2, 1), false)); // duplicate is stopped by the UNIQUE, not the cycle walk
 ok("disconnected components never cycle", () =>
   assert.equal(wouldCreateCycle([E(1, 2), E(3, 4)], 2, 3), false));
+
+// ── Collaborator roles ────────────────────────────────────────────────────────
+ok("role ladder", () => assert.deepEqual([...COLLAB_ROLES], ["viewer", "commenter", "editor", "admin"]));
+ok("isCollabRole", () => { assert.equal(isCollabRole("editor"), true); assert.equal(isCollabRole("owner"), false); assert.equal(isCollabRole("none"), false); });
+ok("isProjectDefaultRole accepts none", () => assert.equal(isProjectDefaultRole("none"), true));
+ok("roleAtLeast ordering", () => {
+  assert.equal(roleAtLeast("admin", "editor"), true);
+  assert.equal(roleAtLeast("editor", "admin"), false);
+  assert.equal(roleAtLeast("commenter", "commenter"), true);
+  assert.equal(roleAtLeast("viewer", "commenter"), false);
+  assert.equal(roleAtLeast("none", "viewer"), false);
+  assert.equal(roleAtLeast(null, "viewer"), false);
+});
+const proj = (createdBy: number | null, defaultRole: string) => ({ createdBy, defaultRole });
+ok("super admin is always admin", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: true, userId: 9, project: proj(null, "none"), collabRole: null }), "admin"));
+ok("explicit row wins over default", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: false, userId: 9, project: proj(null, "admin"), collabRole: "viewer" }), "viewer"));
+ok("creator can never be locked out", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: false, userId: 9, project: proj(9, "none"), collabRole: null }), "admin"));
+ok("creator's explicit row still wins (deliberate self-demotion)", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: false, userId: 9, project: proj(9, "none"), collabRole: "editor" }), "editor"));
+ok("unlisted user gets the project default", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: false, userId: 9, project: proj(1, "commenter"), collabRole: null }), "commenter"));
+ok("default none = hidden", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: false, userId: 9, project: proj(1, "none"), collabRole: null }), "none"));
+ok("garbage default fails closed to none", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: false, userId: 9, project: proj(1, "everything"), collabRole: null }), "none"));
+ok("garbage collab row is ignored, falls to default", () =>
+  assert.equal(effectiveRole({ isSuperAdmin: false, userId: 9, project: proj(1, "viewer"), collabRole: "boss" }), "viewer"));
 
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ", 0 failed"}`);

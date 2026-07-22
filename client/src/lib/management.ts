@@ -10,7 +10,9 @@ export {
   PRIORITY_META, DEFAULT_STATUSES, PROJECT_COLORS,
   isIsoDate, addDaysIso, daysBetween,
   taskBarRange, isOverdue, dueBucket, wouldCreateCycle,
+  COLLAB_ROLES, COLLAB_ROLE_META, ROLE_RANK, roleAtLeast, effectiveRole,
   type ProjectStatus, type StatusKind, type TaskPriority, type DueBucket,
+  type CollabRole, type ProjectDefaultRole,
 } from "@shared/management";
 import { addDaysIso as _addDays } from "@shared/management";
 
@@ -24,13 +26,28 @@ export interface PlanStatusRow {
   label: string; color: string; kind: string; sortOrder: number; createdAt: string;
 }
 
+export interface CollabRow {
+  id: number; organizationId: number; projectId: number;
+  userId: number; role: string; addedBy: number | null; createdAt: string;
+}
+
 export interface PlanProjectRow {
   id: number; organizationId: number;
   name: string; description: string | null; color: string; status: string;
   startDate: string | null; targetDate: string | null;
-  sortOrder: number; createdBy: number | null; createdAt: string; updatedAt: string;
+  sortOrder: number; defaultRole: string; createdBy: number | null;
+  createdAt: string; updatedAt: string;
   statuses: PlanStatusRow[];
+  collaborators: CollabRow[];
+  myRole: string; // the server-derived effective role for the session user
 }
+
+/** Client-side mirrors of the server gates — for disabling UI, never for
+ *  security (the API re-checks everything). */
+import { roleAtLeast as _atLeast } from "@shared/management";
+export const canEdit = (p: PlanProjectRow | null | undefined) => !!p && _atLeast(p.myRole as any, "editor");
+export const canAdmin = (p: PlanProjectRow | null | undefined) => !!p && _atLeast(p.myRole as any, "admin");
+export const canComment = (p: PlanProjectRow | null | undefined) => !!p && _atLeast(p.myRole as any, "commenter");
 
 export interface ChecklistRow {
   id: number; organizationId: number; taskId: number;

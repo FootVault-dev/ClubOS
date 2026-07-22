@@ -24,9 +24,10 @@ import {
 } from "lucide-react";
 import {
   PRIORITY_META, TASK_PRIORITIES, STATUS_COLOR_PRESETS, PROJECT_COLORS,
-  initials, fmtDate, wouldCreateCycle,
+  initials, fmtDate, wouldCreateCycle, memberName,
+  COLLAB_ROLES, COLLAB_ROLE_META, canEdit, canAdmin, canComment,
   type PlanProjectRow, type PlanStatusRow, type PlanTaskRow, type DepRow,
-  type CommentRow, type TeamMember,
+  type CommentRow, type TeamMember, type CollabRow,
 } from "@/lib/management";
 import {
   OverviewView, MyWorkView, BoardView, TableView, CalendarView,
@@ -233,10 +234,14 @@ export default function PrintsManagement() {
                 <span className="truncate">{p.name}</span>
                 <span className="ml-auto text-[10px] text-white/30 shrink-0">{openCountFor(p.id)}</span>
               </button>
-              <button onClick={() => setProjectModal({ mode: "edit", project: p })}
-                className="pr-3 text-white/0 group-hover:text-white/40 hover:!text-white shrink-0" title="Project settings">
-                <Pencil className="w-3 h-3" />
-              </button>
+              {canAdmin(p) ? (
+                <button onClick={() => setProjectModal({ mode: "edit", project: p })}
+                  className="pr-3 text-white/0 group-hover:text-white/40 hover:!text-white shrink-0" title="Project settings">
+                  <Pencil className="w-3 h-3" />
+                </button>
+              ) : !canEdit(p) ? (
+                <span className="pr-3 text-[8px] uppercase tracking-wide text-white/25 shrink-0">{canComment(p) ? "comment" : "view"}</span>
+              ) : null}
             </div>
           ))}
           {!activeProjects.length && !projectsLoading && (
@@ -261,8 +266,12 @@ export default function PrintsManagement() {
             <Plus className="w-4 h-4 mr-1" />Project
           </Button>
           <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white"
-            onClick={() => setTaskModal({ mode: "create", draft: { projectId: selectedProjectId ?? activeProjects[0]?.id } })}
-            disabled={!activeProjects.length}>
+            onClick={() => {
+              const editable = activeProjects.filter(canEdit);
+              const preferred = editable.find((p) => p.id === selectedProjectId) ?? editable[0];
+              setTaskModal({ mode: "create", draft: { projectId: preferred?.id } });
+            }}
+            disabled={!activeProjects.some(canEdit)}>
             <Plus className="w-4 h-4 mr-1" />New task
           </Button>
         </div>
@@ -356,7 +365,7 @@ export default function PrintsManagement() {
       {projectModal && (
         <ProjectModal
           key={projectModal.project?.id ?? "new"}
-          mode={projectModal.mode} project={projectModal.project}
+          mode={projectModal.mode} project={projectModal.project} team={team}
           liveProject={projects.find((p) => p.id === projectModal.project?.id)}
           taskCountByStatus={(statusId) => allTasks.filter((t) => t.statusId === statusId).length}
           onClose={() => setProjectModal(null)}
@@ -461,6 +470,11 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
   const currentStatus = statuses.find((s) => s.id === (statusId ?? src?.statusId));
   const dateInvalid = !!startDate && !!dueDate && startDate > dueDate;
 
+  // Role gates — mirrors of the server rules, for honest UI only.
+  const editable = mode === "create" ? true : canEdit(project);
+  const commentable = mode === "create" ? false : canComment(project);
+  const creatable = projects.filter(canEdit);
+
   const submit = () => {
     if (!title.trim() || !projectId || dateInvalid) return;
     onSave({
@@ -520,7 +534,7 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
 
   return (
     <ModalShell title={mode === "create" ? "New task" : "Edit task"} color={currentStatus?.color ?? project?.color ?? "#6366f1"} onClose={onClose} maxW="max-w-2xl"
-      footer={<>
+      footer={editable ? <>
         <div>{onDelete && (confirmDel
           ? <span className="flex items-center gap-2 text-xs"><span className="text-white/50">Delete?</span><button onClick={onDelete} className="text-red-400 hover:text-red-300 font-semibold">Yes</button><button onClick={() => setConfirmDel(false)} className="text-white/50">No</button></span>
           : <button onClick={() => setConfirmDel(true)} className="text-white/30 hover:text-red-300 flex items-center gap-1 text-xs"><Trash2 className="w-3.5 h-3.5" />Delete</button>)}</div>
@@ -530,7 +544,11 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
             <Check className="w-3.5 h-3.5 mr-1" />{saving ? "Saving…" : "Save"}
           </Button>
         </div>
+      </> : <>
+        <span className="text-[11px] text-white/40">{commentable ? "You can view and comment on this project." : "You have view-only access to this project."}</span>
+        <Button size="sm" variant="ghost" onClick={onClose} className="text-white/60">Close</Button>
       </>}>
+      <fieldset disabled={!editable} className="space-y-4 min-w-0">
       <div>
         <FieldLabel>Task</FieldLabel>
         <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Confirm real per-m² rates with Dima" autoFocus className={inputCls}
@@ -540,7 +558,7 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
         <div>
           <FieldLabel>Project</FieldLabel>
           <select value={projectId ?? ""} onChange={(e) => setProjectId(Number(e.target.value))} className={selCls} disabled={mode === "edit"}>
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {(mode === "create" ? creatable : projects).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
         <div>
@@ -635,6 +653,7 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
           </div>
         )}
       </div>
+      </fieldset>
 
       {/* dependencies */}
       {mode === "edit" && src && (
@@ -648,7 +667,7 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
                 <span className="text-white/40 text-[11px] w-16 shrink-0">Waits on</span>
                 <span className="flex-1 truncate">{t.title}</span>
                 {t.dueDate && <span className="text-[10px] text-white/40">{fmtDate(t.dueDate)}</span>}
-                <button onClick={() => removeDep(dep.id)} className="text-white/20 hover:text-red-300"><X className="w-3.5 h-3.5" /></button>
+                {editable && <button onClick={() => removeDep(dep.id)} className="text-white/20 hover:text-red-300"><X className="w-3.5 h-3.5" /></button>}
               </div>
             ))}
             {blocking.map((t) => t && (
@@ -657,13 +676,15 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
                 <span className="flex-1 truncate">{t.title}</span>
               </div>
             ))}
-            <div className="flex items-center gap-2 pt-1">
-              <select value={depPick} onChange={(e) => setDepPick(e.target.value)} className={`${selCls} h-8 text-xs flex-1`}>
-                <option value="">This task waits on…</option>
-                {depCandidates.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
-              </select>
-              <button onClick={addDep} disabled={!depPick} className="w-8 h-8 rounded-md bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center shrink-0 disabled:opacity-30"><Plus className="w-4 h-4" /></button>
-            </div>
+            {editable && (
+              <div className="flex items-center gap-2 pt-1">
+                <select value={depPick} onChange={(e) => setDepPick(e.target.value)} className={`${selCls} h-8 text-xs flex-1`}>
+                  <option value="">This task waits on…</option>
+                  {depCandidates.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+                </select>
+                <button onClick={addDep} disabled={!depPick} className="w-8 h-8 rounded-md bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center shrink-0 disabled:opacity-30"><Plus className="w-4 h-4" /></button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -685,12 +706,14 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
               </div>
             ))}
             {!comments.length && <div className="text-[11px] text-white/30">No comments yet.</div>}
-            <div className="flex items-center gap-2 pt-1">
-              <Input value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") postComment(); }}
-                placeholder="Write a comment…" className={`${inputCls} h-8 flex-1`} />
-              <button onClick={postComment} className="w-8 h-8 rounded-md bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center shrink-0"><Plus className="w-4 h-4" /></button>
-            </div>
+            {commentable && (
+              <div className="flex items-center gap-2 pt-1">
+                <Input value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") postComment(); }}
+                  placeholder="Write a comment…" className={`${inputCls} h-8 flex-1`} />
+                <button onClick={postComment} className="w-8 h-8 rounded-md bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center shrink-0"><Plus className="w-4 h-4" /></button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -699,8 +722,8 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
 }
 
 // ═══ PROJECT MODAL — details + workflow-column manager ═══════════════════════
-function ProjectModal({ mode, project, liveProject, taskCountByStatus, onClose, onDone, onDeleted }: {
-  mode: "create" | "edit"; project?: PlanProjectRow; liveProject?: PlanProjectRow;
+function ProjectModal({ mode, project, liveProject, team, taskCountByStatus, onClose, onDone, onDeleted }: {
+  mode: "create" | "edit"; project?: PlanProjectRow; liveProject?: PlanProjectRow; team: TeamMember[];
   taskCountByStatus: (statusId: number) => number;
   onClose: () => void; onDone: () => void; onDeleted: (id: number) => void;
 }) {
@@ -740,6 +763,30 @@ function ProjectModal({ mode, project, liveProject, taskCountByStatus, onClose, 
       toast({ title: r.archived ? "Project archived" : "Project deleted", description: r.reason });
       onDeleted(src.id);
     } catch (e: any) { toast({ title: "Couldn't delete", description: e.message, variant: "destructive" }); }
+  };
+
+  // people & access (immediate API calls, column-manager style)
+  const [addPick, setAddPick] = useState("");
+  const [addRole, setAddRole] = useState("editor");
+  const setDefaultRole = async (v: string) => {
+    if (!src) return;
+    try { await (await apiRequest("PATCH", `/api/admin/management/projects/${src.id}`, { defaultRole: v })).json(); onDone(); }
+    catch (e: any) { toast({ title: "Couldn't change access", description: e.message, variant: "destructive" }); }
+  };
+  const addCollab = async () => {
+    if (!src || !addPick) return;
+    try {
+      await (await apiRequest("POST", `/api/admin/management/projects/${src.id}/collaborators`, { userId: Number(addPick), role: addRole })).json();
+      setAddPick(""); onDone();
+    } catch (e: any) { toast({ title: "Couldn't add person", description: e.message, variant: "destructive" }); }
+  };
+  const patchCollab = async (cid: number, role: string) => {
+    try { await (await apiRequest("PATCH", `/api/admin/management/collaborators/${cid}`, { role })).json(); onDone(); }
+    catch (e: any) { toast({ title: "Couldn't change role", description: e.message, variant: "destructive" }); }
+  };
+  const removeCollab = async (cid: number) => {
+    try { await (await apiRequest("DELETE", `/api/admin/management/collaborators/${cid}`)).json(); onDone(); }
+    catch (e: any) { toast({ title: "Couldn't remove", description: e.message, variant: "destructive" }); }
   };
 
   const addColumn = async () => {
@@ -849,6 +896,49 @@ function ProjectModal({ mode, project, liveProject, taskCountByStatus, onClose, 
               <button onClick={addColumn} className="w-8 h-8 rounded-md bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center shrink-0"><Plus className="w-4 h-4" /></button>
             </div>
             <div className="text-[10px] text-white/30">The “kind” keeps Done logic working however you name a column.</div>
+          </div>
+        </div>
+      )}
+
+      {mode === "edit" && src && (
+        <div className="border-t border-white/[0.06] pt-4">
+          <div className="text-xs uppercase tracking-wider text-white/40 font-semibold mb-2">People & access</div>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs text-white/60 flex-1">Everyone else with the Management tab</span>
+            <select value={src.defaultRole} onChange={(e) => setDefaultRole(e.target.value)}
+              className="h-8 rounded-md bg-white/[0.04] border border-white/10 px-1.5 text-xs">
+              <option value="none">No access</option>
+              {COLLAB_ROLES.map((r) => <option key={r} value={r}>{COLLAB_ROLE_META[r].label}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2">
+            {(src.collaborators ?? []).map((c: CollabRow) => (
+              <div key={c.id} className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-white/10 text-[9px] font-bold flex items-center justify-center text-white/80 border border-white/10 shrink-0">{initials(memberName(team, c.userId))}</span>
+                <span className="flex-1 min-w-0 truncate text-sm">{memberName(team, c.userId) || `User #${c.userId}`}</span>
+                <select value={c.role} onChange={(e) => patchCollab(c.id, e.target.value)}
+                  className="h-8 rounded-md bg-white/[0.04] border border-white/10 px-1.5 text-xs"
+                  title={COLLAB_ROLE_META[c.role as keyof typeof COLLAB_ROLE_META]?.hint}>
+                  {COLLAB_ROLES.map((r) => <option key={r} value={r}>{COLLAB_ROLE_META[r].label}</option>)}
+                </select>
+                <button onClick={() => removeCollab(c.id)} className="text-white/20 hover:text-red-300 shrink-0" title="Remove from project"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+            <div className="flex items-center gap-2 pt-1">
+              <select value={addPick} onChange={(e) => setAddPick(e.target.value)} className={`${selCls} h-8 text-xs flex-1`}>
+                <option value="">Add a person…</option>
+                {team.filter((t) => !(src.collaborators ?? []).some((c: CollabRow) => c.userId === t.id))
+                  .map((t) => <option key={t.id} value={t.id}>{t.first_name} {t.last_name}</option>)}
+              </select>
+              <select value={addRole} onChange={(e) => setAddRole(e.target.value)} className="h-8 rounded-md bg-white/[0.04] border border-white/10 px-1.5 text-xs">
+                {COLLAB_ROLES.map((r) => <option key={r} value={r}>{COLLAB_ROLE_META[r].label}</option>)}
+              </select>
+              <button onClick={addCollab} disabled={!addPick} className="w-8 h-8 rounded-md bg-white/[0.06] hover:bg-white/[0.1] flex items-center justify-center shrink-0 disabled:opacity-30"><Plus className="w-4 h-4" /></button>
+            </div>
+            <div className="text-[10px] text-white/30">
+              Viewer sees · Commenter comments · Editor works the tasks · Admin runs the project.
+              The project owner and super admins always keep full access.
+            </div>
           </div>
         </div>
       )}

@@ -5343,12 +5343,32 @@ export const planProjects = pgTable("plan_projects", {
   startDate: date("start_date"),
   targetDate: date("target_date"),
   sortOrder: integer("sort_order").notNull().default(0),
+  // What any tab-holder gets when not an explicit collaborator:
+  // none|viewer|commenter|editor|admin. 'admin' = pre-collaborators behavior.
+  defaultRole: text("default_role").notNull().default("admin"),
   createdBy: integer("created_by"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   orgIdx: index("plan_projects_org_idx").on(t.organizationId),
 }));
+
+export const planCollaborators = pgTable("plan_collaborators", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => planProjects.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull(),
+  role: text("role").notNull().default("editor"), // viewer|commenter|editor|admin
+  addedBy: integer("added_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index("plan_collaborators_project_idx").on(t.projectId),
+  userIdx: index("plan_collaborators_user_idx").on(t.userId),
+  orgIdx: index("plan_collaborators_org_idx").on(t.organizationId),
+  uq: unique("plan_collaborators_uq").on(t.projectId, t.userId),
+}));
+
+export type PlanCollaborator = typeof planCollaborators.$inferSelect;
 
 export const planStatuses = pgTable("plan_statuses", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),

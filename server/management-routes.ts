@@ -31,11 +31,13 @@ import { storage } from "./storage";
 import {
   organizations,
   planProjects, planStatuses, planTasks, planTaskDeps, planChecklistItems, planComments,
+  planCollaborators,
 } from "@shared/schema";
 import {
   isProjectStatus, isStatusKind, isTaskPriority,
   isIsoDate, nzTodayIso, wouldCreateCycle,
   DEFAULT_STATUSES, PROJECT_COLORS,
+  effectiveRole, roleAtLeast, isCollabRole, isProjectDefaultRole, type CollabRole,
 } from "@shared/management";
 
 // ── Small helpers (mirrors server/maintenance-routes.ts) ─────────────────────
@@ -126,6 +128,58 @@ function datesOrdered(start: string | null, due: string | null): boolean {
   return !start || !due || start <= due;
 }
 
+// ── Per-project access (viewer < commenter < editor < admin) ─────────────────
+// The tab grant gets someone through the door; WHAT they can touch in each
+// project is decided here, by shared/management.ts effectiveRole — the same
+// function the client uses to disable its buttons. Server-side is the gate;
+// the client is just being polite.
+
+async function sessionAccess(req: Request): Promise<{ userId: number; isSuper: boolean }> {
+  const userId = req.session.userId!;
+  const user = await storage.getUser(userId).catch(() => null);
+  return { userId, isSuper: user?.role === "super_admin" };
+}
+
+/** Effective role per project for the whole org — one query each way. */
+async function accessMap(req: Request, orgId: number): Promise<Map<number, CollabRole | "none">> {
+  const { userId, isSuper } = await sessionAccess(req);
+  const [projects, rows] = await Promise.all([
+    db.select({ id: planProjects.id, createdBy: planProjects.createdBy, defaultRole: planProjects.defaultRole })
+      .from(planProjects).where(eq(planProjects.organizationId, orgId)),
+    db.select().from(planCollaborators)
+      .where(and(eq(planCollaborators.organizationId, orgId), eq(planCollaborators.userId, userId))),
+  ]);
+  const mine = new Map(rows.map((r) => [r.projectId, r.role]));
+  const map = new Map<number, CollabRole | "none">();
+  for (const p of projects) {
+    map.set(p.id, effectiveRole({
+      isSuperAdmin: isSuper, userId,
+      project: { createdBy: p.createdBy, defaultRole: p.defaultRole },
+      collabRole: mine.get(p.id) ?? null,
+    }));
+  }
+  return map;
+}
+
+/** Effective role on ONE project (mutation gates). "none" for missing projects
+ *  too — a 403 must not reveal whether a hidden project exists. */
+async function roleFor(req: Request, orgId: number, projectId: number): Promise<CollabRole | "none"> {
+  const { userId, isSuper } = await sessionAccess(req);
+  const [project] = await db.select().from(planProjects)
+    .where(and(eq(planProjects.id, projectId), eq(planProjects.organizationId, orgId)));
+  if (!project) return "none";
+  const [row] = await db.select().from(planCollaborators)
+    .where(and(eq(planCollaborators.projectId, projectId), eq(planCollaborators.userId, userId)));
+  return effectiveRole({
+    isSuperAdmin: isSuper, userId,
+    project: { createdBy: project.createdBy, defaultRole: project.defaultRole },
+    collabRole: row?.role ?? null,
+  });
+}
+
+const forbid = (res: Response, need: string) =>
+  res.status(403).json({ message: `You need ${need} access on this project` });
+
 export function registerManagementRoutes(app: Express) {
   const tab = requireTab("management");
 
@@ -135,21 +189,36 @@ export function registerManagementRoutes(app: Express) {
       const org = await orgOr400(req, res); if (!org) return;
       const includeArchived = truthy(req.query.includeArchived);
 
-      const projects = await db.select().from(planProjects)
-        .where(includeArchived
-          ? eq(planProjects.organizationId, org.id)
-          : and(eq(planProjects.organizationId, org.id), sql`${planProjects.status} <> 'archived'`))
-        .orderBy(asc(planProjects.sortOrder), asc(planProjects.id));
+      const [allProjects, roles] = await Promise.all([
+        db.select().from(planProjects)
+          .where(includeArchived
+            ? eq(planProjects.organizationId, org.id)
+            : and(eq(planProjects.organizationId, org.id), sql`${planProjects.status} <> 'archived'`))
+          .orderBy(asc(planProjects.sortOrder), asc(planProjects.id)),
+        accessMap(req, org.id),
+      ]);
+      // A project you have no role on simply doesn't exist for you.
+      const projects = allProjects.filter((p) => roles.get(p.id) !== "none");
 
-      const statuses = projects.length
-        ? await db.select().from(planStatuses)
-            .where(inArray(planStatuses.projectId, projects.map((p) => p.id)))
-            .orderBy(asc(planStatuses.sortOrder), asc(planStatuses.id))
-        : [];
+      const [statuses, collaborators] = projects.length
+        ? await Promise.all([
+            db.select().from(planStatuses)
+              .where(inArray(planStatuses.projectId, projects.map((p) => p.id)))
+              .orderBy(asc(planStatuses.sortOrder), asc(planStatuses.id)),
+            db.select().from(planCollaborators)
+              .where(inArray(planCollaborators.projectId, projects.map((p) => p.id)))
+              .orderBy(asc(planCollaborators.id)),
+          ])
+        : [[], []];
 
       res.json({
         today: nzTodayIso(),
-        projects: projects.map((p) => ({ ...p, statuses: statuses.filter((st) => st.projectId === p.id) })),
+        projects: projects.map((p) => ({
+          ...p,
+          statuses: statuses.filter((st) => st.projectId === p.id),
+          collaborators: collaborators.filter((c) => c.projectId === p.id),
+          myRole: roles.get(p.id) ?? "none",
+        })),
       });
     } catch (e) { fail(res, e); }
   });
@@ -195,7 +264,16 @@ export function registerManagementRoutes(app: Express) {
           })),
         ).returning();
 
-        return { ...project, statuses };
+        // The creator is always an explicit admin — belt to effectiveRole's
+        // creator-braces, and it makes them visible in the people list.
+        const collaborators = user
+          ? await tx.insert(planCollaborators).values({
+              organizationId: org.id, projectId: project.id,
+              userId: user.id, role: "admin", addedBy: user.id,
+            }).returning()
+          : [];
+
+        return { ...project, statuses, collaborators, myRole: "admin" as const };
       });
 
       res.status(201).json(result);
@@ -211,8 +289,13 @@ export function registerManagementRoutes(app: Express) {
       const [current] = await db.select().from(planProjects)
         .where(and(eq(planProjects.id, projectId), eq(planProjects.organizationId, org.id)));
       if (!current) return res.status(404).json({ message: "Project not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, projectId), "admin")) return forbid(res, "admin");
 
       const patch: Record<string, any> = { updatedAt: new Date() };
+      if (req.body?.defaultRole !== undefined) {
+        if (!isProjectDefaultRole(req.body.defaultRole)) return res.status(400).json({ message: "Unknown default role" });
+        patch.defaultRole = req.body.defaultRole;
+      }
       if (req.body?.name !== undefined) {
         const name = s(req.body.name, 160);
         if (!name) return res.status(400).json({ message: "Project name is required" });
@@ -262,6 +345,7 @@ export function registerManagementRoutes(app: Express) {
       const org = await orgOr400(req, res); if (!org) return;
       const projectId = id(req.params.id);
       if (!projectId) return res.status(400).json({ message: "Bad id" });
+      if (!roleAtLeast(await roleFor(req, org.id, projectId), "admin")) return forbid(res, "admin");
 
       const tasks = await db.select({ id: planTasks.id }).from(planTasks)
         .where(eq(planTasks.projectId, projectId));
@@ -290,6 +374,7 @@ export function registerManagementRoutes(app: Express) {
       const [project] = await db.select().from(planProjects)
         .where(and(eq(planProjects.id, projectId), eq(planProjects.organizationId, org.id)));
       if (!project) return res.status(404).json({ message: "Project not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, projectId), "admin")) return forbid(res, "admin");
 
       const label = s(req.body?.label, 60);
       if (!label) return res.status(400).json({ message: "Column name is required" });
@@ -314,6 +399,11 @@ export function registerManagementRoutes(app: Express) {
       const org = await orgOr400(req, res); if (!org) return;
       const statusId = id(req.params.id);
       if (!statusId) return res.status(400).json({ message: "Bad id" });
+
+      const [existing] = await db.select().from(planStatuses)
+        .where(and(eq(planStatuses.id, statusId), eq(planStatuses.organizationId, org.id)));
+      if (!existing) return res.status(404).json({ message: "Column not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, existing.projectId), "admin")) return forbid(res, "admin");
 
       const patch: Record<string, any> = {};
       if (req.body?.label !== undefined) {
@@ -356,6 +446,7 @@ export function registerManagementRoutes(app: Express) {
       const [status] = await db.select().from(planStatuses)
         .where(and(eq(planStatuses.id, statusId), eq(planStatuses.organizationId, org.id)));
       if (!status) return res.status(404).json({ message: "Column not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, status.projectId), "admin")) return forbid(res, "admin");
 
       const siblings = await db.select({ id: planStatuses.id }).from(planStatuses)
         .where(eq(planStatuses.projectId, status.projectId));
@@ -395,11 +486,16 @@ export function registerManagementRoutes(app: Express) {
       const org = await orgOr400(req, res); if (!org) return;
       const includeArchived = truthy(req.query.includeArchived);
 
-      const tasks = await db.select().from(planTasks)
-        .where(includeArchived
-          ? eq(planTasks.organizationId, org.id)
-          : and(eq(planTasks.organizationId, org.id), eq(planTasks.archived, false)))
-        .orderBy(asc(planTasks.sortOrder), asc(planTasks.id));
+      const [allOrgTasks, roles] = await Promise.all([
+        db.select().from(planTasks)
+          .where(includeArchived
+            ? eq(planTasks.organizationId, org.id)
+            : and(eq(planTasks.organizationId, org.id), eq(planTasks.archived, false)))
+          .orderBy(asc(planTasks.sortOrder), asc(planTasks.id)),
+        accessMap(req, org.id),
+      ]);
+      // Only tasks in projects the user can at least SEE.
+      const tasks = allOrgTasks.filter((t) => roles.get(t.projectId) !== "none");
 
       const ids = tasks.map((t) => t.id);
       const [checklist, deps, commentCounts] = ids.length
@@ -417,6 +513,7 @@ export function registerManagementRoutes(app: Express) {
         : [[], [], []];
 
       const countByTask = new Map(commentCounts.map((c) => [c.taskId, c.n]));
+      const visible = new Set(ids);
       res.json({
         today: nzTodayIso(),
         tasks: tasks.map((t) => ({
@@ -424,7 +521,8 @@ export function registerManagementRoutes(app: Express) {
           checklist: checklist.filter((c) => c.taskId === t.id),
           commentCount: countByTask.get(t.id) ?? 0,
         })),
-        deps,
+        // An edge into a hidden project must not leak that project's tasks.
+        deps: deps.filter((d) => visible.has(d.predecessorId) && visible.has(d.successorId)),
       });
     } catch (e) { fail(res, e); }
   });
@@ -440,6 +538,7 @@ export function registerManagementRoutes(app: Express) {
       const [project] = await db.select().from(planProjects)
         .where(and(eq(planProjects.id, projectId), eq(planProjects.organizationId, org.id)));
       if (!project) return res.status(404).json({ message: "Project not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, projectId), "editor")) return forbid(res, "editor");
 
       const statuses = await db.select().from(planStatuses)
         .where(eq(planStatuses.projectId, projectId))
@@ -502,6 +601,7 @@ export function registerManagementRoutes(app: Express) {
       const [current] = await db.select().from(planTasks)
         .where(and(eq(planTasks.id, taskId), eq(planTasks.organizationId, org.id)));
       if (!current) return res.status(404).json({ message: "Task not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, current.projectId), "editor")) return forbid(res, "editor");
 
       const [currentStatus] = await db.select().from(planStatuses)
         .where(eq(planStatuses.id, current.statusId));
@@ -517,6 +617,7 @@ export function registerManagementRoutes(app: Express) {
         const [project] = await db.select().from(planProjects)
           .where(and(eq(planProjects.id, pid), eq(planProjects.organizationId, org.id)));
         if (!project) return res.status(404).json({ message: "Project not found" });
+        if (!roleAtLeast(await roleFor(req, org.id, pid), "editor")) return forbid(res, "editor");
         targetProjectId = pid;
         patch.projectId = pid;
       }
@@ -604,6 +705,11 @@ export function registerManagementRoutes(app: Express) {
       const taskId = id(req.params.id);
       if (!taskId) return res.status(400).json({ message: "Bad id" });
 
+      const [existing] = await db.select().from(planTasks)
+        .where(and(eq(planTasks.id, taskId), eq(planTasks.organizationId, org.id)));
+      if (!existing) return res.status(404).json({ message: "Task not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, existing.projectId), "editor")) return forbid(res, "editor");
+
       const [row] = await db.delete(planTasks)
         .where(and(eq(planTasks.id, taskId), eq(planTasks.organizationId, org.id))).returning();
       if (!row) return res.status(404).json({ message: "Task not found" });
@@ -623,6 +729,11 @@ export function registerManagementRoutes(app: Express) {
       if (!statusId) return res.status(400).json({ message: "statusId is required" });
       const index = Number(req.body?.index);
       if (!Number.isInteger(index) || index < 0) return res.status(400).json({ message: "Bad index" });
+
+      const [target] = await db.select({ projectId: planTasks.projectId }).from(planTasks)
+        .where(and(eq(planTasks.id, taskId), eq(planTasks.organizationId, org.id)));
+      if (!target) return res.status(404).json({ message: "Task not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, target.projectId), "editor")) return forbid(res, "editor");
 
       const result = await db.transaction(async (tx) => {
         const [task] = await tx.select().from(planTasks)
@@ -682,6 +793,8 @@ export function registerManagementRoutes(app: Express) {
       const pair = await db.select().from(planTasks)
         .where(and(inArray(planTasks.id, [successorId, predecessorId]), eq(planTasks.organizationId, org.id)));
       if (pair.length !== 2) return res.status(404).json({ message: "Task not found" });
+      const succ = pair.find((t) => t.id === successorId)!;
+      if (!roleAtLeast(await roleFor(req, org.id, succ.projectId), "editor")) return forbid(res, "editor");
 
       // Cycle check over the workspace's whole edge set — refused before
       // insert, because a Gantt with a cycle in it can't be drawn honestly.
@@ -705,6 +818,13 @@ export function registerManagementRoutes(app: Express) {
       const depId = id(req.params.id);
       if (!depId) return res.status(400).json({ message: "Bad id" });
 
+      const [edge] = await db.select().from(planTaskDeps)
+        .where(and(eq(planTaskDeps.id, depId), eq(planTaskDeps.organizationId, org.id)));
+      if (!edge) return res.status(404).json({ message: "Dependency not found" });
+      const [succTask] = await db.select({ projectId: planTasks.projectId }).from(planTasks)
+        .where(eq(planTasks.id, edge.successorId));
+      if (succTask && !roleAtLeast(await roleFor(req, org.id, succTask.projectId), "editor")) return forbid(res, "editor");
+
       const [row] = await db.delete(planTaskDeps)
         .where(and(eq(planTaskDeps.id, depId), eq(planTaskDeps.organizationId, org.id))).returning();
       if (!row) return res.status(404).json({ message: "Dependency not found" });
@@ -721,9 +841,10 @@ export function registerManagementRoutes(app: Express) {
       const title = s(req.body?.title, 300);
       if (!title) return res.status(400).json({ message: "Checklist item text is required" });
 
-      const [task] = await db.select({ id: planTasks.id }).from(planTasks)
+      const [task] = await db.select({ id: planTasks.id, projectId: planTasks.projectId }).from(planTasks)
         .where(and(eq(planTasks.id, taskId), eq(planTasks.organizationId, org.id)));
       if (!task) return res.status(404).json({ message: "Task not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, task.projectId), "editor")) return forbid(res, "editor");
 
       const assigneeId = idOrNull(req.body?.assigneeId);
       if (assigneeId === undefined) return res.status(400).json({ message: "Bad assignee" });
@@ -746,6 +867,13 @@ export function registerManagementRoutes(app: Express) {
       const org = await orgOr400(req, res); if (!org) return;
       const itemId = id(req.params.id);
       if (!itemId) return res.status(400).json({ message: "Bad id" });
+
+      const [item] = await db.select().from(planChecklistItems)
+        .where(and(eq(planChecklistItems.id, itemId), eq(planChecklistItems.organizationId, org.id)));
+      if (!item) return res.status(404).json({ message: "Checklist item not found" });
+      const [itemTask] = await db.select({ projectId: planTasks.projectId }).from(planTasks)
+        .where(eq(planTasks.id, item.taskId));
+      if (itemTask && !roleAtLeast(await roleFor(req, org.id, itemTask.projectId), "editor")) return forbid(res, "editor");
 
       const patch: Record<string, any> = {};
       if (req.body?.title !== undefined) {
@@ -779,6 +907,13 @@ export function registerManagementRoutes(app: Express) {
       const itemId = id(req.params.id);
       if (!itemId) return res.status(400).json({ message: "Bad id" });
 
+      const [item] = await db.select().from(planChecklistItems)
+        .where(and(eq(planChecklistItems.id, itemId), eq(planChecklistItems.organizationId, org.id)));
+      if (!item) return res.status(404).json({ message: "Checklist item not found" });
+      const [itemTask] = await db.select({ projectId: planTasks.projectId }).from(planTasks)
+        .where(eq(planTasks.id, item.taskId));
+      if (itemTask && !roleAtLeast(await roleFor(req, org.id, itemTask.projectId), "editor")) return forbid(res, "editor");
+
       const [row] = await db.delete(planChecklistItems)
         .where(and(eq(planChecklistItems.id, itemId), eq(planChecklistItems.organizationId, org.id))).returning();
       if (!row) return res.status(404).json({ message: "Checklist item not found" });
@@ -793,9 +928,10 @@ export function registerManagementRoutes(app: Express) {
       const taskId = id(req.params.id);
       if (!taskId) return res.status(400).json({ message: "Bad id" });
 
-      const [task] = await db.select({ id: planTasks.id }).from(planTasks)
+      const [task] = await db.select({ id: planTasks.id, projectId: planTasks.projectId }).from(planTasks)
         .where(and(eq(planTasks.id, taskId), eq(planTasks.organizationId, org.id)));
       if (!task) return res.status(404).json({ message: "Task not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, task.projectId), "viewer")) return forbid(res, "viewer");
 
       const rows = await db.select().from(planComments)
         .where(eq(planComments.taskId, taskId))
@@ -812,9 +948,10 @@ export function registerManagementRoutes(app: Express) {
       const body = s(req.body?.body, 8000);
       if (!body) return res.status(400).json({ message: "Comment text is required" });
 
-      const [task] = await db.select({ id: planTasks.id }).from(planTasks)
+      const [task] = await db.select({ id: planTasks.id, projectId: planTasks.projectId }).from(planTasks)
         .where(and(eq(planTasks.id, taskId), eq(planTasks.organizationId, org.id)));
       if (!task) return res.status(404).json({ message: "Task not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, task.projectId), "commenter")) return forbid(res, "commenter");
 
       const user = await sessionUser(req);
       const [row] = await db.insert(planComments).values({
@@ -831,9 +968,86 @@ export function registerManagementRoutes(app: Express) {
       const commentId = id(req.params.id);
       if (!commentId) return res.status(400).json({ message: "Bad id" });
 
+      // Your own comment is yours to delete; anyone else's takes project admin.
+      const [existing] = await db.select().from(planComments)
+        .where(and(eq(planComments.id, commentId), eq(planComments.organizationId, org.id)));
+      if (!existing) return res.status(404).json({ message: "Comment not found" });
+      if (existing.authorId !== req.session.userId) {
+        const [cTask] = await db.select({ projectId: planTasks.projectId }).from(planTasks)
+          .where(eq(planTasks.id, existing.taskId));
+        if (cTask && !roleAtLeast(await roleFor(req, org.id, cTask.projectId), "admin")) return forbid(res, "admin");
+      }
+
       const [row] = await db.delete(planComments)
         .where(and(eq(planComments.id, commentId), eq(planComments.organizationId, org.id))).returning();
       if (!row) return res.status(404).json({ message: "Comment not found" });
+      res.json({ deleted: true });
+    } catch (e) { fail(res, e); }
+  });
+
+  // ── Collaborators (per-project people + roles; admin-gated) ────────────────
+  app.post("/api/admin/management/projects/:id/collaborators", requireAuth, tab, async (req, res) => {
+    try {
+      const org = await orgOr400(req, res); if (!org) return;
+      const projectId = id(req.params.id);
+      if (!projectId) return res.status(400).json({ message: "Bad id" });
+      if (!roleAtLeast(await roleFor(req, org.id, projectId), "admin")) return forbid(res, "admin");
+
+      const userId = id(req.body?.userId);
+      if (!userId) return res.status(400).json({ message: "Pick a person" });
+      const role = s(req.body?.role, 12) || "editor";
+      if (!isCollabRole(role)) return res.status(400).json({ message: "Unknown role" });
+
+      // Only people who are actually members of this workspace can be added —
+      // a collaborator row must never grant someone their first door in.
+      const member = await db.execute(sql`
+        SELECT 1 FROM user_organizations WHERE user_id = ${userId} AND organization_id = ${org.id} LIMIT 1`);
+      if (!member.rows.length) return res.status(400).json({ message: "That person isn't in this workspace — add them in Team first" });
+
+      const { userId: me } = await sessionAccess(req);
+      const [row] = await db.insert(planCollaborators)
+        .values({ organizationId: org.id, projectId, userId, role, addedBy: me })
+        .onConflictDoUpdate({
+          target: [planCollaborators.projectId, planCollaborators.userId],
+          set: { role },
+        })
+        .returning();
+      res.status(201).json(row);
+    } catch (e) { fail(res, e); }
+  });
+
+  app.patch("/api/admin/management/collaborators/:id", requireAuth, tab, async (req, res) => {
+    try {
+      const org = await orgOr400(req, res); if (!org) return;
+      const collabId = id(req.params.id);
+      if (!collabId) return res.status(400).json({ message: "Bad id" });
+
+      const [existing] = await db.select().from(planCollaborators)
+        .where(and(eq(planCollaborators.id, collabId), eq(planCollaborators.organizationId, org.id)));
+      if (!existing) return res.status(404).json({ message: "Collaborator not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, existing.projectId), "admin")) return forbid(res, "admin");
+
+      if (!isCollabRole(req.body?.role)) return res.status(400).json({ message: "Unknown role" });
+      const [row] = await db.update(planCollaborators).set({ role: req.body.role })
+        .where(eq(planCollaborators.id, collabId)).returning();
+      res.json(row);
+    } catch (e) { fail(res, e); }
+  });
+
+  app.delete("/api/admin/management/collaborators/:id", requireAuth, tab, async (req, res) => {
+    try {
+      const org = await orgOr400(req, res); if (!org) return;
+      const collabId = id(req.params.id);
+      if (!collabId) return res.status(400).json({ message: "Bad id" });
+
+      const [existing] = await db.select().from(planCollaborators)
+        .where(and(eq(planCollaborators.id, collabId), eq(planCollaborators.organizationId, org.id)));
+      if (!existing) return res.status(404).json({ message: "Collaborator not found" });
+      if (!roleAtLeast(await roleFor(req, org.id, existing.projectId), "admin")) return forbid(res, "admin");
+
+      // Lockout is impossible by construction (super_admin and the project
+      // creator are always effective admins), so removals are unrestricted.
+      await db.delete(planCollaborators).where(eq(planCollaborators.id, collabId));
       res.json({ deleted: true });
     } catch (e) { fail(res, e); }
   });
