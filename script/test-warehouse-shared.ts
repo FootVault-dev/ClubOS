@@ -20,6 +20,9 @@ import {
   isValidDateOnly,
   computeReceiveDiscrepancy, receiveDiscrepancyNote, derivePoStatusFromLines,
   REQUISITION_STATUSES, isRequisitionStatus, REQUISITION_TERMINAL_STATUSES,
+  REQUISITION_TRANSITIONS, isValidRequisitionTransition,
+  allRequisitionLinesPicked, deriveRequisitionStatusFromLines,
+  isValidMonth,
   LOAN_STATUSES, isLoanStatus,
   CONDITION_GRADES, isConditionGrade,
   isLoanOverdue,
@@ -255,6 +258,107 @@ ok("collected + declined are terminal", () => {
   assert.equal(REQUISITION_TERMINAL_STATUSES.has("declined"), true);
 });
 ok("submitted is not terminal", () => assert.equal(REQUISITION_TERMINAL_STATUSES.has("submitted"), false));
+
+// ── Requisition transition graph (T9) ─────────────────────────────────────
+ok("submitted can go to approved or declined", () => {
+  assert.equal(isValidRequisitionTransition("submitted", "approved"), true);
+  assert.equal(isValidRequisitionTransition("submitted", "declined"), true);
+});
+ok("submitted cannot skip straight to picking/ready/collected", () => {
+  assert.equal(isValidRequisitionTransition("submitted", "picking"), false);
+  assert.equal(isValidRequisitionTransition("submitted", "ready"), false);
+  assert.equal(isValidRequisitionTransition("submitted", "collected"), false);
+});
+ok("approved can go to picking or declined, never straight to ready/collected", () => {
+  assert.equal(isValidRequisitionTransition("approved", "picking"), true);
+  assert.equal(isValidRequisitionTransition("approved", "declined"), true);
+  assert.equal(isValidRequisitionTransition("approved", "ready"), false);
+  assert.equal(isValidRequisitionTransition("approved", "collected"), false);
+});
+ok("picking can go to ready or declined", () => {
+  assert.equal(isValidRequisitionTransition("picking", "ready"), true);
+  assert.equal(isValidRequisitionTransition("picking", "declined"), true);
+});
+ok("ready can ONLY go to collected — declining staged stock is not meaningful", () => {
+  assert.equal(isValidRequisitionTransition("ready", "collected"), true);
+  assert.equal(isValidRequisitionTransition("ready", "declined"), false);
+});
+ok("collected and declined are dead ends — every transition rejected", () => {
+  for (const to of REQUISITION_STATUSES) {
+    assert.equal(isValidRequisitionTransition("collected", to), false, to);
+    assert.equal(isValidRequisitionTransition("declined", to), false, to);
+  }
+});
+ok("every status appears in REQUISITION_TRANSITIONS", () => {
+  for (const s of REQUISITION_STATUSES) assert.ok(s in REQUISITION_TRANSITIONS, s);
+});
+
+ok("allRequisitionLinesPicked: true only when every line meets or beats its request", () => {
+  assert.equal(allRequisitionLinesPicked([{ qtyRequested: 5, qtyPicked: 5 }]), true);
+  assert.equal(allRequisitionLinesPicked([{ qtyRequested: 5, qtyPicked: 6 }]), true, "over-picked still counts as fully picked");
+  assert.equal(
+    allRequisitionLinesPicked([
+      { qtyRequested: 5, qtyPicked: 5 },
+      { qtyRequested: 3, qtyPicked: 2 },
+    ]),
+    false,
+  );
+});
+ok("allRequisitionLinesPicked: an empty line list is vacuously true", () => {
+  assert.equal(allRequisitionLinesPicked([]), true);
+});
+
+ok("deriveRequisitionStatusFromLines: never touches submitted (nothing should be pickable pre-approval)", () => {
+  assert.equal(deriveRequisitionStatusFromLines("submitted", [{ qtyRequested: 5, qtyPicked: 5 }]), "submitted");
+});
+ok("deriveRequisitionStatusFromLines: never re-opens a terminal state", () => {
+  assert.equal(deriveRequisitionStatusFromLines("collected", [{ qtyRequested: 5, qtyPicked: 5 }]), "collected");
+  assert.equal(deriveRequisitionStatusFromLines("declined", [{ qtyRequested: 5, qtyPicked: 0 }]), "declined");
+});
+ok("deriveRequisitionStatusFromLines: no lines at all never advances", () => {
+  assert.equal(deriveRequisitionStatusFromLines("approved", []), "approved");
+});
+ok("deriveRequisitionStatusFromLines: approved with nothing picked yet stays approved", () => {
+  assert.equal(deriveRequisitionStatusFromLines("approved", [{ qtyRequested: 5, qtyPicked: 0 }]), "approved");
+});
+ok("deriveRequisitionStatusFromLines: approved with one of two lines picked becomes picking", () => {
+  assert.equal(
+    deriveRequisitionStatusFromLines("approved", [
+      { qtyRequested: 5, qtyPicked: 5 },
+      { qtyRequested: 3, qtyPicked: 0 },
+    ]),
+    "picking",
+  );
+});
+ok("deriveRequisitionStatusFromLines: picking with every line now fully picked becomes ready", () => {
+  assert.equal(
+    deriveRequisitionStatusFromLines("picking", [
+      { qtyRequested: 5, qtyPicked: 5 },
+      { qtyRequested: 3, qtyPicked: 3 },
+    ]),
+    "ready",
+  );
+});
+ok("deriveRequisitionStatusFromLines: a single-line requisition fully picked in one shot jumps approved straight to ready", () => {
+  assert.equal(deriveRequisitionStatusFromLines("approved", [{ qtyRequested: 5, qtyPicked: 5 }]), "ready");
+});
+ok("deriveRequisitionStatusFromLines: over-picked lines still count as fully picked", () => {
+  assert.equal(deriveRequisitionStatusFromLines("picking", [{ qtyRequested: 5, qtyPicked: 7 }]), "ready");
+});
+
+ok("isValidMonth: accepts YYYY-MM", () => {
+  assert.equal(isValidMonth("2026-07"), true);
+  assert.equal(isValidMonth("2026-01"), true);
+  assert.equal(isValidMonth("2026-12"), true);
+});
+ok("isValidMonth: rejects a full date, an out-of-range month, and junk", () => {
+  assert.equal(isValidMonth("2026-07-13"), false);
+  assert.equal(isValidMonth("2026-00"), false);
+  assert.equal(isValidMonth("2026-13"), false);
+  assert.equal(isValidMonth("26-07"), false);
+  assert.equal(isValidMonth(""), false);
+  assert.equal(isValidMonth(202607), false);
+});
 
 // ── Loan statuses / condition grades ──────────────────────────────────────
 ok("two loan statuses", () => assert.equal(LOAN_STATUSES.length, 2));

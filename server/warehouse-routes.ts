@@ -29,10 +29,12 @@ import type { Express, Request, Response } from "express";
 import { and, asc, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
+import { nzTodayIso } from "@shared/academy";
 import {
   whItems, whLocations, whBarcodeAliases, whReservations, whPurchaseOrders, whPoLines,
-  whRequisitions, whRequisitionLines,
+  whRequisitions, whRequisitionLines, whMovements,
   shopOrders, shopOrderItems,
+  users,
 } from "@shared/schema";
 import {
   ITEM_KINDS, isItemKind,
@@ -53,8 +55,10 @@ import {
   QUARANTINE_ZONE,
   buildLocationMoveLegs,
   DISPATCH_SOURCE_KINDS, isDispatchSourceKind, nextOrderStatusAfterDispatch,
+  REQUISITION_STATUSES, isRequisitionStatus, isValidRequisitionTransition,
+  isValidMonth, deriveRequisitionStatusFromLines,
   type ItemKind, type BrandOwner, type Unit, type LocationKind,
-  type RefKind, type MovementType, type ReasonCode, type PoStatus,
+  type RefKind, type MovementType, type ReasonCode, type PoStatus, type RequisitionStatus,
 } from "@shared/warehouse";
 import {
   runReserveStock,
@@ -1328,6 +1332,298 @@ export function registerWarehouseRoutes(app: Express) {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
+  // Requisitions end-to-end (T9/D13). Submitting is requireAuth ONLY — any
+  // staff member, any workspace, can ask the warehouse for stock (same
+  // universal-access spirit as the Feedback board). Everything past
+  // submission — seeing the FULL queue, approve/decline, and closing the
+  // loop at collection — is an operator decision behind
+  // requireTab("warehouse"). 'picking'/'ready' are never accepted from a
+  // client here — see the dispatch endpoint below, which recomputes them
+  // from real picking activity via deriveRequisitionStatusFromLines
+  // (shared/warehouse.ts). 'approve'/'decline'/'collect' stay explicit,
+  // each validated against REQUISITION_TRANSITIONS.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  async function loadRequisitionLines(requisitionId: number) {
+    const lines = await db
+      .select({
+        id: whRequisitionLines.id,
+        itemId: whRequisitionLines.itemId,
+        qtyRequested: whRequisitionLines.qtyRequested,
+        qtyPicked: whRequisitionLines.qtyPicked,
+        itemSku: whItems.sku,
+        itemName: whItems.name,
+      })
+      .from(whRequisitionLines)
+      .innerJoin(whItems, eq(whRequisitionLines.itemId, whItems.id))
+      .where(eq(whRequisitionLines.requisitionId, requisitionId));
+    return lines.map((l) => ({ ...l, qtyRequested: Number(l.qtyRequested), qtyPicked: Number(l.qtyPicked ?? 0) }));
+  }
+
+  function fullName(first: string | null | undefined, last: string | null | undefined): string {
+    return [first, last].filter(Boolean).join(" ") || "Unknown";
+  }
+
+  // ── Submit (any staff — D13) ─────────────────────────────────────────────
+  app.post("/api/admin/warehouse/requisitions", requireAuth, async (req, res) => {
+    try {
+      const b = req.body || {};
+      const chargeTo = clean(b.chargeTo);
+      if (!chargeTo) throw new WarehouseRouteError("chargeTo is required (which brand/department to bill)");
+
+      let neededBy: string | null = null;
+      if (b.neededBy !== undefined && b.neededBy !== null && b.neededBy !== "") {
+        if (!isValidDateOnly(b.neededBy)) throw new WarehouseRouteError("neededBy must be a YYYY-MM-DD date");
+        neededBy = b.neededBy;
+      }
+
+      const rawLines = Array.isArray(b.lines) ? b.lines : [];
+      if (rawLines.length === 0) throw new WarehouseRouteError("At least one line is required");
+      const parsedLines: { itemId: number; qtyRequested: number }[] = [];
+      for (const raw of rawLines) {
+        const itemId = parseId(raw?.itemId);
+        if (itemId === null) throw new WarehouseRouteError("Every line needs an itemId");
+        const qtyRequested = Number(raw?.qtyRequested);
+        if (!Number.isFinite(qtyRequested) || qtyRequested <= 0) {
+          throw new WarehouseRouteError("Every line's qtyRequested must be a positive number");
+        }
+        parsedLines.push({ itemId, qtyRequested });
+      }
+
+      // Validate every itemId up front, before any insert — so a bad line
+      // never leaves a lineless requisition orphaned behind it.
+      const itemIds = Array.from(new Set(parsedLines.map((l) => l.itemId)));
+      const items = await db
+        .select({ id: whItems.id, sku: whItems.sku, name: whItems.name })
+        .from(whItems)
+        .where(inArray(whItems.id, itemIds));
+      const itemById = new Map(items.map((i) => [i.id, i]));
+      for (const l of parsedLines) {
+        if (!itemById.has(l.itemId)) throw new WarehouseRouteError(`itemId ${l.itemId} does not reference a real item`);
+      }
+
+      const requestedBy = req.session.userId!;
+      const [created] = await db
+        .insert(whRequisitions)
+        .values({ requestedBy, chargeTo, status: "submitted", neededBy, notes: clean(b.notes) ?? null })
+        .returning();
+
+      const insertedLines = await db
+        .insert(whRequisitionLines)
+        .values(parsedLines.map((l) => ({ requisitionId: created.id, itemId: l.itemId, qtyRequested: String(l.qtyRequested) })))
+        .returning();
+
+      res.status(201).json({
+        ...created,
+        lines: insertedLines.map((l) => ({
+          ...l,
+          qtyRequested: Number(l.qtyRequested),
+          qtyPicked: 0,
+          itemSku: itemById.get(l.itemId)!.sku,
+          itemName: itemById.get(l.itemId)!.name,
+        })),
+      });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "requisition submit");
+    }
+  });
+
+  // ── Own requisitions (any staff — D13) ───────────────────────────────────
+  app.get("/api/admin/warehouse/requisitions/mine", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const rows = await db
+        .select()
+        .from(whRequisitions)
+        .where(eq(whRequisitions.requestedBy, userId))
+        .orderBy(desc(whRequisitions.createdAt));
+      const result: any[] = [];
+      for (const r of rows) result.push({ ...r, lines: await loadRequisitionLines(r.id) });
+      res.json(result);
+    } catch (e: any) {
+      handleWarehouseError(res, e, "my requisitions");
+    }
+  });
+
+  // ── Full list + detail (operators) ──────────────────────────────────────
+  app.get("/api/admin/warehouse/requisitions", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const statusRaw = clean(req.query.status as string | undefined);
+      const chargeTo = clean(req.query.chargeTo as string | undefined);
+      const conditions = [];
+      if (statusRaw) {
+        if (!isRequisitionStatus(statusRaw)) throw new WarehouseRouteError(`status must be one of: ${REQUISITION_STATUSES.join(", ")}`);
+        conditions.push(eq(whRequisitions.status, statusRaw));
+      }
+      if (chargeTo) conditions.push(eq(whRequisitions.chargeTo, chargeTo));
+
+      const rows = await db
+        .select({
+          id: whRequisitions.id,
+          requestedBy: whRequisitions.requestedBy,
+          chargeTo: whRequisitions.chargeTo,
+          status: whRequisitions.status,
+          neededBy: whRequisitions.neededBy,
+          approvedBy: whRequisitions.approvedBy,
+          collectedAt: whRequisitions.collectedAt,
+          notes: whRequisitions.notes,
+          createdAt: whRequisitions.createdAt,
+          updatedAt: whRequisitions.updatedAt,
+          requesterFirst: users.firstName,
+          requesterLast: users.lastName,
+        })
+        .from(whRequisitions)
+        .leftJoin(users, eq(whRequisitions.requestedBy, users.id))
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(desc(whRequisitions.createdAt));
+
+      const reqIds = rows.map((r) => r.id);
+      const lineAgg = new Map<number, { lineCount: number; totalQtyRequested: number; totalQtyPicked: number }>();
+      if (reqIds.length > 0) {
+        const agg = await db
+          .select({
+            requisitionId: whRequisitionLines.requisitionId,
+            lineCount: sql<string>`COUNT(*)`,
+            totalQtyRequested: sql<string>`COALESCE(SUM(${whRequisitionLines.qtyRequested}), 0)`,
+            totalQtyPicked: sql<string>`COALESCE(SUM(${whRequisitionLines.qtyPicked}), 0)`,
+          })
+          .from(whRequisitionLines)
+          .where(inArray(whRequisitionLines.requisitionId, reqIds))
+          .groupBy(whRequisitionLines.requisitionId);
+        for (const row of agg) {
+          lineAgg.set(row.requisitionId, {
+            lineCount: Number(row.lineCount),
+            totalQtyRequested: Number(row.totalQtyRequested),
+            totalQtyPicked: Number(row.totalQtyPicked),
+          });
+        }
+      }
+
+      res.json(
+        rows.map(({ requesterFirst, requesterLast, ...r }) => ({
+          ...r,
+          requesterName: fullName(requesterFirst, requesterLast),
+          ...(lineAgg.get(r.id) ?? { lineCount: 0, totalQtyRequested: 0, totalQtyPicked: 0 }),
+        })),
+      );
+    } catch (e: any) {
+      handleWarehouseError(res, e, "requisitions list");
+    }
+  });
+
+  app.get("/api/admin/warehouse/requisitions/:id", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [r] = await db
+        .select({ req: whRequisitions, requesterFirst: users.firstName, requesterLast: users.lastName })
+        .from(whRequisitions)
+        .leftJoin(users, eq(whRequisitions.requestedBy, users.id))
+        .where(eq(whRequisitions.id, id));
+      if (!r) return res.status(404).json({ message: "Requisition not found" });
+      res.json({
+        ...r.req,
+        requesterName: fullName(r.requesterFirst, r.requesterLast),
+        lines: await loadRequisitionLines(id),
+      });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "requisition get");
+    }
+  });
+
+  // ── Explicit human decisions (operators) — approve/decline/collect are
+  // the ONLY requisition status changes a client ever asks for directly,
+  // each validated against REQUISITION_TRANSITIONS (shared/warehouse.ts).
+  // 'picking'/'ready' are never set here — see the dispatch endpoint below.
+  async function transitionRequisition(
+    req: Request,
+    res: Response,
+    to: RequisitionStatus,
+    verb: string,
+    extra: (existing: typeof whRequisitions.$inferSelect) => Record<string, any>,
+  ) {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Bad id" });
+      const [existing] = await db.select().from(whRequisitions).where(eq(whRequisitions.id, id));
+      if (!existing) return res.status(404).json({ message: "Requisition not found" });
+      if (!isValidRequisitionTransition(existing.status as RequisitionStatus, to)) {
+        throw new WarehouseRouteError(`This requisition is ${existing.status} — it can't be ${verb} right now.`, 409);
+      }
+      const [updated] = await db
+        .update(whRequisitions)
+        .set({ status: to, updatedAt: new Date(), ...extra(existing) })
+        .where(eq(whRequisitions.id, id))
+        .returning();
+      res.json({ ...updated, lines: await loadRequisitionLines(id) });
+    } catch (e: any) {
+      handleWarehouseError(res, e, `requisition ${verb}`);
+    }
+  }
+
+  app.post("/api/admin/warehouse/requisitions/:id/approve", requireAuth, requireTab("warehouse"), (req, res) =>
+    transitionRequisition(req, res, "approved", "approved", () => ({ approvedBy: req.session.userId! })),
+  );
+
+  app.post("/api/admin/warehouse/requisitions/:id/decline", requireAuth, requireTab("warehouse"), (req, res) =>
+    transitionRequisition(req, res, "declined", "declined", (existing) => {
+      const reason = clean(req.body?.reason);
+      const notes = reason ? [existing.notes, `Declined: ${reason}`].filter(Boolean).join(" — ") : existing.notes;
+      return { approvedBy: req.session.userId!, notes };
+    }),
+  );
+
+  app.post("/api/admin/warehouse/requisitions/:id/collect", requireAuth, requireTab("warehouse"), (req, res) =>
+    transitionRequisition(req, res, "collected", "collected", () => ({ collectedAt: new Date() })),
+  );
+
+  // ── Monthly chargeback report (D13's second deterrent) ──────────────────
+  // Sums every 'pick' movement posted against a requisition (ref_kind=
+  // 'requisition', ref_id=the requisition itself — see the dispatch
+  // endpoint's requisition branch below) within an NZ calendar month, priced
+  // at each item's own cost_cents (a reference figure Daniel/Dima set on the
+  // item, never invented here), grouped by chargeTo. Defaults to the
+  // current NZ month when none is given.
+  app.get("/api/admin/warehouse/chargeback-report", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const month = clean(req.query.month as string | undefined) ?? nzTodayIso().slice(0, 7);
+      if (!isValidMonth(month)) throw new WarehouseRouteError("month must be YYYY-MM");
+
+      const rows = await db
+        .select({
+          chargeTo: whRequisitions.chargeTo,
+          totalCentsRaw: sql<string>`COALESCE(SUM(ABS(${whMovements.delta}) * COALESCE(${whItems.costCents}, 0)), 0)`,
+          totalQtyRaw: sql<string>`COALESCE(SUM(ABS(${whMovements.delta})), 0)`,
+          movementCountRaw: sql<string>`COUNT(*)`,
+        })
+        .from(whMovements)
+        .innerJoin(whRequisitions, eq(whMovements.refId, whRequisitions.id))
+        .innerJoin(whItems, eq(whMovements.itemId, whItems.id))
+        .where(
+          and(
+            eq(whMovements.refKind, "requisition"),
+            eq(whMovements.movementType, "pick"),
+            sql`to_char(${whMovements.createdAt} AT TIME ZONE 'Pacific/Auckland', 'YYYY-MM') = ${month}`,
+          ),
+        )
+        .groupBy(whRequisitions.chargeTo);
+
+      const lines = rows
+        .map((r) => ({
+          chargeTo: r.chargeTo,
+          totalCents: Math.round(Number(r.totalCentsRaw)),
+          totalQty: Number(r.totalQtyRaw),
+          movementCount: Number(r.movementCountRaw),
+        }))
+        .sort((a, b) => b.totalCents - a.totalCents);
+
+      res.json({ month, lines, grandTotalCents: lines.reduce((sum, l) => sum + l.totalCents, 0) });
+    } catch (e: any) {
+      handleWarehouseError(res, e, "chargeback report");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
   // Pick queue + dispatch (T8) — see shared/warehouse.ts's DISPATCH_SOURCE_
   // KINDS comment for the three-source design (native paid orders, Shopify
   // reservations, approved requisitions).
@@ -1408,8 +1704,18 @@ export function registerWarehouseRoutes(app: Express) {
         items,
       }));
 
-      // ── Approved requisitions ────────────────────────────────────────
-      const approved = await db.select().from(whRequisitions).where(eq(whRequisitions.status, "approved")).orderBy(asc(whRequisitions.neededBy));
+      // ── Approved + in-progress requisitions ─────────────────────────
+      // 'picking' (T9) is included alongside 'approved' — a requisition
+      // auto-advances to 'picking' the moment its FIRST line is picked
+      // (deriveRequisitionStatusFromLines, in the dispatch branch below), and
+      // must keep surfacing here for its remaining lines until it's fully
+      // picked (at which point it's 'ready' and every line's remaining
+      // qty is 0 anyway, so the byReq filter below drops it naturally).
+      const approved = await db
+        .select()
+        .from(whRequisitions)
+        .where(inArray(whRequisitions.status, ["approved", "picking"]))
+        .orderBy(asc(whRequisitions.neededBy));
       let requisitions: any[] = [];
       if (approved.length > 0) {
         const reqIds = approved.map((r) => r.id);
@@ -1487,14 +1793,15 @@ export function registerWarehouseRoutes(app: Express) {
         // leave the building on a requisition nobody signed off on — so
         // this needs its own status gate here, at the point stock actually
         // moves, the same way T6's receive endpoint gates on
-        // RECEIVABLE_PO_STATUSES. This mirrors GET /pick-queue's own
-        // "approved requisitions" filter exactly (T9 owns the actual
-        // approve/decline/picking/ready/collected status transitions —
-        // this only refuses to dispatch against one that isn't currently
-        // approved).
+        // RECEIVABLE_PO_STATUSES. 'picking' is included alongside 'approved'
+        // (T9) — the FIRST pick against an approved requisition auto-advances
+        // it to 'picking' below, and a second/later dispatch call against the
+        // SAME (now 'picking') requisition must still be allowed; only
+        // GET /pick-queue's own query needed the parallel update (T9) since
+        // this is the only place status is actually read for the gate.
         const [requisition] = await db.select({ status: whRequisitions.status }).from(whRequisitions).where(eq(whRequisitions.id, sourceId));
         if (!requisition) throw new WarehouseRouteError("sourceId does not reference a real requisition");
-        if (requisition.status !== "approved") {
+        if (requisition.status !== "approved" && requisition.status !== "picking") {
           throw new WarehouseRouteError(`This requisition is ${requisition.status} — it can't be picked against right now.`);
         }
 
@@ -1518,10 +1825,35 @@ export function registerWarehouseRoutes(app: Express) {
           idempotencyKey,
           note,
         });
+        let updatedRequisitionStatus: RequisitionStatus = requisition.status as RequisitionStatus;
         if (!movement.alreadyProcessed) {
           await db.update(whRequisitionLines).set({ qtyPicked: String(alreadyPicked + qty) }).where(eq(whRequisitionLines.id, line.id));
+
+          // T9: recompute the requisition's own status from EVERY line's
+          // freshly-updated picked total — the ledger's own activity trail
+          // (this movement) is what drives approved→picking→ready, never a
+          // client PATCH (shared/warehouse.ts's deriveRequisitionStatusFromLines).
+          const allLines = await db
+            .select({ qtyRequested: whRequisitionLines.qtyRequested, qtyPicked: whRequisitionLines.qtyPicked })
+            .from(whRequisitionLines)
+            .where(eq(whRequisitionLines.requisitionId, sourceId));
+          const nextStatus = deriveRequisitionStatusFromLines(
+            requisition.status as RequisitionStatus,
+            allLines.map((l) => ({ qtyRequested: Number(l.qtyRequested), qtyPicked: Number(l.qtyPicked ?? 0) })),
+          );
+          if (nextStatus !== requisition.status) {
+            await db.update(whRequisitions).set({ status: nextStatus, updatedAt: new Date() }).where(eq(whRequisitions.id, sourceId));
+          }
+          updatedRequisitionStatus = nextStatus;
         }
-        return res.status(movement.alreadyProcessed ? 200 : 201).json({ movement, sourceKind, sourceId, itemId, qty });
+        return res.status(movement.alreadyProcessed ? 200 : 201).json({
+          movement,
+          sourceKind,
+          sourceId,
+          itemId,
+          qty,
+          requisitionStatus: updatedRequisitionStatus,
+        });
       }
 
       if (sourceKind === "shopify_order") {

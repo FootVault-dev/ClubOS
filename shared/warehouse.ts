@@ -391,6 +391,82 @@ export const REQUISITION_TERMINAL_STATUSES: ReadonlySet<RequisitionStatus> = new
   "declined",
 ]);
 
+/**
+ * The requisition workflow (D13) — unlike a PO's free-form status field
+ * (any value is directly PATCHable, gated only by the receiving-history
+ * delete guard), a requisition's whole point is that stock can't leave the
+ * building without a real approve/decline decision, so every status change
+ * is validated against this graph server-side rather than accepted verbatim
+ * from a client. `declined` is reachable from every non-terminal state (an
+ * operator can abort even mid-pick — e.g. discovering the last unit is
+ * damaged) except `ready`, where the physical stock has already been pulled
+ * and staged — declining is no longer meaningful and the resolution is
+ * `collected` (or an operator manually restocking via an adjustment, outside
+ * this workflow).
+ */
+export const REQUISITION_TRANSITIONS: Record<RequisitionStatus, readonly RequisitionStatus[]> = {
+  submitted: ["approved", "declined"],
+  approved: ["picking", "declined"],
+  picking: ["ready", "declined"],
+  ready: ["collected"],
+  collected: [],
+  declined: [],
+};
+
+export function isValidRequisitionTransition(from: RequisitionStatus, to: RequisitionStatus): boolean {
+  return REQUISITION_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/** A requisition can only move to `ready` (staged for collection) once every
+ *  line has actually been picked in full — otherwise "ready" would lie to
+ *  the requester about what's waiting for them at the collection point. */
+export function allRequisitionLinesPicked(lines: readonly { qtyRequested: number; qtyPicked: number }[]): boolean {
+  return lines.every((l) => l.qtyPicked >= l.qtyRequested);
+}
+
+/**
+ * Recomputes a requisition's status from its lines' picked totals — the D13
+ * sibling of `derivePoStatusFromLines` (T6) one level up: the dispatch route
+ * (server/warehouse-routes.ts) calls this after every pick movement so the
+ * ledger's own activity trail — not a client-supplied status — is what
+ * drives `approved`→`picking`→`ready`. `approve`/`decline`/`collect` stay
+ * explicit human decisions (gated by `isValidRequisitionTransition` at their
+ * own routes); this function only ever reacts to REAL picking evidence.
+ *
+ * Never touches `submitted` (nothing should be pickable before approval —
+ * enforced by the dispatch route's own status gate) or a terminal state.
+ * A requisition that goes from fully unpicked to fully picked in a SINGLE
+ * dispatch call (e.g. a one-line requisition picked in one scan) skips
+ * straight from `approved` to `ready` — there's no meaningful moment it sat
+ * "mid-pick" to persist separately, and `REQUISITION_TRANSITIONS` governs
+ * discrete human-facing actions, not this evidence-derived computation (the
+ * evidence — every line's own `qtyPicked` — is the thing that makes the jump
+ * honest, the same way `allRequisitionLinesPicked` is the thing that makes
+ * an explicit "ready" claim honest).
+ */
+export function deriveRequisitionStatusFromLines(
+  current: RequisitionStatus,
+  lines: readonly { qtyRequested: number; qtyPicked: number }[],
+): RequisitionStatus {
+  if (current !== "approved" && current !== "picking") return current;
+  if (lines.length === 0) return current;
+  if (allRequisitionLinesPicked(lines)) return "ready";
+  const anyPicked = lines.some((l) => l.qtyPicked > 0);
+  return anyPicked ? "picking" : current;
+}
+
+// ── Chargeback report (T9) ───────────────────────────────────────────────────
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** `YYYY-MM` — the chargeback report's period key. Deliberately narrower than
+ *  `isValidDateOnly`'s `YYYY-MM-DD` (a chargeback bills a whole month, never
+ *  a day), so the two are kept as separate validators rather than one sharing
+ *  a truncation trick that would accept `2026-13-01` as `"2026-13"`. */
+export function isValidMonth(v: unknown): v is string {
+  return typeof v === "string" && MONTH_RE.test(v);
+}
+
 // ── Equipment loans ───────────────────────────────────────────────────────────
 
 export const LOAN_STATUSES = ["out", "returned"] as const;
