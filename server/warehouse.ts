@@ -168,18 +168,31 @@ export function warehouseDbFromTx(tx: Pick<typeof realDb, "insert" | "select" | 
       return tx.insert(whMovements).values(rows).returning({ id: whMovements.id });
     },
     async upsertStockLeg(leg) {
-      // Single atomic statement (D2): INSERT ... ON CONFLICT (item,location)
-      // DO UPDATE SET on_hand = on_hand + delta WHERE on_hand + delta >= 0
-      // RETURNING. The WHERE guard applies only on the conflict/UPDATE path —
-      // a genuinely first-ever insert for (item,location) always succeeds,
-      // per SPEC §4.2's literal wording. Guard skipped entirely (unconditional
-      // TRUE) when the item allows negative stock (D16).
-      const result = await tx.execute(sql`
+      // D2/D16 — two-statement atomic guard (AGENTS.md's documented
+      // algorithm), both inside the caller's already-open transaction:
+      //   1. Seed a zero row for this (item,location) if it has never been
+      //      touched before — a harmless no-op via ON CONFLICT DO NOTHING
+      //      when the row already exists.
+      //   2. Run a guarded UPDATE — WHERE on_hand + delta >= 0 — and take
+      //      whatever it returns.
+      // A single INSERT ... ON CONFLICT ... DO UPDATE ... WHERE statement is
+      // NOT sufficient on its own: Postgres only evaluates that WHERE clause
+      // on the conflict/UPDATE path, so a genuinely first-ever leg for
+      // (item,location) would insert unconditionally and could go negative
+      // on its very first movement. Seeding the zero row first forces every
+      // leg — first-ever or not — through the same guarded UPDATE. Guard
+      // skipped entirely (unconditional TRUE) when the item allows negative
+      // stock (D16).
+      await tx.execute(sql`
         INSERT INTO wh_stock (item_id, location_id, on_hand, updated_at)
-        VALUES (${leg.itemId}, ${leg.locationId}, ${leg.delta}, now())
-        ON CONFLICT (item_id, location_id) DO UPDATE
-          SET on_hand = wh_stock.on_hand + EXCLUDED.on_hand, updated_at = now()
-          WHERE ${leg.allowNegative ? sql`true` : sql`wh_stock.on_hand + EXCLUDED.on_hand >= 0`}
+        VALUES (${leg.itemId}, ${leg.locationId}, 0, now())
+        ON CONFLICT (item_id, location_id) DO NOTHING
+      `);
+      const result = await tx.execute(sql`
+        UPDATE wh_stock
+          SET on_hand = on_hand + ${leg.delta}, updated_at = now()
+          WHERE item_id = ${leg.itemId} AND location_id = ${leg.locationId}
+            AND ${leg.allowNegative ? sql`true` : sql`on_hand + ${leg.delta} >= 0`}
         RETURNING on_hand
       `);
       const rows = result.rows as Array<{ on_hand: string }>;

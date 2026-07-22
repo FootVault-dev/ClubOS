@@ -228,9 +228,8 @@ function makeFakeWarehouseDb(initialStock: Record<string, number> = {}) {
     },
     async upsertStockLeg(leg) {
       const key = `${leg.itemId}:${leg.locationId}`;
-      const existed = stock.has(key);
       const next = (stock.get(key) ?? 0) + leg.delta;
-      if (existed && next < 0 && !leg.allowNegative) return null;
+      if (next < 0 && !leg.allowNegative) return null; // first-ever leg included, D16
       stock.set(key, next);
       return { onHand: next };
     },

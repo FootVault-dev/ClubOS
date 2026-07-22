@@ -41,7 +41,7 @@ import {
   type ShopKitCustomisation, type ShopSponsorSlot, type ShopUnitPersonalisation,
 } from "@shared/schema";
 // T13 — WMS reservation on payment-confirm (dark-launched, see finalizeShopOrderPaid).
-import { runReserveStock } from "./warehouse";
+import { runReserveStock, runReleaseReservationsForRef } from "./warehouse";
 
 // ─── Brand registry — add a row per brand to open a new store ──────────────
 
@@ -1993,6 +1993,19 @@ export function registerShopRoutes(app: Express) {
         .where(eq(shopOrders.id, parseInt(String(req.params.id))))
         .returning();
       if (!updated) return res.status(404).json({ message: "Order not found" });
+      // WMS reservation release (dark-launched behind WMS_NATIVE_SYNC, mirrors
+      // the reserve call in finalizeShopOrderPaid) — a cancelled/refunded
+      // order must release its active shop_order reservation, or `available`
+      // stays permanently reduced by a promise that will never be dispatched.
+      // Best-effort + idempotent (releaseReservationsForRef only touches
+      // still-active reservations): never fails the status update itself.
+      if (process.env.WMS_NATIVE_SYNC === "1" && (status === "cancelled" || status === "refunded")) {
+        try {
+          await runReleaseReservationsForRef({ kind: "shop_order", id: updated.id });
+        } catch (e) {
+          console.error(`[Shop] WMS reservation release failed for order ${updated.id}:`, e);
+        }
+      }
       res.json(updated);
     } catch (e: any) {
       handleShopError(res, e, "admin order status");

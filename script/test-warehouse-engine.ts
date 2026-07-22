@@ -40,13 +40,13 @@ async function ok(name: string, fn: () => Promise<void> | void) {
 }
 
 // ── Fake WarehouseDb ─────────────────────────────────────────────────────────
-// Mirrors the real atomic-upsert semantics that matter to callers: a
-// PRE-EXISTING (item,location) row is guarded (delta would take on_hand
-// negative -> reject, unless allowNegative); a genuinely first-ever row for
-// that (item,location) always succeeds (mirrors real Postgres
-// INSERT...ON CONFLICT...DO UPDATE...WHERE — the guard only fires on the
-// conflict/UPDATE path, never the plain INSERT path — SPEC §4.2's literal
-// wording, restated in server/warehouse.ts).
+// Mirrors the real atomic-upsert semantics that matter to callers: EVERY
+// (item,location) leg is guarded — delta would take on_hand negative ->
+// reject, unless allowNegative — including a genuinely first-ever row for
+// that (item,location) (real Postgres seeds a zero row first via
+// INSERT...ON CONFLICT DO NOTHING, then runs a guarded UPDATE, so the guard
+// applies uniformly regardless of whether a row pre-existed — see
+// server/warehouse.ts).
 function makeFakeDb(initialStock: Record<string, number> = {}) {
   const stock = new Map<string, number>(Object.entries(initialStock));
   const idempotency = new Map<string, string>();
@@ -74,10 +74,9 @@ function makeFakeDb(initialStock: Record<string, number> = {}) {
     async upsertStockLeg(leg) {
       calls.upsertStockLeg++;
       const key = `${leg.itemId}:${leg.locationId}`;
-      const hadExisting = stock.has(key);
-      const newOnHand = (hadExisting ? stock.get(key)! : 0) + leg.delta;
-      if (hadExisting && !leg.allowNegative && newOnHand < 0) {
-        return null; // guard failed — 0 rows updated
+      const newOnHand = (stock.get(key) ?? 0) + leg.delta;
+      if (!leg.allowNegative && newOnHand < 0) {
+        return null; // guard failed — 0 rows updated (first-ever leg included, D16)
       }
       stock.set(key, newOnHand);
       return { onHand: newOnHand };
@@ -255,9 +254,25 @@ await ok("allow_negative bypasses the guard", async () => {
   assert.equal(stock.get("1:10"), -8);
 });
 
-await ok("a genuinely first-ever row always succeeds regardless of sign (no prior row to guard)", async () => {
+await ok("a genuinely first-ever (item,location) leg is guarded exactly like an existing row (D2/D16)", async () => {
   const { db, stock } = makeFakeDb(); // no seed at all
-  await postMovementGroup(db, input({ legs: [{ itemId: 9, locationId: 90, locationCode: "NEW-BIN", delta: -1 }] }));
+  await assert.rejects(
+    () => postMovementGroup(db, input({ legs: [{ itemId: 9, locationId: 90, locationCode: "NEW-BIN", delta: -1 }] })),
+    (err: unknown) => {
+      assert.ok(err instanceof InsufficientStockError);
+      assert.equal((err as InsufficientStockError).locationCode, "NEW-BIN");
+      return true;
+    },
+  );
+  assert.equal(stock.has("9:90"), false, "no negative row was left behind");
+});
+
+await ok("a genuinely first-ever (item,location) leg with allow_negative still succeeds (D16)", async () => {
+  const { db, stock } = makeFakeDb(); // no seed at all
+  await postMovementGroup(
+    db,
+    input({ legs: [{ itemId: 9, locationId: 90, locationCode: "NEW-BIN", delta: -1, allowNegative: true }] }),
+  );
   assert.equal(stock.get("9:90"), -1);
 });
 
@@ -413,9 +428,8 @@ function makeFakeCombinedDb(
     async upsertStockLeg(leg) {
       calls.upsertStockLeg++;
       const key = `${leg.itemId}:${leg.locationId}`;
-      const hadExisting = stock.has(key);
-      const newOnHand = (hadExisting ? stock.get(key)! : 0) + leg.delta;
-      if (hadExisting && !leg.allowNegative && newOnHand < 0) return null;
+      const newOnHand = (stock.get(key) ?? 0) + leg.delta;
+      if (!leg.allowNegative && newOnHand < 0) return null; // first-ever leg included, D16
       stock.set(key, newOnHand);
       return { onHand: newOnHand };
     },

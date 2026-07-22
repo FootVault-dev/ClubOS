@@ -65,7 +65,7 @@ All in `apps/clubos/shared/schema.ts`, org-scoped where meaningful (warehouse li
 One function every flow goes through — `postMovementGroup(tx, {legs, type, reason, ref, operator, idempotencyKey})`:
 1. Validate types/reasons in `shared/warehouse.ts` (no DB CHECKs).
 2. Insert ledger rows (idempotency key: unique-violation = already processed, return prior result).
-3. For each leg: atomic `INSERT … ON CONFLICT (item,location) DO UPDATE SET on_hand = wh_stock.on_hand + $delta WHERE wh_stock.on_hand + $delta >= 0 RETURNING` (guard skipped for allow_negative items). Zero rows → whole transaction rejects with a clean "insufficient stock at LOCATION" error.
+3. For each leg: seed a zero `wh_stock` row for (item,location) if absent (`INSERT … ON CONFLICT DO NOTHING`), then a guarded `UPDATE … SET on_hand = on_hand + $delta WHERE on_hand + $delta >= 0 RETURNING` (guard skipped for allow_negative items). The seed step is required — an `INSERT … ON CONFLICT DO UPDATE … WHERE` guard alone only fires on the conflict/UPDATE path, so a genuinely first-ever leg for (item,location) would insert unconditionally and could go negative. Zero rows from the guarded UPDATE → whole transaction rejects with a clean "insufficient stock at LOCATION" error.
 4. Enqueue channel push for mapped items (after commit).
 Nightly reconcile job: assert cache == Σledger per (item, location); auto-repair cache from ledger + alert on any repair (a repair means a code path bypassed the engine).
 

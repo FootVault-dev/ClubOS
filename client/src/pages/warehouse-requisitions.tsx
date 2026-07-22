@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { REQUISITION_STATUSES, REQUISITION_STATUS_LABELS, type RequisitionStatus } from "@shared/warehouse";
 import type { WhRequisition, WhItem, WhLocation } from "@shared/schema";
+import { nzTodayIso } from "@shared/academy";
 
 const ALL = "__all__";
 const CHARGE_TO_SUGGESTIONS = ["CUFC", "SIU", "MFL", "CIC", "USC", "Academy", "Office"];
@@ -73,7 +74,11 @@ function fmtDate(d: string | null): string {
   return new Date(`${d}T00:00:00`).toLocaleDateString("en-NZ", { day: "numeric", month: "short" });
 }
 function currentMonth(): string {
-  return new Date().toISOString().slice(0, 7);
+  // NZ calendar month, never a UTC one (AGENTS.md house rule) — the server's
+  // own chargeback aggregate derives `month` the same way (nzTodayIso().slice
+  // (0, 7), warehouse-routes.ts), so the client's default must match it or
+  // the two disagree for several hours around every month boundary.
+  return nzTodayIso().slice(0, 7);
 }
 
 function ItemPicker({

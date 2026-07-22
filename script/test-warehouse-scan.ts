@@ -248,8 +248,7 @@ await ok("all four lookup paths miss in sequence before landing on unknown", asy
 // engine.ts covers postMovementGroup exhaustively — this is a thin
 // end-to-end sanity check that T7's route handlers wire the two together
 // correctly, using the same fake-WarehouseDb shape/semantics established
-// there: a pre-existing (item,location) row is guarded, a first-ever row for
-// that pair always succeeds).
+// there: every (item,location) leg is guarded, including a first-ever one).
 
 function makeFakeWarehouseDb(initialStock: Record<string, number> = {}) {
   const stock = new Map<string, number>(Object.entries(initialStock));
@@ -273,9 +272,8 @@ function makeFakeWarehouseDb(initialStock: Record<string, number> = {}) {
     },
     async upsertStockLeg(leg) {
       const key = `${leg.itemId}:${leg.locationId}`;
-      const existed = stock.has(key);
       const next = (stock.get(key) ?? 0) + leg.delta;
-      if (existed && next < 0 && !leg.allowNegative) return null;
+      if (next < 0 && !leg.allowNegative) return null; // first-ever leg included, D16
       stock.set(key, next);
       return { onHand: next };
     },

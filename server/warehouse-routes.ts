@@ -338,21 +338,26 @@ export function registerWarehouseRoutes(app: Express) {
     try {
       const today = nzTodayIso();
 
-      // Low stock — Σ on_hand across REAL (non-virtual) locations vs the
-      // item's own min_qty reorder threshold. An item with no min_qty set
+      // Low stock — Σ on_hand across SELLABLE locations (excludes both
+      // virtual locations AND QUARANTINE — mirrors isSellableLocation /
+      // getAvailableForItem's own predicate, server/warehouse.ts) vs the
+      // item's own min_qty reorder threshold. Quarantined stock is damaged/
+      // unavailable (D15) — an item whose only stock is sitting in QUARANTINE
+      // must still raise a reorder alert, not read as "in stock" because the
+      // FILTER only excluded virtual locations. An item with no min_qty set
       // has opted out of this alert (not everything needs reordering); a
       // computed multi-row aggregate joined across 3 tables isn't something
       // the query builder expresses cleanly (same reasoning as T6's
       // getPoLineReceiptTotals), so this is one raw SQL statement.
       const lowStockResult = await db.execute(sql`
         SELECT i.id, i.sku, i.name, i.brand_owner, i.min_qty,
-          COALESCE(SUM(s.on_hand) FILTER (WHERE l.kind <> 'virtual'), 0) AS on_hand
+          COALESCE(SUM(s.on_hand) FILTER (WHERE l.kind <> 'virtual' AND UPPER(l.code) <> ${QUARANTINE_ZONE}), 0) AS on_hand
         FROM wh_items i
         LEFT JOIN wh_stock s ON s.item_id = i.id
         LEFT JOIN wh_locations l ON l.id = s.location_id
         WHERE i.active = true AND i.min_qty IS NOT NULL
         GROUP BY i.id
-        HAVING COALESCE(SUM(s.on_hand) FILTER (WHERE l.kind <> 'virtual'), 0) < i.min_qty
+        HAVING COALESCE(SUM(s.on_hand) FILTER (WHERE l.kind <> 'virtual' AND UPPER(l.code) <> ${QUARANTINE_ZONE}), 0) < i.min_qty
         ORDER BY i.sku
       `);
       const lowStockItems = (
@@ -502,7 +507,8 @@ export function registerWarehouseRoutes(app: Express) {
         .select()
         .from(whLocations)
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(asc(whLocations.code));
+        .orderBy(asc(whLocations.code))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
       res.json(rows);
     } catch (e: any) {
       handleWarehouseError(res, e, "locations list");
@@ -640,7 +646,8 @@ export function registerWarehouseRoutes(app: Express) {
         .from(whItems)
         .leftJoin(whLocations, eq(whItems.defaultLocationId, whLocations.id))
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(asc(whItems.sku));
+        .orderBy(asc(whItems.sku))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
       res.json(rows.map((r) => ({ ...r.item, defaultLocationCode: r.defaultLocationCode ?? null })));
     } catch (e: any) {
@@ -845,7 +852,8 @@ export function registerWarehouseRoutes(app: Express) {
         .from(whBarcodeAliases)
         .innerJoin(whItems, eq(whBarcodeAliases.itemId, whItems.id))
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(asc(whBarcodeAliases.code));
+        .orderBy(asc(whBarcodeAliases.code))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
       res.json(rows.map((r) => ({ ...r.alias, itemSku: r.itemSku, itemName: r.itemName })));
     } catch (e: any) {
@@ -1059,7 +1067,8 @@ export function registerWarehouseRoutes(app: Express) {
         .from(whReservations)
         .innerJoin(whItems, eq(whReservations.itemId, whItems.id))
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(desc(whReservations.createdAt));
+        .orderBy(desc(whReservations.createdAt))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
       res.json(rows.map((r) => ({ ...r.reservation, itemSku: r.itemSku, itemName: r.itemName })));
     } catch (e: any) {
@@ -1170,7 +1179,8 @@ export function registerWarehouseRoutes(app: Express) {
         .select()
         .from(whPurchaseOrders)
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(desc(whPurchaseOrders.createdAt));
+        .orderBy(desc(whPurchaseOrders.createdAt))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
       // Per-PO line count + total ordered qty — a second, small aggregate
       // query rather than a GROUP BY on the main select (keeps the primary
@@ -1803,7 +1813,8 @@ export function registerWarehouseRoutes(app: Express) {
         .from(whRequisitions)
         .leftJoin(users, eq(whRequisitions.requestedBy, users.id))
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(desc(whRequisitions.createdAt));
+        .orderBy(desc(whRequisitions.createdAt))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
       const reqIds = rows.map((r) => r.id);
       const lineAgg = new Map<number, { lineCount: number; totalQtyRequested: number; totalQtyPicked: number }>();
@@ -2333,7 +2344,8 @@ export function registerWarehouseRoutes(app: Express) {
         .select()
         .from(whLoans)
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(asc(whLoans.dueOn));
+        .orderBy(asc(whLoans.dueOn))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
       let result = rows.map(withOverdue);
       if (overdueOnly) result = result.filter((r) => r.overdue);
@@ -2710,14 +2722,15 @@ export function registerWarehouseRoutes(app: Express) {
       const scopeClass = clean(b.scopeClass) ?? null;
       const blindFlag = toBool(b.blind, true);
 
-      let countedBy: number | null = req.session.userId!;
-      if (b.countedBy !== undefined && b.countedBy !== null && b.countedBy !== "") {
-        const cid = parseId(b.countedBy);
-        if (cid === null) throw new WarehouseRouteError("countedBy must be a number");
-        const [user] = await db.select({ id: users.id }).from(users).where(eq(users.id, cid));
-        if (!user) throw new WarehouseRouteError("countedBy does not reference a real user");
-        countedBy = cid;
-      }
+      // countedBy is ALWAYS the session's own operator, never client-supplied
+      // (D12/segregation-of-duties) — a client-chosen countedBy would let
+      // whoever creates the session attribute it to a different user, enter
+      // every count themselves, then approve it under their own id (which
+      // never equals the attributed countedBy), defeating canApproveCount's
+      // "counter ≠ approver" guard entirely. Same "operator comes from the
+      // session, never the request body" rule as every movement's
+      // operatorUserId (D17) elsewhere in this file.
+      const countedBy: number = req.session.userId!;
 
       const scopeConditions = [ne(whLocations.kind, "virtual")];
       if (scopeZone) scopeConditions.push(eq(whLocations.zone, scopeZone));
@@ -2776,7 +2789,8 @@ export function registerWarehouseRoutes(app: Express) {
         .select()
         .from(whCounts)
         .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(desc(whCounts.createdAt));
+        .orderBy(desc(whCounts.createdAt))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
       const countIds = rows.map((r) => r.id);
       const agg = new Map<number, { lineCount: number; countedLineCount: number; recountLineCount: number }>();
@@ -2832,6 +2846,19 @@ export function registerWarehouseRoutes(app: Express) {
       if (id === null) return res.status(400).json({ message: "Bad id" });
       const [count] = await db.select().from(whCounts).where(eq(whCounts.id, id));
       if (!count) return res.status(404).json({ message: "Count not found" });
+      // D12 — this endpoint is deliberately ALWAYS-full (no blind stripping),
+      // so on a BLIND session it must enforce the one thing it can't rely on
+      // shouldHideExpectedQty for: the session's own recorded counter can't
+      // read it before approval — otherwise they'd see (or reverse-engineer)
+      // every expected number the blind-count guarantee exists to hide from
+      // them. Gated on `count.blind` too — a non-blind session's counter
+      // could already see expectedQty via GET /counts/:id from the start, so
+      // blocking them here would protect nothing and just be inconsistent. A
+      // different staff member (the intended approver) is unaffected; once
+      // approved there's nothing left to protect either way.
+      if (count.blind && count.status !== "approved" && count.countedBy === req.session.userId) {
+        throw new WarehouseRouteError("The counter on a blind session can't view the variance list before it's approved", 403);
+      }
       const lines = await loadCountLines(id);
       const varianceLines = lines.filter((l) => l.varianceQty !== null && l.varianceQty !== 0);
       res.json({
@@ -3109,9 +3136,10 @@ export function registerWarehouseRoutes(app: Express) {
             and(isNotNull(whItems.shopifyStore), isNotNull(whItems.shopifyVariantId)),
           ),
         )
-        .orderBy(asc(whItems.sku));
+        .orderBy(asc(whItems.sku))
+        .limit(500); // bounded — see the ledger/movements endpoints' own cap
 
-      const stateRows = await db.select().from(whSyncState);
+      const stateRows = await db.select().from(whSyncState).limit(500); // bounded, same reason
       const stateByKey = new Map(stateRows.map((s) => [`${s.itemId}-${s.store}`, s]));
       const pendingItemIds = new Set(getPendingPushItemIds());
 
