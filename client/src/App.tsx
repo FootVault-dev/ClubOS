@@ -57,6 +57,7 @@ import GroupSponsorship from "@/pages/group-sponsorship";
 import GroupProposals from "@/pages/group-proposals";
 import GroupGrants from "@/pages/group-grants";
 import GroupInvoices from "@/pages/invoices";
+import GroupPayouts from "@/pages/payouts";
 import AdminLicensing from "@/pages/admin-licensing";
 import AdminEvents from "@/pages/admin-events";
 import AdminMembership from "@/pages/admin-membership";
@@ -313,6 +314,7 @@ function AdminRouter() {
         <Route path="/admin/proposals" component={GroupProposals} />
         <Route path="/admin/grants" component={GroupGrants} />
         <Route path="/admin/invoices" component={GroupInvoices} />
+        <Route path="/admin/payouts" component={GroupPayouts} />
         <Route path="/admin/budget/cost-centres/:slug" component={GroupBudgetCostCentre} />
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />

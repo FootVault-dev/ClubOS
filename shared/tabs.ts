@@ -205,6 +205,9 @@ const groupTabs: TabDef[] = [
   { slug: "proposals", title: "Proposals", url: "/admin/proposals" },
   { slug: "grants", title: "Grants", url: "/admin/grants" },
   { slug: "invoices", title: "Invoices", url: "/admin/invoices" },
+  // Stripe bulk payouts decoded — which programmes, players and parents are
+  // inside each bank deposit. Read-only over the Stripe API + existing rows.
+  { slug: "payouts", title: "Payouts", url: "/admin/payouts" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
   { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
   { slug: "vehicles", title: "Vehicles", url: "/admin/vehicles" },
@@ -314,6 +317,10 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "media", // CIC Media Library — dark launch while Daniel shapes it with Max. Remove to open to Max (admin/manager).
   "warehouse", // WMS v1 — dark launch while Daniel shapes it with Dima. Remove to open to Print managers.
   "invoices", // Tracked invoices — carries bank details. Daniel only while it's shaped.
+  // Stripe payouts: every line pairs a family's name with a dollar amount
+  // across all brands. Same class of data as invoices/housing. Daniel only
+  // while it's shaped — remove this line to open it to Group admins/managers.
+  "payouts",
   "vehicles", // Fleet — names a staff member against an insurance policy and an FBT private-use position. Daniel only. Remove to open to admins/managers.
   // The United Print prospect database + sales pipeline: 400+ researched
   // companies with contact details, call notes and deal values. Daniel's

@@ -40,6 +40,7 @@ import {
   Handshake,
   HeartHandshake,
   Landmark,
+  Banknote,
   GraduationCap,
   Printer,
   ShoppingCart,
@@ -285,6 +286,7 @@ const groupNav = [
   { tab: "proposals", title: "Proposals", url: "/admin/proposals", icon: Send },
   { tab: "grants", title: "Grants", url: "/admin/grants", icon: Landmark },
   { tab: "invoices", title: "Invoices", url: "/admin/invoices", icon: Receipt },
+  { tab: "payouts", title: "Payouts", url: "/admin/payouts", icon: Banknote },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
   // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
