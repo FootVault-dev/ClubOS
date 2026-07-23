@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link, useLocation } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { programBasePath, useProgramRoute } from "@/lib/program-path";
+import { tabsForOrgSlug } from "@shared/tabs";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/format";
 import { ArrowLeft, Calendar, DollarSign, Settings, Percent, Tent, Trash2, Plus, X, Save, FileText, BarChart3, Users, TrendingUp, ChevronRight, UserCheck, UserX, AlertTriangle, Phone, Mail, Clock, User, FlaskConical, Trophy, Eye, Ban, Pencil } from "lucide-react";
@@ -1871,7 +1872,10 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
 
       <div className="rounded-xl border border-blue-500/[0.08] overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px]" data-testid="table-players">
+          {/* Parent/Contact/Sessions/Paid all drop out below their breakpoints,
+              so on a phone this is just name + age + status — no need to force
+              a width that makes it scroll sideways. */}
+          <table className="w-full min-w-[340px]" data-testid="table-players">
             <thead>
               <tr className="border-b border-blue-500/[0.06] bg-blue-500/[0.03]">
                 <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold">Player</th>
@@ -1893,7 +1897,9 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
                     className="border-b border-blue-500/[0.03] hover:bg-blue-500/[0.04] transition-colors cursor-pointer"
                     data-testid={`row-player-${p.key}`}
                   >
-                    <td className="px-4 py-2.5">
+                    {/* Capped on phones so a long name + allergy badge can't
+                        squeeze Age and Status off the row. */}
+                    <td className="px-4 py-2.5 max-w-[170px] sm:max-w-none">
                       <div className="flex items-center gap-2 min-w-0">
                         <ChevronRight className="w-3.5 h-3.5 text-white/20 flex-shrink-0" />
                         <span className="text-[13px] text-white/75 font-medium truncate">{p.firstName} {p.lastName}</span>
@@ -1905,7 +1911,7 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-2.5 whitespace-nowrap">
                       {age !== null ? (
                         <span className="text-[12px] text-white/55">{age} yrs</span>
                       ) : (
@@ -1936,12 +1942,12 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
                         </span>
                       </td>
                     )}
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-2.5 whitespace-nowrap">
                       <Badge
                         variant="outline"
                         className={`text-[9px] uppercase tracking-wider no-default-hover-elevate no-default-active-elevate ${PLAYER_STATUS_STYLES[p.status] ?? "text-white/40 border-white/10 bg-white/[0.03]"}`}
                       >
-                        {p.status}
+                        {p.status.replace("_", " ")}
                       </Badge>
                     </td>
                   </tr>
@@ -2231,6 +2237,22 @@ export default function AdminCampDetail() {
   // Sub-pages (landing-page editor, session roll) live under the same section
   // as the page you opened them from — never hard-coded to /admin/camps.
   const detailPath = `${listPath}/${campId}`;
+
+  // Heal a stale URL. Old bookmarks and any link we haven't caught still point
+  // at /admin/camps/:id for an academy programme, which lights up the wrong
+  // sidebar item. Once the record loads we know its real section, so rewrite
+  // the address bar to it — replace, not push, so Back still leaves the page.
+  // Guarded by the workspace's own tab list: never redirect to a section this
+  // workspace doesn't have (that would be a 404).
+  useEffect(() => {
+    if (!camp || !route) return;
+    if (route.base === listPath) return;
+    const sectionExists = currentOrg?.slug
+      ? tabsForOrgSlug(currentOrg.slug).some(t => t.url === listPath)
+      : false;
+    if (!sectionExists) return;
+    navigate(detailPath, { replace: true });
+  }, [camp, route?.base, listPath, detailPath, currentOrg?.slug, navigate]);
 
   const updateMutation = useMutation({
     mutationFn: async (data: any) => {
