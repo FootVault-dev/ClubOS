@@ -1811,57 +1811,61 @@ export class DatabaseStorage implements IStorage {
     totalRevenueCents: number;
     registeredPlayers: number;
   }> {
-    // With an orgId the stats are workspace-scoped (SIU vs CUFC); without it
-    // the legacy all-orgs behaviour is preserved.
+    // "Active Camps" stays a literal holiday-camp count — it feeds the SIU
+    // dashboard's Active Camps tile and the CUFC "X active camps" footer, both
+    // of which mean camps, not the whole programme list.
     const campWhere = orgId
       ? and(eq(programs.type, "holiday_camp"), eq(programs.organizationId, orgId))
       : eq(programs.type, "holiday_camp");
     const [ac] = await db.select({ count: sql<number>`count(*)` }).from(programs)
       .where(and(eq(programs.isActive, true), campWhere));
-    const campIds = await db.select({ id: programs.id }).from(programs).where(campWhere);
-    const ids = campIds.map(c => c.id);
+
+    // Registrations, paid count and revenue cover the WHOLE workspace — every
+    // programme type, not just camps — so the dashboard reflects academy (and
+    // any future) revenue alongside camps, matching the registered-players
+    // tile. This was the bug: these three were scoped to holiday_camp only, so
+    // the CUFC dashboard sat on the camps numbers and hid ~$23k of academy
+    // income. Without an orgId, keep the legacy holiday-camp-only behaviour so
+    // the unscoped all-orgs call is unchanged.
+    let statIds: number[];
+    if (orgId) {
+      const orgPrograms = await db.select({ id: programs.id }).from(programs).where(eq(programs.organizationId, orgId));
+      statIds = orgPrograms.map(p => p.id);
+    } else {
+      const campPrograms = await db.select({ id: programs.id }).from(programs).where(eq(programs.type, "holiday_camp"));
+      statIds = campPrograms.map(c => c.id);
+    }
+
     let totalRegs = 0, paidRegs = 0, totalRev = 0;
-    if (ids.length > 0) {
-      const [tr] = await db.select({ count: sql<number>`count(*)` }).from(registrations).where(inArray(registrations.programId, ids));
+    if (statIds.length > 0) {
+      const [tr] = await db.select({ count: sql<number>`count(*)` }).from(registrations).where(inArray(registrations.programId, statIds));
       const [pr] = await db.select({ count: sql<number>`count(*)` }).from(registrations)
-        .where(and(inArray(registrations.programId, ids), eq(registrations.status, "confirmed")));
+        .where(and(inArray(registrations.programId, statIds), eq(registrations.status, "confirmed")));
       const [rev] = await db.select({ total: sql<number>`COALESCE(SUM(total_cents), 0)` }).from(registrations)
-        .where(and(inArray(registrations.programId, ids), eq(registrations.status, "confirmed")));
+        .where(and(inArray(registrations.programId, statIds), eq(registrations.status, "confirmed")));
       totalRegs = Number(tr.count);
       paidRegs = Number(pr.count);
       totalRev = Number(rev.total);
     }
-    // Contacts aren't org-scoped, so per-workspace we count guardians who
-    // actually registered for this club's camps.
+
+    // Distinct registrant contacts across the workspace's programmes — reused
+    // for both totalParents (SIU tile) and registeredPlayers (CUFC tile).
+    // Without an orgId, totalParents keeps the legacy global guardian count.
+    let distinctRegistrants = 0;
+    if (orgId && statIds.length > 0) {
+      const [dr] = await db.select({ count: sql<number>`count(distinct ${registrations.contactId})` })
+        .from(registrations).where(inArray(registrations.programId, statIds));
+      distinctRegistrants = Number(dr.count);
+    }
+
     let totalParents: number;
     if (orgId) {
-      if (ids.length > 0) {
-        const [tp] = await db.select({ count: sql<number>`count(distinct ${registrations.contactId})` })
-          .from(registrations).where(inArray(registrations.programId, ids));
-        totalParents = Number(tp.count);
-      } else {
-        totalParents = 0;
-      }
+      totalParents = distinctRegistrants;
     } else {
       const [tp] = await db.select({ count: sql<number>`count(*)` }).from(contacts).where(eq(contacts.type, "guardian"));
       totalParents = Number(tp.count);
     }
-    // Club-wide "registered players" — distinct contacts who registered for
-    // ANY program in this workspace (camps AND academy), not just camps.
-    // Only meaningful per-workspace; without an orgId fall back to the
-    // legacy totalParents figure so the all-orgs call keeps its old shape.
-    let registeredPlayers = totalParents;
-    if (orgId) {
-      const orgPrograms = await db.select({ id: programs.id }).from(programs).where(eq(programs.organizationId, orgId));
-      const orgProgramIds = orgPrograms.map(p => p.id);
-      if (orgProgramIds.length > 0) {
-        const [rp] = await db.select({ count: sql<number>`count(distinct ${registrations.contactId})` })
-          .from(registrations).where(inArray(registrations.programId, orgProgramIds));
-        registeredPlayers = Number(rp.count);
-      } else {
-        registeredPlayers = 0;
-      }
-    }
+    const registeredPlayers = orgId ? distinctRegistrants : totalParents;
 
     return {
       totalParents,
