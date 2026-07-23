@@ -38,6 +38,21 @@ export type MissedPaymentResult = {
 const DAY_MS = 86_400_000;
 const NONE: MissedPaymentResult = { missedCount: 0, missedCents: 0, payoffCents: 0, kind: null };
 
+/** The subscription id behind a Stripe invoice, across API versions.
+ *  Pre-basil the invoice carries top-level `subscription`; from 2025-03's
+ *  basil restructure (incl. the 2026 clover our webhook endpoint runs on) it
+ *  lives at `parent.subscription_details.subscription`. Reading only the old
+ *  field silently killed every weekly advance on prod — never again. */
+export function subscriptionIdFromInvoice(invoice: any): string | undefined {
+  const direct = invoice?.subscription;
+  if (typeof direct === "string" && direct) return direct;
+  if (direct && typeof direct === "object" && typeof direct.id === "string") return direct.id;
+  const nested = invoice?.parent?.subscription_details?.subscription;
+  if (typeof nested === "string" && nested) return nested;
+  if (nested && typeof nested === "object" && typeof nested.id === "string") return nested.id;
+  return undefined;
+}
+
 /** Parse a bare ISO date at UTC midnight — same maths the breakdown endpoint uses. */
 function isoToUtcMs(iso: string): number | null {
   const ms = new Date(iso.slice(0, 10) + "T00:00:00Z").getTime();

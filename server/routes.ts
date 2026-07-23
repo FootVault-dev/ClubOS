@@ -7,7 +7,7 @@ import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLi
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
-import { missedPayments } from "@shared/league-weekly";
+import { missedPayments, subscriptionIdFromInvoice } from "@shared/league-weekly";
 import { fromForOrg, workspaceDomainByOrgId } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
@@ -16396,7 +16396,12 @@ export async function registerRoutes(
         // events here so we don't double-count and accidentally mark the
         // SECOND week paid when only the first has been paid.
         const invoice = event.data.object as any;
-        const subId: string | undefined = invoice.subscription;
+        // 🔴 Never read invoice.subscription directly: our webhook endpoint runs
+        // a post-basil API version where the field moved to
+        // parent.subscription_details.subscription — the old read returned
+        // undefined and silently skipped EVERY weekly advance (weeks_paid stuck
+        // at 0 for all Term 3 weekly teams; found 2026-07-24).
+        const subId: string | undefined = subscriptionIdFromInvoice(invoice);
         const billingReason: string = invoice.billing_reason || "";
 
         // League deposit-weekly: a weekly charge succeeded → advance weeks_paid.
@@ -16440,7 +16445,7 @@ export async function registerRoutes(
         // A weekly invoice failed. Stripe will retry per its schedule; we
         // don't cancel the booking here — wait for subscription.deleted.
         const invoice = event.data.object as any;
-        console.warn(`[Stripe Webhook] invoice.payment_failed for subscription ${invoice.subscription} (will retry)`);
+        console.warn(`[Stripe Webhook] invoice.payment_failed for subscription ${subscriptionIdFromInvoice(invoice)} (will retry)`);
       } else if (event.type === "customer.subscription.deleted") {
         // Subscription cancelled (either by customer, by Stripe after retries
         // exhausted, or by our own cancel_at fence). Cancel any remaining

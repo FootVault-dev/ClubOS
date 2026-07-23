@@ -1,6 +1,6 @@
 // Pure tests for the missed-payment derivation (shared/league-weekly.ts).
 // No DB, no Stripe. Run: npx tsx script/test-payment-reminders.ts
-import { missedPayments, weeklyAnchorMs } from "../shared/league-weekly";
+import { missedPayments, weeklyAnchorMs, subscriptionIdFromInvoice } from "../shared/league-weekly";
 
 let passed = 0, failed = 0;
 function eq(name: string, got: any, want: any) {
@@ -87,6 +87,13 @@ eq("split teams never flag here (Player Pay tab owns that)",
 eq("upfront card → nothing",
   missedPayments({ status: "confirmed", paymentMode: "upfront", nowMs: D("2026-08-05") }),
   { missedCount: 0, missedCents: 0, payoffCents: 0, kind: null });
+
+// ── invoice → subscription id across Stripe API versions ────────────────────
+eq("invoice sub id: pre-basil top-level string", subscriptionIdFromInvoice({ subscription: "sub_1" }), "sub_1");
+eq("invoice sub id: expanded object", subscriptionIdFromInvoice({ subscription: { id: "sub_2" } }), "sub_2");
+eq("invoice sub id: basil/clover nested field", subscriptionIdFromInvoice({ parent: { subscription_details: { subscription: "sub_3" } } }), "sub_3");
+eq("invoice sub id: nested expanded object", subscriptionIdFromInvoice({ parent: { subscription_details: { subscription: { id: "sub_4" } } } }), "sub_4");
+eq("invoice sub id: non-subscription invoice → undefined", subscriptionIdFromInvoice({ parent: { quote_details: null } }), undefined);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
