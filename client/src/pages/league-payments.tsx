@@ -254,7 +254,7 @@ const STATUS: Record<string, { bar: string; text: string; label: string }> = {
 };
 const fmtDate = (d: string | null) => d ? new Date(d.length <= 10 ? d + "T12:00:00" : d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—";
 
-function PaymentBreakdownModal({ reg, onClose }: { reg: LeagueReg; onClose: () => void }) {
+export function PaymentBreakdownModal({ reg, onClose }: { reg: LeagueReg; onClose: () => void }) {
   const { toast } = useToast();
   const { data: bd, isLoading } = useQuery<Breakdown>({
     queryKey: ["/api/admin/league/registrations", reg.id, "payment-breakdown"],
