@@ -317,10 +317,9 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "media", // CIC Media Library — dark launch while Daniel shapes it with Max. Remove to open to Max (admin/manager).
   "warehouse", // WMS v1 — dark launch while Daniel shapes it with Dima. Remove to open to Print managers.
   "invoices", // Tracked invoices — carries bank details. Daniel only while it's shaped.
-  // Stripe payouts: every line pairs a family's name with a dollar amount
-  // across all brands. Same class of data as invoices/housing. Daniel only
-  // while it's shaped — remove this line to open it to Group admins/managers.
-  "payouts",
+  // "payouts" UNLOCKED 2026-07-23 (Daniel): the tab now follows the normal
+  // permission system — workspace role + the per-member tabs whitelist set in
+  // Team (first grant: Olga, USG team_member with tabs:["payouts"]).
   "vehicles", // Fleet — names a staff member against an insurance policy and an FBT private-use position. Daniel only. Remove to open to admins/managers.
   // The United Print prospect database + sales pipeline: 400+ researched
   // companies with contact details, call notes and deal values. Daniel's
