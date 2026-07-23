@@ -90,6 +90,7 @@ import {
   shortLinks, linkClicks,
   type InsertShortLink, type ShortLink,
 } from "@shared/schema";
+import { missedPayments } from "@shared/league-weekly";
 import type { ReadClass } from "@shared/studio-signal";
 
 // ── Studio "Signal" analytics read models (aggregation query outputs) ─────────
@@ -2365,13 +2366,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Paid/in-progress team registrations for a competition, enriched with the
-  // captain contact, division name and team payment status — for the admin
-  // Registrations view.
+  // captain contact, division name, team payment status and how far behind the
+  // team's payments are (missed weekly charges / failed instalment balance) —
+  // for the admin Registrations view. Missed is DERIVED here on every read
+  // (shared/league-weekly.ts — same maths as the breakdown modal), Postgres
+  // only, no Stripe calls.
   async getLeagueRegistrations(competitionId: number): Promise<any[]> {
     const progs = await db.select().from(programs)
       .where(and(eq(programs.leagueCompetitionId, competitionId), eq(programs.type, "league_team")));
     const progIds = progs.map(p => p.id);
     if (progIds.length === 0) return [];
+    const comp = await this.getLeagueCompetition(competitionId);
 
     const rows = await db.select({ reg: registrations, captain: contacts, division: leagueDivisions })
       .from(registrations)
@@ -2390,29 +2395,47 @@ export class DatabaseStorage implements IStorage {
       : [];
     const teamByReg = new Map(teams.map(t => [t.registrationId, t]));
 
-    return rows.map(r => ({
-      id: r.reg.id,
-      teamName: r.reg.teamName,
-      status: r.reg.status,
-      divisionId: r.reg.leagueDivisionId ?? null,
-      divisionName: r.division?.name ?? null,
-      captainName: r.captain ? `${r.captain.firstName} ${r.captain.lastName}` : "",
-      captainEmail: r.captain?.email ?? null,
-      captainPhone: r.captain?.phone ?? null,
-      totalCents: r.reg.totalCents,
-      amountPaid: r.reg.amountPaid,
-      paymentMode: r.reg.paymentMode,
-      depositCents: r.reg.depositCents,
-      balanceCents: r.reg.balanceCents,
-      balanceDueDate: r.reg.balanceDueDate,
-      balanceStatus: r.reg.balanceStatus,
-      paymentStatus: teamByReg.get(r.reg.id)?.paymentStatus ?? (
-        r.reg.status === "confirmed" ? "deposit_paid"
-        : (r.reg.status === "refunded" || r.reg.status === "partially_refunded") ? r.reg.status
-        : "unpaid"
-      ),
-      registeredAt: r.reg.registeredAt,
-    }));
+    const nowMs = Date.now();
+    return rows.map(r => {
+      const missed = missedPayments({
+        status: r.reg.status,
+        paymentMode: r.reg.paymentMode,
+        weeksTotal: r.reg.weeksTotal,
+        weeksPaid: r.reg.weeksPaid,
+        weeklyAmountCents: r.reg.weeklyAmountCents,
+        weeklyFirstChargeDate: (r.reg as any).weeklyFirstChargeDate ?? null,
+        compStartDate: (comp as any)?.startDate ?? null,
+        registeredAt: r.reg.registeredAt,
+        balanceStatus: r.reg.balanceStatus,
+        balanceCents: r.reg.balanceCents,
+        nowMs,
+      });
+      return {
+        id: r.reg.id,
+        teamName: r.reg.teamName,
+        status: r.reg.status,
+        divisionId: r.reg.leagueDivisionId ?? null,
+        divisionName: r.division?.name ?? null,
+        captainName: r.captain ? `${r.captain.firstName} ${r.captain.lastName}` : "",
+        captainEmail: r.captain?.email ?? null,
+        captainPhone: r.captain?.phone ?? null,
+        totalCents: r.reg.totalCents,
+        amountPaid: r.reg.amountPaid,
+        paymentMode: r.reg.paymentMode,
+        depositCents: r.reg.depositCents,
+        balanceCents: r.reg.balanceCents,
+        balanceDueDate: r.reg.balanceDueDate,
+        balanceStatus: r.reg.balanceStatus,
+        paymentStatus: teamByReg.get(r.reg.id)?.paymentStatus ?? (
+          r.reg.status === "confirmed" ? "deposit_paid"
+          : (r.reg.status === "refunded" || r.reg.status === "partially_refunded") ? r.reg.status
+          : "unpaid"
+        ),
+        registeredAt: r.reg.registeredAt,
+        missedCount: missed.missedCount,
+        missedCents: missed.missedCents,
+      };
+    });
   }
 
   // Raw registration rows for a competition (all columns, incl. the weekly-plan

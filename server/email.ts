@@ -2377,6 +2377,56 @@ export async function sendLeagueBalanceFailedEmail(params: {
   });
 }
 
+/** Staff-triggered payment reminder — a captain is behind on weekly charges
+ *  (or a failed instalment balance). One-click from the Payments tab; carries
+ *  an open-tracking pixel + a tagged pay link so opens show in the admin. */
+export async function sendLeaguePaymentReminderEmail(params: {
+  registrationId: number;
+  programId: number;
+  captainEmail: string;
+  captainName: string;
+  teamName: string;
+  kind: "weekly_missed" | "balance_failed";
+  missedCount: number;
+  missedAmount: string;   // formatted, e.g. $95.00
+  payoffAmount: string;   // formatted — clears the registration in one go
+  payUrl: string;         // /league/balance/:id?rt=token
+  pixelUrl: string;       // /api/public/league/reminder/:token/pixel.gif
+}): Promise<boolean> {
+  const isWeekly = params.kind === "weekly_missed";
+  const missedLine = isWeekly
+    ? `<strong style="color:#f87171;">${params.missedCount} weekly payment${params.missedCount === 1 ? "" : "s"}</strong> for <strong>${params.teamName}</strong> ${params.missedCount === 1 ? "hasn't" : "haven't"} gone through — <strong style="color:#d1b96e;">${params.missedAmount}</strong> is currently behind.`
+    : `The balance payment of <strong style="color:#d1b96e;">${params.missedAmount}</strong> for <strong>${params.teamName}</strong> didn't go through.`;
+  const bodyHtml = `
+    <p style="color:#e6e6e6; font-size:16px; margin:0 0 16px;">Hi ${params.captainName},</p>
+    <p style="color:#bdbdbd; font-size:14px; line-height:1.6; margin:0 0 16px;">
+      Quick heads-up — ${missedLine}
+    </p>
+    ${isWeekly ? `<p style="color:#bdbdbd; font-size:14px; line-height:1.6; margin:0 0 24px;">
+      We'll keep retrying the card on file automatically, so topping up that card may be all you need.
+      The fastest way to square it away is to pay the rest of the term in one go — that clears what's behind and stops all future weekly charges:
+    </p>` : `<p style="color:#bdbdbd; font-size:14px; line-height:1.6; margin:0 0 24px;">
+      No stress — just pay it here to keep your spot:
+    </p>`}
+    <p style="text-align:center; margin:0 0 24px;">
+      <a href="${params.payUrl}" style="display:inline-block; background:#d1b96e; color:#000; font-weight:600; text-decoration:none; padding:14px 28px; border-radius:9999px;">${isWeekly ? `Pay remaining ${params.payoffAmount}` : `Pay balance (${params.missedAmount})`}</a>
+    </p>
+    <p style="color:#8a8a8a; font-size:12px; line-height:1.6; margin:0;">
+      Card trouble or need a hand? Just reply to this email and we'll sort it.
+    </p>
+    <img src="${params.pixelUrl}" width="1" height="1" style="display:none;" alt="" />`;
+
+  return sendEmail({
+    to: params.captainEmail,
+    from: MFL_FROM,
+    replyTo: MFL_REPLY_TO,
+    subject: `Payment catch-up — ${params.teamName}`,
+    html: mflShell({ heading: "Payment Catch-Up", bodyHtml }),
+    campId: params.programId,
+    registrationId: params.registrationId,
+  });
+}
+
 // ── Hiring — a new job application landed ────────────────────────────────────
 // Sent to whoever the job names in `notify_email`, falling back to the club
 // inbox. Best-effort at the call site: a Resend outage must never cost us an

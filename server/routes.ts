@@ -1,12 +1,13 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents, attendance } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, leaguePaymentReminders, leaguePaymentReminderEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents, attendance } from "@shared/schema";
 import { isValidApiScope, API_SCOPES, normalizeProgramFilter, programFilterIsEmpty, programFilterSqlCondition, describeProgramFilter, rejectedProgramTokens, unknownProgramTypes, scopesOutsideProgramFilter, PROGRAM_TYPES, type ProgramFilter } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
+import { missedPayments } from "@shared/league-weekly";
 import { fromForOrg, workspaceDomainByOrgId } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
@@ -22,7 +23,7 @@ import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent, sendVenuePurchaseEvent } from "./meta-capi";
 import { purchaseEventId } from "@shared/meta-events";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -7632,6 +7633,11 @@ export async function registerRoutes(
             weeksPaid = weeklyCents > 0 ? Math.round(totalWeeklyPaid / weeklyCents) : paidDates.length;
           } catch { /* fall back to reg.weeksPaid + comp start */ }
         }
+        // Anchor fallback chain: live Stripe trial_end → the anchor persisted at
+        // creation (weekly_first_charge_date) → comp start (last resort).
+        if (!trialEndSec && (reg as any).weeklyFirstChargeDate) {
+          trialEndSec = Math.floor(new Date(String((reg as any).weeklyFirstChargeDate).slice(0, 10) + "T00:00:00Z").getTime() / 1000);
+        }
         if (!trialEndSec) {
           const program = await storage.getProgram(reg.programId);
           const compId = (program as any)?.leagueCompetitionId;
@@ -7652,11 +7658,153 @@ export async function registerRoutes(
 
       const paidCents = depositCents + weeksPaid * weeklyCents;
       const remainingCents = Math.max(0, totalCents - paidCents);
+      // Missed = the red rows in THIS breakdown (so the reminder header can
+      // never disagree with the schedule the staffer is looking at); the
+      // instalment case mirrors the balance cron's failed state.
+      const missedCount = isWeekly
+        ? weeks.filter(w => w.status === "failed").length
+        : (reg.paymentMode === "installment" && reg.balanceStatus === "failed" && (reg.balanceCents ?? 0) > 0 ? 1 : 0);
+      const missedCents = isWeekly ? missedCount * weeklyCents : (missedCount ? (reg.balanceCents ?? 0) : 0);
+      const payoffCents = isWeekly
+        ? Math.max(0, (weeksTotal - weeksPaid) * weeklyCents)
+        : (reg.paymentMode === "installment" ? Math.max(0, reg.balanceCents ?? 0) : 0);
       res.json({
         teamName: reg.teamName, paymentMode: reg.paymentMode, totalCents, depositCents,
         weeklyAmountCents: weeklyCents, weeksTotal, weeksPaid, paidCents, remainingCents, deposit, weeks,
+        missedCount, missedCents, payoffCents,
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── Payment reminders (weekly plans + failed instalments) ─────────────────
+  // One-click chase from the Payments tab: emails the captain what's behind
+  // and a pay link, and records the send so opens can be tracked (invoice-
+  // pages doctrine: page opens are the honest signal, pixel opens approximate).
+
+  app.get("/api/admin/league/registrations/:id/payment-reminders", requireAuth, async (req, res) => {
+    try {
+      const regId = parseInt(String(req.params.id));
+      const rows = await db.select().from(leaguePaymentReminders)
+        .where(eq(leaguePaymentReminders.registrationId, regId))
+        .orderBy(desc(leaguePaymentReminders.sentAt));
+      const ids = rows.map(r => r.id);
+      const events = ids.length
+        ? await db.select().from(leaguePaymentReminderEvents).where(inArray(leaguePaymentReminderEvents.reminderId, ids))
+        : [];
+      res.json(rows.map(r => {
+        const evs = events.filter(e => e.reminderId === r.id);
+        const pageOpens = evs.filter(e => e.kind === "page_open");
+        const emailOpens = evs.filter(e => e.kind === "email_open");
+        return {
+          id: r.id, kind: r.kind, sentTo: r.sentTo, sentByName: r.sentByName, sentAt: r.sentAt,
+          missedCount: r.missedCount, missedCents: r.missedCents, payoffCents: r.payoffCents,
+          emailOpens: emailOpens.length,
+          pageOpens: pageOpens.length,
+          lastOpenedAt: [...pageOpens, ...emailOpens].map(e => e.occurredAt).sort().pop() ?? null,
+        };
+      }));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/league/registrations/:id/payment-reminder", requireAuth, async (req, res) => {
+    try {
+      const regId = parseInt(String(req.params.id));
+      const reg = await storage.getRegistration(regId);
+      if (!reg) return res.status(404).json({ message: "Not found" });
+
+      // Derive what's behind (same shared maths as the Registrations list).
+      const program = await storage.getProgram(reg.programId);
+      const compId = (program as any)?.leagueCompetitionId;
+      const comp = compId ? await storage.getLeagueCompetition(compId) : null;
+      const missed = missedPayments({
+        status: reg.status, paymentMode: reg.paymentMode,
+        weeksTotal: reg.weeksTotal, weeksPaid: reg.weeksPaid, weeklyAmountCents: reg.weeklyAmountCents,
+        weeklyFirstChargeDate: (reg as any).weeklyFirstChargeDate ?? null,
+        compStartDate: (comp as any)?.startDate ?? null, registeredAt: reg.registeredAt,
+        balanceStatus: reg.balanceStatus, balanceCents: reg.balanceCents,
+        nowMs: Date.now(),
+      });
+      if (!missed.kind || missed.missedCents <= 0) {
+        return res.status(400).json({ message: "Nothing is overdue for this team right now." });
+      }
+
+      const contact = await storage.getContact(reg.contactId);
+      if (!contact?.email) return res.status(400).json({ message: "No captain email on file." });
+
+      // Double-click guard: one reminder per minute per registration.
+      const [last] = await db.select().from(leaguePaymentReminders)
+        .where(eq(leaguePaymentReminders.registrationId, regId))
+        .orderBy(desc(leaguePaymentReminders.sentAt)).limit(1);
+      if (last && Date.now() - new Date(last.sentAt as any).getTime() < 60_000) {
+        return res.status(429).json({ message: "A reminder was just sent — give it a minute." });
+      }
+
+      const token = crypto.randomBytes(24).toString("base64url");
+      const base = process.env.MFL_PUBLIC_URL || "https://join.minifootball.co.nz";
+      const fmt = (c: number) => `$${(c / 100).toFixed(2)}`;
+      const sent = await sendLeaguePaymentReminderEmail({
+        registrationId: reg.id,
+        programId: reg.programId,
+        captainEmail: contact.email,
+        captainName: contact.firstName || "there",
+        teamName: reg.teamName || "your team",
+        kind: missed.kind,
+        missedCount: missed.missedCount,
+        missedAmount: fmt(missed.missedCents),
+        payoffAmount: fmt(missed.payoffCents),
+        payUrl: `${base}/league/balance/${reg.id}?rt=${token}`,
+        pixelUrl: `${base}/api/public/league/reminder/${token}/pixel.gif`,
+      });
+      if (!sent) return res.status(502).json({ message: "Email failed to send — try again." });
+
+      const user = req.session.userId ? await storage.getUser(req.session.userId) : null;
+      const [row] = await db.insert(leaguePaymentReminders).values({
+        registrationId: reg.id,
+        token,
+        kind: missed.kind,
+        sentTo: contact.email,
+        sentByUserId: req.session.userId ?? null,
+        sentByName: user ? `${(user as any).firstName ?? ""} ${(user as any).lastName ?? ""}`.trim() || (user as any).email : null,
+        missedCount: missed.missedCount,
+        missedCents: missed.missedCents,
+        payoffCents: missed.payoffCents,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Email-open pixel. Proxy fetches (Apple MPP, Gmail) inflate this — recorded
+  // as 'email_open' and surfaced as approximate. Always 200 so the token's
+  // validity can't be probed.
+  app.get("/api/public/league/reminder/:token/pixel.gif", async (req, res) => {
+    try {
+      const [rem] = await db.select().from(leaguePaymentReminders)
+        .where(eq(leaguePaymentReminders.token, String(req.params.token))).limit(1);
+      if (rem) {
+        await db.insert(leaguePaymentReminderEvents).values({
+          reminderId: rem.id, kind: "email_open", userAgent: String(req.headers["user-agent"] || "").slice(0, 512),
+        });
+      }
+    } catch { /* never block the pixel */ }
+    res.set({ "Content-Type": "image/gif", "Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache" });
+    res.end(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
+  });
+
+  // Pay-page open beacon (fired by /league/balance/:id when it carries ?rt=).
+  // Bot-filtered — this is the honest "they actually looked at it" signal.
+  app.post("/api/public/league/reminder/:token/opened", async (req, res) => {
+    try {
+      const ua = String(req.headers["user-agent"] || "");
+      if (detectBot({ userAgent: ua })) return res.status(204).end();
+      const [rem] = await db.select().from(leaguePaymentReminders)
+        .where(eq(leaguePaymentReminders.token, String(req.params.token))).limit(1);
+      if (rem) {
+        await db.insert(leaguePaymentReminderEvents).values({
+          reminderId: rem.id, kind: "page_open", userAgent: ua.slice(0, 512),
+        });
+      }
+      res.status(204).end();
+    } catch { res.status(204).end(); }
   });
 
   // ── Cashflow forecast (money IN, by week) ─────────────────────────────────
@@ -23436,7 +23584,12 @@ async function createLeagueWeeklySubscription(opts: {
       programId: String(program.id),
     },
   });
-  await storage.updateRegistration(reg.id, { stripeSubscriptionId: subscription.id } as any);
+  await storage.updateRegistration(reg.id, {
+    stripeSubscriptionId: subscription.id,
+    // Persist the schedule anchor so missed-payment maths never has to guess
+    // it from the comp start (wrong for teams registering mid-term).
+    weeklyFirstChargeDate: new Date(trialEnd * 1000).toISOString().slice(0, 10),
+  } as any);
   console.log(`[MFL weekly] reg ${reg.id}: subscription ${subscription.id} — $${(weeklyCents / 100).toFixed(2)}/wk × ${weeksTotal}, first charge ${new Date(trialEnd * 1000).toISOString().slice(0, 10)}`);
 }
 

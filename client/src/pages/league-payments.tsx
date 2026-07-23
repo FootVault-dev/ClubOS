@@ -16,6 +16,7 @@ type LeagueReg = {
   totalCents: number | null; amountPaid: string | null; paymentMode: string | null;
   depositCents: number | null; balanceCents: number | null; balanceDueDate: string | null;
   balanceStatus: string | null; paymentStatus: string; registeredAt: string;
+  missedCount: number; missedCents: number;
 };
 
 const PAY_BADGE: Record<string, string> = {
@@ -70,6 +71,16 @@ export default function LeaguePayments() {
   const deposit = regs.filter(r => r.paymentStatus === "deposit_paid").length;
   const collected = regs.reduce((s, r) => s + (parseFloat(r.amountPaid || "0") || 0), 0);
   const balanceOwed = regs.reduce((s, r) => s + (r.balanceStatus && r.balanceStatus !== "paid" ? (r.balanceCents || 0) : 0), 0);
+  const missedTeams = regs.filter(r => (r.missedCount || 0) > 0);
+  const missedCents = missedTeams.reduce((s, r) => s + (r.missedCents || 0), 0);
+
+  // Teams behind on payments float to the top (most dollars behind first) so
+  // the follow-up list IS the top of the table; everyone else keeps the
+  // newest-first order the server sent (stable sort).
+  const sortedRegs = [...regs].sort((a, b) =>
+    ((b.missedCount || 0) > 0 ? 1 : 0) - ((a.missedCount || 0) > 0 ? 1 : 0) ||
+    (b.missedCents || 0) - (a.missedCents || 0)
+  );
 
   const stats = [
     { label: "Teams", value: regs.length },
@@ -77,6 +88,11 @@ export default function LeaguePayments() {
     { label: "Paid in full", value: paid },
     { label: "Deposit only", value: deposit },
     { label: "Balance owed", value: formatCurrency(balanceOwed, { fromCents: true }) },
+    {
+      label: "Missed payments",
+      value: missedTeams.length > 0 ? `${missedTeams.length} team${missedTeams.length === 1 ? "" : "s"} · ${formatCurrency(missedCents, { fromCents: true })}` : "None",
+      klass: missedTeams.length > 0 ? "text-red-400" : undefined,
+    },
   ];
 
   return (
@@ -116,11 +132,11 @@ export default function LeaguePayments() {
         <SplitsView competitionId={activeTermId} />
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {stats.map((s, i) => (
               <div key={i} className="rounded-xl border border-white/5 bg-white/[0.02] p-4">
                 <p className="text-[10px] uppercase tracking-wider text-white/30">{s.label}</p>
-                <p className="text-lg font-bold text-white mt-0.5">{s.value}</p>
+                <p className={`text-lg font-bold mt-0.5 ${(s as any).klass || "text-white"}`}>{s.value}</p>
               </div>
             ))}
           </div>
@@ -146,9 +162,23 @@ export default function LeaguePayments() {
                   </tr>
                 </thead>
                 <tbody>
-                  {regs.map(r => (
+                  {sortedRegs.map(r => (
                     <tr key={r.id} onClick={() => setSelected(r)} className="border-b border-white/[0.02] hover:bg-white/[0.03] cursor-pointer transition-colors group" data-testid={`pay-row-${r.id}`}>
-                      <td className="px-4 py-2.5 text-sm text-white/80 font-medium">{r.teamName || `#${r.id}`}</td>
+                      <td className="px-4 py-2.5 text-sm text-white/80 font-medium">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span>{r.teamName || `#${r.id}`}</span>
+                          {(r.missedCount || 0) > 0 && (
+                            <span
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 whitespace-nowrap"
+                              title={`${r.missedCount} payment${r.missedCount === 1 ? "" : "s"} missed — ${formatCurrency(r.missedCents || 0, { fromCents: true })} behind`}
+                              data-testid={`missed-badge-${r.id}`}
+                            >
+                              <AlertTriangle className="w-3 h-3" />
+                              {r.missedCount} missed
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-2.5 text-sm text-white/50">{r.divisionName || "—"}</td>
                       <td className="px-4 py-2.5 text-sm text-white/50 whitespace-nowrap">
                         {r.registeredAt ? (() => { const d = new Date(r.registeredAt); return (<><div>{d.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })}</div><div className="text-[11px] text-white/30">{d.toLocaleTimeString("en-NZ", { hour: "numeric", minute: "2-digit" })}</div></>); })() : "—"}
@@ -206,6 +236,13 @@ type Breakdown = {
   weeklyAmountCents: number; weeksTotal: number; weeksPaid: number; paidCents: number; remainingCents: number;
   deposit: { amountCents: number; status: string; paidAt: string | null };
   weeks: { week: number; dueDate: string | null; amountCents: number; status: string; paidAt: string | null }[];
+  missedCount: number; missedCents: number; payoffCents: number;
+};
+
+type ReminderRow = {
+  id: number; kind: string; sentTo: string; sentByName: string | null; sentAt: string;
+  missedCount: number; missedCents: number; payoffCents: number;
+  emailOpens: number; pageOpens: number; lastOpenedAt: string | null;
 };
 
 const STATUS: Record<string, { bar: string; text: string; label: string }> = {
@@ -218,9 +255,25 @@ const STATUS: Record<string, { bar: string; text: string; label: string }> = {
 const fmtDate = (d: string | null) => d ? new Date(d.length <= 10 ? d + "T12:00:00" : d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—";
 
 function PaymentBreakdownModal({ reg, onClose }: { reg: LeagueReg; onClose: () => void }) {
+  const { toast } = useToast();
   const { data: bd, isLoading } = useQuery<Breakdown>({
     queryKey: ["/api/admin/league/registrations", reg.id, "payment-breakdown"],
     queryFn: () => fetch(`/api/admin/league/registrations/${reg.id}/payment-breakdown`).then(r => r.json()),
+  });
+
+  const canRemind = reg.paymentMode === "deposit_weekly" || reg.paymentMode === "installment";
+  const { data: reminders = [] } = useQuery<ReminderRow[]>({
+    queryKey: ["/api/admin/league/registrations", reg.id, "payment-reminders"],
+    queryFn: () => fetch(`/api/admin/league/registrations/${reg.id}/payment-reminders`).then(r => r.json()),
+    enabled: canRemind,
+  });
+  const sendReminder = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/admin/league/registrations/${reg.id}/payment-reminder`).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/league/registrations", reg.id, "payment-reminders"] });
+      toast({ title: "Reminder sent", description: `Emailed ${reg.captainName || "the captain"} at ${reg.captainEmail || "their address"}.` });
+    },
+    onError: (e: any) => toast({ title: "Couldn't send reminder", description: e?.message || "Try again.", variant: "destructive" }),
   });
 
   const items = bd ? [
@@ -297,6 +350,64 @@ function PaymentBreakdownModal({ reg, onClose }: { reg: LeagueReg; onClose: () =
                 );
               })}
             </div>
+
+            {/* Missed-payment chase: one-click reminder + sent/opened analytics */}
+            {canRemind && ((bd.missedCount || 0) > 0 || reminders.length > 0) && (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/[0.04] p-4 space-y-3" data-testid="reminder-section">
+                {(bd.missedCount || 0) > 0 ? (
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <p className="text-sm font-semibold text-red-400 flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4" />
+                        {bd.missedCount} payment{bd.missedCount === 1 ? "" : "s"} missed — {formatCurrency(bd.missedCents, { fromCents: true })} behind
+                      </p>
+                      <p className="text-[11px] text-white/40 mt-1">
+                        One click emails {reg.captainName || "the captain"} what's owed plus a pay link that clears the remaining {formatCurrency(bd.payoffCents, { fromCents: true })} in one go.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => sendReminder.mutate()}
+                      disabled={sendReminder.isPending || !reg.captainEmail}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-lg bg-[#d1b96e] text-black hover:bg-[#dcc788] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      data-testid="send-reminder"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      {sendReminder.isPending ? "Sending…" : reminders.length > 0 ? "Send another reminder" : "Send payment reminder"}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-white/40">Nothing overdue right now. Earlier reminders:</p>
+                )}
+                {!reg.captainEmail && (bd.missedCount || 0) > 0 && (
+                  <p className="text-[11px] text-red-400/70">No captain email on file — reminders can't be sent.</p>
+                )}
+
+                {reminders.length > 0 && (
+                  <div className="space-y-1.5">
+                    {reminders.map(rem => (
+                      <div key={rem.id} className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 flex-wrap">
+                        <div className="min-w-0">
+                          <p className="text-[12px] text-white/70">
+                            Sent {new Date(rem.sentAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}, {new Date(rem.sentAt).toLocaleTimeString("en-NZ", { hour: "numeric", minute: "2-digit" })}
+                            <span className="text-white/30"> · {formatCurrency(rem.missedCents, { fromCents: true })} behind{rem.sentByName ? ` · by ${rem.sentByName}` : ""}</span>
+                          </p>
+                          <p className="text-[11px] text-white/30 truncate">{rem.sentTo}</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {rem.pageOpens > 0 ? (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 font-medium">Pay page opened{rem.pageOpens > 1 ? ` ×${rem.pageOpens}` : ""}</span>
+                          ) : rem.emailOpens > 0 ? (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-medium" title="From the email tracking pixel — mail apps pre-fetch images, so treat as approximate">Email opened{rem.emailOpens > 1 ? ` ×${rem.emailOpens}` : ""}</span>
+                          ) : (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/40 font-medium">Not opened yet</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {bd.paymentMode === "deposit_weekly" && (
               <p className="text-[11px] text-white/30 leading-relaxed">

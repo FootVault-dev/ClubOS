@@ -379,6 +379,10 @@ export const registrations = pgTable("registrations", {
   weeklyAmountCents: integer("weekly_amount_cents"),
   weeksPaid: integer("weeks_paid").default(0),
   weeksTotal: integer("weeks_total"),
+  // The REAL first-charge date (the Stripe subscription's trial_end), persisted
+  // at creation so missed-payment maths never guesses the schedule from the
+  // comp start (wrong for teams that signed up after the term began).
+  weeklyFirstChargeDate: date("weekly_first_charge_date"),
   refundedAt: timestamp("refunded_at"),
   refundedAmountCents: integer("refunded_amount_cents"),
   refundReason: text("refund_reason"),
@@ -6716,3 +6720,38 @@ export const sportyReferenceCache = pgTable(
 export type SportySyncState = typeof sportySyncState.$inferSelect;
 export type SportyPushLogRow = typeof sportyPushLog.$inferSelect;
 export type SportyReferenceCacheRow = typeof sportyReferenceCache.$inferSelect;
+
+// ── MFL payment reminders ────────────────────────────────────────────────────
+// One row per reminder email actually SENT to a captain who is behind on a
+// weekly plan (or whose instalment balance failed). Analytics — email opens
+// (tracking pixel, proxy-inflated, treat as approximate) and pay-page opens
+// (bot-filtered, the honest signal) — are DERIVED from the events table,
+// never stored as counters. Mirrors the invoice-pages doctrine.
+export const leaguePaymentReminders = pgTable("league_payment_reminders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  registrationId: integer("registration_id").notNull().references(() => registrations.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),           // open-tracking + pay-link tag; non-enumerable
+  kind: text("kind").notNull().default("weekly_missed"), // 'weekly_missed' | 'balance_failed'
+  sentTo: text("sent_to").notNull(),                  // captain email at send time
+  sentByUserId: integer("sent_by_user_id"),
+  sentByName: text("sent_by_name"),
+  missedCount: integer("missed_count").notNull().default(0),
+  missedCents: integer("missed_cents").notNull().default(0),
+  payoffCents: integer("payoff_cents").notNull().default(0),
+  sentAt: timestamp("sent_at").defaultNow().notNull(),
+}, (t) => [
+  index("league_payment_reminders_reg_idx").on(t.registrationId, t.sentAt),
+]);
+
+export const leaguePaymentReminderEvents = pgTable("league_payment_reminder_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  reminderId: integer("reminder_id").notNull().references(() => leaguePaymentReminders.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),                      // 'email_open' | 'page_open'
+  userAgent: text("user_agent"),
+  occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+}, (t) => [
+  index("league_payment_reminder_events_rem_idx").on(t.reminderId, t.occurredAt),
+]);
+
+export type LeaguePaymentReminder = typeof leaguePaymentReminders.$inferSelect;
+export type LeaguePaymentReminderEvent = typeof leaguePaymentReminderEvents.$inferSelect;

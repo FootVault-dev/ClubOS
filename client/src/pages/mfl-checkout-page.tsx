@@ -160,6 +160,16 @@ export default function MflCheckoutPage({ mode = "deposit" }: { mode?: "deposit"
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Reminder-email attribution: when the captain arrives from a payment
+  // reminder (?rt=token), tell the server the pay page was actually opened —
+  // that's the "opened" signal on the admin's reminder analytics.
+  useEffect(() => {
+    if (mode !== "balance") return;
+    const rt = new URLSearchParams(window.location.search).get("rt");
+    if (!rt) return;
+    fetch(`/api/public/league/reminder/${encodeURIComponent(rt)}/opened`, { method: "POST" }).catch(() => {});
+  }, [mode]);
+
   useEffect(() => {
     if (mode === "balance") {
       const registrationId = balanceParams?.registrationId;
