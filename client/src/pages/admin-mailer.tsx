@@ -5,12 +5,13 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   Mail, Send, ChevronRight, ChevronLeft, Users, Trash2, Plus, X,
   Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight,
   List, ListOrdered, Link as LinkIcon, Image, Type, Palette,
   Eye, Loader2, CheckCircle2, AlertCircle, Upload, Heading1,
-  Heading2, Minus, RotateCcw,
+  Heading2, Minus, RotateCcw, Search,
 } from "lucide-react";
 
 type SegmentData = {
@@ -22,6 +23,8 @@ type SegmentData = {
 type Campaign = {
   id: number;
   subject: string;
+  fromEmail: string;
+  segmentType: string;
   recipientCount: number;
   sentCount: number;
   failedCount: number;
@@ -30,7 +33,31 @@ type Campaign = {
   createdAt: string;
 };
 
+// The full row, fetched only when a past send is opened — this one carries the
+// HTML that actually went out.
+type CampaignDetail = Campaign & {
+  body: string;
+  replyTo: string | null;
+  segmentConfig: string | null;
+};
+
 const STEPS = ["Setup", "Content", "Send"];
+const HISTORY_PAGE = 10;
+
+// "cic_youth_custom" → "CIC youth custom". Segment types are namespaced by the
+// mailer that sent them, which is what tells CIC sends apart from camp sends.
+function segmentLabel(segmentType: string) {
+  const pretty = String(segmentType || "").replace(/_/g, " ").trim();
+  if (!pretty) return "—";
+  return pretty.replace(/^(cic|cufc|mfl|siu)\b/i, (m) => m.toUpperCase());
+}
+
+function formatSentAt(c: { sentAt: string | null; createdAt: string }) {
+  const stamp = c.sentAt || c.createdAt;
+  return new Date(stamp).toLocaleDateString("en-NZ", {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
 
 export default function AdminMailer() {
   const { toast } = useToast();
@@ -56,12 +83,46 @@ export default function AdminMailer() {
   const textColorRef = useRef<HTMLInputElement>(null);
   const bgColorRef = useRef<HTMLInputElement>(null);
 
+  // Send history — search + paging + the opened campaign.
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE);
+  const [openCampaignId, setOpenCampaignId] = useState<number | null>(null);
+
   const { data: segments = [] } = useQuery<SegmentData[]>({
     queryKey: ["/api/admin/mailer/segments"],
   });
 
-  const { data: campaigns = [] } = useQuery<Campaign[]>({
-    queryKey: ["/api/admin/mailer/campaigns"],
+  // Debounced so typing doesn't fire a query per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setHistoryQuery(historySearch.trim());
+      setHistoryLimit(HISTORY_PAGE);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [historySearch]);
+
+  const { data: history, isFetching: historyLoading } = useQuery<{ campaigns: Campaign[]; total: number }>({
+    queryKey: ["/api/admin/mailer/campaigns", historyQuery, historyLimit],
+    queryFn: async () => {
+      const res = await apiRequest(
+        "GET",
+        `/api/admin/mailer/campaigns?q=${encodeURIComponent(historyQuery)}&limit=${historyLimit}`,
+      );
+      return res.json();
+    },
+    placeholderData: (prev) => prev,
+  });
+  const campaigns = history?.campaigns ?? [];
+  const historyTotal = history?.total ?? 0;
+
+  const { data: openCampaign, isFetching: openCampaignLoading } = useQuery<CampaignDetail>({
+    queryKey: ["/api/admin/mailer/campaigns", "detail", openCampaignId],
+    enabled: openCampaignId !== null,
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/admin/mailer/campaigns/${openCampaignId}`);
+      return res.json();
+    },
   });
 
   const segmentConfig = useMemo(() => {
@@ -371,7 +432,7 @@ export default function AdminMailer() {
               </div>
             )}
 
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex flex-wrap items-center gap-3 pt-2">
               <Button
                 onClick={() => previewMutation.mutate()}
                 variant="outline"
@@ -408,27 +469,79 @@ export default function AdminMailer() {
             </div>
           </div>
 
-          {campaigns.length > 0 && (
+          {(historyTotal > 0 || historyQuery) && (
             <div className="glass-card rounded-2xl p-6 space-y-4">
-              <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Recent Campaigns</h2>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Send History</h2>
+                <div className="relative w-full sm:w-72">
+                  <Search className="w-3.5 h-3.5 text-white/30 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <Input
+                    value={historySearch}
+                    onChange={e => setHistorySearch(e.target.value)}
+                    placeholder="Search subject or content..."
+                    className="premium-input text-white/80 pl-9 pr-8 h-9 text-sm"
+                    data-testid="input-search-campaigns"
+                  />
+                  {historySearch && (
+                    <button
+                      onClick={() => setHistorySearch("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/70"
+                      title="Clear search"
+                      data-testid="button-clear-campaign-search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="text-xs text-white/30">
+                {historyQuery
+                  ? `${historyTotal} ${historyTotal === 1 ? "email" : "emails"} matching "${historyQuery}"`
+                  : `${historyTotal} ${historyTotal === 1 ? "email" : "emails"} sent — click one to see what went out`}
+              </div>
+
+              {campaigns.length === 0 && !historyLoading && (
+                <div className="p-6 text-center text-sm text-white/30">No emails match that search.</div>
+              )}
+
               <div className="space-y-2">
-                {campaigns.slice(0, 10).map(c => (
-                  <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-white/[0.02] border border-white/[0.06]">
+                {campaigns.map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => setOpenCampaignId(c.id)}
+                    className="w-full flex items-center justify-between gap-3 p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] text-left transition-all hover:bg-white/[0.05] hover:border-white/[0.12]"
+                    data-testid={`button-campaign-${c.id}`}
+                  >
                     <div className="min-w-0 flex-1">
                       <div className="text-sm text-white/70 truncate" data-testid={`text-campaign-subject-${c.id}`}>{c.subject}</div>
-                      <div className="text-xs text-white/30 mt-0.5">
-                        {c.sentAt ? new Date(c.sentAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : new Date(c.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}
+                      <div className="text-xs text-white/30 mt-0.5 truncate">
+                        {formatSentAt(c)} · {segmentLabel(c.segmentType)}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       <Badge variant="outline" className={`text-xs ${c.status === "sent" ? "border-green-500/20 text-green-400" : c.status === "failed" ? "border-red-500/20 text-red-400" : "border-yellow-500/20 text-yellow-400"}`}>
                         {c.status === "sent" ? <CheckCircle2 className="w-3 h-3 mr-1" /> : c.status === "failed" ? <AlertCircle className="w-3 h-3 mr-1" /> : null}
                         {c.sentCount}/{c.recipientCount}
                       </Badge>
+                      <ChevronRight className="w-4 h-4 text-white/20" />
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
+
+              {campaigns.length < historyTotal && (
+                <Button
+                  onClick={() => setHistoryLimit(l => l + HISTORY_PAGE)}
+                  variant="outline"
+                  disabled={historyLoading}
+                  className="w-full border-white/10 text-white/50 hover:bg-white/5"
+                  data-testid="button-load-more-campaigns"
+                >
+                  {historyLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                  Show older ({historyTotal - campaigns.length} more)
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -744,8 +857,94 @@ export default function AdminMailer() {
           </div>
         </div>
       )}
+
+      <Dialog open={openCampaignId !== null} onOpenChange={o => { if (!o) setOpenCampaignId(null); }}>
+        <DialogContent className="max-w-3xl bg-[#0a0f1a] border border-white/10 text-white/90 max-h-[85vh] overflow-y-auto">
+          <DialogTitle className="text-base font-semibold text-white/90 pr-8 leading-snug min-w-0 break-words" data-testid="text-campaign-detail-subject">
+            {openCampaign?.subject || (openCampaignLoading ? "Loading..." : "Campaign")}
+          </DialogTitle>
+
+          {openCampaignLoading && !openCampaign ? (
+            <div className="py-16 flex items-center justify-center text-white/30">
+              <Loader2 className="w-5 h-5 animate-spin" />
+            </div>
+          ) : openCampaign ? (
+            // min-w-0 all the way down: a sent email is built on fixed-width
+            // tables (600px is the email standard), and without this its
+            // min-content width drags the whole dialog wider than the phone.
+            <div className="space-y-4 min-w-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <DetailField label="Sent" value={formatSentAt(openCampaign)} />
+                <DetailField
+                  label="Delivered"
+                  value={`${openCampaign.sentCount} of ${openCampaign.recipientCount}${openCampaign.failedCount > 0 ? ` — ${openCampaign.failedCount} failed` : ""}`}
+                />
+                <DetailField label="From" value={openCampaign.fromEmail} />
+                <DetailField label="Reply-to" value={openCampaign.replyTo || "—"} />
+                <DetailField label="Audience" value={segmentLabel(openCampaign.segmentType)} />
+                <DetailField label="Status" value={openCampaign.status} />
+              </div>
+
+              {recipientList(openCampaign.segmentConfig).length > 0 && (
+                <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06]">
+                  <div className="text-xs text-white/40 mb-2">Sent to these addresses</div>
+                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+                    {recipientList(openCampaign.segmentConfig).map(email => (
+                      <Badge key={email} variant="outline" className="border-white/10 text-white/50 bg-white/[0.02] text-[11px] font-normal">
+                        {email}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="min-w-0">
+                <div className="text-xs text-white/40 mb-2">What was sent</div>
+                <div className="rounded-xl border border-white/10 overflow-hidden min-w-0">
+                  {/* The email scrolls sideways inside this box rather than
+                      pushing the dialog off the screen. */}
+                  <div className="bg-gray-50 p-4 overflow-x-auto">
+                    <div className="max-w-[600px] mx-auto bg-white rounded-lg shadow-sm p-6 border border-gray-100">
+                      <div
+                        className="prose prose-sm max-w-none [&_img]:max-w-full [&_img]:h-auto"
+                        style={{ color: "#333", lineHeight: "1.6" }}
+                        dangerouslySetInnerHTML={{ __html: openCampaign.body }}
+                        data-testid="html-campaign-body"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-10 text-center text-sm text-white/40">Couldn't load that campaign.</div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+function DetailField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] min-w-0">
+      <div className="text-xs text-white/40 mb-1">{label}</div>
+      <div className="text-sm text-white/80 break-words">{value}</div>
+    </div>
+  );
+}
+
+// Custom sends record the exact address list they went to in segmentConfig.
+// Segment sends don't (the audience was a query), so this returns nothing.
+function recipientList(segmentConfig: string | null): string[] {
+  if (!segmentConfig) return [];
+  try {
+    const parsed = JSON.parse(segmentConfig);
+    const emails = parsed?.emails;
+    return Array.isArray(emails) ? emails.filter((e: unknown) => typeof e === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function ToolBtn({ icon: Icon, label, onClick }: { icon: any; cmd?: string; label: string; onClick: () => void }) {

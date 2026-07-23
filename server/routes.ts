@@ -4013,10 +4013,32 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/mailer/campaigns", requireAuth, async (_req, res) => {
+  // Send history — searchable + paged. `q` matches subject OR email content.
+  // Returns summaries without the body; open one for the content it sent.
+  app.get("/api/admin/mailer/campaigns", requireAuth, async (req, res) => {
     try {
-      const campaigns = await storage.getEmailCampaigns();
-      res.json(campaigns);
+      const q = typeof req.query.q === "string" ? req.query.q : "";
+      const limit = parseInt(String(req.query.limit ?? ""));
+      const offset = parseInt(String(req.query.offset ?? ""));
+      const { rows, total } = await storage.searchEmailCampaigns({
+        q,
+        limit: Number.isFinite(limit) ? limit : undefined,
+        offset: Number.isFinite(offset) ? offset : undefined,
+      });
+      res.json({ campaigns: rows, total });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // One past send, in full — including the exact HTML that went out.
+  app.get("/api/admin/mailer/campaigns/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid campaign id" });
+      const campaign = await storage.getEmailCampaign(id);
+      if (!campaign) return res.status(404).json({ message: "Campaign not found" });
+      res.json(campaign);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

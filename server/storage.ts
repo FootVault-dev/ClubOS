@@ -212,6 +212,11 @@ export type ProgramPlayer = {
   latestRegisteredAt: string | null;
 };
 
+// A campaign row for the mailer HISTORY list — deliberately without `body`.
+// Bodies carry inlined base64 images, so selecting every campaign ever sent
+// with its body is megabytes the list never renders. Open one to get the body.
+export type EmailCampaignSummary = Omit<EmailCampaign, "body" | "replyTo" | "segmentConfig" | "scheduledAt">;
+
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -484,6 +489,7 @@ export interface IStorage {
   createMetaEventLog(log: InsertMetaEventLog): Promise<MetaEventLog>;
 
   getEmailCampaigns(): Promise<EmailCampaign[]>;
+  searchEmailCampaigns(opts?: { q?: string; limit?: number; offset?: number }): Promise<{ rows: EmailCampaignSummary[]; total: number }>;
   getEmailCampaign(id: number): Promise<EmailCampaign | undefined>;
   createEmailCampaign(campaign: InsertEmailCampaign): Promise<EmailCampaign>;
   updateEmailCampaign(id: number, data: Partial<InsertEmailCampaign>): Promise<EmailCampaign | undefined>;
@@ -1853,6 +1859,49 @@ export class DatabaseStorage implements IStorage {
 
   async getEmailCampaigns(): Promise<EmailCampaign[]> {
     return db.select().from(emailCampaigns).orderBy(desc(emailCampaigns.createdAt));
+  }
+
+  // Mailer history search — every broadcast this club has ever sent, from any
+  // mailer (camps, CIC, CUFC, MFL, league), newest first. `q` matches the
+  // subject OR the email content, so "goalkeeper" finds the send that mentioned
+  // it even when the subject line didn't. Paged, and body-free (see the type).
+  async searchEmailCampaigns(opts: { q?: string; limit?: number; offset?: number } = {}): Promise<{ rows: EmailCampaignSummary[]; total: number }> {
+    const raw = (opts.q ?? "").trim();
+    // `%` and `_` are ILIKE wildcards — a search for "50% off" must not match
+    // every campaign ever sent. Backslash is Postgres's default escape char.
+    const term = raw.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const where = term
+      ? or(ilike(emailCampaigns.subject, `%${term}%`), ilike(emailCampaigns.body, `%${term}%`))
+      : undefined;
+
+    const limit = Number.isFinite(opts.limit) ? Math.min(Math.max(Math.trunc(opts.limit!), 1), 100) : 20;
+    const offset = Number.isFinite(opts.offset) ? Math.max(Math.trunc(opts.offset!), 0) : 0;
+
+    const rows = await db
+      .select({
+        id: emailCampaigns.id,
+        subject: emailCampaigns.subject,
+        fromEmail: emailCampaigns.fromEmail,
+        segmentType: emailCampaigns.segmentType,
+        recipientCount: emailCampaigns.recipientCount,
+        sentCount: emailCampaigns.sentCount,
+        failedCount: emailCampaigns.failedCount,
+        status: emailCampaigns.status,
+        sentAt: emailCampaigns.sentAt,
+        createdAt: emailCampaigns.createdAt,
+      })
+      .from(emailCampaigns)
+      .where(where)
+      .orderBy(desc(emailCampaigns.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const [counted] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(emailCampaigns)
+      .where(where);
+
+    return { rows, total: Number(counted?.n ?? 0) };
   }
 
   async getEmailCampaign(id: number): Promise<EmailCampaign | undefined> {
