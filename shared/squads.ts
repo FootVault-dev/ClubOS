@@ -59,7 +59,10 @@ export type SquadBand = (typeof SQUAD_BANDS)[number];
 export const SQUAD_BAND_LABELS: Record<SquadBand, string> = {
   senior: "Senior",
   academy: "Academy",
-  youth: "Youth",
+  // The club says "Pre-Academy", never "Youth" — U9 through U12 is the
+  // Pre-Academy pathway, and that is the wording on the programmes and the
+  // coaches' team sheets.
+  youth: "Pre-Academy",
 };
 export function isSquadBand(v: unknown): v is SquadBand {
   return typeof v === "string" && (SQUAD_BANDS as readonly string[]).includes(v);

@@ -946,6 +946,73 @@ const BAND_ICONS: Record<SquadBand, typeof Trophy> = {
   youth: Baby,
 };
 
+/**
+ * Split a band's squads into one column per age grade.
+ *
+ * Pre-Academy reads U9 · U10 · U11 · U12 and Academy reads U13 · U14 · U15 · U17,
+ * which is how the club's own team sheets are laid out. Returns null when columns
+ * would be meaningless — the senior band has no grades to speak of, and a single
+ * grade is just a list.
+ *
+ * Squads keep the order the server sent (display order), so within a grade the
+ * teams stay in the club's own sequence. A squad with no grade in a graded band
+ * still gets a home rather than vanishing.
+ */
+function gradeColumnsFor(band: SquadBand, list: Squad[]) {
+  if (band === "senior") return null;
+  const grades = Array.from(new Set(list.map((s) => s.ageGrade).filter((g): g is number => g != null))).sort((a, b) => a - b);
+  const ungraded = list.filter((s) => s.ageGrade == null);
+  if (grades.length < 2 && !ungraded.length) return null;
+  const cols = grades.map((g) => {
+    const squads = list.filter((s) => s.ageGrade === g);
+    return { key: `u${g}`, label: `U${g}`, squads, players: squads.reduce((n, s) => n + s.players, 0) };
+  });
+  if (ungraded.length) {
+    cols.push({ key: "ungraded", label: "No grade", squads: ungraded, players: ungraded.reduce((n, s) => n + s.players, 0) });
+  }
+  return cols;
+}
+
+function SquadCard({ sq, onOpen }: { sq: Squad; onOpen: () => void }) {
+  return (
+    <button
+      onClick={onOpen}
+      className={`w-full text-left rounded-xl border p-4 transition-colors cursor-pointer ${
+        sq.isActive
+          ? "border-blue-500/10 bg-white/[0.02] hover:bg-blue-500/[0.05] hover:border-blue-500/20"
+          : "border-white/[0.05] bg-white/[0.01] opacity-60"
+      }`}
+      data-testid={`card-squad-${sq.id}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[13px] font-medium text-white/80 truncate">{sq.name}</p>
+          <p className="text-[11px] text-white/30 mt-0.5 truncate">
+            {sq.ageGrade != null ? `U${sq.ageGrade}` : "Senior"}
+            {sq.competition ? ` · ${sq.competition}` : ""}
+          </p>
+        </div>
+        {!sq.isActive && (
+          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-white/10 text-white/30 bg-white/[0.03] flex-shrink-0">
+            Archived
+          </Badge>
+        )}
+      </div>
+      <div className="flex items-center gap-3 mt-3">
+        <span className="flex items-center gap-1 text-[12px] text-white/50">
+          <Users className="w-3.5 h-3.5 text-blue-400/30" />
+          {sq.players}
+        </span>
+        <span className="flex items-center gap-1 text-[12px] text-white/50">
+          <Users2 className="w-3.5 h-3.5 text-blue-400/30" />
+          {sq.staff}
+        </span>
+        <ChevronRight className="w-3.5 h-3.5 text-white/15 ml-auto" />
+      </div>
+    </button>
+  );
+}
+
 export default function AdminSquads() {
   const currentYear = new Date().getFullYear();
   const [season, setSeason] = useState(currentYear);
@@ -1032,6 +1099,7 @@ export default function AdminSquads() {
             const list = byBand(band);
             if (list.length === 0) return null;
             const Icon = BAND_ICONS[band];
+            const gradeColumns = gradeColumnsFor(band, list);
             return (
               <div key={band} className="glass-card rounded-2xl overflow-hidden animate-fade-in-up" style={{ animationDelay: "50ms", opacity: 0 }}>
                 <div className="px-5 py-3 border-b border-blue-500/[0.08] flex items-center gap-2">
@@ -1041,46 +1109,34 @@ export default function AdminSquads() {
                     {list.length}
                   </Badge>
                 </div>
-                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {list.map((sq) => (
-                    <button
-                      key={sq.id}
-                      onClick={() => setSelectedSquadId(sq.id)}
-                      className={`text-left rounded-xl border p-4 transition-colors cursor-pointer ${
-                        sq.isActive
-                          ? "border-blue-500/10 bg-white/[0.02] hover:bg-blue-500/[0.05] hover:border-blue-500/20"
-                          : "border-white/[0.05] bg-white/[0.01] opacity-60"
-                      }`}
-                      data-testid={`card-squad-${sq.id}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-white/80 truncate">{sq.name}</p>
-                          <p className="text-[11px] text-white/30 mt-0.5">
-                            {sq.ageGrade != null ? `U${sq.ageGrade}` : "Senior"}
-                            {sq.competition ? ` · ${sq.competition}` : ""}
-                          </p>
+                {gradeColumns ? (
+                  // One column per age grade — U9 U10 U11 U12 for Pre-Academy,
+                  // U13 U14 U15 U17 for Academy — with that grade's teams stacked
+                  // beneath it. This is how the coaches read a team sheet, and it
+                  // keeps the mixed sides (U9/10 Gold, U10/11 Gold) in the column
+                  // of the older grade they play at.
+                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-3 gap-y-5 items-start">
+                    {gradeColumns.map((col) => (
+                      <div key={col.key} className="min-w-0 space-y-2.5">
+                        <div className="flex items-baseline gap-2 px-1 pb-1 border-b border-blue-500/[0.08]">
+                          <h3 className="text-[12px] font-semibold text-blue-300/60">{col.label}</h3>
+                          <span className="text-[10px] text-white/25 truncate">
+                            {col.squads.length} {col.squads.length === 1 ? "team" : "teams"} · {col.players} players
+                          </span>
                         </div>
-                        {!sq.isActive && (
-                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-white/10 text-white/30 bg-white/[0.03] flex-shrink-0">
-                            Archived
-                          </Badge>
-                        )}
+                        {col.squads.map((sq) => (
+                          <SquadCard key={sq.id} sq={sq} onOpen={() => setSelectedSquadId(sq.id)} />
+                        ))}
                       </div>
-                      <div className="flex items-center gap-3 mt-3">
-                        <span className="flex items-center gap-1 text-[12px] text-white/50">
-                          <Users className="w-3.5 h-3.5 text-blue-400/30" />
-                          {sq.players}
-                        </span>
-                        <span className="flex items-center gap-1 text-[12px] text-white/50">
-                          <Users2 className="w-3.5 h-3.5 text-blue-400/30" />
-                          {sq.staff}
-                        </span>
-                        <ChevronRight className="w-3.5 h-3.5 text-white/15 ml-auto" />
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {list.map((sq) => (
+                      <SquadCard key={sq.id} sq={sq} onOpen={() => setSelectedSquadId(sq.id)} />
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}

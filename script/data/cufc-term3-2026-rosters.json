@@ -1,0 +1,2559 @@
+[
+ {
+  "name": "U9 Kiwis",
+  "age_grade": 9,
+  "competition": "Pre-Academy entry",
+  "band": "youth",
+  "coach": "Ian Hughes",
+  "display_order": 7,
+  "source_title": "U9 - Kiwis - Ian Hughes",
+  "players": [
+   {
+    "first": "Stanley",
+    "last": "Reynolds",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Jantira",
+    "last": "Gurr",
+    "dob": "2018-08-16",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 6
+   },
+   {
+    "first": "Nathaniel",
+    "last": "Chang",
+    "dob": "2018-01-24",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 7
+   },
+   {
+    "first": "Amitai",
+    "last": "Wong king",
+    "dob": "2019-02-05",
+    "birth_year": 2019,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Daario",
+    "last": "Gordon",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Fionn",
+    "last": "Carney",
+    "dob": null,
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 10
+   }
+  ]
+ },
+ {
+  "name": "U9 Kakapos",
+  "age_grade": 9,
+  "competition": "Pre-Academy entry",
+  "band": "youth",
+  "coach": "Lachlan Jansen",
+  "display_order": 8,
+  "source_title": "U9 - Kakapos -  Lachlan Jansen",
+  "players": [
+   {
+    "first": "Wyatt",
+    "last": "Todd",
+    "dob": "2017-10-30",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 16
+   },
+   {
+    "first": "Manu",
+    "last": "Lambie",
+    "dob": "2017-01-09",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 17
+   },
+   {
+    "first": "Alex",
+    "last": "Mullaney",
+    "dob": "2017-07-05",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 18
+   },
+   {
+    "first": "Max",
+    "last": "Williams",
+    "dob": "2018-06-05",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 19
+   },
+   {
+    "first": "Alisha",
+    "last": "Mcbride",
+    "dob": "2017-04-01",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 20
+   },
+   {
+    "first": "Cedric",
+    "last": "Hornabrook",
+    "dob": "2017-12-15",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 21
+   },
+   {
+    "first": "Finn",
+    "last": "Jones",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 22
+   }
+  ]
+ },
+ {
+  "name": "U9 Sparrows",
+  "age_grade": 9,
+  "competition": "Pre-Academy entry",
+  "band": "youth",
+  "coach": null,
+  "display_order": 9,
+  "source_title": "U9 - Sparrow's -",
+  "players": [
+   {
+    "first": "Mehran",
+    "last": "Alizada",
+    "dob": "2017-07-05",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 27
+   },
+   {
+    "first": "Santiago",
+    "last": "Goncalves",
+    "dob": "2018-10-15",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 28
+   },
+   {
+    "first": "Henry",
+    "last": "Davis",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 29
+   },
+   {
+    "first": "Luca",
+    "last": "Wahrlich",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 30
+   },
+   {
+    "first": "Teyhan",
+    "last": "Samaranayaka",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 31
+   },
+   {
+    "first": "Hendrix",
+    "last": "Meek",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 32
+   },
+   {
+    "first": "Felix",
+    "last": "Sinclair-Butterick",
+    "dob": "2017-09-03",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 33
+   },
+   {
+    "first": "Abbas",
+    "last": "Ahmadi",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 34
+   }
+  ]
+ },
+ {
+  "name": "U9 Pukekos",
+  "age_grade": 9,
+  "competition": "Pre-Academy entry",
+  "band": "youth",
+  "coach": "James",
+  "display_order": 10,
+  "source_title": "U9 - Pukeko's - James",
+  "players": [
+   {
+    "first": "Jacob",
+    "last": "Mansour",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 38
+   },
+   {
+    "first": "Nawranuddin",
+    "last": "Chowdhurry",
+    "dob": "2017-06-08",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 39
+   },
+   {
+    "first": "Thiago",
+    "last": "Echiverri",
+    "dob": null,
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 40
+   },
+   {
+    "first": "Sotearach",
+    "last": "Haimay",
+    "dob": null,
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 41
+   },
+   {
+    "first": "Charlie",
+    "last": "Salmond",
+    "dob": "2018-01-31",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 42
+   },
+   {
+    "first": "Lucas",
+    "last": "Feng",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 43
+   },
+   {
+    "first": "Jack",
+    "last": "Hornby",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 44
+   },
+   {
+    "first": "Astle",
+    "last": "Robert's",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 45
+   }
+  ]
+ },
+ {
+  "name": "U9 Fantails",
+  "age_grade": 9,
+  "competition": "Pre-Academy entry",
+  "band": "youth",
+  "coach": "Will",
+  "display_order": 11,
+  "source_title": "U9 - Fantail's - Will",
+  "players": [
+   {
+    "first": "Karn",
+    "last": "Singsuphakkun",
+    "dob": "2017-04-06",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 49
+   },
+   {
+    "first": "Ershad",
+    "last": "Alizada",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 50
+   },
+   {
+    "first": "Emerson",
+    "last": "Hamilton-Petrie",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 51
+   },
+   {
+    "first": "Oscar",
+    "last": "O'Byrne",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 52
+   },
+   {
+    "first": "Benjamin",
+    "last": "Solomons",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 53
+   },
+   {
+    "first": "Edwin",
+    "last": "Lappage",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 54
+   },
+   {
+    "first": "Willem",
+    "last": "Farrant",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 55
+   },
+   {
+    "first": "Zach",
+    "last": "Schroder",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 56
+   }
+  ]
+ },
+ {
+  "name": "U9 Magpies",
+  "age_grade": 9,
+  "competition": "Pre-Academy entry",
+  "band": "youth",
+  "coach": null,
+  "display_order": 12,
+  "source_title": "U9 - Magpie's -",
+  "players": [
+   {
+    "first": "Max",
+    "last": "Morreau",
+    "dob": "2018-08-17",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 60
+   },
+   {
+    "first": "Micah",
+    "last": "Hansen",
+    "dob": "2016-12-25",
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 61
+   },
+   {
+    "first": "Benjamin",
+    "last": "Cochrane",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 62
+   },
+   {
+    "first": "Mitch",
+    "last": "Mardon",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 63
+   },
+   {
+    "first": "Usman",
+    "last": "Baraki",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 64
+   },
+   {
+    "first": "Abbas",
+    "last": "Qurbanzada",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 65
+   }
+  ]
+ },
+ {
+  "name": "U10 Blue",
+  "age_grade": 10,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Tom Holbutt",
+  "display_order": 13,
+  "source_title": "U10 Blue - Tom Holbutt",
+  "players": [
+   {
+    "first": "Oliver",
+    "last": "Holbutt",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Luke",
+    "last": "Webb",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 6
+   },
+   {
+    "first": "Jayden",
+    "last": "Wang",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 7
+   },
+   {
+    "first": "Max",
+    "last": "Caldwell",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Hugo",
+    "last": "Le Breton",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Toby",
+    "last": "Mitchell",
+    "dob": "2016-01-06",
+    "birth_year": 2016,
+    "position": "GK",
+    "notes": null,
+    "sheet_row": 10
+   },
+   {
+    "first": "Liam",
+    "last": "Bustin",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 11
+   },
+   {
+    "first": "Noah",
+    "last": "May",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 12
+   },
+   {
+    "first": "Max",
+    "last": "Havill",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 13
+   }
+  ]
+ },
+ {
+  "name": "U10 White",
+  "age_grade": 10,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Luca Bocock",
+  "display_order": 14,
+  "source_title": "U10 White - Luca Bocock",
+  "players": [
+   {
+    "first": "Casey",
+    "last": "Wogan",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 18
+   },
+   {
+    "first": "Oscar",
+    "last": "Penston",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 19
+   },
+   {
+    "first": "Nate",
+    "last": "Slavov",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 20
+   },
+   {
+    "first": "Ethan",
+    "last": "Domenech-Beltran",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 21
+   },
+   {
+    "first": "Ollie",
+    "last": "Stevens",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 22
+   },
+   {
+    "first": "Brodie",
+    "last": "Carrie",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 23
+   },
+   {
+    "first": "Theo",
+    "last": "Fox",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 24
+   },
+   {
+    "first": "Blake",
+    "last": "Abbot",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 25
+   },
+   {
+    "first": "Mohamed",
+    "last": "Al Ghanem",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 26
+   },
+   {
+    "first": "Beauden",
+    "last": "Whittle",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 27
+   }
+  ]
+ },
+ {
+  "name": "U10 Yellow",
+  "age_grade": 10,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Bray Whitecliff",
+  "display_order": 15,
+  "source_title": "U10 Yellow - Bray Whitecliff",
+  "players": [
+   {
+    "first": "Kade",
+    "last": "Cunningham",
+    "dob": "2017-03-22",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 31
+   },
+   {
+    "first": "Oscar",
+    "last": "Gabites",
+    "dob": "2017-09-01",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 32
+   },
+   {
+    "first": "Lucas",
+    "last": "Wang",
+    "dob": "2018-07-20",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 33
+   },
+   {
+    "first": "Patrick",
+    "last": "Finn",
+    "dob": "2017-05-19",
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 34
+   },
+   {
+    "first": "Boston",
+    "last": "Mc Donald",
+    "dob": "2016-12-30",
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 35
+   },
+   {
+    "first": "Beau",
+    "last": "Britton",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 36
+   },
+   {
+    "first": "Stefano",
+    "last": "Sebastian",
+    "dob": "2018-02-13",
+    "birth_year": 2018,
+    "position": null,
+    "notes": null,
+    "sheet_row": 37
+   },
+   {
+    "first": "Shinyoung",
+    "last": "Lee",
+    "dob": null,
+    "birth_year": null,
+    "position": null,
+    "notes": null,
+    "sheet_row": 38
+   },
+   {
+    "first": "Bailey",
+    "last": "Gordon-Bhebe",
+    "dob": "2016-04-27",
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 39
+   },
+   {
+    "first": "Teddy",
+    "last": "Patterson",
+    "dob": "2016-07-14",
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 40
+   }
+  ]
+ },
+ {
+  "name": "U9/10 Gold",
+  "age_grade": 10,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Graham Pearce",
+  "display_order": 16,
+  "source_title": "U9/10 Gold - Graham Pearce",
+  "players": [
+   {
+    "first": "Sol",
+    "last": "Stewart",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 44
+   },
+   {
+    "first": "Udayveer",
+    "last": "Singh",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 45
+   },
+   {
+    "first": "Flynn",
+    "last": "Pearce",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 46
+   },
+   {
+    "first": "Rahman",
+    "last": "Baraki",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": "Roster note: (Mustafa)",
+    "sheet_row": 47
+   },
+   {
+    "first": "Ryan",
+    "last": "Cui",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 48
+   },
+   {
+    "first": "James",
+    "last": "Yee",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 49
+   },
+   {
+    "first": "Jai Sriman",
+    "last": "Narayana Vadlamudi",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 50
+   },
+   {
+    "first": "Christiano",
+    "last": "Sebastian",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 51
+   },
+   {
+    "first": "Stella",
+    "last": "Sumner",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 52
+   },
+   {
+    "first": "Mason",
+    "last": "Bannon",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 53
+   }
+  ]
+ },
+ {
+  "name": "U10 Royal",
+  "age_grade": 10,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Connor Elsworth",
+  "display_order": 17,
+  "source_title": "U10  - Royal - Connor Elsworth",
+  "players": [
+   {
+    "first": "Ariki",
+    "last": "Karetai",
+    "dob": "2016-11-21",
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 57
+   },
+   {
+    "first": "Abel",
+    "last": "Britto",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 58
+   },
+   {
+    "first": "Priyansh",
+    "last": "Poudel",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 59
+   },
+   {
+    "first": "Elijah",
+    "last": "Kambuta",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 60
+   },
+   {
+    "first": "Ali",
+    "last": "Sena",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 61
+   },
+   {
+    "first": "Illia",
+    "last": "Malyasev",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 62
+   },
+   {
+    "first": "Amir",
+    "last": "Ali Rahimi",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 63
+   },
+   {
+    "first": "Ahmad",
+    "last": "darwish",
+    "dob": "2016-05-30",
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 64
+   },
+   {
+    "first": "Lakshveer",
+    "last": "TBC",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": "Surname blank on Paul's roster",
+    "sheet_row": 65
+   },
+   {
+    "first": "Yevsey",
+    "last": "Koulanov",
+    "dob": null,
+    "birth_year": 2017,
+    "position": null,
+    "notes": null,
+    "sheet_row": 66
+   }
+  ]
+ },
+ {
+  "name": "U11 Blue",
+  "age_grade": 11,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Lew Gordon",
+  "display_order": 18,
+  "source_title": "U11 Blue - Lew Gordon",
+  "players": [
+   {
+    "first": "Liam",
+    "last": "Cron",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Quentin",
+    "last": "Que",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 6
+   },
+   {
+    "first": "Finn",
+    "last": "Keogh",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 7
+   },
+   {
+    "first": "Zachary",
+    "last": "Tan",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Alierfan",
+    "last": "Qambari",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Elian",
+    "last": "Gallardo",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 10
+   },
+   {
+    "first": "Peter",
+    "last": "Carey",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 11
+   },
+   {
+    "first": "Rogan",
+    "last": "Lee",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 12
+   },
+   {
+    "first": "Noah",
+    "last": "Walls",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 13
+   },
+   {
+    "first": "Archer",
+    "last": "Marsh",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 14
+   }
+  ]
+ },
+ {
+  "name": "U11 White",
+  "age_grade": 11,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Tony Harvey",
+  "display_order": 19,
+  "source_title": "U11 White - Tony Harvey",
+  "players": [
+   {
+    "first": "Jeremy",
+    "last": "Harvet",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 21
+   },
+   {
+    "first": "Mario",
+    "last": "Lupi",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 22
+   },
+   {
+    "first": "Tony",
+    "last": "Liu",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 23
+   },
+   {
+    "first": "Harry",
+    "last": "Rose",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 24
+   },
+   {
+    "first": "Ezra",
+    "last": "Shen",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 25
+   },
+   {
+    "first": "Jax",
+    "last": "Bright",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 26
+   },
+   {
+    "first": "Ezekiel",
+    "last": "Johns",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 27
+   },
+   {
+    "first": "Angelou",
+    "last": "Brown",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 28
+   },
+   {
+    "first": "Moein",
+    "last": "Hussaini",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 29
+   },
+   {
+    "first": "Samuel",
+    "last": "Ma",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 30
+   },
+   {
+    "first": "Eli",
+    "last": "Axcell-Stephens",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": "Playing Rugby",
+    "sheet_row": 31
+   }
+  ]
+ },
+ {
+  "name": "U11 Yellow",
+  "age_grade": 11,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Omid Rayfee",
+  "display_order": 20,
+  "source_title": "U11 Yellow - Omid Rayfee",
+  "players": [
+   {
+    "first": "Rayeed - Mousufuddin",
+    "last": "Chowdhurry",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 36
+   },
+   {
+    "first": "Anthony",
+    "last": "Lopes",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 37
+   },
+   {
+    "first": "Ashton",
+    "last": "McArthur",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 38
+   },
+   {
+    "first": "Cameron",
+    "last": "Yee",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 39
+   },
+   {
+    "first": "Max",
+    "last": "Jiang",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 40
+   },
+   {
+    "first": "Subhan",
+    "last": "Ali",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 41
+   },
+   {
+    "first": "Josh",
+    "last": "Wang",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 42
+   },
+   {
+    "first": "Jenson",
+    "last": "Boyd",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 43
+   },
+   {
+    "first": "Hunter",
+    "last": "Donovan",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 44
+   },
+   {
+    "first": "Hadi",
+    "last": "Hussani",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 45
+   },
+   {
+    "first": "Teynuk",
+    "last": "Samaranayaka",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 46
+   }
+  ]
+ },
+ {
+  "name": "U10/11 Gold",
+  "age_grade": 11,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Scott Saurin",
+  "display_order": 21,
+  "source_title": "U10/11 Gold - Scott Saurin",
+  "players": [
+   {
+    "first": "Jack",
+    "last": "De Saurin",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 51
+   },
+   {
+    "first": "Garren",
+    "last": "Owhojeta",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 52
+   },
+   {
+    "first": "Rafa",
+    "last": "Vianna",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 53
+   },
+   {
+    "first": "Leo",
+    "last": "Lazo",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 54
+   },
+   {
+    "first": "Subhan",
+    "last": "Heydari",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 55
+   },
+   {
+    "first": "Bailey",
+    "last": "Fuller",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 56
+   },
+   {
+    "first": "Angus",
+    "last": "Pearce",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 57
+   },
+   {
+    "first": "Yerassyl",
+    "last": "Yermek",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 58
+   },
+   {
+    "first": "Lathan",
+    "last": "Harris O'Callaghan",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 59
+   },
+   {
+    "first": "Axel",
+    "last": "Paguayan",
+    "dob": null,
+    "birth_year": 2016,
+    "position": null,
+    "notes": null,
+    "sheet_row": 60
+   }
+  ]
+ },
+ {
+  "name": "U12 Blue",
+  "age_grade": 12,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Josh Sapsford",
+  "display_order": 22,
+  "source_title": "U12 Blue -Josh Sapsford",
+  "players": [
+   {
+    "first": "Koden",
+    "last": "Liu",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Monty",
+    "last": "Fox",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 6
+   },
+   {
+    "first": "Hurley",
+    "last": "Edmonds",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 7
+   },
+   {
+    "first": "Tommy",
+    "last": "Arrowsmith",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Taiwa",
+    "last": "Lim",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Dannie",
+    "last": "Thomas",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 10
+   },
+   {
+    "first": "Callum",
+    "last": "Fraser",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 11
+   },
+   {
+    "first": "Judah",
+    "last": "Burns",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 12
+   },
+   {
+    "first": "Riaan",
+    "last": "Schvede",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 13
+   },
+   {
+    "first": "Johaan",
+    "last": "George",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 14
+   },
+   {
+    "first": "Brad",
+    "last": "McLaughlin",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 15
+   },
+   {
+    "first": "Hunter",
+    "last": "Leathem",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 16
+   },
+   {
+    "first": "Caleb",
+    "last": "Orme",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 17
+   }
+  ]
+ },
+ {
+  "name": "U12 White",
+  "age_grade": 12,
+  "competition": "Pre-Academy",
+  "band": "youth",
+  "coach": "Sam Cosham",
+  "display_order": 23,
+  "source_title": "U12 White - Sam Cosham",
+  "players": [
+   {
+    "first": "Jim",
+    "last": "Chamberlain",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 21
+   },
+   {
+    "first": "Yaraslov",
+    "last": "Koulnov",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 22
+   },
+   {
+    "first": "Isaac",
+    "last": "Van Druten",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 23
+   },
+   {
+    "first": "David",
+    "last": "Soloviv",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 24
+   },
+   {
+    "first": "Santiago",
+    "last": "Mendoza",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 25
+   },
+   {
+    "first": "Xan",
+    "last": "Nuthall",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 26
+   },
+   {
+    "first": "Hunter",
+    "last": "Ballans",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 27
+   },
+   {
+    "first": "Marko",
+    "last": "Ile",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 28
+   },
+   {
+    "first": "Taha",
+    "last": "Nabi",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 29
+   },
+   {
+    "first": "Andrew",
+    "last": "Gai",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 30
+   },
+   {
+    "first": "Arush",
+    "last": "SELWYN",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 31
+   },
+   {
+    "first": "Panharith",
+    "last": "Nhiv",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 32
+   },
+   {
+    "first": "Connor",
+    "last": "Carney",
+    "dob": null,
+    "birth_year": 2015,
+    "position": null,
+    "notes": null,
+    "sheet_row": 33
+   }
+  ]
+ },
+ {
+  "name": "U13 Blue",
+  "age_grade": 13,
+  "competition": "Academy",
+  "band": "academy",
+  "coach": "Ash Fitzpatrick",
+  "display_order": 24,
+  "source_title": "U13 BLUE - Ash Fitzpatrick",
+  "players": [
+   {
+    "first": "Beckett",
+    "last": "Sumner",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Charlie",
+    "last": "Hayes",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 6
+   },
+   {
+    "first": "David",
+    "last": "Smiley",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 7
+   },
+   {
+    "first": "Jack",
+    "last": "Wood",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Nate",
+    "last": "Mitchell",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Cooper",
+    "last": "Caldwell",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 10
+   },
+   {
+    "first": "Tyler",
+    "last": "Walls",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 11
+   },
+   {
+    "first": "Edison",
+    "last": "Tiong",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 12
+   },
+   {
+    "first": "Indi",
+    "last": "Haydon-Uren",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 13
+   },
+   {
+    "first": "Manni",
+    "last": "Singh",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 14
+   },
+   {
+    "first": "Troy",
+    "last": "Timola",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 15
+   },
+   {
+    "first": "Max",
+    "last": "Morgan",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": "New",
+    "sheet_row": 16
+   }
+  ]
+ },
+ {
+  "name": "U13 White",
+  "age_grade": 13,
+  "competition": "Academy",
+  "band": "academy",
+  "coach": "Oliver Feint",
+  "display_order": 25,
+  "source_title": "U13 WHITE - Oliver Feint",
+  "players": [
+   {
+    "first": "Jasper",
+    "last": "Jushi",
+    "dob": null,
+    "birth_year": 2014,
+    "position": null,
+    "notes": null,
+    "sheet_row": 21
+   },
+   {
+    "first": "Tamiranashe",
+    "last": "Saruwaka",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 22
+   },
+   {
+    "first": "Seth",
+    "last": "Payne - Buabin",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 23
+   },
+   {
+    "first": "Lachlan",
+    "last": "Feeney",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 24
+   },
+   {
+    "first": "Mario",
+    "last": "Dominic - Beltran",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 25
+   },
+   {
+    "first": "Connor",
+    "last": "Wogan",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 26
+   },
+   {
+    "first": "Fox",
+    "last": "Mosen",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 27
+   },
+   {
+    "first": "Hashim",
+    "last": "Bacha",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 28
+   },
+   {
+    "first": "Benji",
+    "last": "Gomez",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 29
+   },
+   {
+    "first": "Sina",
+    "last": "Rayfee",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 30
+   },
+   {
+    "first": "Jacob",
+    "last": "DeSilva",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 31
+   },
+   {
+    "first": "Sheresh",
+    "last": "Nautiyal",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 32
+   }
+  ]
+ },
+ {
+  "name": "U14 Academy",
+  "age_grade": 14,
+  "competition": "Academy",
+  "band": "academy",
+  "coach": "Luca Bocock",
+  "display_order": 6,
+  "source_title": "U14 Academy - Luca Bocock",
+  "players": [
+   {
+    "first": "Cain",
+    "last": "Soppett",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Grayson",
+    "last": "Seddon",
+    "dob": null,
+    "birth_year": 2013,
+    "position": null,
+    "notes": "Marked \"(L)\" on Paul's roster",
+    "sheet_row": 6
+   },
+   {
+    "first": "Martino",
+    "last": "Llorens",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": "Marked \"(L)\" on Paul's roster",
+    "sheet_row": 7
+   },
+   {
+    "first": "Jamie",
+    "last": "Donald",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Kamran",
+    "last": "Ahmed",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Mustafa",
+    "last": "Qurbanzada",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 10
+   },
+   {
+    "first": "Finn",
+    "last": "Treacy",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 11
+   },
+   {
+    "first": "Warren",
+    "last": "Guo",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 12
+   },
+   {
+    "first": "Ali",
+    "last": "Salehi",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 13
+   },
+   {
+    "first": "Diesel",
+    "last": "Macca",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": "Marked \"(L)\" on Paul's roster",
+    "sheet_row": 14
+   },
+   {
+    "first": "Isaac",
+    "last": "Young",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 15
+   },
+   {
+    "first": "Ayodeji",
+    "last": "Fasheun",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 16
+   },
+   {
+    "first": "Raphael",
+    "last": "Ndondo",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 17
+   },
+   {
+    "first": "Samuel",
+    "last": "Clements",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 18
+   },
+   {
+    "first": "Archie",
+    "last": "Hodgsen",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 19
+   },
+   {
+    "first": "Saed",
+    "last": "Nuradim",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 20
+   },
+   {
+    "first": "Arseniy",
+    "last": "Koulanov",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 21
+   }
+  ]
+ },
+ {
+  "name": "U15 Academy",
+  "age_grade": 15,
+  "competition": "Academy",
+  "band": "academy",
+  "coach": "Sam Cosham",
+  "display_order": 5,
+  "source_title": "U15 Academy - Sam Cosham",
+  "players": [
+   {
+    "first": "Denver",
+    "last": "Little",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Patrick",
+    "last": "O'Bryne",
+    "dob": null,
+    "birth_year": 2012,
+    "position": null,
+    "notes": "Marked \"(L)\" on Paul's roster",
+    "sheet_row": 6
+   },
+   {
+    "first": "Mahdi",
+    "last": "Husseini",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 7
+   },
+   {
+    "first": "Aashman",
+    "last": "Chandratrey",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Son",
+    "last": "Nguyen",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Daniel",
+    "last": "Carey",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 10
+   },
+   {
+    "first": "Prince",
+    "last": "Kufa",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 11
+   },
+   {
+    "first": "Nicolas",
+    "last": "Rechkunov",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": "Marked \"(L)\" on Paul's roster",
+    "sheet_row": 12
+   },
+   {
+    "first": "Hugo",
+    "last": "Sales",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 13
+   },
+   {
+    "first": "Ryan",
+    "last": "McIlwrick",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 14
+   },
+   {
+    "first": "Ryan",
+    "last": "Pongracz",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": "Marked \"(L)\" on Paul's roster",
+    "sheet_row": 15
+   },
+   {
+    "first": "Souroush",
+    "last": "Mohseni",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 16
+   },
+   {
+    "first": "Ali",
+    "last": "Reza Karimi",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 17
+   },
+   {
+    "first": "Aiden",
+    "last": "Pethig",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 18
+   },
+   {
+    "first": "George",
+    "last": "Brietenden",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 19
+   },
+   {
+    "first": "Jacob",
+    "last": "Sales",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": null,
+    "sheet_row": 20
+   },
+   {
+    "first": "Sebastian",
+    "last": "Link",
+    "dob": null,
+    "birth_year": 2011,
+    "position": null,
+    "notes": "Marked \"(L)\" on Paul's roster",
+    "sheet_row": 21
+   }
+  ]
+ },
+ {
+  "name": "U17 Academy",
+  "age_grade": 17,
+  "competition": "Academy",
+  "band": "academy",
+  "coach": "James Malthus",
+  "display_order": 4,
+  "source_title": "U17 Academy - James Malthus",
+  "players": [
+   {
+    "first": "Jesse",
+    "last": "Little",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 5
+   },
+   {
+    "first": "Cameron",
+    "last": "McCaskill",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 6
+   },
+   {
+    "first": "Aiden",
+    "last": "Hodgsen",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 7
+   },
+   {
+    "first": "Scott",
+    "last": "Gilby",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 8
+   },
+   {
+    "first": "Daniel",
+    "last": "Bell",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 9
+   },
+   {
+    "first": "Alijan",
+    "last": "Quebanzada",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 10
+   },
+   {
+    "first": "Olllie",
+    "last": "Wheatland",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 11
+   },
+   {
+    "first": "Ollie",
+    "last": "Rees",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 12
+   },
+   {
+    "first": "Loch",
+    "last": "Stevens",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 13
+   },
+   {
+    "first": "Fritz",
+    "last": "Cantos",
+    "dob": null,
+    "birth_year": 2010,
+    "position": null,
+    "notes": null,
+    "sheet_row": 14
+   },
+   {
+    "first": "Peter",
+    "last": "Chapman",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 15
+   },
+   {
+    "first": "Josh",
+    "last": "Manege",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 16
+   },
+   {
+    "first": "Richard",
+    "last": "Faalago",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 17
+   },
+   {
+    "first": "Thom",
+    "last": "Sweeny",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 18
+   },
+   {
+    "first": "Bobby",
+    "last": "Careford",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 19
+   },
+   {
+    "first": "Xavier",
+    "last": "Barnett",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 20
+   },
+   {
+    "first": "Arlo",
+    "last": "Moran",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 21
+   },
+   {
+    "first": "Benjamin",
+    "last": "Drudi",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 22
+   },
+   {
+    "first": "Luca",
+    "last": "Molina",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 23
+   },
+   {
+    "first": "Osiame",
+    "last": "Mbhele",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 24
+   },
+   {
+    "first": "Ali",
+    "last": "Rafee",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": null,
+    "sheet_row": 25
+   }
+  ]
+ },
+ {
+  "name": "NXT (U20)",
+  "age_grade": 20,
+  "competition": "Development",
+  "band": "senior",
+  "coach": "Travis Graham",
+  "display_order": 2,
+  "source_title": "NXT - U20's - Travis Graham",
+  "players": [
+   {
+    "first": "Nicolas",
+    "last": "Montoya",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": "U17",
+    "sheet_row": 5
+   },
+   {
+    "first": "Dravend",
+    "last": "Henry",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": "U17",
+    "sheet_row": 6
+   },
+   {
+    "first": "Max",
+    "last": "Freeman",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": "U17",
+    "sheet_row": 7
+   },
+   {
+    "first": "Jack",
+    "last": "Hocken",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": "U17; Back Playing",
+    "sheet_row": 8
+   },
+   {
+    "first": "Sena",
+    "last": "Vesty",
+    "dob": null,
+    "birth_year": 2009,
+    "position": null,
+    "notes": "U17 - injured T1-T2",
+    "sheet_row": 9
+   },
+   {
+    "first": "Callum",
+    "last": "Olsnam",
+    "dob": null,
+    "birth_year": 2008,
+    "position": null,
+    "notes": "U18",
+    "sheet_row": 13
+   },
+   {
+    "first": "Raul",
+    "last": "Demarchi",
+    "dob": null,
+    "birth_year": 2008,
+    "position": null,
+    "notes": "U18",
+    "sheet_row": 14
+   },
+   {
+    "first": "Carter",
+    "last": "Lachlund",
+    "dob": null,
+    "birth_year": 2008,
+    "position": null,
+    "notes": "U18",
+    "sheet_row": 15
+   },
+   {
+    "first": "Sam",
+    "last": "Sheppard",
+    "dob": null,
+    "birth_year": 2008,
+    "position": null,
+    "notes": "U18",
+    "sheet_row": 16
+   },
+   {
+    "first": "Joel",
+    "last": "Thirkell",
+    "dob": null,
+    "birth_year": 2008,
+    "position": null,
+    "notes": "U18",
+    "sheet_row": 17
+   },
+   {
+    "first": "Ollie",
+    "last": "Young",
+    "dob": null,
+    "birth_year": 2008,
+    "position": null,
+    "notes": "U18",
+    "sheet_row": 18
+   },
+   {
+    "first": "Farren",
+    "last": "Bayley",
+    "dob": null,
+    "birth_year": 2008,
+    "position": null,
+    "notes": "U18",
+    "sheet_row": 19
+   },
+   {
+    "first": "Ciaran",
+    "last": "Barnett",
+    "dob": null,
+    "birth_year": 2007,
+    "position": null,
+    "notes": "U19 - Injured T1",
+    "sheet_row": 21
+   },
+   {
+    "first": "Johnson",
+    "last": "Cleland",
+    "dob": null,
+    "birth_year": 2007,
+    "position": null,
+    "notes": "U19",
+    "sheet_row": 22
+   },
+   {
+    "first": "Mackie",
+    "last": "Hanwell",
+    "dob": null,
+    "birth_year": 2006,
+    "position": null,
+    "notes": "U20",
+    "sheet_row": 24
+   },
+   {
+    "first": "Zino",
+    "last": "Badis",
+    "dob": null,
+    "birth_year": 2006,
+    "position": null,
+    "notes": "U20",
+    "sheet_row": 25
+   },
+   {
+    "first": "Shoto",
+    "last": "TBC",
+    "dob": null,
+    "birth_year": 2006,
+    "position": null,
+    "notes": "U20; Surname blank on Paul's roster",
+    "sheet_row": 26
+   }
+  ]
+ }
+]
