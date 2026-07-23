@@ -323,12 +323,19 @@ export default function AdminSessionRoll() {
           ) : (
         <div className="rounded-xl border border-blue-500/[0.08] overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[500px]" data-testid="table-session-roll">
+            {/* A term roll must NOT force a min-width: the 500px floor pushed
+                the Present/Absent buttons off the right of a 390px phone
+                behind a horizontal scroll, so a coach standing on the field
+                could read the roll but not actually take it. */}
+            <table className={`w-full ${isTermRoll ? "" : "min-w-[500px]"}`} data-testid="table-session-roll">
               <thead>
                 <tr className="border-b border-blue-500/[0.06] bg-blue-500/[0.03]">
                   <th className="text-left px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Player</th>
                   <th className="text-left px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold hidden sm:table-cell">Age</th>
-                  <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Status</th>
+                  {/* On a phone the button fill IS the status (solid green =
+                      present, solid amber = absent, both hollow = not marked),
+                      so the badge column stands down to make room for them. */}
+                  <th className={`text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold ${isTermRoll ? "hidden sm:table-cell" : ""}`}>Status</th>
                   {isTermRoll ? (
                     <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold hidden sm:table-cell">Marked</th>
                   ) : (
@@ -380,7 +387,7 @@ export default function AdminSessionRoll() {
                       <td className="px-4 py-3 hidden sm:table-cell">
                         <span className="text-[12px] text-white/45">{formatAge(player.child.dateOfBirth)}</span>
                       </td>
-                      <td className="px-4 py-3 text-center">
+                      <td className={`px-4 py-3 text-center ${isTermRoll ? "hidden sm:table-cell" : ""}`}>
                         {isTermRoll ? (
                           mark === "present" ? (
                             <Badge variant="outline" className="text-[9px] text-emerald-400/80 border-emerald-500/20 bg-emerald-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Present</Badge>
