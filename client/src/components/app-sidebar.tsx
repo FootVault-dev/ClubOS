@@ -81,6 +81,7 @@ import {
   Video,
   Wrench,
   ClipboardList,
+  CloudUpload,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -134,6 +135,8 @@ const campsNav = [
   { tab: "fm-competitions", title: "Competitions", url: "/admin/fm-competitions", icon: Trophy },
   // Free open-training requests from cufc.co.nz (invite-only funnel, U9–U20).
   { tab: "open-trainings", title: "Open Trainings", url: "/admin/open-trainings", icon: CalendarCheck },
+  // Sporty / NZ Football NRS push — super-admin only while in UAT.
+  { tab: "sporty", title: "Sporty NRS", url: "/admin/sporty", icon: CloudUpload },
   { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },

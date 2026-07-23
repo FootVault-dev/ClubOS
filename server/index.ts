@@ -147,6 +147,13 @@ app.use(attributionCookieMiddleware);
   const { registerVideoRoutes } = await import("./videos-routes");
   registerVideoRoutes(app);
 
+  // Sporty / NZ Football NRS — outbound registration push (the FM/Club Hub
+  // pathway, approved by NZF 2026-07-20). Gated by requireTab("sporty"), which
+  // is in SUPER_ADMIN_ONLY_TABS: it pushes children's identity data to a
+  // national register, so it stays Daniel-only through UAT. No public surface.
+  const { registerSportyRoutes } = await import("./sporty-routes");
+  registerSportyRoutes(app);
+
   // Housing — the residency houses at the United Sports Centre: rooms, tenants,
   // rent and utility bills. Admin-only, gated by requireTab("housing") to the
   // venue workspace. No public surface: rent arrears are not a public fact.
@@ -294,6 +301,11 @@ app.use(attributionCookieMiddleware);
   // United Prints: 24h upload-reminder cron.
   const { startPrintCron } = await import("./print-cron");
   startPrintCron();
+
+  // Sporty auto-sync: hourly push of new/changed CUFC registrations to the NRS.
+  // No-ops unless SPORTY_AUTOSYNC=1 AND credentials are installed.
+  const { startSportySyncCron } = await import("./sporty-cron");
+  startSportySyncCron();
 
   // Calendar event reminders: per-minute sweeper.
   const { startReminderCron } = await import("./calendar-invites");
