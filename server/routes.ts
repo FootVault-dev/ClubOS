@@ -4776,7 +4776,10 @@ export async function registerRoutes(
       const ua = String(req.headers["user-agent"] || "");
       const rawEvents = Array.isArray(body.events) ? body.events.slice(0, 50) : [];
       // Bots and empty payloads: accept silently, record nothing.
-      if (!rawEvents.length || detectBot(ua)) return res.json({ ok: true, inserted: 0 });
+      // detectBot takes a BotSignals object, not a bare string — passing the
+      // string made signals.userAgent undefined → isBotUserAgent(undefined)
+      // returns true → EVERY beacon was dropped as a bot (0 impressions ever).
+      if (!rawEvents.length || detectBot({ userAgent: ua })) return res.json({ ok: true, inserted: 0 });
       const wanted = rawEvents
         .filter((e: any) => e && (e.kind === "impression" || e.kind === "view") && typeof e.code === "string" && e.code.trim())
         .map((e: any) => ({ code: e.code.trim().slice(0, 64), kind: e.kind as "impression" | "view" }));
