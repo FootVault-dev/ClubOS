@@ -12,6 +12,7 @@ import {
   Share2, Plus, X, Search, Copy, ExternalLink, Trash2, Users, Clock,
   Check, Link2, Monitor, Smartphone, Tablet, Globe,
   RefreshCw, CircleCheck, CircleX, CircleHelp, MousePointerClick,
+  Eye, Image as ImageIcon, Percent,
 } from "lucide-react";
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -36,6 +37,9 @@ interface SponsorStats {
   totalClicks: number;
   lastClick: string | null;
   byDay: { day: string; clicks: number }[];
+  impressions30d: number;
+  views30d: number;
+  viewUniques30d: number;
 }
 interface Sponsor {
   id: number; organizationId: number; name: string; brand: string;
@@ -45,6 +49,10 @@ interface Sponsor {
   createdAt: string; updatedAt: string;
   stats?: SponsorStats;
 }
+
+// CTR = clicks per impression, as a percentage. "—" when there's no impression
+// data yet (divide-by-zero guard) rather than a misleading 0%/NaN.
+const pct = (num: number, den: number) => den > 0 ? (100 * num / den).toFixed(1) + "%" : "—";
 
 const fmtDate = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -113,6 +121,24 @@ function Kpi({ label, value, icon, accent, sub }: { label: string; value: string
       </div>
       <div className="text-lg font-semibold mt-1">{value}</div>
       {sub && <div className="text-[10px] text-white/30 mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+// Compact reach chips (impressions / views / CTR) for the sponsor table —
+// kept as one narrow column instead of three new columns so the table
+// doesn't get any wider than it already is on small screens.
+function ReachStats({ impressions, views, ctr }: { impressions: number; views: number; ctr: string }) {
+  return (
+    <div className="flex items-center gap-2.5 text-[10px] tabular-nums whitespace-nowrap">
+      <span className="text-white/50" title="Impressions (30d) — times the logo was rendered on a page">
+        <span className="text-white/30">Impr</span> {impressions.toLocaleString()}
+      </span>
+      <span className="text-white/50" title="Views (30d) — actually scrolled into view (≥50% visible ≥1s)">
+        <span className="text-white/30">Views</span> {views.toLocaleString()}
+      </span>
+      <span className="text-white/50" title="CTR (30d) — clicks per impression">
+        <span className="text-white/30">CTR</span> {ctr}
+      </span>
     </div>
   );
 }
@@ -214,10 +240,15 @@ export default function GroupSponsors() {
 
   const kpis = useMemo(() => {
     const live = sponsors.filter(s => showInactive ? true : s.active);
+    const clicks30d = live.reduce((sum, s) => sum + (s.stats?.clicks30d ?? 0), 0);
+    const impressions30d = live.reduce((sum, s) => sum + (s.stats?.impressions30d ?? 0), 0);
     return {
       total: live.length,
-      clicks30d: live.reduce((sum, s) => sum + (s.stats?.clicks30d ?? 0), 0),
+      clicks30d,
       unique30d: live.reduce((sum, s) => sum + (s.stats?.unique30d ?? 0), 0),
+      impressions30d,
+      views30d: live.reduce((sum, s) => sum + (s.stats?.views30d ?? 0), 0),
+      ctr30d: pct(clicks30d, impressions30d),
       down: live.filter(s => s.siteStatus === "down").length,
     };
   }, [sponsors, showInactive]);
@@ -279,9 +310,12 @@ export default function GroupSponsors() {
         </div>
 
         {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 mt-4">
           <Kpi label="Sponsors tracked" value={String(kpis.total)} icon={<Share2 className="w-3.5 h-3.5" />} accent="#3b82f6" />
+          <Kpi label="Impressions (30d)" value={kpis.impressions30d.toLocaleString()} icon={<ImageIcon className="w-3.5 h-3.5" />} accent="#f59e0b" />
+          <Kpi label="Views (30d)" value={kpis.views30d.toLocaleString()} icon={<Eye className="w-3.5 h-3.5" />} accent="#22d3ee" />
           <Kpi label="Clicks (30d)" value={String(kpis.clicks30d)} icon={<MousePointerClick className="w-3.5 h-3.5" />} accent="#0ea5e9" />
+          <Kpi label="CTR (30d)" value={kpis.ctr30d} icon={<Percent className="w-3.5 h-3.5" />} accent="#f472b6" sub="clicks ÷ impressions" />
           <Kpi label="Unique visitors sent (30d)" value={String(kpis.unique30d)} icon={<Users className="w-3.5 h-3.5" />} accent="#a855f7" />
           <Kpi label="Sites down" value={String(kpis.down)} icon={<CircleX className="w-3.5 h-3.5" />} accent={kpis.down > 0 ? "#ef4444" : "#22c55e"} />
         </div>
@@ -339,13 +373,14 @@ export default function GroupSponsors() {
                   </div>
                 )}
                 <div className="overflow-x-auto rounded-xl border border-white/[0.06]">
-                  <table className="w-full text-xs min-w-[820px]">
+                  <table className="w-full text-xs min-w-[940px]">
                     <thead>
                       <tr className="text-white/35 text-[10px] uppercase tracking-wide border-b border-white/[0.06]">
                         <th className="text-left font-medium px-3 py-2">Sponsor</th>
                         <th className="text-left font-medium px-3 py-2">Tier</th>
                         <th className="text-right font-medium px-3 py-2">Clicks (30d)</th>
                         <th className="text-right font-medium px-3 py-2">Unique (30d)</th>
+                        <th className="text-left font-medium px-3 py-2">Reach (30d)</th>
                         <th className="text-right font-medium px-3 py-2">Total sent</th>
                         <th className="text-left font-medium px-3 py-2">Last 30 days</th>
                         <th className="text-left font-medium px-3 py-2">Health</th>
@@ -371,6 +406,13 @@ export default function GroupSponsors() {
                           <td className="px-3 py-2.5 text-white/50">{s.tier || "—"}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-white/85">{s.stats?.clicks30d ?? 0}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-white/60">{s.stats?.unique30d ?? 0}</td>
+                          <td className="px-3 py-2.5">
+                            <ReachStats
+                              impressions={s.stats?.impressions30d ?? 0}
+                              views={s.stats?.views30d ?? 0}
+                              ctr={pct(s.stats?.clicks30d ?? 0, s.stats?.impressions30d ?? 0)}
+                            />
+                          </td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-white/50">{s.openCount}</td>
                           <td className="px-3 py-2.5"><Sparkline data={fillDays(s.stats?.byDay)} /></td>
                           <td className="px-3 py-2.5"><HealthBadge status={s.siteStatus} /></td>
@@ -551,6 +593,10 @@ function SponsorAnalytics({ sponsorId }: { sponsorId: number }) {
   const s = data?.summary || {};
   const clicks = Number(s.clicks || 0);
   const uniques = Number(s.unique_visitors || 0);
+  const impressions = Number(s.impressions ?? 0);
+  const views = Number(s.views ?? 0);
+  const uniqueViewers = Number(s.unique_viewers ?? 0);
+  const ctr = pct(clicks, impressions);
   const byDay = fillDays((data?.byDay || []).map((d: any) => ({ day: d.day, clicks: Number(d.clicks) })));
   const byDevice: { device: string; n: number }[] = (data?.byDevice || []).map((d: any) => ({ device: d.device, n: Number(d.n) }));
   const byReferrer: { referrer: string; n: number }[] = (data?.byReferrer || []).map((d: any) => ({ referrer: d.referrer, n: Number(d.n) }));
@@ -560,16 +606,33 @@ function SponsorAnalytics({ sponsorId }: { sponsorId: number }) {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 text-center">
+          <div className="text-lg font-semibold text-white/90">{impressions.toLocaleString()}</div>
+          <div className="text-[10px] text-white/40 flex items-center justify-center gap-1"><ImageIcon className="w-3 h-3" /> impressions</div>
+        </div>
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 text-center">
+          <div className="text-lg font-semibold text-white/90">{views.toLocaleString()}</div>
+          <div className="text-[10px] text-white/40 flex items-center justify-center gap-1"><Eye className="w-3 h-3" /> views</div>
+        </div>
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 text-center">
+          <div className="text-lg font-semibold text-white/90">{ctr}</div>
+          <div className="text-[10px] text-white/40 flex items-center justify-center gap-1"><Percent className="w-3 h-3" /> CTR</div>
+        </div>
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 text-center">
           <div className="text-lg font-semibold text-white/90">{clicks}</div>
           <div className="text-[10px] text-white/40 flex items-center justify-center gap-1"><MousePointerClick className="w-3 h-3" /> clicks</div>
         </div>
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 text-center">
           <div className="text-lg font-semibold text-white/90">{uniques}</div>
-          <div className="text-[10px] text-white/40 flex items-center justify-center gap-1"><Users className="w-3 h-3" /> unique</div>
+          <div className="text-[10px] text-white/40 flex items-center justify-center gap-1"><Users className="w-3 h-3" /> unique visitors</div>
+        </div>
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 text-center">
+          <div className="text-lg font-semibold text-white/90">{uniqueViewers.toLocaleString()}</div>
+          <div className="text-[10px] text-white/40 flex items-center justify-center gap-1"><Eye className="w-3 h-3" /> unique viewers</div>
         </div>
       </div>
+      <p className="text-[10px] text-white/30 -mt-1">Impression = logo shown · View = actually seen (≥50% in view for ≥1s) · CTR = clicks per impression.</p>
 
       {clicks === 0 ? (
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4 text-center text-[11px] text-white/40">
