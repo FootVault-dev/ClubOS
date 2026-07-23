@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, ne, gt } from "drizzle-orm";
+import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, isNotNull, ne, gt } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import crypto from "crypto";
 import { contentHashOf } from "./studio/hash";
@@ -1377,6 +1377,18 @@ export class DatabaseStorage implements IStorage {
           eq(player.type, "player"),
         ));
 
+      // Walk-ups added to THIS session by a coach — an open trainer or someone
+      // whose fees aren't paid. They have no registration, so they'd otherwise
+      // vanish from the roll the moment it reloaded. Scoped to this session on
+      // purpose: turning up once doesn't put a trialist on every future roll.
+      const guestRows = await db.select({ contact: player, att: attendance })
+        .from(attendance)
+        .innerJoin(player, eq(attendance.contactId, player.id))
+        .where(and(
+          eq(attendance.campDateId, campDateId),
+          isNotNull(attendance.guestKind),
+        ));
+
       const seenContactIds = new Set<number>();
       for (const row of enrolled) {
         const p = row.player;
@@ -1421,7 +1433,32 @@ export class DatabaseStorage implements IStorage {
           parent: (row.guardian ?? null) as any,
           attendance: att || undefined,
           productType: "SESSION",
-        });
+        } as any);
+      }
+
+      // Then the walk-ups. A guest who has since been registered would appear
+      // in BOTH lists, so the registration wins — someone who has paid must
+      // never keep reading as "not paid yet".
+      for (const g of guestRows) {
+        if (seenContactIds.has(g.contact.id)) continue;
+        seenContactIds.add(g.contact.id);
+        const p = g.contact;
+        results.push({
+          child: {
+            id: p.id,
+            firstName: p.firstName,
+            lastName: p.lastName,
+            dateOfBirth: p.dateOfBirth,
+            gender: p.gender,
+            parentId: 0,
+            medical: (p.allergies || p.medicalNotes)
+              ? { allergies: p.allergies, notes: p.medicalNotes } as any
+              : undefined,
+          } as any,
+          parent: null as any,
+          attendance: g.att,
+          productType: "SESSION",
+        } as any);
       }
     }
 

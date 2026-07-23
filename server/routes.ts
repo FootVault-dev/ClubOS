@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents, attendance } from "@shared/schema";
 import { isValidApiScope, API_SCOPES, normalizeProgramFilter, programFilterIsEmpty, programFilterSqlCondition, describeProgramFilter, rejectedProgramTokens, unknownProgramTypes, scopesOutsideProgramFilter, PROGRAM_TYPES, type ProgramFilter } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -15,7 +15,7 @@ import * as watch from "./watch-supabase";
 import { buildConversionAttribution } from "./attribution-stamp";
 import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, reconciliation, recentConversions, personJourney, type ReportParams } from "./attribution-reports";
 import { resolveBehaviorRange, behaviorOverview, behaviorPageDetail, behaviorJourneys, behaviorHours } from "./behavior-reports";
-import { eq, ne, and, or, sql, asc, desc, inArray, isNull, gt, gte, lte, like } from "drizzle-orm";
+import { eq, ne, and, or, sql, asc, desc, inArray, isNull, isNotNull, gt, gte, lte, like, ilike } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
@@ -3212,6 +3212,104 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
+  });
+
+  // ── Walk-ups on the roll ──────────────────────────────────────────────────
+  // A child standing on the field who isn't a confirmed registration: an open
+  // trainer (free trial) or someone whose fees aren't paid. They must be
+  // countable — "how many were here, and how many of those are registered" is
+  // the question the roll exists to answer.
+  const GUEST_KINDS = ["open_training", "unpaid"] as const;
+
+  // Find an existing player so a returning trialist attaches to their own
+  // record instead of minting a second one every week.
+  app.get("/api/admin/roll/player-search", requireAuth, async (req, res) => {
+    try {
+      const q = String(req.query.q ?? "").trim().slice(0, 80);
+      if (q.length < 2) return res.json([]);
+      const like = `%${q}%`;
+      const rows = await db.select({
+        id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName,
+        dateOfBirth: contacts.dateOfBirth,
+      })
+        .from(contacts)
+        .where(and(
+          eq(contacts.type, "player"),
+          or(ilike(contacts.firstName, like), ilike(contacts.lastName, like)),
+        ))
+        .limit(15);
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  app.post("/api/admin/camps/:id/session-roll/guest", requireAuth, async (req, res) => {
+    try {
+      const campId = parseInt(req.params.id);
+      const campDateId = parseInt(req.body?.campDateId);
+      const kind = String(req.body?.kind ?? "");
+      if (!campDateId) return res.status(400).json({ message: "campDateId is required" });
+      if (!GUEST_KINDS.includes(kind as any)) {
+        return res.status(400).json({ message: "Mark them as an open trainer or not paid yet" });
+      }
+
+      // The session must belong to this programme — a campDateId from another
+      // club's programme would otherwise attach a child to their roll.
+      const [session] = await db.select().from(campDates)
+        .where(and(eq(campDates.id, campDateId), eq(campDates.campId, campId)));
+      if (!session) return res.status(404).json({ message: "Session not found" });
+
+      let contactId = req.body?.contactId ? parseInt(req.body.contactId) : null;
+      if (contactId) {
+        const [existing] = await db.select().from(contacts).where(eq(contacts.id, contactId));
+        if (!existing) return res.status(404).json({ message: "Player not found" });
+      } else {
+        const firstName = String(req.body?.firstName ?? "").trim().slice(0, 80);
+        const lastName = String(req.body?.lastName ?? "").trim().slice(0, 80);
+        if (!firstName || !lastName) return res.status(400).json({ message: "First and last name are required" });
+        // A real contact, not a name typed onto the roll line: an open trainer
+        // is a lead to convert, and a name can't be counted across sessions or
+        // turned into a registration later.
+        const [created] = await db.insert(contacts).values({
+          type: "player",
+          firstName, lastName,
+          dateOfBirth: req.body?.dateOfBirth || null,
+          notes: `Added on the ${kind === "open_training" ? "open training" : "unpaid"} roll`,
+        } as any).returning();
+        contactId = created.id;
+      }
+
+      // Present by default — a coach only adds someone who is standing there.
+      try {
+        const [row] = await db.insert(attendance).values({
+          campId, campDateId, contactId,
+          guestKind: kind,
+          status: "present",
+          markedAt: new Date(),
+          markedByUserId: req.session.userId ?? null,
+        } as any).returning();
+        return res.status(201).json(row);
+      } catch {
+        // Already on this roll (the partial unique index) — flip them to the
+        // stated kind rather than erroring at a coach mid-session.
+        const [row] = await db.update(attendance)
+          .set({ guestKind: kind, status: "present", markedAt: new Date() } as any)
+          .where(and(eq(attendance.campDateId, campDateId), eq(attendance.contactId, contactId)))
+          .returning();
+        return res.json(row);
+      }
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Undo a mistaken add. Guests ONLY — a registered player's roll line is a
+  // record of whether they turned up and must not be deletable from here.
+  app.delete("/api/admin/attendance/:id", requireAuth, async (req, res) => {
+    try {
+      const [row] = await db.delete(attendance)
+        .where(and(eq(attendance.id, parseInt(req.params.id)), isNotNull(attendance.guestKind)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Not a manually-added player" });
+      res.json({ ok: true });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
   });
 
   app.patch("/api/admin/attendance/:id", requireAuth, async (req, res) => {

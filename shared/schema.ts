@@ -517,6 +517,11 @@ export const attendance = pgTable("attendance", {
   status: text("status"),
   markedAt: timestamp("marked_at"),
   markedByUserId: integer("marked_by_user_id").references(() => users.id),
+  // Why this person is on the roll without being a confirmed registration.
+  // NULL = a registration (the normal case) · 'open_training' = free
+  // trialist · 'unpaid' = training while the fees are outstanding. Not a DB
+  // enum — new reasons shouldn't need a migration; the route validates it.
+  guestKind: text("guest_kind"),
   note: text("note"),
 });
 
