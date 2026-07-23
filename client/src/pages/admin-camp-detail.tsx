@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link, useLocation } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
+import { programBasePath, useProgramRoute } from "@/lib/program-path";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/format";
 import { ArrowLeft, Calendar, DollarSign, Settings, Percent, Tent, Trash2, Plus, X, Save, FileText, BarChart3, Users, TrendingUp, ChevronRight, UserCheck, UserX, AlertTriangle, Phone, Mail, Clock, User, FlaskConical, Trophy, Eye, Ban, Pencil } from "lucide-react";
@@ -1675,7 +1676,271 @@ function PlayerProfileModal({ player, onClose }: { player: RollPlayer; onClose: 
   );
 }
 
-function SessionsTab({ campId, camp }: { campId: number; camp?: any }) {
+type ProgramPlayer = {
+  childId: number;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string | null;
+  gender: string | null;
+  allergies: string | null;
+  epiPen: boolean;
+  medicalNotes: string | null;
+  parent: { id: number; firstName: string; lastName: string; email: string | null; phone: string | null } | null;
+  status: string;
+  registrationIds: number[];
+  orderNumbers: number[];
+  sessionsBooked: number;
+  firstRegisteredAt: string | null;
+  latestRegisteredAt: string | null;
+};
+
+/** Age in whole years at today, or null when we have no date of birth. */
+function ageFromDob(dob: string | null): number | null {
+  if (!dob) return null;
+  const born = new Date(dob);
+  if (isNaN(born.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - born.getFullYear();
+  const m = now.getMonth() - born.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < born.getDate())) age--;
+  return age;
+}
+
+const PLAYER_STATUS_STYLES: Record<string, string> = {
+  confirmed: "text-emerald-400/70 border-emerald-500/15 bg-emerald-500/10",
+  pending: "text-amber-400/60 border-amber-500/15 bg-amber-500/10",
+  cancelled: "text-red-400/60 border-red-500/15 bg-red-500/10",
+};
+
+/**
+ * Who has actually signed up. First tab on every programme, because "which
+ * kids are in this programme" is the question staff open the page to answer —
+ * Sessions answers "how full is each night", which is the second question.
+ *
+ * One row per child, not per registration. Missing dates of birth are flagged
+ * rather than hidden: the NZF / Mainland Football audit needs a real DOB on
+ * every player, and a blank here is the thing to chase.
+ */
+function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
+  const [, navigate] = useLocation();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const { data: players, isLoading } = useQuery<ProgramPlayer[]>({
+    queryKey: ["/api/admin/camps", campId, "players"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/camps/${campId}/players`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load players");
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return <Skeleton className="h-64 w-full rounded-xl bg-blue-500/[0.04]" />;
+  }
+
+  const all = players ?? [];
+
+  if (all.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <Users className="w-10 h-10 text-blue-400/10 mb-3" />
+        <p className="text-[13px] text-white/25">No players signed up yet</p>
+        <p className="text-[11px] text-white/15 mt-1">Registrations appear here the moment someone books.</p>
+      </div>
+    );
+  }
+
+  const counts = all.reduce<Record<string, number>>((acc, p) => {
+    acc[p.status] = (acc[p.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const missingDob = all.filter(p => !p.dateOfBirth).length;
+
+  const q = search.trim().toLowerCase();
+  const filtered = all.filter(p => {
+    if (statusFilter !== "all" && p.status !== statusFilter) return false;
+    if (!q) return true;
+    const hay = [
+      p.firstName, p.lastName,
+      p.parent?.firstName, p.parent?.lastName, p.parent?.email, p.parent?.phone,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+
+  const exportCsv = () => {
+    const header = ["First name", "Last name", "Date of birth", "Age", "Gender", "Status", "Sessions booked", "Parent", "Parent email", "Parent phone", "Allergies", "EpiPen", "Registered"];
+    const rows = filtered.map(p => [
+      p.firstName,
+      p.lastName,
+      p.dateOfBirth ?? "",
+      ageFromDob(p.dateOfBirth) ?? "",
+      p.gender ?? "",
+      p.status,
+      p.sessionsBooked,
+      p.parent ? `${p.parent.firstName} ${p.parent.lastName}`.trim() : "",
+      p.parent?.email ?? "",
+      p.parent?.phone ?? "",
+      p.allergies ?? "",
+      p.epiPen ? "Yes" : "",
+      p.firstRegisteredAt ? new Date(p.firstRegisteredAt).toLocaleDateString("en-NZ") : "",
+    ]);
+    const esc = (v: any) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = [header, ...rows].map(r => r.map(esc).join(",")).join("\n");
+    const slug = (camp?.slug || camp?.name || "programme").toString().replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${slug}-players.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const chips: { key: string; label: string; count: number }[] = [
+    { key: "all", label: "All", count: all.length },
+    ...["confirmed", "pending", "cancelled"]
+      .filter(s => counts[s])
+      .map(s => ({ key: s, label: s.charAt(0).toUpperCase() + s.slice(1), count: counts[s] })),
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {chips.map(c => (
+            <button
+              key={c.key}
+              onClick={() => setStatusFilter(c.key)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer border ${
+                statusFilter === c.key
+                  ? "bg-blue-500/15 text-blue-400 border-blue-500/25"
+                  : "text-white/35 border-transparent hover:text-white/55 hover:bg-white/[0.03]"
+              }`}
+              data-testid={`filter-players-${c.key}`}
+            >
+              {c.label} <span className="text-white/25">{c.count}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 sm:ml-auto">
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search player or parent…"
+            className="premium-input text-white/80 rounded-xl h-8 text-[12px] w-full sm:w-56"
+            data-testid="input-players-search"
+          />
+          <Button
+            variant="outline"
+            onClick={exportCsv}
+            className="rounded-xl h-8 text-[12px] border-blue-500/20 text-blue-400/60 hover:bg-blue-500/5 cursor-pointer flex-shrink-0"
+            data-testid="button-export-players"
+          >
+            Export CSV
+          </Button>
+        </div>
+      </div>
+
+      {missingDob > 0 && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-amber-500/[0.06] border border-amber-500/15">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400/70 flex-shrink-0 mt-0.5" />
+          <p className="text-[11px] text-amber-200/60">
+            {missingDob} player{missingDob === 1 ? " has" : "s have"} no date of birth on file — NZ Football registration needs one for every player.
+          </p>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-blue-500/[0.08] overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px]" data-testid="table-players">
+            <thead>
+              <tr className="border-b border-blue-500/[0.06] bg-blue-500/[0.03]">
+                <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold">Player</th>
+                <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold">Age</th>
+                <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden md:table-cell">Parent</th>
+                <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden lg:table-cell">Contact</th>
+                <th className="text-center px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden sm:table-cell">Sessions</th>
+                <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(p => {
+                const age = ageFromDob(p.dateOfBirth);
+                return (
+                  <tr
+                    key={p.childId}
+                    onClick={() => navigate(`/admin/contacts/player/${p.childId}`)}
+                    className="border-b border-blue-500/[0.03] hover:bg-blue-500/[0.04] transition-colors cursor-pointer"
+                    data-testid={`row-player-${p.childId}`}
+                  >
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <ChevronRight className="w-3.5 h-3.5 text-white/20 flex-shrink-0" />
+                        <span className="text-[13px] text-white/75 font-medium truncate">{p.firstName} {p.lastName}</span>
+                        {p.epiPen && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/10 border border-red-500/20 text-red-400/80 uppercase tracking-wider flex-shrink-0" title="EpiPen on file">EpiPen</span>
+                        )}
+                        {!p.epiPen && p.allergies && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400/70 uppercase tracking-wider flex-shrink-0" title={p.allergies}>Allergy</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {age !== null ? (
+                        <span className="text-[12px] text-white/55">{age} yrs</span>
+                      ) : (
+                        <span className="text-[11px] text-amber-400/50" title="No date of birth on file">No DOB</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 hidden md:table-cell">
+                      <span className="text-[12px] text-white/50 truncate">
+                        {p.parent ? `${p.parent.firstName} ${p.parent.lastName}`.trim() || "—" : "—"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 hidden lg:table-cell">
+                      <div className="flex flex-col">
+                        {p.parent?.email && <span className="text-[11px] text-white/40 truncate max-w-[220px]">{p.parent.email}</span>}
+                        {p.parent?.phone && <span className="text-[11px] text-white/25 font-mono">{p.parent.phone}</span>}
+                        {!p.parent?.email && !p.parent?.phone && <span className="text-[11px] text-white/20">—</span>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center hidden sm:table-cell">
+                      <span className="text-[12px] text-white/50">{p.sessionsBooked || "—"}</span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Badge
+                        variant="outline"
+                        className={`text-[9px] uppercase tracking-wider no-default-hover-elevate no-default-active-elevate ${PLAYER_STATUS_STYLES[p.status] ?? "text-white/40 border-white/10 bg-white/[0.03]"}`}
+                      >
+                        {p.status}
+                      </Badge>
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-[12px] text-white/25">
+                    No players match that filter.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-white/20 px-1">
+        Showing {filtered.length} of {all.length} player{all.length === 1 ? "" : "s"}. One row per child — a child who registered more than once appears once.
+      </p>
+    </div>
+  );
+}
+
+function SessionsTab({ campId, camp, detailPath }: { campId: number; camp?: any; detailPath: string }) {
   const [, navigate] = useLocation();
 
   const { data: sessions, isLoading } = useQuery<(SessionSummary & { name?: string | null; startTime?: string | null; endTime?: string | null })[]>({
@@ -1742,7 +2007,7 @@ function SessionsTab({ campId, camp }: { campId: number; camp?: any }) {
                       return (
                         <tr
                           key={`${s.campDateId}`}
-                          onClick={() => navigate(`/admin/camps/${campId}/session/${s.campDateId}/SESSION`)}
+                          onClick={() => navigate(`${detailPath}/session/${s.campDateId}/SESSION`)}
                           className="border-b border-blue-500/[0.03] hover:bg-blue-500/[0.04] transition-colors cursor-pointer"
                           data-testid={`row-session-${s.campDateId}`}
                         >
@@ -1849,7 +2114,7 @@ function SessionsTab({ campId, camp }: { campId: number; camp?: any }) {
                     return (
                       <tr
                         key={sessionKey}
-                        onClick={() => navigate(`/admin/camps/${campId}/session/${s.campDateId}/${pt}`)}
+                        onClick={() => navigate(`${detailPath}/session/${s.campDateId}/${pt}`)}
                         className="border-b border-blue-500/[0.03] hover:bg-blue-500/[0.04] transition-colors cursor-pointer"
                         data-testid={`row-session-${s.campDateId}-${pt}`}
                       >
@@ -1908,9 +2173,12 @@ function SessionsTab({ campId, camp }: { campId: number; camp?: any }) {
 }
 
 export default function AdminCampDetail() {
-  const [, params] = useRoute("/admin/camps/:id");
-  const campId = parseInt(params?.id || "0");
-  const [tab, setTab] = useState("sessions");
+  // Matches /admin/camps/:id, /admin/academy/:id and /admin/programs/:id —
+  // `base` is the section the user came in through, so every link on this page
+  // stays inside it and the sidebar keeps the right item highlighted.
+  const route = useProgramRoute();
+  const campId = route?.id || 0;
+  const [tab, setTab] = useState("players");
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const { toast } = useToast();
@@ -1929,14 +2197,14 @@ export default function AdminCampDetail() {
   // Where 'back' goes depends on the workspace AND the program type, since
   // CUFC has a separate /admin/academy list for type === "academy" and
   // /admin/camps for everything else (holiday_camp etc.). Gymnastics uses
-  // a single /admin/programs list. Default to /admin/camps until the camp
-  // record is fetched so the back button is never undefined.
-  const listPath =
-    currentOrg?.slug === "united-gymnastics"
-      ? "/admin/programs"
-      : camp?.type === "academy"
-        ? "/admin/academy"
-        : "/admin/camps";
+  // a single /admin/programs list. Until the camp record loads, fall back to
+  // the section in the URL so the back button is never wrong or undefined.
+  const listPath = camp
+    ? programBasePath(camp, currentOrg?.slug)
+    : route?.base ?? "/admin/camps";
+  // Sub-pages (landing-page editor, session roll) live under the same section
+  // as the page you opened them from — never hard-coded to /admin/camps.
+  const detailPath = `${listPath}/${campId}`;
 
   const updateMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -1965,6 +2233,7 @@ export default function AdminCampDetail() {
 
   const isTermProgram = camp?.scheduleType === "term";
   const tabs = [
+    { key: "players", label: "Players", icon: Users },
     { key: "sessions", label: "Sessions", icon: BarChart3 },
     { key: "content", label: "Content", icon: FileText },
     { key: "dates", label: isTermProgram ? "Schedule" : "Dates & Capacity", icon: Calendar },
@@ -2013,7 +2282,7 @@ export default function AdminCampDetail() {
             <Settings className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Edit</span>
           </Button>
           <Button variant="outline" asChild className="rounded-xl h-8 text-[12px] border-blue-500/20 text-blue-400/60 hover:bg-blue-500/5">
-            <Link href={`/admin/camps/${camp.id}/edit-page`} data-testid="link-edit-page">
+            <Link href={`${detailPath}/edit-page`} data-testid="link-edit-page">
               <FileText className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Edit Page</span>
             </Link>
           </Button>
@@ -2060,7 +2329,8 @@ export default function AdminCampDetail() {
       </div>
 
       <div className="rounded-2xl glass-card p-3 sm:p-5 animate-fade-in-up" style={{ animationDelay: '100ms', opacity: 0 }}>
-        {tab === "sessions" && <SessionsTab campId={campId} camp={camp} />}
+        {tab === "players" && <PlayersTab campId={campId} camp={camp} />}
+        {tab === "sessions" && <SessionsTab campId={campId} camp={camp} detailPath={detailPath} />}
         {tab === "content" && <ContentTab camp={camp} onUpdate={(data) => updateMutation.mutate(data)} />}
         {tab === "dates" && (camp.scheduleType === "term" ? <ClassDatesTab campId={campId} camp={camp} /> : <DatesTab campId={campId} />)}
         {tab === "pricing" && (camp.scheduleType === "term" ? <ClassPricingTab campId={campId} camp={camp} /> : <PricingTab campId={campId} />)}

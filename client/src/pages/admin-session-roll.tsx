@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link } from "wouter";
+import { useProgramRoute } from "@/lib/program-path";
 import { ArrowLeft, UserCheck, UserX, AlertTriangle, Clock, Users, Phone, Mail, User, X, Search } from "lucide-react";
 
 type RollPlayer = {
@@ -113,10 +114,13 @@ function PlayerProfileModal({ player, onClose }: { player: RollPlayer; onClose: 
 }
 
 export default function AdminSessionRoll() {
-  const [, params] = useRoute("/admin/camps/:campId/session/:dateId/:sessionType");
-  const campId = parseInt(params?.campId || "0");
-  const dateId = parseInt(params?.dateId || "0");
-  const sessionType = params?.sessionType || "MORNING";
+  // Matched under whichever section the programme lives in (camps / academy /
+  // programs) so back goes where the user came from.
+  const route = useProgramRoute("/session/:dateId/:sessionType");
+  const campId = route?.id || 0;
+  const detailPath = `${route?.base ?? "/admin/camps"}/${campId}`;
+  const dateId = parseInt(route?.params.dateId || "0");
+  const sessionType = route?.params.sessionType || "MORNING";
   const { toast } = useToast();
   const [selectedPlayer, setSelectedPlayer] = useState<RollPlayer | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -194,7 +198,7 @@ export default function AdminSessionRoll() {
   return (
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
-        <Link href={`/admin/camps/${campId}`}>
+        <Link href={detailPath}>
           <button className="w-8 h-8 rounded-xl bg-white/[0.04] border border-blue-500/[0.08] flex items-center justify-center hover:bg-white/[0.08] transition-colors cursor-pointer" data-testid="link-back-to-camp">
             <ArrowLeft className="w-4 h-4 text-white/40" />
           </button>

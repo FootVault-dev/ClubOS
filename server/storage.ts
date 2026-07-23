@@ -171,6 +171,32 @@ export type DisciplineRow = {
   suspensions: Suspension[];
 };
 
+/**
+ * One row per CHILD on a programme's Players tab — not one per registration.
+ * A child can appear on several registrations (re-registered next term, or a
+ * parent who booked twice), so registrations are folded into a single player
+ * row and counted. Money stays at registration level on purpose: a
+ * registration total covers every child in that booking, so splitting it
+ * per-child would invent a number nobody paid.
+ */
+export type ProgramPlayer = {
+  childId: number;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string | null;
+  gender: string | null;
+  allergies: string | null;
+  epiPen: boolean;
+  medicalNotes: string | null;
+  parent: { id: number; firstName: string; lastName: string; email: string | null; phone: string | null } | null;
+  status: string;                  // best status across their registrations
+  registrationIds: number[];
+  orderNumbers: number[];
+  sessionsBooked: number;          // registration_items tied to a camp date
+  firstRegisteredAt: string | null;
+  latestRegisteredAt: string | null;
+};
+
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -415,6 +441,7 @@ export interface IStorage {
   getCampRegistrationStats(campId: number): Promise<{ totalRegistrations: number; confirmedRegistrations: number; totalRevenueCents: number; totalSessions: number }>;
   getCampRegistrationCounts(): Promise<Record<number, number>>;
   getSessionRoll(campId: number, campDateId: number, sessionType: string): Promise<{ child: Child & { medical?: ChildMedical }; parent: Contact; attendance?: Attendance; productType: string }[]>;
+  getProgramPlayers(campId: number): Promise<ProgramPlayer[]>;
 
   getAllChildren(): Promise<(Child & { medical?: ChildMedical })[]>;
   getChildren(parentId: number): Promise<(Child & { medical?: ChildMedical })[]>;
@@ -1253,6 +1280,105 @@ export class DatabaseStorage implements IStorage {
     }
 
     return results.sort((a, b) => a.child.lastName.localeCompare(b.child.lastName));
+  }
+
+  async getProgramPlayers(campId: number): Promise<ProgramPlayer[]> {
+    // Every registration_item that names a child, across every registration on
+    // this programme. Cancelled/pending rows are included — Daniel wants to see
+    // who has signed up, and the status column tells him where each one sits.
+    const rows = await db.select({
+      childId: children.id,
+      firstName: children.firstName,
+      lastName: children.lastName,
+      dateOfBirth: children.dateOfBirth,
+      gender: children.gender,
+      parentId: contacts.id,
+      parentFirstName: contacts.firstName,
+      parentLastName: contacts.lastName,
+      parentEmail: contacts.email,
+      parentPhone: contacts.phone,
+      registrationId: registrations.id,
+      orderNumber: registrations.orderNumber,
+      status: registrations.status,
+      registeredAt: registrations.registeredAt,
+      campDateId: registrationItems.campDateId,
+    })
+      .from(registrationItems)
+      .innerJoin(registrations, eq(registrationItems.registrationId, registrations.id))
+      .innerJoin(children, eq(registrationItems.childId, children.id))
+      .leftJoin(contacts, eq(children.parentId, contacts.id))
+      .where(eq(registrations.programId, campId));
+
+    // A confirmed registration outranks a pending one, which outranks a
+    // cancelled one — so a child who re-registered after a cancellation reads
+    // as confirmed rather than cancelled.
+    const rank: Record<string, number> = { confirmed: 3, pending: 2, cancelled: 1 };
+
+    const byChild = new Map<number, ProgramPlayer & { _regIds: Set<number> }>();
+    for (const r of rows) {
+      let p = byChild.get(r.childId);
+      if (!p) {
+        p = {
+          childId: r.childId,
+          firstName: r.firstName,
+          lastName: r.lastName,
+          dateOfBirth: r.dateOfBirth ?? null,
+          gender: r.gender ?? null,
+          allergies: null,
+          epiPen: false,
+          medicalNotes: null,
+          parent: r.parentId
+            ? {
+                id: r.parentId,
+                firstName: r.parentFirstName ?? "",
+                lastName: r.parentLastName ?? "",
+                email: r.parentEmail ?? null,
+                phone: r.parentPhone ?? null,
+              }
+            : null,
+          status: r.status,
+          registrationIds: [],
+          orderNumbers: [],
+          sessionsBooked: 0,
+          firstRegisteredAt: null,
+          latestRegisteredAt: null,
+          _regIds: new Set<number>(),
+        };
+        byChild.set(r.childId, p);
+      }
+      if (r.campDateId != null) p.sessionsBooked += 1;
+      if (!p._regIds.has(r.registrationId)) {
+        p._regIds.add(r.registrationId);
+        p.registrationIds.push(r.registrationId);
+        if (r.orderNumber != null) p.orderNumbers.push(r.orderNumber);
+      }
+      if ((rank[r.status] ?? 0) > (rank[p.status] ?? 0)) p.status = r.status;
+      const at = r.registeredAt ? new Date(r.registeredAt).toISOString() : null;
+      if (at) {
+        if (!p.firstRegisteredAt || at < p.firstRegisteredAt) p.firstRegisteredAt = at;
+        if (!p.latestRegisteredAt || at > p.latestRegisteredAt) p.latestRegisteredAt = at;
+      }
+    }
+
+    const players = [...byChild.values()];
+    if (players.length === 0) return [];
+
+    // Medical in one pass — allergies and EpiPen matter most on the U4–U8 roll.
+    const meds = await db.select().from(childMedical)
+      .where(inArray(childMedical.childId, players.map(p => p.childId)));
+    const medByChild = new Map(meds.map(m => [m.childId, m]));
+    for (const p of players) {
+      const m = medByChild.get(p.childId);
+      if (m) {
+        p.allergies = m.allergies ?? null;
+        p.epiPen = Boolean(m.epiPen);
+        p.medicalNotes = m.notes ?? null;
+      }
+    }
+
+    return players
+      .map(({ _regIds, ...p }) => p)
+      .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || "") || (a.firstName || "").localeCompare(b.firstName || ""));
   }
 
   async getCampRegistrationCounts(): Promise<Record<number, number>> {

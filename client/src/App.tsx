@@ -350,10 +350,15 @@ function AdminRouter() {
         <Route path="/admin/cugc-inbox" component={CugcInbox} />
         <Route path="/admin/terms" component={GymnasticsTerms} />
         {/* Reuse the camps detail + landing-page editor — they take a
-            program id and don't care what type the program is. */}
+            program id and don't care what type the program is. Gymnastics
+            programmes live under /admin/programs so the sidebar highlights
+            Programs, not Camps; the /admin/camps aliases stay for old links. */}
+        <Route path="/admin/programs/:id/edit-page" component={AdminEditPage} />
+        <Route path="/admin/programs/:id/session/:dateId/:sessionType" component={AdminSessionRoll} />
+        <Route path="/admin/programs/:id" component={AdminCampDetail} />
         <Route path="/admin/camps/:id/edit-page" component={AdminEditPage} />
+        <Route path="/admin/camps/:id/session/:dateId/:sessionType" component={AdminSessionRoll} />
         <Route path="/admin/camps/:id" component={AdminCampDetail} />
-        <Route path="/admin/camps/:campId/session/:dateId/:sessionType" component={AdminSessionRoll} />
         <Route path="/admin/studio/new" component={StudioNew} />
         <Route path="/admin/studio/:id/signal" component={StudioAnalytics} />
         <Route path="/admin/studio/:id" component={StudioEditor} />
@@ -486,9 +491,15 @@ function AdminRouter() {
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/admin/camps" component={AdminCamps} />
       <Route path="/admin/camps/:id/edit-page" component={AdminEditPage} />
+      <Route path="/admin/camps/:id/session/:dateId/:sessionType" component={AdminSessionRoll} />
       <Route path="/admin/camps/:id" component={AdminCampDetail} />
-      <Route path="/admin/camps/:campId/session/:dateId/:sessionType" component={AdminSessionRoll} />
       <Route path="/admin/academy" component={AdminAcademy} />
+      {/* Academy programmes get their own detail URL so the sidebar keeps
+          Academy highlighted — same components as camps, different section.
+          The /admin/camps/:id aliases above still resolve for old links. */}
+      <Route path="/admin/academy/:id/edit-page" component={AdminEditPage} />
+      <Route path="/admin/academy/:id/session/:dateId/:sessionType" component={AdminSessionRoll} />
+      <Route path="/admin/academy/:id" component={AdminCampDetail} />
       <Route path="/admin/squads" component={AdminSquads} />
       <Route path="/admin/terms" component={GymnasticsTerms} />
       <Route path="/admin/registrations" component={AdminRegistrations} />
@@ -576,7 +587,12 @@ function AdminLayout() {
 
 function App() {
   const [isAdminLogin] = useRoute("/admin/login");
-  const [isAdminEditPage] = useRoute("/admin/camps/:id/edit-page");
+  // The landing-page editor renders full-screen, outside the sidebar layout —
+  // match it under every programme prefix, not just camps.
+  const [isCampsEditPage] = useRoute("/admin/camps/:id/edit-page");
+  const [isAcademyEditPage] = useRoute("/admin/academy/:id/edit-page");
+  const [isProgramsEditPage] = useRoute("/admin/programs/:id/edit-page");
+  const isAdminEditPage = isCampsEditPage || isAcademyEditPage || isProgramsEditPage;
   const [isAdminDeep] = useRoute("/admin/**");
   const [isAdminRoot] = useRoute("/admin");
 

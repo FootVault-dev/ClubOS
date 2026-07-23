@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRoute, useLocation } from "wouter";
+import { useProgramRoute } from "@/lib/program-path";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -349,8 +350,11 @@ function EditableFAQ({ items, onUpdate }: { items: { q: string; a: string }[]; o
 }
 
 export default function AdminEditPage() {
-  const [, params] = useRoute("/admin/camps/:id/edit-page");
-  const campId = params?.id ? parseInt(params.id) : 0;
+  // Matched under whichever section the programme lives in (camps / academy /
+  // programs) so "back" returns to the detail page the user opened this from.
+  const route = useProgramRoute("/edit-page");
+  const campId = route?.id ?? 0;
+  const detailPath = `${route?.base ?? "/admin/camps"}/${campId}`;
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const reviewsRef = useRef<HTMLDivElement>(null);
@@ -509,7 +513,7 @@ export default function AdminEditPage() {
     <div className="min-h-screen relative" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
       <div className="fixed top-0 left-0 right-0 z-[60] bg-slate-900/95 backdrop-blur-lg border-b border-white/10 shadow-lg">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
-          <button onClick={() => navigate(`/admin/camps/${campId}`)} className="flex items-center gap-2 text-white/70 hover:text-white text-[13px] font-medium transition-colors cursor-pointer" data-testid="button-back-admin">
+          <button onClick={() => navigate(detailPath)} className="flex items-center gap-2 text-white/70 hover:text-white text-[13px] font-medium transition-colors cursor-pointer" data-testid="button-back-admin">
             <ArrowLeft className="w-4 h-4" /> Back to Camp
           </button>
           <div className="flex items-center gap-3">

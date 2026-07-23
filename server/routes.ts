@@ -3238,6 +3238,28 @@ export async function registerRoutes(
     }
   });
 
+  // Players on a programme — one row per child, folded across their
+  // registrations. Fenced to the active workspace the same way the
+  // registrations list is: a programme from another club returns 404 rather
+  // than leaking children to a staff member who can't see that club.
+  app.get("/api/admin/camps/:id/players", requireAuth, async (req, res) => {
+    try {
+      const campId = parseInt(req.params.id);
+      const org = await workspaceOrg(req);
+      if (org) {
+        const prog = await storage.getProgram(campId);
+        if (!prog) return res.status(404).json({ message: "Program not found" });
+        if (prog.organizationId && prog.organizationId !== org.id) {
+          return res.status(404).json({ message: "Program not found" });
+        }
+      }
+      const players = await storage.getProgramPlayers(campId);
+      res.json(players);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/admin/camps/:id/dates", requireAuth, async (req, res) => {
     try {
       const campId = parseInt(req.params.id);
