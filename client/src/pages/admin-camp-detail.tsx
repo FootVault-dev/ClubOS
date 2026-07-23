@@ -1677,7 +1677,10 @@ function PlayerProfileModal({ player, onClose }: { player: RollPlayer; onClose: 
 }
 
 type ProgramPlayer = {
-  childId: number;
+  key: string;
+  personType: "contact" | "child";
+  personId: number;
+  profilePath: string;
   firstName: string;
   lastName: string;
   dateOfBirth: string | null;
@@ -1690,6 +1693,7 @@ type ProgramPlayer = {
   registrationIds: number[];
   orderNumbers: number[];
   sessionsBooked: number;
+  paidCents: number | null;
   firstRegisteredAt: string | null;
   latestRegisteredAt: string | null;
 };
@@ -1708,7 +1712,11 @@ function ageFromDob(dob: string | null): number | null {
 
 const PLAYER_STATUS_STYLES: Record<string, string> = {
   confirmed: "text-emerald-400/70 border-emerald-500/15 bg-emerald-500/10",
+  paid: "text-emerald-400/70 border-emerald-500/15 bg-emerald-500/10",
   pending: "text-amber-400/60 border-amber-500/15 bg-amber-500/10",
+  waitlisted: "text-blue-400/60 border-blue-500/15 bg-blue-500/10",
+  partially_refunded: "text-violet-400/60 border-violet-500/15 bg-violet-500/10",
+  refunded: "text-violet-400/60 border-violet-500/15 bg-violet-500/10",
   cancelled: "text-red-400/60 border-red-500/15 bg-red-500/10",
 };
 
@@ -1717,9 +1725,11 @@ const PLAYER_STATUS_STYLES: Record<string, string> = {
  * kids are in this programme" is the question staff open the page to answer —
  * Sessions answers "how full is each night", which is the second question.
  *
- * One row per child, not per registration. Missing dates of birth are flagged
- * rather than hidden: the NZF / Mainland Football audit needs a real DOB on
- * every player, and a blank here is the thing to chase.
+ * One row per player, not per registration, so a child who re-registered shows
+ * once. The Sessions and Paid columns only appear when the programme's data
+ * actually carries them (see ProgramPlayer on the server — academy and camps
+ * store players differently). Missing dates of birth are flagged rather than
+ * hidden: the NZF / Mainland Football audit needs a real DOB on every player.
  */
 function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
   const [, navigate] = useLocation();
@@ -1756,6 +1766,11 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
     return acc;
   }, {});
   const missingDob = all.filter(p => !p.dateOfBirth).length;
+  // Academy programmes book a whole term per player (no per-day lines); camps
+  // book days per child and split one payment across siblings. Show whichever
+  // column the data actually has rather than a column of dashes.
+  const showSessions = all.some(p => p.sessionsBooked > 0);
+  const showPaid = all.some(p => p.paidCents != null);
 
   const q = search.trim().toLowerCase();
   const filtered = all.filter(p => {
@@ -1769,7 +1784,7 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
   });
 
   const exportCsv = () => {
-    const header = ["First name", "Last name", "Date of birth", "Age", "Gender", "Status", "Sessions booked", "Parent", "Parent email", "Parent phone", "Allergies", "EpiPen", "Registered"];
+    const header = ["First name", "Last name", "Date of birth", "Age", "Gender", "Status", "Sessions booked", "Paid (NZD)", "Parent", "Parent email", "Parent phone", "Allergies", "EpiPen", "Registered"];
     const rows = filtered.map(p => [
       p.firstName,
       p.lastName,
@@ -1777,7 +1792,8 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
       ageFromDob(p.dateOfBirth) ?? "",
       p.gender ?? "",
       p.status,
-      p.sessionsBooked,
+      p.sessionsBooked || "",
+      p.paidCents != null ? (p.paidCents / 100).toFixed(2) : "",
       p.parent ? `${p.parent.firstName} ${p.parent.lastName}`.trim() : "",
       p.parent?.email ?? "",
       p.parent?.phone ?? "",
@@ -1862,7 +1878,8 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
                 <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold">Age</th>
                 <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden md:table-cell">Parent</th>
                 <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden lg:table-cell">Contact</th>
-                <th className="text-center px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden sm:table-cell">Sessions</th>
+                {showSessions && <th className="text-center px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden sm:table-cell">Sessions</th>}
+                {showPaid && <th className="text-right px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold hidden sm:table-cell">Paid</th>}
                 <th className="text-left px-4 py-2 text-[10px] text-blue-300/25 uppercase tracking-wider font-semibold">Status</th>
               </tr>
             </thead>
@@ -1871,10 +1888,10 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
                 const age = ageFromDob(p.dateOfBirth);
                 return (
                   <tr
-                    key={p.childId}
-                    onClick={() => navigate(`/admin/contacts/player/${p.childId}`)}
+                    key={p.key}
+                    onClick={() => navigate(p.profilePath)}
                     className="border-b border-blue-500/[0.03] hover:bg-blue-500/[0.04] transition-colors cursor-pointer"
-                    data-testid={`row-player-${p.childId}`}
+                    data-testid={`row-player-${p.key}`}
                   >
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2 min-w-0">
@@ -1907,9 +1924,18 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
                         {!p.parent?.email && !p.parent?.phone && <span className="text-[11px] text-white/20">—</span>}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 text-center hidden sm:table-cell">
-                      <span className="text-[12px] text-white/50">{p.sessionsBooked || "—"}</span>
-                    </td>
+                    {showSessions && (
+                      <td className="px-4 py-2.5 text-center hidden sm:table-cell">
+                        <span className="text-[12px] text-white/50">{p.sessionsBooked || "—"}</span>
+                      </td>
+                    )}
+                    {showPaid && (
+                      <td className="px-4 py-2.5 text-right hidden sm:table-cell">
+                        <span className="text-[12px] text-white/55">
+                          {p.paidCents != null ? formatCurrency(p.paidCents, { fromCents: true }) : "—"}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-4 py-2.5">
                       <Badge
                         variant="outline"
@@ -1923,7 +1949,7 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-[12px] text-white/25">
+                  <td colSpan={4 + (showSessions ? 1 : 0) + (showPaid ? 1 : 0)} className="px-4 py-8 text-center text-[12px] text-white/25">
                     No players match that filter.
                   </td>
                 </tr>
@@ -1934,7 +1960,7 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
       </div>
 
       <p className="text-[11px] text-white/20 px-1">
-        Showing {filtered.length} of {all.length} player{all.length === 1 ? "" : "s"}. One row per child — a child who registered more than once appears once.
+        Showing {filtered.length} of {all.length} player{all.length === 1 ? "" : "s"}. One row per player — someone who registered more than once appears once.
       </p>
     </div>
   );

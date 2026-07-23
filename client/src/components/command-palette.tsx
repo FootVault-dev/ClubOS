@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
+import { programDetailPath } from "@/lib/program-path";
 import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -35,7 +36,7 @@ const TYPE_META: Record<string, TypeMeta> = {
   fi_app:           { label: "Football Institute",   icon: GraduationCap,  ws: "christchurch-united", url: () => `/admin/football-institute` },
   community_event:  { label: "Community events",     icon: Calendar,       ws: "south-island-united", url: () => `/admin/events` },
   facility_booking: { label: "Venue bookings",       icon: MapPin,         ws: "united-sports-centre", url: () => `/admin/bookings` },
-  program:          { label: "Programs / camps",     icon: Calendar,       ws: null,                  url: r => `/admin/camps/${r.id}` },
+  program:          { label: "Programs / camps",     icon: Calendar,       ws: null,                  url: r => programDetailPath({ id: Number(r.id), type: r.meta }, r.orgSlug) },
   discount:         { label: "Discounts",            icon: Tag,            ws: null,                  url: r => `/admin/discounts/${r.id}` },
   billboard_deal:   { label: "Billboard deals",      icon: Building2,      ws: "united-sports-group", url: () => `/admin/sponsorship` },
   contact:          { label: "Contacts",             icon: Users,          ws: "christchurch-united", url: r => `/admin/contacts/${r.meta === "player" ? "player" : "parent"}/${r.id}` },

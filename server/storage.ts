@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, ne, gt } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import crypto from "crypto";
 import { contentHashOf } from "./studio/hash";
 import {
@@ -172,15 +173,28 @@ export type DisciplineRow = {
 };
 
 /**
- * One row per CHILD on a programme's Players tab — not one per registration.
- * A child can appear on several registrations (re-registered next term, or a
- * parent who booked twice), so registrations are folded into a single player
- * row and counted. Money stays at registration level on purpose: a
- * registration total covers every child in that booking, so splitting it
- * per-child would invent a number nobody paid.
+ * One row per PLAYER on a programme's Players tab — not one per registration.
+ *
+ * ClubOS holds players in two different shapes and this type flattens both:
+ *
+ *  - **Academy** (U4–U8, Pre-Academy, Academy): the player IS the registration's
+ *    contact — a `contacts` row of type 'player' — and the parent is
+ *    `guardian_id`. There are no `children` rows and no `registration_items`.
+ *  - **Holiday camps** (legacy): the player is a `children` row named on a
+ *    `registration_items` line, and the registrant contact is the parent. One
+ *    booking can cover several kids across several days.
+ *
+ * A player can hold more than one registration (re-registered, or booked
+ * twice), so registrations are folded into one row and counted. `paidCents` is
+ * only filled for the academy shape, where a registration maps 1:1 to a player;
+ * splitting a camp booking that covers three siblings would invent a number
+ * nobody paid.
  */
 export type ProgramPlayer = {
-  childId: number;
+  key: string;                     // "contact-123" / "child-45" — stable row key
+  personType: "contact" | "child";
+  personId: number;
+  profilePath: string;             // where the row links in the admin UI
   firstName: string;
   lastName: string;
   dateOfBirth: string | null;
@@ -192,7 +206,8 @@ export type ProgramPlayer = {
   status: string;                  // best status across their registrations
   registrationIds: number[];
   orderNumbers: number[];
-  sessionsBooked: number;          // registration_items tied to a camp date
+  sessionsBooked: number;          // camp shape only — registration_items with a date
+  paidCents: number | null;        // academy shape only — see above
   firstRegisteredAt: string | null;
   latestRegisteredAt: string | null;
 };
@@ -1283,11 +1298,67 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getProgramPlayers(campId: number): Promise<ProgramPlayer[]> {
-    // Every registration_item that names a child, across every registration on
-    // this programme. Cancelled/pending rows are included — Daniel wants to see
-    // who has signed up, and the status column tells him where each one sits.
-    const rows = await db.select({
-      childId: children.id,
+    // Both shapes are queried — see the ProgramPlayer docblock. Cancelled and
+    // pending rows are kept: the question is "who has signed up", and the
+    // status column says where each one sits.
+    //
+    // A confirmed registration outranks pending, which outranks cancelled, so
+    // someone who re-registered after a cancellation reads as confirmed.
+    const rank: Record<string, number> = {
+      confirmed: 5, paid: 5, pending: 4, waitlisted: 3, partially_refunded: 2, refunded: 1, cancelled: 0,
+    };
+    type Row = {
+      personType: "contact" | "child";
+      personId: number;
+      firstName: string;
+      lastName: string;
+      dateOfBirth: string | null;
+      gender: string | null;
+      allergies: string | null;
+      medicalNotes: string | null;
+      parentId: number | null;
+      parentFirstName: string | null;
+      parentLastName: string | null;
+      parentEmail: string | null;
+      parentPhone: string | null;
+      registrationId: number;
+      orderNumber: number | null;
+      status: string;
+      registeredAt: Date | null;
+      totalCents: number | null;
+      hasSession: boolean;
+    };
+
+    const guardian = alias(contacts, "guardian_contact");
+
+    // Shape 1 — academy: the registrant contact IS the player.
+    const contactRows = await db.select({
+      personId: contacts.id,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      dateOfBirth: contacts.dateOfBirth,
+      gender: contacts.gender,
+      allergies: contacts.allergies,
+      medicalNotes: contacts.medicalNotes,
+      parentId: guardian.id,
+      parentFirstName: guardian.firstName,
+      parentLastName: guardian.lastName,
+      parentEmail: guardian.email,
+      parentPhone: guardian.phone,
+      registrationId: registrations.id,
+      orderNumber: registrations.orderNumber,
+      status: registrations.status,
+      registeredAt: registrations.registeredAt,
+      totalCents: registrations.totalCents,
+    })
+      .from(registrations)
+      .innerJoin(contacts, eq(registrations.contactId, contacts.id))
+      .leftJoin(guardian, eq(registrations.guardianId, guardian.id))
+      .where(and(eq(registrations.programId, campId), eq(contacts.type, "player")));
+
+    // Shape 2 — camps: one registration_items line per child per day.
+    const childRows = await db.select({
+      personId: children.id,
       firstName: children.firstName,
       lastName: children.lastName,
       dateOfBirth: children.dateOfBirth,
@@ -1309,24 +1380,70 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(contacts, eq(children.parentId, contacts.id))
       .where(eq(registrations.programId, campId));
 
-    // A confirmed registration outranks a pending one, which outranks a
-    // cancelled one — so a child who re-registered after a cancellation reads
-    // as confirmed rather than cancelled.
-    const rank: Record<string, number> = { confirmed: 3, pending: 2, cancelled: 1 };
+    const rows: Row[] = [
+      ...contactRows.map((r): Row => ({
+        personType: "contact",
+        personId: r.personId,
+        firstName: r.firstName,
+        lastName: r.lastName,
+        dateOfBirth: r.dateOfBirth ?? null,
+        gender: r.gender ?? null,
+        allergies: r.allergies ?? null,
+        medicalNotes: r.medicalNotes ?? null,
+        parentId: r.parentId ?? null,
+        parentFirstName: r.parentFirstName ?? null,
+        parentLastName: r.parentLastName ?? null,
+        parentEmail: r.parentEmail ?? null,
+        parentPhone: r.parentPhone ?? null,
+        registrationId: r.registrationId,
+        orderNumber: r.orderNumber ?? null,
+        status: r.status,
+        registeredAt: r.registeredAt ?? null,
+        totalCents: r.totalCents ?? null,
+        hasSession: false,
+      })),
+      ...childRows.map((r): Row => ({
+        personType: "child",
+        personId: r.personId,
+        firstName: r.firstName,
+        lastName: r.lastName,
+        dateOfBirth: r.dateOfBirth ?? null,
+        gender: r.gender ?? null,
+        allergies: null,          // camps keep medical in child_medical, joined below
+        medicalNotes: null,
+        parentId: r.parentId ?? null,
+        parentFirstName: r.parentFirstName ?? null,
+        parentLastName: r.parentLastName ?? null,
+        parentEmail: r.parentEmail ?? null,
+        parentPhone: r.parentPhone ?? null,
+        registrationId: r.registrationId,
+        orderNumber: r.orderNumber ?? null,
+        status: r.status,
+        registeredAt: r.registeredAt ?? null,
+        totalCents: null,         // a camp booking can cover several siblings
+        hasSession: r.campDateId != null,
+      })),
+    ];
 
-    const byChild = new Map<number, ProgramPlayer & { _regIds: Set<number> }>();
+    const byPerson = new Map<string, ProgramPlayer & { _regIds: Set<number> }>();
     for (const r of rows) {
-      let p = byChild.get(r.childId);
+      const key = `${r.personType}-${r.personId}`;
+      let p = byPerson.get(key);
       if (!p) {
         p = {
-          childId: r.childId,
+          key,
+          personType: r.personType,
+          personId: r.personId,
+          profilePath: r.personType === "child"
+            ? `/admin/contacts/player/${r.personId}`
+            : `/admin/contacts/parent/${r.personId}`,   // generic contact detail
           firstName: r.firstName,
           lastName: r.lastName,
-          dateOfBirth: r.dateOfBirth ?? null,
-          gender: r.gender ?? null,
-          allergies: null,
+          dateOfBirth: r.dateOfBirth,
+          gender: r.gender,
+          allergies: r.allergies,
           epiPen: false,
-          medicalNotes: null,
+          medicalNotes: r.medicalNotes,
           parent: r.parentId
             ? {
                 id: r.parentId,
@@ -1340,17 +1457,20 @@ export class DatabaseStorage implements IStorage {
           registrationIds: [],
           orderNumbers: [],
           sessionsBooked: 0,
+          paidCents: null,
           firstRegisteredAt: null,
           latestRegisteredAt: null,
           _regIds: new Set<number>(),
         };
-        byChild.set(r.childId, p);
+        byPerson.set(key, p);
       }
-      if (r.campDateId != null) p.sessionsBooked += 1;
+      if (r.hasSession) p.sessionsBooked += 1;
       if (!p._regIds.has(r.registrationId)) {
         p._regIds.add(r.registrationId);
         p.registrationIds.push(r.registrationId);
         if (r.orderNumber != null) p.orderNumbers.push(r.orderNumber);
+        // Only count money the registration actually attributes to this player.
+        if (r.totalCents != null) p.paidCents = (p.paidCents ?? 0) + r.totalCents;
       }
       if ((rank[r.status] ?? 0) > (rank[p.status] ?? 0)) p.status = r.status;
       const at = r.registeredAt ? new Date(r.registeredAt).toISOString() : null;
@@ -1360,19 +1480,22 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    const players = [...byChild.values()];
+    const players = Array.from(byPerson.values());
     if (players.length === 0) return [];
 
-    // Medical in one pass — allergies and EpiPen matter most on the U4–U8 roll.
-    const meds = await db.select().from(childMedical)
-      .where(inArray(childMedical.childId, players.map(p => p.childId)));
-    const medByChild = new Map(meds.map(m => [m.childId, m]));
-    for (const p of players) {
-      const m = medByChild.get(p.childId);
-      if (m) {
-        p.allergies = m.allergies ?? null;
-        p.epiPen = Boolean(m.epiPen);
-        p.medicalNotes = m.notes ?? null;
+    // child_medical in one pass — allergies and EpiPen matter most on a roll.
+    const childIds = players.filter(p => p.personType === "child").map(p => p.personId);
+    if (childIds.length > 0) {
+      const meds = await db.select().from(childMedical).where(inArray(childMedical.childId, childIds));
+      const medByChild = new Map(meds.map(m => [m.childId, m]));
+      for (const p of players) {
+        if (p.personType !== "child") continue;
+        const m = medByChild.get(p.personId);
+        if (m) {
+          p.allergies = m.allergies ?? null;
+          p.epiPen = Boolean(m.epiPen);
+          p.medicalNotes = m.notes ?? null;
+        }
       }
     }
 

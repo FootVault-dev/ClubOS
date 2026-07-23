@@ -79,7 +79,7 @@ export default function GymnasticsDashboard() {
               {programs.filter(p => p.isActive).slice(0, 5).map(p => (
                 <button
                   key={p.id}
-                  onClick={() => setLocation(`/admin/camps/${p.id}`)}
+                  onClick={() => setLocation(`/admin/programs/${p.id}`)}
                   className="w-full flex items-center justify-between p-3 rounded-lg bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 text-left"
                 >
                   <div>

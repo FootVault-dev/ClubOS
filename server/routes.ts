@@ -4837,7 +4837,9 @@ export async function registerRoutes(
     { type: "fi_app", table: "football_institute_applications", labelSql: "applicant_name", sublabelSql: "COALESCE(current_club, email)", orgCol: "organization_id", cols: ["applicant_name","parent_name","email","current_club","current_school"] },
     { type: "community_event", table: "community_events", labelSql: "title", sublabelSql: "COALESCE(partner, location)", orgCol: "organization_id", cols: ["title","partner","location","description"] },
     { type: "facility_booking", table: "facility_bookings", labelSql: "customer_name", sublabelSql: "COALESCE(customer_club, customer_email)", orgCol: "organization_id", cols: ["customer_name","customer_email","customer_club","customer_phone"] },
-    { type: "program", table: "programs", labelSql: "name", sublabelSql: "COALESCE(location, slug)", orgCol: "organization_id", cols: ["name","location","slug"] },
+    // meta carries the programme type so the palette can open it under the
+    // right section (academy programmes are not camps).
+    { type: "program", table: "programs", labelSql: "name", sublabelSql: "COALESCE(location, slug)", metaSql: "type", orgCol: "organization_id", cols: ["name","location","slug"] },
     { type: "discount", table: "discounts", labelSql: "COALESCE(title, code)", sublabelSql: "code", orgCol: "organization_id", cols: ["title","code"] },
     { type: "billboard_deal", table: "billboard_deals", labelSql: "customer_name", sublabelSql: "contact_name", orgCol: "organization_id", cols: ["customer_name","contact_name","contact_email"] },
     // Org-less shared pools — leadership only.

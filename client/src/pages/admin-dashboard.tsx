@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tent, Users, ClipboardCheck, DollarSign, ArrowRight, CalendarPlus, ClipboardList, Download, GraduationCap, UserCog , Shield} from "lucide-react";
 import { Link } from "wouter";
+import { programDetailPath } from "@/lib/program-path";
 import { formatCurrency } from "@/lib/format";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -129,7 +130,7 @@ export default function AdminDashboard() {
                         ? `U${program.ageMin}+`
                         : null;
                     return (
-                      <Link key={program.id} href={`/admin/camps/${program.id}`}>
+                      <Link key={program.id} href={programDetailPath(program)}>
                         <div className="flex items-center gap-3 px-5 py-3 row-hover cursor-pointer" data-testid={`row-programme-${program.id}`}>
                           <div className="w-8 h-8 rounded-xl bg-blue-500/8 border border-blue-500/15 flex items-center justify-center flex-shrink-0">
                             <GraduationCap className="w-4 h-4 text-blue-400/70" />

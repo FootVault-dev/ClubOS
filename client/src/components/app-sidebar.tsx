@@ -523,6 +523,36 @@ function getWorkspaceInitials(slug: string | undefined) {
   return "CU";
 }
 
+/**
+ * Does `location` sit inside the section at `url`?
+ *
+ * Segment-boundary match, never a bare `startsWith`: `/admin/campsite` is not
+ * inside `/admin/camps`, and `/admin/camps` is not inside `/admin/camp`. The
+ * old prefix test also meant any detail page parked under another section's
+ * URL lit up the wrong item — an academy programme at `/admin/camps/123`
+ * highlighted Camps. Detail pages now live under their own section
+ * (see `lib/program-path`), and this keeps the match honest.
+ */
+function navMatches(location: string, url: string): boolean {
+  if (url === "/admin") return location === "/admin";
+  return location === url || location.startsWith(url + "/") || location.startsWith(url + "?");
+}
+
+/**
+ * Exactly one nav item may be active. When two items both match — because one
+ * URL nests inside another, e.g. /admin/shop and /admin/shop/orders — the
+ * longest (most specific) wins, so a nested section can never light up its
+ * parent as well.
+ */
+function activeNavUrl(location: string, items: { url: string }[]): string | null {
+  let best: string | null = null;
+  for (const item of items) {
+    if (!navMatches(location, item.url)) continue;
+    if (best === null || item.url.length > best.length) best = item.url;
+  }
+  return best;
+}
+
 export function AppSidebar() {
   const [location] = useLocation();
   const { currentOrg, cicView } = useWorkspace();
@@ -554,6 +584,10 @@ export function AppSidebar() {
   // Chat + Feedback are universal — always shown (no tab-whitelist filtering),
   // for every staff member in every workspace. Chat sits first.
   const secondaryNav = [...allSecondaryNav.filter(navFilter), chatSecondary, feedbackSecondary];
+
+  // Resolved once across BOTH groups so a Navigation item and a System item
+  // can never both look active on the same page.
+  const activeUrl = activeNavUrl(location, [...mainNav, ...secondaryNav]);
 
   // Live unread badge for the Chat item: mentions + DM messages count (gold),
   // other unreads show as a subtle dot. Polling this ALSO acts as the presence
@@ -614,9 +648,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu className="space-y-0.5">
               {mainNav.map((item) => {
-                const isActive = item.url === "/admin"
-                  ? location === "/admin"
-                  : location.startsWith(item.url);
+                const isActive = item.url === activeUrl;
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
@@ -647,7 +679,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu className="space-y-0.5">
               {secondaryNav.map((item) => {
-                const isActive = location.startsWith(item.url);
+                const isActive = item.url === activeUrl;
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton

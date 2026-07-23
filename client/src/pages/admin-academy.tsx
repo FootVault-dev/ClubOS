@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, X, ChevronRight, Users, UserPlus, GraduationCap, Sparkles } from "lucide-react";
 import { useSearch, useLocation } from "wouter";
+import { programDetailPath } from "@/lib/program-path";
 import type { Program } from "@shared/schema";
 import { RegisterPlayerModal } from "./admin-register-player";
 
@@ -60,7 +61,7 @@ function CreateAcademyModal({ open, onClose }: { open: boolean; onClose: () => v
       queryClient.invalidateQueries({ queryKey: ["/api/admin/academy"] });
       toast({ title: "Program created" });
       onClose();
-      window.location.href = `/admin/camps/${program.id}`;
+      window.location.href = programDetailPath({ id: program.id, type: "academy" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -181,7 +182,7 @@ function ProgramTable({ programs, regCounts, navigate, emptyMessage }: {
             return (
               <tr
                 key={program.id}
-                onClick={() => navigate(`/admin/camps/${program.id}`)}
+                onClick={() => navigate(programDetailPath(program))}
                 className={`group cursor-pointer transition-colors duration-200 hover:bg-blue-500/[0.04] ${idx < programs.length - 1 ? "border-b border-blue-500/[0.05]" : ""}`}
                 data-testid={`row-academy-${program.id}`}
               >

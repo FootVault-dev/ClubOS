@@ -115,7 +115,8 @@ function CreateProgramModal({ open, onClose, orgId, prefill }: CreateProgramModa
       queryClient.invalidateQueries({ queryKey: ["/api/admin/programs"] });
       toast({ title: "Program created" });
       onClose();
-      setLocation(`/admin/camps/${program.id}`);
+      // Gymnastics programmes live under the Programs section.
+      setLocation(`/admin/programs/${program.id}`);
     },
     onError: (e: Error) => toast({ title: "Couldn't create program", description: e.message, variant: "destructive" }),
   });
@@ -431,7 +432,7 @@ export default function GymnasticsPrograms() {
           {filtered.map(p => (
             <button
               key={p.id}
-              onClick={() => setLocation(`/admin/camps/${p.id}`)}
+              onClick={() => setLocation(`/admin/programs/${p.id}`)}
               className="w-full flex items-center gap-4 p-4 rounded-xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] hover:border-white/10 transition text-left"
             >
               <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center flex-shrink-0">
