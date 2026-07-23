@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link } from "wouter";
 import { useProgramRoute } from "@/lib/program-path";
-import { ArrowLeft, UserCheck, UserX, AlertTriangle, Clock, Users, Phone, Mail, User, X, Search } from "lucide-react";
+import { ArrowLeft, UserCheck, UserX, AlertTriangle, Clock, Users, Phone, Mail, User, X, Search, Info } from "lucide-react";
 
 type RollPlayer = {
   child: { id: number; firstName: string; lastName: string; dateOfBirth?: string | null; gender?: string | null; parentId: number; medical?: { allergies?: string | null; epiPen?: boolean; notes?: string | null } };
@@ -181,14 +181,37 @@ export default function AdminSessionRoll() {
 
   // Tapping the state a player is already in clears it back to "not marked",
   // so a mis-tap is recoverable without a coach inventing a state.
+  const rollKey = ["/api/admin/camps", campId, "session-roll", dateId, sessionType];
+
+  // Optimistic: a coach ticks 30 children off in a few seconds as they run
+  // onto the field, so the row must light up on the tap, not a round-trip
+  // later. Nothing is disabled while a save is in flight either — a global
+  // `isPending` lock would swallow every tap after the first.
   const markMutation = useMutation({
     mutationFn: async ({ attendanceId, status }: { attendanceId: number; status: "present" | "absent" | null }) => {
       await apiRequest("PATCH", `/api/admin/attendance/${attendanceId}`, { status });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/camps", campId, "session-roll", dateId, sessionType] });
+    onMutate: async ({ attendanceId, status }) => {
+      await queryClient.cancelQueries({ queryKey: rollKey });
+      const previous = queryClient.getQueryData<RollPlayer[]>(rollKey);
+      queryClient.setQueryData<RollPlayer[]>(rollKey, old =>
+        (old ?? []).map(p =>
+          p.attendance?.id === attendanceId
+            ? { ...p, attendance: { ...p.attendance, status, markedAt: status ? new Date().toISOString() : null } }
+            : p,
+        ),
+      );
+      return { previous };
     },
-    onError: (e: Error) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
+    onError: (e: Error, _vars, context: any) => {
+      // Put the roll back exactly as it was — a tap that silently didn't save
+      // would leave a child recorded as absent when they were standing there.
+      if (context?.previous) queryClient.setQueryData(rollKey, context.previous);
+      toast({ title: "Couldn't save", description: e.message, variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: rollKey });
+    },
   });
 
   const sessionDate = sessionInfo?.date;
@@ -219,10 +242,12 @@ export default function AdminSessionRoll() {
   const signedInCount = roll?.filter(p => p.attendance?.checkedInAt).length || 0;
   const signedOutCount = roll?.filter(p => p.attendance?.checkedOutAt).length || 0;
   const totalPlayers = roll?.length || 0;
+  // Daniel's model (2026-07-23): children pick which days they come, so the
+  // roll is a one-tap list — tapped = here, everything left untapped is taken
+  // as not here. There is no separate "absent" tap and no unmarked state to
+  // chase, because on a 45-minute session the coach only ever ticks arrivals.
   const presentCount = roll?.filter(p => p.attendance?.status === "present").length || 0;
-  const absentCount = roll?.filter(p => p.attendance?.status === "absent").length || 0;
-  // Deliberately shown: a roll that isn't finished must not read as complete.
-  const unmarkedCount = totalPlayers - presentCount - absentCount;
+  const absentCount = totalPlayers - presentCount;
 
   return (
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
@@ -253,17 +278,17 @@ export default function AdminSessionRoll() {
         <div className="rounded-xl border border-emerald-500/[0.12] bg-emerald-500/[0.03] p-4">
           <div className="flex items-center gap-2 mb-1.5">
             <UserCheck className="w-3.5 h-3.5 text-emerald-400/40" />
-            <span className="text-[10px] text-emerald-300/30 uppercase tracking-wider font-semibold">{isTermRoll ? "Present" : "Signed In"}</span>
+            <span className="text-[10px] text-emerald-300/30 uppercase tracking-wider font-semibold">{isTermRoll ? "Here" : "Signed In"}</span>
           </div>
           <span className="text-2xl font-bold text-emerald-400/80" data-testid="text-signed-in">{isTermRoll ? presentCount : signedInCount}</span>
         </div>
         {isTermRoll ? (
-          <div className="rounded-xl border border-amber-500/[0.12] bg-amber-500/[0.03] p-4">
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
             <div className="flex items-center gap-2 mb-1.5">
-              <UserX className="w-3.5 h-3.5 text-amber-400/40" />
-              <span className="text-[10px] text-amber-300/30 uppercase tracking-wider font-semibold">Absent</span>
+              <UserX className="w-3.5 h-3.5 text-white/25" />
+              <span className="text-[10px] text-white/25 uppercase tracking-wider font-semibold">Not here</span>
             </div>
-            <span className="text-2xl font-bold text-amber-400/80" data-testid="text-absent">{absentCount}</span>
+            <span className="text-2xl font-bold text-white/45" data-testid="text-absent">{absentCount}</span>
           </div>
         ) : (
           <div className="rounded-xl border border-blue-500/[0.12] bg-blue-500/[0.03] p-4">
@@ -276,9 +301,9 @@ export default function AdminSessionRoll() {
         )}
       </div>
 
-      {isTermRoll && totalPlayers > 0 && unmarkedCount > 0 && (
+      {isTermRoll && totalPlayers > 0 && (
         <p className="text-[12px] text-white/30 -mt-2" data-testid="text-unmarked">
-          {unmarkedCount} still to mark.
+          Tap each player who's here. Anyone left untapped counts as not here.
         </p>
       )}
 
@@ -295,24 +320,42 @@ export default function AdminSessionRoll() {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25" />
-            <input
-              type="text"
-              placeholder="Search players..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-blue-500/[0.1] bg-blue-500/[0.03] text-[13px] text-white/80 placeholder-white/25 outline-none focus:border-blue-500/25 transition-colors"
-              data-testid="input-search-players"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-md bg-white/[0.06] flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer"
-                data-testid="button-clear-search"
-              >
-                <X className="w-3 h-3 text-white/40" />
-              </button>
+          {/* Sticky on a term roll: with ~58 names the coach is scrolled well
+              down the list when the next child arrives, and a search box that
+              has scrolled off the top is no use to them. */}
+          <div className={isTermRoll ? "sticky top-0 z-30 -mx-1 px-1 py-2 backdrop-blur-md" : ""}
+               style={isTermRoll ? { background: "rgba(6,10,18,0.88)" } : undefined}>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25" />
+              <input
+                type="text"
+                inputMode="search"
+                autoComplete="off"
+                placeholder={isTermRoll ? "Search for a player…" : "Search players..."}
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className={`w-full pl-10 pr-10 rounded-xl border border-blue-500/[0.1] bg-blue-500/[0.03] text-white/80 placeholder-white/25 outline-none focus:border-blue-500/25 transition-colors ${
+                  isTermRoll ? "py-3 text-[16px]" : "py-2.5 text-[13px]"
+                }`}
+                /* 16px on the term roll: iOS Safari zooms the whole page in
+                   when a focused input's text is smaller than that. */
+                data-testid="input-search-players"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  aria-label="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg bg-white/[0.06] flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer"
+                  data-testid="button-clear-search"
+                >
+                  <X className="w-3.5 h-3.5 text-white/40" />
+                </button>
+              )}
+            </div>
+            {isTermRoll && searchQuery && (
+              <p className="text-[11px] text-white/30 mt-1.5 px-1">
+                {filteredRoll.length} of {totalPlayers} player{totalPlayers === 1 ? "" : "s"}
+              </p>
             )}
           </div>
           {filteredRoll.length === 0 ? (
@@ -332,9 +375,8 @@ export default function AdminSessionRoll() {
                 <tr className="border-b border-blue-500/[0.06] bg-blue-500/[0.03]">
                   <th className="text-left px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Player</th>
                   <th className="text-left px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold hidden sm:table-cell">Age</th>
-                  {/* On a phone the button fill IS the status (solid green =
-                      present, solid amber = absent, both hollow = not marked),
-                      so the badge column stands down to make room for them. */}
+                  {/* The row's own highlight is the status on a term roll, so
+                      the badge column stands down on a phone to leave room. */}
                   <th className={`text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold ${isTermRoll ? "hidden sm:table-cell" : ""}`}>Status</th>
                   {isTermRoll ? (
                     <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold hidden sm:table-cell">Marked</th>
@@ -354,16 +396,37 @@ export default function AdminSessionRoll() {
                   const hasMedical = hasRealAllergies(player.child.medical?.allergies) || player.child.medical?.epiPen;
                   const mark = player.attendance?.status ?? null;
 
+                  const here = mark === "present";
+                  // One tap anywhere on the row marks a player here (and taps
+                  // again to undo) — with 58 names arriving at once, hunting a
+                  // small button is the slow part. The profile moved to its own
+                  // control so a mis-tap can't open a sheet mid-roll.
+                  const toggleHere = () => {
+                    if (!isTermRoll || !player.attendance) return;
+                    markMutation.mutate({ attendanceId: player.attendance.id, status: here ? null : "present" });
+                  };
+
                   return (
                     <tr
                       key={player.child.id}
-                      className="border-b border-blue-500/[0.04] hover:bg-blue-500/[0.04] transition-colors"
+                      onClick={isTermRoll ? toggleHere : undefined}
+                      role={isTermRoll ? "button" : undefined}
+                      aria-pressed={isTermRoll ? here : undefined}
+                      className={`border-b border-blue-500/[0.04] transition-colors ${
+                        isTermRoll
+                          ? `cursor-pointer select-none ${here ? "bg-emerald-500/[0.10] hover:bg-emerald-500/[0.14]" : "hover:bg-white/[0.04]"}`
+                          : "hover:bg-blue-500/[0.04]"
+                      }`}
                       data-testid={`row-player-${player.child.id}`}
                     >
                       <td className="px-4 py-3">
+                        {/* On a term roll the name is NOT a separate target —
+                            the click bubbles up and marks them here. The
+                            profile lives on its own button in the Roll cell. */}
                         <button
-                          onClick={() => setSelectedPlayer(player)}
-                          className="flex items-center gap-3 text-left cursor-pointer hover:opacity-80 transition-opacity"
+                          onClick={isTermRoll ? undefined : () => setSelectedPlayer(player)}
+                          className={`flex items-center gap-3 text-left transition-opacity ${isTermRoll ? "cursor-pointer" : "cursor-pointer hover:opacity-80"}`}
+                          tabIndex={isTermRoll ? -1 : 0}
                           data-testid={`button-player-profile-${player.child.id}`}
                         >
                           <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/15 flex items-center justify-center flex-shrink-0">
@@ -389,12 +452,10 @@ export default function AdminSessionRoll() {
                       </td>
                       <td className={`px-4 py-3 text-center ${isTermRoll ? "hidden sm:table-cell" : ""}`}>
                         {isTermRoll ? (
-                          mark === "present" ? (
-                            <Badge variant="outline" className="text-[9px] text-emerald-400/80 border-emerald-500/20 bg-emerald-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Present</Badge>
-                          ) : mark === "absent" ? (
-                            <Badge variant="outline" className="text-[9px] text-amber-400/80 border-amber-500/20 bg-amber-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Absent</Badge>
+                          here ? (
+                            <Badge variant="outline" className="text-[9px] text-emerald-400/80 border-emerald-500/20 bg-emerald-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Here</Badge>
                           ) : (
-                            <Badge variant="outline" className="text-[9px] text-white/30 border-white/10 bg-white/[0.03] uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Not marked</Badge>
+                            <Badge variant="outline" className="text-[9px] text-white/25 border-white/10 bg-white/[0.02] uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Not here</Badge>
                           )
                         ) : isOut ? (
                           <Badge variant="outline" className="text-[9px] text-blue-400/70 border-blue-500/20 bg-blue-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Signed Out</Badge>
@@ -449,35 +510,31 @@ export default function AdminSessionRoll() {
                         <div className="flex items-center justify-end gap-2">
                           {isTermRoll && player.attendance && (
                             <>
+                              {/* Profile is its own small control so it can't
+                                  be hit by accident while ticking the roll. */}
                               <button
-                                onClick={() => markMutation.mutate({ attendanceId: player.attendance!.id, status: mark === "present" ? null : "present" })}
-                                disabled={markMutation.isPending}
-                                aria-pressed={mark === "present"}
-                                // 44px min target — this is tapped on a phone,
-                                // on a field, wearing a coat.
-                                className={`min-h-[44px] min-w-[44px] px-3 sm:px-4 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
-                                  mark === "present"
-                                    ? "bg-emerald-500/25 border-emerald-400/50 text-emerald-200"
-                                    : "bg-emerald-500/[0.06] border-emerald-500/15 text-emerald-400/60 hover:bg-emerald-500/15"
+                                onClick={e => { e.stopPropagation(); setSelectedPlayer(player); }}
+                                aria-label={`Details for ${player.child.firstName} ${player.child.lastName}`}
+                                className="min-h-[44px] min-w-[36px] rounded-lg text-white/25 hover:text-white/60 hover:bg-white/[0.05] transition-colors cursor-pointer"
+                                data-testid={`button-details-${player.child.id}`}
+                              >
+                                <Info className="w-4 h-4 inline-block" />
+                              </button>
+                              {/* One tap = here, tap again to undo. The whole
+                                  row does this too; the button is the obvious
+                                  affordance and the 44px target. */}
+                              <button
+                                onClick={e => { e.stopPropagation(); toggleHere(); }}
+                                aria-pressed={here}
+                                className={`min-h-[44px] min-w-[64px] px-3 sm:px-4 rounded-lg border text-[12px] font-semibold transition-colors cursor-pointer ${
+                                  here
+                                    ? "bg-emerald-500/30 border-emerald-400/60 text-emerald-100"
+                                    : "bg-white/[0.03] border-white/10 text-white/40 hover:bg-emerald-500/10 hover:border-emerald-500/25 hover:text-emerald-300/70"
                                 }`}
                                 data-testid={`button-present-${player.child.id}`}
                               >
-                                <UserCheck className="w-4 h-4 inline-block sm:mr-1.5" />
-                                <span className="hidden sm:inline">Present</span>
-                              </button>
-                              <button
-                                onClick={() => markMutation.mutate({ attendanceId: player.attendance!.id, status: mark === "absent" ? null : "absent" })}
-                                disabled={markMutation.isPending}
-                                aria-pressed={mark === "absent"}
-                                className={`min-h-[44px] min-w-[44px] px-3 sm:px-4 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
-                                  mark === "absent"
-                                    ? "bg-amber-500/25 border-amber-400/50 text-amber-200"
-                                    : "bg-amber-500/[0.06] border-amber-500/15 text-amber-400/60 hover:bg-amber-500/15"
-                                }`}
-                                data-testid={`button-absent-${player.child.id}`}
-                              >
-                                <UserX className="w-4 h-4 inline-block sm:mr-1.5" />
-                                <span className="hidden sm:inline">Absent</span>
+                                <UserCheck className="w-4 h-4 inline-block mr-1.5" />
+                                {here ? "Here" : "Mark"}
                               </button>
                             </>
                           )}
