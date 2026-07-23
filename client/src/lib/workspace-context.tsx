@@ -55,7 +55,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     if (organizations.length > 0 && !currentOrg) {
       const savedSlug = localStorage.getItem("clubos_workspace");
       const saved = organizations.find(o => o.slug === savedSlug);
-      setCurrentOrgState(saved || organizations[0]);
+      // Persist the resolved workspace, don't just hold it in state. Every API
+      // call reads this key to send X-Workspace-Slug (see lib/queryClient), so a
+      // user who has never CLICKED the workspace switcher used to send no header
+      // at all: the sidebar showed their first workspace while org-scoped
+      // endpoints got "no workspace selected" and returned nothing. That is why
+      // Squads rendered empty for a CUFC admin who had never switched workspace.
+      // Writing it here also repairs a stale slug for a workspace they've lost.
+      setCurrentOrg(saved || organizations[0]);
     }
   }, [organizations, currentOrg]);
 
