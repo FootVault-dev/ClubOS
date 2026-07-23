@@ -133,6 +133,14 @@ app.use(attributionCookieMiddleware);
   // listed to usg-invoices.vercel.app and carry no session.
   const { registerInvoiceRoutes } = await import("./invoice-routes");
   registerInvoiceRoutes(app);
+
+  // Stripe Payouts — explain every bulk bank deposit: list the account's
+  // payouts and break each into its charges with programme + player + parent
+  // resolved from ClubOS rows. Read-only against Stripe AND the DB; gated by
+  // requireTab("payouts") (SUPER_ADMIN_ONLY_TABS — names families next to
+  // amounts, same class of data as invoices).
+  const { registerPayoutRoutes } = await import("./payout-routes");
+  registerPayoutRoutes(app);
   // Fleet — company vehicles, assignments, insurance, servicing, running costs.
   // Gated by requireTab("vehicles"), which is in SUPER_ADMIN_ONLY_TABS: the
   // records tie a named staff member to an insurance policy and an FBT
