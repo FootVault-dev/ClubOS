@@ -11,6 +11,7 @@ import { useRoute, Link, useLocation } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { programBasePath, useProgramRoute } from "@/lib/program-path";
 import { tabsForOrgSlug } from "@shared/tabs";
+import { withFrom } from "@/lib/back-to";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/format";
 import { ArrowLeft, Calendar, DollarSign, Settings, Percent, Tent, Trash2, Plus, X, Save, FileText, BarChart3, Users, TrendingUp, ChevronRight, UserCheck, UserX, AlertTriangle, Phone, Mail, Clock, User, FlaskConical, Trophy, Eye, Ban, Pencil } from "lucide-react";
@@ -1732,7 +1733,7 @@ const PLAYER_STATUS_STYLES: Record<string, string> = {
  * store players differently). Missing dates of birth are flagged rather than
  * hidden: the NZF / Mainland Football audit needs a real DOB on every player.
  */
-function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
+function PlayersTab({ campId, camp, detailPath }: { campId: number; camp?: any; detailPath: string }) {
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -1893,7 +1894,9 @@ function PlayersTab({ campId, camp }: { campId: number; camp?: any }) {
                 return (
                   <tr
                     key={p.key}
-                    onClick={() => navigate(p.profilePath)}
+                    // Carry where we came from, so Back on the player's card
+                    // returns to this programme and the sidebar stays put.
+                    onClick={() => navigate(withFrom(p.profilePath, detailPath))}
                     className="border-b border-blue-500/[0.03] hover:bg-blue-500/[0.04] transition-colors cursor-pointer"
                     data-testid={`row-player-${p.key}`}
                   >
@@ -2377,7 +2380,7 @@ export default function AdminCampDetail() {
       </div>
 
       <div className="rounded-2xl glass-card p-3 sm:p-5 animate-fade-in-up" style={{ animationDelay: '100ms', opacity: 0 }}>
-        {tab === "players" && <PlayersTab campId={campId} camp={camp} />}
+        {tab === "players" && <PlayersTab campId={campId} camp={camp} detailPath={detailPath} />}
         {tab === "sessions" && <SessionsTab campId={campId} camp={camp} detailPath={detailPath} />}
         {tab === "content" && <ContentTab camp={camp} onUpdate={(data) => updateMutation.mutate(data)} />}
         {tab === "dates" && (camp.scheduleType === "term" ? <ClassDatesTab campId={campId} camp={camp} /> : <DatesTab campId={campId} />)}

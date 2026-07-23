@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, Link } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import {
   Sidebar,
   SidebarContent,
@@ -98,6 +98,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useWorkspace } from "@/lib/workspace-context";
 import { canAccessTab } from "@shared/tabs";
+import { fromParam } from "@/lib/back-to";
 
 type Org = {
   id: number;
@@ -554,7 +555,14 @@ function activeNavUrl(location: string, items: { url: string }[]): string | null
 }
 
 export function AppSidebar() {
-  const [location] = useLocation();
+  const [rawLocation] = useLocation();
+  const search = useSearch();
+  // A record can live in one section but be opened from another — a player's
+  // contact card reached from a programme's Players tab. `?from=` says where
+  // the user actually is, so the sidebar doesn't silently jump to Contacts
+  // and lose their place. See lib/back-to.
+  const from = fromParam(search);
+  const location = from ?? rawLocation;
   const { currentOrg, cicView } = useWorkspace();
   const { resolved: themeResolved, toggle: toggleTheme } = useTheme();
   const { data: user } = useQuery<{ firstName: string; lastName: string; role: string }>({ queryKey: ["/api/auth/me"] });

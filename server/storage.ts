@@ -228,6 +228,7 @@ export interface IStorage {
 
   getContacts(): Promise<Contact[]>;
   getContact(id: number): Promise<Contact | undefined>;
+  getContactsByIds(ids: number[]): Promise<Contact[]>;
   findContactByEmail(email: string): Promise<Contact | undefined>;
   createContact(contact: InsertContact): Promise<Contact>;
   updateContact(id: number, contact: Partial<InsertContact>): Promise<Contact | undefined>;
@@ -434,6 +435,7 @@ export interface IStorage {
   getRegistrations(): Promise<(Registration & { contact?: Contact; program?: Program })[]>;
   getRegistrationsByProgram(programId: number): Promise<(Registration & { contact?: Contact })[]>;
   getRegistration(id: number): Promise<Registration | undefined>;
+  getRegistrationsForContact(contactId: number): Promise<(Registration & { program?: Program })[]>;
   createRegistration(reg: InsertRegistration): Promise<Registration>;
   updateRegistration(id: number, data: Partial<InsertRegistration>): Promise<Registration | undefined>;
   updateRegistrationItem(id: number, data: Partial<InsertRegistrationItem>): Promise<RegistrationItem | undefined>;
@@ -771,6 +773,12 @@ export class DatabaseStorage implements IStorage {
     return contact;
   }
 
+  /** Batch form of getContact — one query, not one per id. */
+  async getContactsByIds(ids: number[]): Promise<Contact[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(contacts).where(inArray(contacts.id, ids));
+  }
+
   async findContactByEmail(email: string): Promise<Contact | undefined> {
     const [contact] = await db.select().from(contacts).where(eq(contacts.email, email));
     return contact;
@@ -970,6 +978,29 @@ export class DatabaseStorage implements IStorage {
       const [contact] = await db.select().from(contacts).where(eq(contacts.id, r.contactId));
       return { ...r, contact };
     }));
+  }
+
+  /**
+   * One contact's registrations — as the registrant OR as the guardian.
+   *
+   * The contact-detail pages used to call getRegistrations() and filter in JS.
+   * That loads EVERY confirmed registration in the database and fires two more
+   * queries per row, which reproducibly exhausted the 15-connection pool
+   * (`EMAXCONNSESSION`) and 500'd the page. This is two queries, total.
+   *
+   * Unlike getRegistrations() this keeps pending rows: a player card reached
+   * from a programme's Players tab must still show a pending registration —
+   * the status badge says which it is.
+   */
+  async getRegistrationsForContact(contactId: number): Promise<(Registration & { program?: Program })[]> {
+    const regs = await db.select().from(registrations)
+      .where(or(eq(registrations.contactId, contactId), eq(registrations.guardianId, contactId)))
+      .orderBy(desc(registrations.registeredAt));
+    if (regs.length === 0) return [];
+    const programIds = Array.from(new Set(regs.map(r => r.programId)));
+    const progs = await db.select().from(programs).where(inArray(programs.id, programIds));
+    const byId = new Map(progs.map(p => [p.id, p]));
+    return regs.map(r => ({ ...r, program: byId.get(r.programId) }));
   }
 
   async getRegistration(id: number): Promise<Registration | undefined> {

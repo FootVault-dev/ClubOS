@@ -3931,13 +3931,25 @@ export async function registerRoutes(
       const contact = await storage.getContact(parseInt(req.params.id));
       if (!contact) return res.status(404).json({ message: "Contact not found" });
       const kids = await storage.getChildren(contact.id);
-      const regs = await storage.getRegistrations();
-      const contactRegs = regs.filter(r => r.contactId === contact.id || r.guardianId === contact.id);
+      const contactRegs = await storage.getRegistrationsForContact(contact.id);
       const regDetails = await Promise.all(contactRegs.map(async (r) => {
         const items = await storage.getRegistrationItems(r.id);
         return { ...r, items };
       }));
-      res.json({ contact, children: kids, registrations: regDetails });
+      // Academy registrations store the PLAYER as the contact and the parent on
+      // guardian_id, so this endpoint also serves player records. Resolve their
+      // guardian(s) — without this the page can only show a child with empty
+      // email/phone rows and no way to reach the parent.
+      let guardians: any[] = [];
+      if (contact.type === "player") {
+        const guardianIds = Array.from(new Set(
+          contactRegs
+            .filter(r => r.contactId === contact.id && r.guardianId)
+            .map(r => r.guardianId as number),
+        ));
+        guardians = await storage.getContactsByIds(guardianIds);
+      }
+      res.json({ contact, children: kids, registrations: regDetails, guardians });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -3949,8 +3961,10 @@ export async function registerRoutes(
       if (!child) return res.status(404).json({ message: "Player not found" });
       const parent = await storage.getContact(child.parentId);
       const medical = await storage.getChildMedical(child.id);
-      const regs = await storage.getRegistrations();
-      const parentRegs = regs.filter(r => r.contactId === child.parentId || r.guardianId === child.parentId);
+      // Scoped to this child's parent — loading every registration in the
+      // database here exhausted the connection pool. See
+      // getRegistrationsForContact.
+      const parentRegs = await storage.getRegistrationsForContact(child.parentId);
       const regDetails = await Promise.all(parentRegs.map(async (r) => {
         const items = await storage.getRegistrationItems(r.id);
         const playerItems = items.filter(i => i.childId === child.id);
