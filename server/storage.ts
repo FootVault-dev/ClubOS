@@ -1190,6 +1190,13 @@ export class DatabaseStorage implements IStorage {
     if (isTermMode) {
       // Term-mode: one summary row per camp_date (the slot itself is the
       // session — no MORNING/AFTERNOON split). Capacity is capacityFullDay.
+      // An academy term enrolment buys the TERM, not a set of dates — it writes
+      // no per-date registration_items, so counting items alone reports 0
+      // booked on every session of a fully-subscribed programme. Those
+      // registrants (the contact shape) are on the roll for every session, so
+      // they're added to each date's count. Programmes that do book per date
+      // (CUGC) still count their items; a programme never has both shapes.
+      const termEnrolments = await this.countTermEnrolments(campId);
       for (const d of dates) {
         const totalCount = items
           .filter(i => i.campDateId === d.id)
@@ -1198,7 +1205,7 @@ export class DatabaseStorage implements IStorage {
           campDateId: d.id,
           date: d.date,
           productType: "SESSION",
-          bookedCount: totalCount,
+          bookedCount: totalCount + termEnrolments,
           capacity: d.capacityFullDay || 0,
           name: d.name,
           startTime: d.startTime,
@@ -1248,6 +1255,24 @@ export class DatabaseStorage implements IStorage {
     }
 
     return { totalRegistrations, confirmedRegistrations, totalRevenueCents, totalSessions };
+  }
+
+  // Confirmed registrations of a term programme whose registrant contact IS
+  // the player. This is the academy shape (storage.getProgramPlayers "Shape 1")
+  // and it carries no per-date rows, so these people are on the roll for every
+  // session of the term.
+  private async countTermEnrolments(campId: number): Promise<number> {
+    const program = await this.getProgram(campId);
+    if (program?.scheduleType !== "term") return 0;
+    const [r] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(registrations)
+      .innerJoin(contacts, eq(registrations.contactId, contacts.id))
+      .where(and(
+        eq(registrations.programId, campId),
+        eq(registrations.status, "confirmed"),
+        eq(contacts.type, "player"),
+      ));
+    return r?.count || 0;
   }
 
   async getSessionRoll(campId: number, campDateId: number, sessionType: string): Promise<{ child: Child & { medical?: ChildMedical }; parent: Contact; attendance?: Attendance; productType: string }[]> {
@@ -1323,6 +1348,75 @@ export class DatabaseStorage implements IStorage {
         attendance: att || undefined,
         productType: item.registration_items.productType,
       });
+    }
+
+    // ── Academy shape ────────────────────────────────────────────────────────
+    // The registrant contact IS the player and the term enrolment booked no
+    // dates, so the roll for this session is every confirmed enrolment. Without
+    // this branch the loop above returns nothing at all for an academy
+    // programme (programme 4: 72 registrants, 0 registration_items).
+    if (isTermMode) {
+      const guardian = alias(contacts, "roll_guardian");
+      const player = alias(contacts, "roll_player");
+      const enrolled = await db.select({
+        player: player,
+        guardian: guardian,
+      })
+        .from(registrations)
+        .innerJoin(player, eq(registrations.contactId, player.id))
+        .leftJoin(guardian, eq(registrations.guardianId, guardian.id))
+        .where(and(
+          eq(registrations.programId, campId),
+          eq(registrations.status, "confirmed"),
+          eq(player.type, "player"),
+        ));
+
+      const seenContactIds = new Set<number>();
+      for (const row of enrolled) {
+        const p = row.player;
+        if (seenContactIds.has(p.id)) continue;   // re-registered → one roll line
+        seenContactIds.add(p.id);
+
+        let [att] = await db.select().from(attendance).where(and(
+          eq(attendance.campDateId, campDateId),
+          eq(attendance.contactId, p.id),
+        ));
+        if (!att) {
+          try {
+            const [created] = await db.insert(attendance)
+              .values({ campId, campDateId, contactId: p.id }).returning();
+            att = created;
+          } catch {
+            // Lost the race with another coach opening the same roll — the
+            // partial unique index means the other insert won; re-read it.
+            [att] = await db.select().from(attendance).where(and(
+              eq(attendance.campDateId, campDateId),
+              eq(attendance.contactId, p.id),
+            ));
+          }
+        }
+
+        results.push({
+          // Shaped as a `child` so one roll UI serves both models. `epiPen` is
+          // deliberately left undefined, not false: contacts carry allergies +
+          // medicalNotes but have no EpiPen column, and an absent field must
+          // never render as a checked "no EpiPen".
+          child: {
+            id: p.id,
+            firstName: p.firstName,
+            lastName: p.lastName,
+            dateOfBirth: p.dateOfBirth,
+            gender: p.gender,
+            parentId: row.guardian?.id ?? 0,
+            medical: (p.allergies || p.medicalNotes)
+              ? { allergies: p.allergies, notes: p.medicalNotes } as any
+              : undefined,
+          } as any,
+          parent: (row.guardian ?? null) as any,
+          attendance: att || undefined,
+          productType: "SESSION",
+        });
+      }
     }
 
     return results.sort((a, b) => a.child.lastName.localeCompare(b.child.lastName));

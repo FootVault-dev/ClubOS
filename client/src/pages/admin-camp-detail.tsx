@@ -253,6 +253,14 @@ function ClassDatesTab({ campId, camp }: { campId: number; camp: any }) {
     queryFn: () => fetch(`/api/admin/camps/${campId}/dates`, { credentials: "include" }).then(r => r.json()),
   });
 
+  // The linked term supplies the date window the server generates across.
+  const { data: terms } = useQuery<any[]>({
+    queryKey: ["/api/admin/terms", camp?.organizationId],
+    queryFn: () => fetch(`/api/admin/terms?orgId=${camp.organizationId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!camp?.organizationId,
+  });
+  const term = terms?.find((t: any) => t.id === camp?.termId) ?? null;
+
   // Seed slot rows from the persisted weekly_pattern_json if there is one,
   // otherwise default to the U4-U8 academy starter pattern Daniel asked for:
   //   Mon-Fri 4:30-5:15pm + Sat 9:30-10:15 (Age 4-6) + Sat 10:30-11:15 (Age 7-8).
@@ -342,14 +350,29 @@ function ClassDatesTab({ campId, camp }: { campId: number; camp: any }) {
     );
   }
 
+  // The window the sessions are generated across is the TERM's, not the
+  // programme's. Academy programmes carry NULL start/end dates (the term owns
+  // the calendar), which used to leave the estimate at 0 and — because the
+  // button disables on `estimated === 0` — made Generate permanently
+  // un-clickable on exactly the programmes this tab exists for.
+  const window = term?.startDate && term?.endDate
+    ? { start: term.startDate, end: term.endDate }
+    : camp.startDate && camp.endDate
+      ? { start: camp.startDate, end: camp.endDate }
+      : null;
+
   // Estimate how many sessions the current pattern will produce so the
-  // admin can sanity-check before generating (e.g. 70 for U4-U8 over 10 weeks).
+  // admin can sanity-check before generating (e.g. 68 for U4-U8 over Term 3).
   const estimateCount = (): number => {
-    if (!camp.startDate || !camp.endDate) return 0;
-    const start = new Date(camp.startDate + "T00:00:00");
-    const end = new Date(camp.endDate + "T00:00:00");
+    if (!window) return 0;
     let count = 0;
-    const cursor = new Date(start);
+    // Walked as plain Y-M-D parts. Building a Date from an ISO date string and
+    // reading it back through toISOString() shifts the day in NZ (UTC+12) —
+    // the bug that has bitten this codebase repeatedly.
+    const [ys, ms, ds] = window.start.split("-").map(Number);
+    const cursor = new Date(ys, ms - 1, ds);
+    const [ye, me, de] = window.end.split("-").map(Number);
+    const end = new Date(ye, me - 1, de);
     while (cursor <= end) {
       const dow = cursor.getDay();
       for (const slot of slots) if (slot.daysOfWeek.includes(dow)) count++;
@@ -366,7 +389,9 @@ function ClassDatesTab({ campId, camp }: { campId: number; camp: any }) {
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-blue-300/40">Weekly schedule</div>
             <div className="text-[11px] text-white/30 mt-0.5">
-              {camp.startDate && camp.endDate ? <>Repeats every week between <span className="font-mono text-white/50">{camp.startDate}</span> and <span className="font-mono text-white/50">{camp.endDate}</span>.</> : "Set the term dates first."}
+              {window ? (
+                <>Repeats every week between <span className="font-mono text-white/50">{window.start}</span> and <span className="font-mono text-white/50">{window.end}</span>{term ? <> ({term.name ?? `Term ${term.termNumber}`} {term.year})</> : null}.</>
+              ) : "Set the term dates first."}
             </div>
           </div>
           <button
@@ -2061,19 +2086,30 @@ function SessionsTab({ campId, camp, detailPath }: { campId: number; camp?: any;
                             <span className="text-[11px] text-amber-400/70 font-medium">{s.name || "—"}</span>
                           </td>
                           <td className="px-4 py-2.5 text-center">
+                            {/* No capacity set is not the same as a capacity of
+                                zero — showing "58 / 0" (or a red 100% bar)
+                                would invent a limit nobody has set. */}
                             <span className="text-[13px] text-white/60">
                               <span className="font-semibold text-white/80">{s.bookedCount}</span>
-                              <span className="text-white/25 mx-1">/</span>
-                              <span>{s.capacity}</span>
+                              {s.capacity > 0 && (
+                                <>
+                                  <span className="text-white/25 mx-1">/</span>
+                                  <span>{s.capacity}</span>
+                                </>
+                              )}
                             </span>
                           </td>
                           <td className="px-4 py-2.5 hidden md:table-cell">
-                            <div className="flex items-center gap-2">
-                              <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-                                <div className={`h-full rounded-full ${barColor} transition-all duration-500`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                            {s.capacity > 0 ? (
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                                  <div className={`h-full rounded-full ${barColor} transition-all duration-500`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                                </div>
+                                <span className="text-[10px] text-white/30 w-8 text-right">{pct}%</span>
                               </div>
-                              <span className="text-[10px] text-white/30 w-8 text-right">{pct}%</span>
-                            </div>
+                            ) : (
+                              <span className="text-[10px] text-white/20">No cap</span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -2081,15 +2117,21 @@ function SessionsTab({ campId, camp, detailPath }: { campId: number; camp?: any;
                     <tr className="bg-blue-500/[0.03]">
                       <td className="px-4 py-2 text-[11px] text-blue-300/30 font-semibold uppercase tracking-wider" colSpan={3}>Week Total</td>
                       <td className="px-4 py-2 text-center">
-                        <span className="text-[12px] text-white/50 font-medium">{weekBooked} / {weekCapacity}</span>
+                        <span className="text-[12px] text-white/50 font-medium">
+                          {weekBooked}{weekCapacity > 0 ? ` / ${weekCapacity}` : ""}
+                        </span>
                       </td>
                       <td className="px-4 py-2 hidden md:table-cell">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-                            <div className="h-full rounded-full bg-blue-400/60 transition-all duration-500" style={{ width: `${weekCapacity > 0 ? Math.min(Math.round((weekBooked / weekCapacity) * 100), 100) : 0}%` }} />
+                        {weekCapacity > 0 ? (
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                              <div className="h-full rounded-full bg-blue-400/60 transition-all duration-500" style={{ width: `${Math.min(Math.round((weekBooked / weekCapacity) * 100), 100)}%` }} />
+                            </div>
+                            <span className="text-[10px] text-white/30 w-8 text-right">{Math.round((weekBooked / weekCapacity) * 100)}%</span>
                           </div>
-                          <span className="text-[10px] text-white/30 w-8 text-right">{weekCapacity > 0 ? Math.round((weekBooked / weekCapacity) * 100) : 0}%</span>
-                        </div>
+                        ) : (
+                          <span className="text-[10px] text-white/20">No cap</span>
+                        )}
                       </td>
                     </tr>
                   </tbody>

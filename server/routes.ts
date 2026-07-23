@@ -3217,9 +3217,34 @@ export async function registerRoutes(
   app.patch("/api/admin/attendance/:id", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const data: any = { ...req.body };
+      // Whitelist. This used to spread req.body straight into an UPDATE, so an
+      // authenticated caller could rewrite campId/childId/contactId and move a
+      // roll line onto a different child. Only the four fields the roll UI
+      // actually sends can be written.
+      const body: any = req.body ?? {};
+      const data: any = {};
+      for (const f of ["checkedInAt", "checkedOutAt", "note", "status"]) {
+        if (f in body) data[f] = body[f];
+      }
       if (data.checkedInAt) data.checkedInAt = new Date(data.checkedInAt);
       if (data.checkedOutAt) data.checkedOutAt = new Date(data.checkedOutAt);
+
+      // Term-programme roll: present / absent / un-mark. Validated here rather
+      // than by a DB CHECK (a stale one is how the MFL checkout started 500ing),
+      // and the timestamp + who-marked-it are stamped SERVER-side — a roll is a
+      // record of what a named adult observed, so the browser doesn't get to
+      // choose either. `null` clears a mis-tap back to "not marked yet", which
+      // stays distinct from "absent".
+      if ("status" in data) {
+        const s = data.status;
+        if (s !== null && s !== "present" && s !== "absent") {
+          return res.status(400).json({ message: "status must be 'present', 'absent' or null" });
+        }
+        data.status = s;
+        data.markedAt = s === null ? null : new Date();
+        data.markedByUserId = s === null ? null : (req.session.userId ?? null);
+      }
+
       const updated = await storage.updateAttendance(id, data);
       if (!updated) return res.status(404).json({ message: "Attendance record not found" });
       res.json(updated);
@@ -3339,13 +3364,24 @@ export async function registerRoutes(
       }
 
       const generated: any[] = [];
-      const start = new Date(term.startDate + "T00:00:00");
-      const end = new Date(term.endDate + "T00:00:00");
+      // Walked as LOCAL calendar parts, and the date string is rebuilt from
+      // those parts. `new Date("2026-07-20T00:00:00").toISOString()` yields
+      // 2026-07-19 whenever the process runs in NZ (UTC+12) — every session
+      // would be filed a day early, on the wrong weekday. Fly runs UTC today,
+      // which is the only reason this ever worked; that is a deployment detail,
+      // not an invariant.
+      const iso = (d: Date) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const parse = (s: string) => {
+        const [y, m, d] = s.split("-").map(Number);
+        return new Date(y, m - 1, d);
+      };
+      const end = parse(term.endDate);
       // Walk every day of the term ONCE, then for each day check every slot.
-      const cursor = new Date(start);
+      const cursor = parse(term.startDate);
       while (cursor <= end) {
         const dow = cursor.getDay();
-        const dateStr = cursor.toISOString().split("T")[0];
+        const dateStr = iso(cursor);
         for (const slot of slots) {
           if (slot.daysOfWeek.includes(dow)) {
             const created = await storage.createCampDate({

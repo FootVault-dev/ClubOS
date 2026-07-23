@@ -432,11 +432,21 @@ export const campDates = pgTable("camp_dates", {
   // capacity model instead.
   startTime: text("start_time"),
   endTime: text("end_time"),
-  // Optional human label for the slot — e.g. "Age 4-6", "Age 7-8" for
-  // age-split Saturday sessions. Lets a single program run multiple slots
-  // on the same day with different rolls.
+  // Optional human label for the slot — e.g. "U4–U6", "U7–U8" for age-split
+  // Saturday sessions. Lets a single program run multiple slots on the same
+  // day with different rolls.
   name: text("name"),
 });
+// Uniqueness on camp_dates lives in two PARTIAL indexes, not a plain UNIQUE
+// (see migrations/2026-07-23_camp_dates_slot_key.sql), because the two models
+// need different keys:
+//   camp_dates_day_uniq   (camp_id, date) WHERE start_time IS NULL
+//       — holiday camps: one row per camp per day, split by the capacity cols.
+//   camp_dates_slot_uniq  (camp_id, date, start_time) WHERE start_time IS NOT NULL
+//       — term timetables: the U4-U8 academy runs Sat 09:30 AND Sat 10:30.
+// Do NOT reinstate a plain UNIQUE (camp_id, date) — it makes an age-split
+// Saturday impossible, and a plain UNIQUE (camp_id, date, start_time) would
+// silently stop protecting holiday camps, whose start_time is always NULL.
 
 export const campSettings = pgTable("camp_settings", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -480,15 +490,33 @@ export const registrationItems = pgTable("registration_items", {
   refundedAmountCents: integer("refunded_amount_cents"),
 });
 
+// One roll line per person per session. Exactly one of childId/contactId is
+// set — enforced by `attendance_one_person_ck`, not by hope:
+//   childId   — holiday camps, where the player is a `children` row reached
+//               through a per-day registration_items line.
+//   contactId — academy/term programmes, where the registrant contact IS the
+//               player (contacts.type='player') and a term enrolment writes no
+//               per-date items at all.
+// Both references are NO ACTION (≈ RESTRICT): deleting a person must never
+// erase the record of whether they turned up.
 export const attendance = pgTable("attendance", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   campId: integer("camp_id").notNull().references(() => programs.id),
   campDateId: integer("camp_date_id").notNull().references(() => campDates.id),
-  childId: integer("child_id").notNull().references(() => children.id),
+  childId: integer("child_id").references(() => children.id),
+  contactId: integer("contact_id").references(() => contacts.id),
   checkedInAt: timestamp("checked_in_at"),
+  // Camps only. A holiday camp signs a child out to a named adult (a custody
+  // record); a 45-minute academy session just ends. Term rolls never set it.
   checkedOutAt: timestamp("checked_out_at"),
   checkedInByUserId: integer("checked_in_by_user_id").references(() => users.id),
   checkedOutByUserId: integer("checked_out_by_user_id").references(() => users.id),
+  // Term-roll state: 'present' | 'absent'. NULL means NOT MARKED YET, which is
+  // a different fact from absent and must stay distinguishable — a blank roll
+  // must never read as "nobody came". Deliberately not a DB enum/CHECK.
+  status: text("status"),
+  markedAt: timestamp("marked_at"),
+  markedByUserId: integer("marked_by_user_id").references(() => users.id),
   note: text("note"),
 });
 

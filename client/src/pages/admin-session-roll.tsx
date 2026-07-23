@@ -10,8 +10,8 @@ import { ArrowLeft, UserCheck, UserX, AlertTriangle, Clock, Users, Phone, Mail, 
 
 type RollPlayer = {
   child: { id: number; firstName: string; lastName: string; dateOfBirth?: string | null; gender?: string | null; parentId: number; medical?: { allergies?: string | null; epiPen?: boolean; notes?: string | null } };
-  parent: { id: number; firstName: string; lastName: string; email?: string | null; phone?: string | null };
-  attendance?: { id: number; checkedInAt?: string | null; checkedOutAt?: string | null; note?: string | null };
+  parent: { id: number; firstName: string; lastName: string; email?: string | null; phone?: string | null } | null;
+  attendance?: { id: number; checkedInAt?: string | null; checkedOutAt?: string | null; note?: string | null; status?: string | null; markedAt?: string | null };
   productType: string;
 };
 
@@ -70,17 +70,20 @@ function PlayerProfileModal({ player, onClose }: { player: RollPlayer; onClose: 
           <div className="flex items-center gap-2.5 text-[12px]">
             <User className="w-3.5 h-3.5 text-white/25" />
             <span className="text-white/50">Parent:</span>
-            <span className="text-white/70 font-medium">{player.parent.firstName} {player.parent.lastName}</span>
+            <span className="text-white/70 font-medium">
+              {player.parent ? `${player.parent.firstName} ${player.parent.lastName}` : "Not on file"}
+            </span>
           </div>
-          {player.parent.email && (
+          {player.parent?.email && (
             <div className="flex items-center gap-2.5 text-[12px]">
               <Mail className="w-3.5 h-3.5 text-white/25" />
               <a href={`mailto:${player.parent.email}`} className="text-blue-400/70 hover:text-blue-400 transition-colors">{player.parent.email}</a>
             </div>
           )}
-          {player.parent.phone && (
+          {player.parent?.phone && (
             <div className="flex items-center gap-2.5 text-[12px]">
               <Phone className="w-3.5 h-3.5 text-white/25" />
+              {/* Tap-to-call: the coach is holding a phone on a field. */}
               <a href={`tel:${player.parent.phone}`} className="text-blue-400/70 hover:text-blue-400 transition-colors">{player.parent.phone}</a>
             </div>
           )}
@@ -157,6 +160,11 @@ export default function AdminSessionRoll() {
 
   const sessionInfo = sessions?.find((s: any) => s.campDateId === dateId && s.productType === sessionType);
 
+  // Term programmes (academy) take a plain roll: present or absent, no
+  // sign-out. A holiday camp signs a child OUT to a named adult because the
+  // club holds them all day; a 45-minute academy session just ends.
+  const isTermRoll = camp?.scheduleType === "term";
+
   const checkInMutation = useMutation({
     mutationFn: async ({ attendanceId, action }: { attendanceId: number; action: "in" | "out" }) => {
       const body = action === "in"
@@ -171,11 +179,28 @@ export default function AdminSessionRoll() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Tapping the state a player is already in clears it back to "not marked",
+  // so a mis-tap is recoverable without a coach inventing a state.
+  const markMutation = useMutation({
+    mutationFn: async ({ attendanceId, status }: { attendanceId: number; status: "present" | "absent" | null }) => {
+      await apiRequest("PATCH", `/api/admin/attendance/${attendanceId}`, { status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/camps", campId, "session-roll", dateId, sessionType] });
+    },
+    onError: (e: Error) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
+  });
+
   const sessionDate = sessionInfo?.date;
   const dateLabel = sessionDate
     ? new Date(sessionDate + "T12:00:00").toLocaleDateString("en-NZ", { weekday: "long", day: "numeric", month: "long" })
     : "";
-  const sessionLabel = sessionType === "MORNING" ? "Morning" : "Afternoon";
+  const timeLabel = sessionInfo?.startTime
+    ? `${String(sessionInfo.startTime).slice(0, 5)}–${String(sessionInfo.endTime ?? "").slice(0, 5)}`
+    : "";
+  const sessionLabel = isTermRoll
+    ? (sessionInfo?.name || "Session")
+    : sessionType === "MORNING" ? "Morning" : "Afternoon";
 
   const sortedRoll = (roll || []).slice().sort((a, b) => {
     const firstCmp = a.child.firstName.localeCompare(b.child.firstName);
@@ -194,6 +219,10 @@ export default function AdminSessionRoll() {
   const signedInCount = roll?.filter(p => p.attendance?.checkedInAt).length || 0;
   const signedOutCount = roll?.filter(p => p.attendance?.checkedOutAt).length || 0;
   const totalPlayers = roll?.length || 0;
+  const presentCount = roll?.filter(p => p.attendance?.status === "present").length || 0;
+  const absentCount = roll?.filter(p => p.attendance?.status === "absent").length || 0;
+  // Deliberately shown: a roll that isn't finished must not read as complete.
+  const unmarkedCount = totalPlayers - presentCount - absentCount;
 
   return (
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
@@ -205,10 +234,10 @@ export default function AdminSessionRoll() {
         </Link>
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white/90 tracking-tight" data-testid="text-session-title">
-            {sessionLabel} Session
+            {isTermRoll ? sessionLabel : `${sessionLabel} Session`}
           </h1>
           <p className="text-[13px] text-white/35 mt-0.5">
-            {dateLabel}{camp ? ` · ${camp.name}` : ""}
+            {dateLabel}{timeLabel ? ` · ${timeLabel}` : ""}{camp ? ` · ${camp.name}` : ""}
           </p>
         </div>
       </div>
@@ -217,25 +246,41 @@ export default function AdminSessionRoll() {
         <div className="rounded-xl border border-blue-500/[0.08] bg-blue-500/[0.03] p-4">
           <div className="flex items-center gap-2 mb-1.5">
             <Users className="w-3.5 h-3.5 text-blue-400/40" />
-            <span className="text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Players</span>
+            <span className="text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">{isTermRoll ? "On roll" : "Players"}</span>
           </div>
           <span className="text-2xl font-bold text-white/85" data-testid="text-total-players">{totalPlayers}</span>
         </div>
         <div className="rounded-xl border border-emerald-500/[0.12] bg-emerald-500/[0.03] p-4">
           <div className="flex items-center gap-2 mb-1.5">
             <UserCheck className="w-3.5 h-3.5 text-emerald-400/40" />
-            <span className="text-[10px] text-emerald-300/30 uppercase tracking-wider font-semibold">Signed In</span>
+            <span className="text-[10px] text-emerald-300/30 uppercase tracking-wider font-semibold">{isTermRoll ? "Present" : "Signed In"}</span>
           </div>
-          <span className="text-2xl font-bold text-emerald-400/80" data-testid="text-signed-in">{signedInCount}</span>
+          <span className="text-2xl font-bold text-emerald-400/80" data-testid="text-signed-in">{isTermRoll ? presentCount : signedInCount}</span>
         </div>
-        <div className="rounded-xl border border-blue-500/[0.12] bg-blue-500/[0.03] p-4">
-          <div className="flex items-center gap-2 mb-1.5">
-            <UserX className="w-3.5 h-3.5 text-blue-400/40" />
-            <span className="text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Signed Out</span>
+        {isTermRoll ? (
+          <div className="rounded-xl border border-amber-500/[0.12] bg-amber-500/[0.03] p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <UserX className="w-3.5 h-3.5 text-amber-400/40" />
+              <span className="text-[10px] text-amber-300/30 uppercase tracking-wider font-semibold">Absent</span>
+            </div>
+            <span className="text-2xl font-bold text-amber-400/80" data-testid="text-absent">{absentCount}</span>
           </div>
-          <span className="text-2xl font-bold text-blue-400/80" data-testid="text-signed-out">{signedOutCount}</span>
-        </div>
+        ) : (
+          <div className="rounded-xl border border-blue-500/[0.12] bg-blue-500/[0.03] p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <UserX className="w-3.5 h-3.5 text-blue-400/40" />
+              <span className="text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Signed Out</span>
+            </div>
+            <span className="text-2xl font-bold text-blue-400/80" data-testid="text-signed-out">{signedOutCount}</span>
+          </div>
+        )}
       </div>
+
+      {isTermRoll && totalPlayers > 0 && unmarkedCount > 0 && (
+        <p className="text-[12px] text-white/30 -mt-2" data-testid="text-unmarked">
+          {unmarkedCount} still to mark.
+        </p>
+      )}
 
       {isLoading ? (
         <div className="space-y-3">
@@ -284,9 +329,15 @@ export default function AdminSessionRoll() {
                   <th className="text-left px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Player</th>
                   <th className="text-left px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold hidden sm:table-cell">Age</th>
                   <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Status</th>
-                  <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Sign In</th>
-                  <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Sign Out</th>
-                  <th className="text-right px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Actions</th>
+                  {isTermRoll ? (
+                    <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold hidden sm:table-cell">Marked</th>
+                  ) : (
+                    <>
+                      <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Sign In</th>
+                      <th className="text-center px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">Sign Out</th>
+                    </>
+                  )}
+                  <th className="text-right px-4 py-3 text-[10px] text-blue-300/30 uppercase tracking-wider font-semibold">{isTermRoll ? "Roll" : "Actions"}</th>
                 </tr>
               </thead>
               <tbody>
@@ -294,6 +345,7 @@ export default function AdminSessionRoll() {
                   const isIn = !!player.attendance?.checkedInAt;
                   const isOut = !!player.attendance?.checkedOutAt;
                   const hasMedical = hasRealAllergies(player.child.medical?.allergies) || player.child.medical?.epiPen;
+                  const mark = player.attendance?.status ?? null;
 
                   return (
                     <tr
@@ -319,7 +371,9 @@ export default function AdminSessionRoll() {
                                 <AlertTriangle className="w-3 h-3 text-amber-400/60 flex-shrink-0" aria-label="Has medical info" />
                               )}
                             </div>
-                            <p className="text-[11px] text-white/30 truncate">{player.parent.firstName} {player.parent.lastName}</p>
+                            <p className="text-[11px] text-white/30 truncate">
+                              {player.parent ? `${player.parent.firstName} ${player.parent.lastName}` : "—"}
+                            </p>
                           </div>
                         </button>
                       </td>
@@ -327,7 +381,15 @@ export default function AdminSessionRoll() {
                         <span className="text-[12px] text-white/45">{formatAge(player.child.dateOfBirth)}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {isOut ? (
+                        {isTermRoll ? (
+                          mark === "present" ? (
+                            <Badge variant="outline" className="text-[9px] text-emerald-400/80 border-emerald-500/20 bg-emerald-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Present</Badge>
+                          ) : mark === "absent" ? (
+                            <Badge variant="outline" className="text-[9px] text-amber-400/80 border-amber-500/20 bg-amber-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Absent</Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[9px] text-white/30 border-white/10 bg-white/[0.03] uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Not marked</Badge>
+                          )
+                        ) : isOut ? (
                           <Badge variant="outline" className="text-[9px] text-blue-400/70 border-blue-500/20 bg-blue-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Signed Out</Badge>
                         ) : isIn ? (
                           <Badge variant="outline" className="text-[9px] text-emerald-400/80 border-emerald-500/20 bg-emerald-500/10 uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Signed In</Badge>
@@ -335,33 +397,84 @@ export default function AdminSessionRoll() {
                           <Badge variant="outline" className="text-[9px] text-white/30 border-white/10 bg-white/[0.03] uppercase tracking-wider" data-testid={`badge-status-${player.child.id}`}>Not Arrived</Badge>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        {isIn ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <Clock className="w-3 h-3 text-emerald-400/50" />
-                            <span className="text-[12px] text-emerald-400/70 font-medium" data-testid={`text-signin-time-${player.child.id}`}>
-                              {formatTime(player.attendance?.checkedInAt)}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-white/15">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {isOut ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <Clock className="w-3 h-3 text-blue-400/50" />
-                            <span className="text-[12px] text-blue-400/70 font-medium" data-testid={`text-signout-time-${player.child.id}`}>
-                              {formatTime(player.attendance?.checkedOutAt)}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-white/15">—</span>
-                        )}
-                      </td>
+                      {isTermRoll ? (
+                        <td className="px-4 py-3 text-center hidden sm:table-cell">
+                          {player.attendance?.markedAt ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <Clock className="w-3 h-3 text-white/25" />
+                              <span className="text-[12px] text-white/45 font-medium" data-testid={`text-marked-time-${player.child.id}`}>
+                                {formatTime(player.attendance.markedAt)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-white/15">—</span>
+                          )}
+                        </td>
+                      ) : (
+                        <>
+                          <td className="px-4 py-3 text-center">
+                            {isIn ? (
+                              <div className="flex items-center justify-center gap-1">
+                                <Clock className="w-3 h-3 text-emerald-400/50" />
+                                <span className="text-[12px] text-emerald-400/70 font-medium" data-testid={`text-signin-time-${player.child.id}`}>
+                                  {formatTime(player.attendance?.checkedInAt)}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-white/15">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {isOut ? (
+                              <div className="flex items-center justify-center gap-1">
+                                <Clock className="w-3 h-3 text-blue-400/50" />
+                                <span className="text-[12px] text-blue-400/70 font-medium" data-testid={`text-signout-time-${player.child.id}`}>
+                                  {formatTime(player.attendance?.checkedOutAt)}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-white/15">—</span>
+                            )}
+                          </td>
+                        </>
+                      )}
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {!isIn && player.attendance && (
+                          {isTermRoll && player.attendance && (
+                            <>
+                              <button
+                                onClick={() => markMutation.mutate({ attendanceId: player.attendance!.id, status: mark === "present" ? null : "present" })}
+                                disabled={markMutation.isPending}
+                                aria-pressed={mark === "present"}
+                                // 44px min target — this is tapped on a phone,
+                                // on a field, wearing a coat.
+                                className={`min-h-[44px] min-w-[44px] px-3 sm:px-4 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                                  mark === "present"
+                                    ? "bg-emerald-500/25 border-emerald-400/50 text-emerald-200"
+                                    : "bg-emerald-500/[0.06] border-emerald-500/15 text-emerald-400/60 hover:bg-emerald-500/15"
+                                }`}
+                                data-testid={`button-present-${player.child.id}`}
+                              >
+                                <UserCheck className="w-4 h-4 inline-block sm:mr-1.5" />
+                                <span className="hidden sm:inline">Present</span>
+                              </button>
+                              <button
+                                onClick={() => markMutation.mutate({ attendanceId: player.attendance!.id, status: mark === "absent" ? null : "absent" })}
+                                disabled={markMutation.isPending}
+                                aria-pressed={mark === "absent"}
+                                className={`min-h-[44px] min-w-[44px] px-3 sm:px-4 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                                  mark === "absent"
+                                    ? "bg-amber-500/25 border-amber-400/50 text-amber-200"
+                                    : "bg-amber-500/[0.06] border-amber-500/15 text-amber-400/60 hover:bg-amber-500/15"
+                                }`}
+                                data-testid={`button-absent-${player.child.id}`}
+                              >
+                                <UserX className="w-4 h-4 inline-block sm:mr-1.5" />
+                                <span className="hidden sm:inline">Absent</span>
+                              </button>
+                            </>
+                          )}
+                          {!isTermRoll && !isIn && player.attendance && (
                             <button
                               onClick={() => checkInMutation.mutate({ attendanceId: player.attendance!.id, action: "in" })}
                               disabled={checkInMutation.isPending}
@@ -371,7 +484,7 @@ export default function AdminSessionRoll() {
                               <UserCheck className="w-3.5 h-3.5" /> Sign In
                             </button>
                           )}
-                          {isIn && !isOut && player.attendance && (
+                          {!isTermRoll && isIn && !isOut && player.attendance && (
                             <button
                               onClick={() => checkInMutation.mutate({ attendanceId: player.attendance!.id, action: "out" })}
                               disabled={checkInMutation.isPending}
@@ -381,7 +494,7 @@ export default function AdminSessionRoll() {
                               <UserX className="w-3.5 h-3.5" /> Sign Out
                             </button>
                           )}
-                          {isOut && (
+                          {!isTermRoll && isOut && (
                             <span className="text-[10px] text-white/20 italic">Complete</span>
                           )}
                         </div>
