@@ -97,7 +97,8 @@ interface ResolvedRef {
     | "facility"
     | "print"
     | "cugc"
-    | "adspace";
+    | "adspace"
+    | "stripe";
   programme: string;
   player: string | null;
   parent: string | null;
@@ -270,6 +271,32 @@ async function resolveClubByPaymentIntent(piIds: string[]) {
   }
 
   return { byPi, bySubscription };
+}
+
+/** Stripe's own account-level lines (its Billing usage fee, adjustments…) —
+ *  labelled explicitly so they never render as mystery customer payments
+ *  (Daniel, 2026-07-24: "no mystery payments"). */
+function describeOther(t: Stripe.BalanceTransaction): ResolvedRef {
+  const verbatim = t.description ?? t.type;
+  if (t.type === "stripe_fee" || t.reporting_category === "fee") {
+    const isBilling = (t.description ?? "").toLowerCase().includes("billing");
+    return {
+      source: "stripe",
+      programme: isBilling ? "Stripe Billing usage fee" : "Stripe fee",
+      player: null,
+      parent: null,
+      detail: isBilling
+        ? `${verbatim} · Stripe's own charge for running the weekly payment plans — not a customer payment`
+        : `${verbatim} · Stripe's own charge — not a customer payment`,
+    };
+  }
+  return {
+    source: "stripe",
+    programme: `Stripe ${(t.reporting_category ?? t.type).replace(/_/g, " ")}`,
+    player: null,
+    parent: null,
+    detail: `${verbatim} · Stripe account movement — not a customer payment`,
+  };
 }
 
 /** Registrations behind weekly-plan subscription ids, looked up DIRECTLY by
@@ -664,7 +691,7 @@ export async function explainPayout(client: Stripe, account: AccountKey, id: str
       description: t.description ?? t.type,
       payerName: null,
       payerEmail: null,
-      resolved: null,
+      resolved: describeOther(t),
     })),
   ];
 

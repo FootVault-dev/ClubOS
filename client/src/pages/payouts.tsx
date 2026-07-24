@@ -21,7 +21,7 @@ interface PayoutRow {
 }
 
 interface ResolvedRef {
-  source: "registration" | "membership" | "shop" | "invoice" | "split" | "facility" | "print" | "cugc" | "adspace";
+  source: "registration" | "membership" | "shop" | "invoice" | "split" | "facility" | "print" | "cugc" | "adspace" | "stripe";
   programme: string;
   player: string | null;
   parent: string | null;
@@ -93,6 +93,7 @@ const SOURCE_LABEL: Record<ResolvedRef["source"], string> = {
   print: "United Print",
   cugc: "Gymnastics",
   adspace: "AdSpace",
+  stripe: "Stripe",
 };
 
 function StatusBadge({ status }: { status: string }) {
