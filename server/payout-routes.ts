@@ -34,6 +34,7 @@ import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
 import { stripe } from "./stripe";
 import { cugcStripe } from "./cugc-stripe";
+import { subscriptionIdFromInvoice } from "@shared/league-weekly";
 import {
   registrations,
   contacts,
@@ -269,6 +270,69 @@ async function resolveClubByPaymentIntent(piIds: string[]) {
   }
 
   return { byPi, bySubscription };
+}
+
+/** Registrations behind weekly-plan subscription ids, looked up DIRECTLY by
+ *  subscription id. A week-N subscription charge carries no payment intent
+ *  the DB knows (only the deposit/balance PIs are stored), so the PI-derived
+ *  bySubscription map almost never contains it — before this lookup every
+ *  MFL weekly line rendered as "Subscription update · not matched". */
+async function resolveClubBySubscriptionIds(subIds: string[]): Promise<Map<string, ResolvedRef>> {
+  const bySub = new Map<string, ResolvedRef>();
+  if (subIds.length === 0) return bySub;
+  const regs = await db.select().from(registrations).where(inArray(registrations.stripeSubscriptionId, subIds));
+  if (regs.length > 0) {
+    const contactIds = new Set<number>();
+    const programIds = new Set<number>();
+    for (const r of regs) {
+      contactIds.add(r.contactId);
+      if (r.guardianId) contactIds.add(r.guardianId);
+      programIds.add(r.programId);
+    }
+    const contactRows = await db
+      .select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName })
+      .from(contacts)
+      .where(inArray(contacts.id, Array.from(contactIds)));
+    const contactById = new Map(contactRows.map((c) => [c.id, c]));
+    const programRows = await db
+      .select({ id: programs.id, name: programs.name })
+      .from(programs)
+      .where(inArray(programs.id, Array.from(programIds)));
+    const programById = new Map(programRows.map((p) => [p.id, p.name]));
+    for (const r of regs) {
+      if (!r.stripeSubscriptionId) continue;
+      bySub.set(r.stripeSubscriptionId, {
+        source: "registration",
+        programme: programById.get(r.programId) ?? `Programme #${r.programId}`,
+        player: fullName(contactById.get(r.contactId)),
+        parent: r.guardianId ? fullName(contactById.get(r.guardianId)) : null,
+        detail: r.teamName ? `Team ${r.teamName} · weekly plan` : "Weekly plan",
+      });
+    }
+  }
+  // Weekly venue hire ("Pay weekly" bookings) stores its subscription too.
+  const remaining = subIds.filter((s) => !bySub.has(s));
+  if (remaining.length > 0) {
+    const bookings = await db.select().from(facilityBookings).where(inArray(facilityBookings.stripeSubscriptionId, remaining));
+    if (bookings.length > 0) {
+      const facRows = await db
+        .select({ id: facilities.id, name: facilities.name })
+        .from(facilities)
+        .where(inArray(facilities.id, Array.from(new Set(bookings.map((b) => b.facilityId)))));
+      const facById = new Map(facRows.map((f) => [f.id, f.name]));
+      for (const b of bookings) {
+        if (!b.stripeSubscriptionId || bySub.has(b.stripeSubscriptionId)) continue;
+        bySub.set(b.stripeSubscriptionId, {
+          source: "facility",
+          programme: `Facility hire — ${facById.get(b.facilityId) ?? "USC"}`,
+          player: b.customerName,
+          parent: null,
+          detail: "Weekly plan",
+        });
+      }
+    }
+  }
+  return bySub;
 }
 
 /** CUGC has its own Stripe account and its own enrolment table. */
@@ -513,30 +577,9 @@ export async function explainPayout(client: Stripe, account: AccountKey, id: str
     if (ref && m.chargeId) resolvedByCharge.set(m.chargeId, ref);
   }
 
-  // Weekly-plan subscription charges: no direct PI row, but the Stripe
-  // invoice carries the subscription id which registrations stores.
-  const needInvoice = money.filter((m) => m.kind === "charge" && m.chargeId && !resolvedByCharge.has(m.chargeId) && m.invoiceId);
-  const distinctInvoiceIds = Array.from(new Set(needInvoice.map((m) => m.invoiceId as string))).slice(0, 25);
-  if (distinctInvoiceIds.length > 0 && bySubscription.size > 0) {
-    const invToSub = new Map<string, string>();
-    for (const invId of distinctInvoiceIds) {
-      try {
-        const inv = await client.invoices.retrieve(invId);
-        const subId = typeof (inv as any).subscription === "string" ? (inv as any).subscription : (inv as any).subscription?.id;
-        if (subId) invToSub.set(invId, subId);
-      } catch {
-        // best-effort — an unreadable invoice just stays unresolved
-      }
-    }
-    for (const m of needInvoice) {
-      const subId = m.invoiceId ? invToSub.get(m.invoiceId) : undefined;
-      const ref = subId ? bySubscription.get(subId) : undefined;
-      if (ref && m.chargeId) resolvedByCharge.set(m.chargeId, ref);
-    }
-  }
-
-  // Metadata fallback for anything still unnamed (club account only — the
-  // CUGC account's metadata ids point at cugc_registrations, already tried).
+  // Metadata fallback for anything the PI join didn't name (club account only —
+  // the CUGC account's metadata ids point at cugc_registrations, already tried).
+  // DB-only and cheap, so it runs BEFORE the per-charge Stripe lookups below.
   if (account === "club") {
     const unresolved = money
       .filter((m) => m.chargeId && !resolvedByCharge.has(m.chargeId) && Object.keys(m.metadata).length > 0)
@@ -544,6 +587,57 @@ export async function explainPayout(client: Stripe, account: AccountKey, id: str
     if (unresolved.length > 0) {
       const metaRefs = await resolveClubByMetadata(unresolved);
       metaRefs.forEach((ref, chargeId) => resolvedByCharge.set(chargeId, ref));
+    }
+  }
+
+  // Weekly-plan subscription charges (MFL weekly teams, weekly venue hire):
+  // the registration/booking stores a SUBSCRIPTION id, and a week-N charge
+  // carries no payment intent the DB knows. 🔴 On the 2026-02-25.clover API
+  // version BOTH legacy links are gone — `charge.invoice` no longer exists,
+  // and `invoice.subscription` moved to parent.subscription_details (the
+  // same trap the invoice.paid webhook hit, v349). The route that works:
+  // charge → payment intent → InvoicePayment → invoice →
+  // subscriptionIdFromInvoice() → registrations / facility_bookings.
+  const needInvoice = money
+    .filter((m) => m.kind === "charge" && m.chargeId && !resolvedByCharge.has(m.chargeId) && (m.invoiceId || m.paymentIntentId))
+    .slice(0, 50); // bounded work — anything past the cap just stays unresolved
+  if (needInvoice.length > 0) {
+    const subByCharge = new Map<string, string>();
+    const subByInvoice = new Map<string, string | null>();
+    for (const m of needInvoice) {
+      try {
+        let invId = m.invoiceId;
+        if (!invId && m.paymentIntentId) {
+          const ip = await client.invoicePayments.list({
+            payment: { type: "payment_intent", payment_intent: m.paymentIntentId },
+            limit: 1,
+          });
+          const inv = ip.data[0]?.invoice;
+          invId = typeof inv === "string" ? inv : inv?.id ?? null;
+        }
+        if (!invId) continue; // a plain one-off card charge — not an invoice payment
+        let subId = subByInvoice.get(invId);
+        if (subId === undefined) {
+          const inv = await client.invoices.retrieve(invId);
+          subId = subscriptionIdFromInvoice(inv) ?? null;
+          subByInvoice.set(invId, subId);
+        }
+        if (subId && m.chargeId) subByCharge.set(m.chargeId, subId);
+      } catch {
+        // best-effort — an unreadable invoice just stays unresolved
+      }
+    }
+    // A week-N charge's registration is NOT in this payout's PI set, so the
+    // PI-derived bySubscription map almost never has it — look up directly.
+    if (account === "club") {
+      const missing = Array.from(new Set(subByCharge.values())).filter((s) => !bySubscription.has(s));
+      const direct = await resolveClubBySubscriptionIds(missing);
+      direct.forEach((ref, subId) => bySubscription.set(subId, ref));
+    }
+    for (const m of needInvoice) {
+      const subId = m.chargeId ? subByCharge.get(m.chargeId) : undefined;
+      const ref = subId ? bySubscription.get(subId) : undefined;
+      if (ref && m.chargeId) resolvedByCharge.set(m.chargeId, ref);
     }
   }
 
