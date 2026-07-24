@@ -394,10 +394,21 @@ html:not(.dark) .text-blue-400\/50,
 html:not(.dark) .text-blue-400\/60 { color: hsl(217 91% 38% / 0.9) !important; }
 html:not(.dark) .text-emerald-400 { color: hsl(160 70% 32%) !important; }
 html:not(.dark) .text-emerald-400\/70 { color: hsl(160 70% 32% / 0.95) !important; }
+html:not(.dark) .text-emerald-300 { color: hsl(160 70% 30%) !important; }
+html:not(.dark) .text-emerald-300\/90 { color: hsl(160 70% 30% / 0.95) !important; }
 html:not(.dark) .text-amber-400 { color: hsl(38 90% 38%) !important; }
 html:not(.dark) .text-violet-400 { color: hsl(265 70% 45%) !important; }
 html:not(.dark) .text-rose-400 { color: hsl(350 75% 42%) !important; }
 html:not(.dark) .text-red-400 { color: hsl(0 75% 42%) !important; }
+
+/* The USG/USC ram workspace mark is a WHITE logo on transparency — invisible
+   against a white page. In light mode repaint the mark in the primary brand
+   blue so it stands out (Daniel, 2026-07-24). The filter chain is solved
+   numerically to land a white source EXACTLY on hsl(217 91% 50%) — the app's
+   --primary — not eyeballed; dark mode keeps the white mark untouched. */
+html:not(.dark) img[src="/logos/united-sports-group.png"] {
+  filter: brightness(0) saturate(100%) invert(35%) sepia(97%) saturate(6441%) hue-rotate(215deg) brightness(105%) contrast(91%);
+}
 
 /* Gradient stat cards — original gradient (e.g. from-blue-500/15 to-blue-600/5)
    is invisible on a white page. In light mode swap to a stronger tinted
