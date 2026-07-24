@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Calendar as CalIcon, ChevronLeft, ChevronRight, Plus, X, Trash2 } from "lucide-react";
+import { Calendar as CalIcon, ChevronLeft, ChevronRight, Pencil, Plus, X, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { TimePickerInput } from "@/components/ui/time-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -41,6 +42,23 @@ const WEEKDAY_BUTTONS = [
 ];
 
 type RepeatFreq = "none" | "daily" | "weekly" | "weekdays" | "custom";
+
+// In-modal edit form for an existing booking. Deliberately edits ONE row —
+// a series/multi-facility group is a set of independent rows, and editing
+// just the clicked one is the honest, predictable behaviour.
+type EditFormState = {
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  facilityId: string;
+  bookingDate: string;
+  startTime: string;
+  endTime: string;
+  totalAmount: string;
+  color: string;
+  notes: string;
+  status: string;
+};
 
 const emptyForm = {
   customerName: "",
@@ -143,9 +161,12 @@ export default function VenueCalendar() {
   // admin picked; notifyCancel drives the "email the customer" checkbox.
   const [deleteIntent, setDeleteIntent] = useState<null | { scope?: "series" }>(null);
   const [notifyCancel, setNotifyCancel] = useState(true);
+  // When set, the details modal swaps to an edit form pre-filled from the booking.
+  const [editForm, setEditForm] = useState<EditFormState | null>(null);
   useEffect(() => {
     setDeleteIntent(null);
     setNotifyCancel(true);
+    setEditForm(null);
   }, [selectedBooking?.id]);
 
   const weekDates = getWeekDates(currentDate);
@@ -203,6 +224,67 @@ export default function VenueCalendar() {
     },
     onError: (e: any) => toast({ title: "Couldn't delete booking", description: e?.message || String(e), variant: "destructive" }),
   });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, patch }: { id: number; patch: any }) => {
+      const r = await apiRequest("PATCH", `/api/admin/venue/bookings/${id}`, patch);
+      return await r.json();
+    },
+    onSuccess: (updated: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/venue/bookings"] });
+      // Keep the open modal showing the fresh values. The server row has no
+      // joined facility, so re-attach it from the facilities list.
+      setSelectedBooking(prev => prev
+        ? { ...prev, ...updated, facility: facs.find(f => f.id === updated.facilityId) || prev.facility }
+        : prev);
+      setEditForm(null);
+      toast({ title: "Booking updated" });
+    },
+    onError: (e: any) => toast({ title: "Couldn't update booking", description: e?.message || String(e), variant: "destructive" }),
+  });
+
+  const startEdit = (b: BookingWithFacility) => {
+    setDeleteIntent(null);
+    setEditForm({
+      customerName: b.customerName || "",
+      customerEmail: b.customerEmail || "",
+      customerPhone: b.customerPhone || "",
+      facilityId: String(b.facilityId),
+      bookingDate: b.bookingDate,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      totalAmount: b.totalAmount != null ? String(Number(b.totalAmount)) : "0",
+      color: b.color || "",
+      notes: b.notes || "",
+      status: b.status,
+    });
+  };
+
+  // Deep link: ?booking=<id> opens that booking's details on load; add &edit=1
+  // to jump straight into the edit form. One-shot — after the first resolution
+  // the calendar behaves normally.
+  const deepLinkDone = useRef(false);
+  const pendingDeepEdit = useRef(false);
+  useEffect(() => {
+    if (deepLinkDone.current || bookings.length === 0) return;
+    deepLinkDone.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const idStr = params.get("booking");
+    if (!idStr) return;
+    const target = bookings.find(x => x.id === parseInt(idStr));
+    if (!target) return;
+    pendingDeepEdit.current = params.get("edit") === "1";
+    setCurrentDate(new Date(target.bookingDate + "T00:00:00"));
+    setSelectedBooking(target);
+  }, [bookings]);
+  // Declared AFTER the reset-on-selection effect so it runs after it in the
+  // same commit — otherwise the reset would wipe the deep-linked edit form.
+  useEffect(() => {
+    if (pendingDeepEdit.current && selectedBooking) {
+      pendingDeepEdit.current = false;
+      startEdit(selectedBooking);
+    }
+  }, [selectedBooking?.id]);
 
   const weekDateStrs = weekDates.map(d => ymd(d));
   const facilityFilterId = facilityFilter === "all" ? null : Number(facilityFilter);
@@ -701,6 +783,7 @@ export default function VenueCalendar() {
                 <button onClick={() => setSelectedBooking(null)} className="text-white/30 hover:text-white/60 flex-shrink-0" data-testid="button-close-details"><X className="w-5 h-5" /></button>
               </div>
 
+              {!editForm && (
               <div className="mt-4">
                 <DetailRow label={extraNames.length > 0 ? "Facilities" : "Facility"}>
                   <span className="font-medium">{primaryName}{sizeLabel(b)}</span>
@@ -734,15 +817,153 @@ export default function VenueCalendar() {
                   <DetailRow label="Booked on">{new Date(b.createdAt).toLocaleString("en-NZ", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })}</DetailRow>
                 )}
               </div>
+              )}
 
               {/* Audit trail — small print at the bottom: who added this booking. */}
-              {attribution && (
+              {!editForm && attribution && (
                 <p className="mt-3 pt-3 border-t border-white/5 text-[11px] text-white/40" data-testid="text-booking-attribution">
                   {attribution}
                 </p>
               )}
 
-              {(() => {
+              {editForm && (
+                <div className="mt-4 space-y-3" data-testid="edit-booking-panel">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs text-white/40 mb-1 block">Customer Name</label>
+                      <Input value={editForm.customerName} onChange={e => setEditForm({ ...editForm, customerName: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-name" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-white/40 mb-1 block">Email</label>
+                      <Input value={editForm.customerEmail} onChange={e => setEditForm({ ...editForm, customerEmail: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-email" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-white/40 mb-1 block">Phone (optional)</label>
+                    <Input value={editForm.customerPhone} onChange={e => setEditForm({ ...editForm, customerPhone: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-phone" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-white/40 mb-1 block">Facility</label>
+                    <Select value={editForm.facilityId} onValueChange={v => setEditForm({ ...editForm, facilityId: v })}>
+                      <SelectTrigger className="bg-white/5 border-white/10 text-white" data-testid="select-edit-facility"><SelectValue placeholder="Select facility" /></SelectTrigger>
+                      <SelectContent>
+                        {facs
+                          .slice()
+                          .sort((a, f2) => (a.displayOrder ?? 0) - (f2.displayOrder ?? 0) || a.name.localeCompare(f2.name))
+                          .map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-xs text-white/40 mb-1 block">Date</label>
+                      <DatePickerInput value={editForm.bookingDate} onChange={e => setEditForm({ ...editForm, bookingDate: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-date" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-white/40 mb-1 block">Start</label>
+                      <TimePickerInput value={editForm.startTime} onChange={e => setEditForm({ ...editForm, startTime: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-start" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-white/40 mb-1 block">End</label>
+                      <TimePickerInput value={editForm.endTime} onChange={e => setEditForm({ ...editForm, endTime: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-end" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs text-white/40 mb-1 block">Amount (inc GST)</label>
+                      <Input type="number" step="0.01" value={editForm.totalAmount} onChange={e => setEditForm({ ...editForm, totalAmount: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-amount" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-white/40 mb-1 block">Status</label>
+                      <Select value={editForm.status} onValueChange={v => setEditForm({ ...editForm, status: v })}>
+                        <SelectTrigger className="bg-white/5 border-white/10 text-white" data-testid="select-edit-status"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="confirmed">Confirmed</SelectItem>
+                          <SelectItem value="paid">Paid</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-white/40 mb-1 block">Color</label>
+                    <div className="flex items-center gap-2 flex-wrap" data-testid="edit-color-picker">
+                      <button
+                        type="button"
+                        onClick={() => setEditForm({ ...editForm, color: "" })}
+                        className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-[10px] text-white/50 ${editForm.color === "" ? "border-white" : "border-white/20"}`}
+                        title="No color (use status color)"
+                        data-testid="button-edit-color-none"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                      {COLOR_SWATCHES.map(s => (
+                        <button
+                          key={s.hex}
+                          type="button"
+                          onClick={() => setEditForm({ ...editForm, color: s.hex })}
+                          style={{ backgroundColor: s.hex }}
+                          className={`w-7 h-7 rounded-full border-2 transition-all ${editForm.color === s.hex ? "border-white scale-110" : "border-transparent hover:scale-105"}`}
+                          title={s.label}
+                          data-testid={`button-edit-color-${s.label.toLowerCase()}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-white/40 mb-1 block">Notes</label>
+                    <Textarea value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} rows={3} className="bg-white/5 border-white/10 text-white" data-testid="input-edit-notes" />
+                  </div>
+                  {b.bookingGroupId && bookings.filter(x => x.bookingGroupId === b.bookingGroupId && x.status !== "cancelled").length > 1 && (
+                    <p className="text-[11px] text-white/40">
+                      This booking is part of a linked series — edits apply to this booking only, the rest of the series is unchanged.
+                    </p>
+                  )}
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button variant="ghost" size="sm" onClick={() => setEditForm(null)} disabled={updateMutation.isPending} className="text-white/50" data-testid="button-edit-cancel">
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const amt = editForm.totalAmount === "" ? "0" : editForm.totalAmount;
+                        updateMutation.mutate({
+                          id: b.id,
+                          patch: {
+                            customerName: editForm.customerName.trim(),
+                            customerEmail: editForm.customerEmail.trim(),
+                            customerPhone: editForm.customerPhone.trim() || null,
+                            facilityId: parseInt(editForm.facilityId),
+                            bookingDate: editForm.bookingDate,
+                            startTime: editForm.startTime,
+                            endTime: editForm.endTime,
+                            totalAmount: amt,
+                            gstAmount: String(Number(amt) * 3 / 23),
+                            color: editForm.color || null,
+                            notes: editForm.notes.trim() || null,
+                            status: editForm.status,
+                          },
+                        });
+                      }}
+                      disabled={
+                        !editForm.customerName.trim() ||
+                        !editForm.customerEmail.trim() ||
+                        !editForm.facilityId ||
+                        !editForm.bookingDate ||
+                        !editForm.startTime ||
+                        !editForm.endTime ||
+                        updateMutation.isPending
+                      }
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                      data-testid="button-save-edit"
+                    >
+                      {updateMutation.isPending ? "Saving…" : "Save changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {!editForm && (() => {
                 // Other rows sharing this booking's group id (recurring series /
                 // multi-facility) — offers a one-click series delete.
                 const seriesCount = b.bookingGroupId
@@ -799,7 +1020,17 @@ export default function VenueCalendar() {
 
                 return (
                   <div className="flex items-center justify-between gap-2 pt-4 flex-wrap">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => startEdit(b)}
+                        disabled={deleteMutation.isPending}
+                        className="border-white/15 text-white/80 hover:bg-white/10"
+                        data-testid="button-edit-booking"
+                      >
+                        <Pencil className="w-3.5 h-3.5 mr-1.5" /> Edit booking
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"
