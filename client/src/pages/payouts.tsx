@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { formatCurrency } from "@/lib/format";
 import {
   Banknote, ArrowLeft, ChevronRight, Download, Search as SearchIcon,
-  AlertTriangle, RefreshCcw,
+  AlertTriangle, RefreshCcw, ArrowUp, ArrowDown, ChevronsUpDown,
 } from "lucide-react";
 
 // ── Types (mirror server/payout-routes.ts) ──────────────────────────────────
@@ -121,6 +121,49 @@ function csvEscape(v: string): string {
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
+// ── Column sorting (Olga's ask: click a header, the lines re-order) ─────────
+type SortKey = "when" | "programme" | "player" | "parent" | "gross" | "fee" | "net";
+type SortDir = "asc" | "desc";
+
+// First click lands on the direction people actually want: amounts biggest
+// first, names A→Z, When newest first.
+const SORT_FIRST_DIR: Record<SortKey, SortDir> = {
+  when: "desc", programme: "asc", player: "asc", parent: "asc",
+  gross: "desc", fee: "desc", net: "desc",
+};
+
+function SortableTh({ label, k, sort, onSort, className = "", right = false }: {
+  label: string;
+  k: SortKey;
+  sort: { key: SortKey; dir: SortDir } | null;
+  onSort: (k: SortKey) => void;
+  className?: string;
+  right?: boolean;
+}) {
+  const dir: SortDir | null = sort && sort.key === k ? sort.dir : null;
+  return (
+    <th
+      className={`px-4 py-2.5 font-medium ${className}`}
+      aria-sort={dir ? (dir === "asc" ? "ascending" : "descending") : undefined}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        data-testid={`button-sort-${k}`}
+        title={`Sort by ${label.toLowerCase()}`}
+        className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-white/70 ${right ? "w-full justify-end" : ""} ${dir ? "text-emerald-300" : ""}`}
+      >
+        {label}
+        {dir ? (
+          dir === "asc" ? <ArrowUp className="w-3 h-3 shrink-0" /> : <ArrowDown className="w-3 h-3 shrink-0" />
+        ) : (
+          <ChevronsUpDown className="w-3 h-3 shrink-0 opacity-40" />
+        )}
+      </button>
+    </th>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function GroupPayouts() {
   const [account, setAccount] = useState<AccountKey>(() =>
@@ -135,6 +178,7 @@ export default function GroupPayouts() {
     return p && /^po_[A-Za-z0-9]+$/.test(p) ? p : null;
   });
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null);
 
   const listUrl = `/api/admin/payouts?account=${account}${cursor ? `&starting_after=${cursor}` : ""}`;
   const { data: list, isLoading } = useQuery<ListResponse>({ queryKey: [listUrl] });
@@ -159,11 +203,58 @@ export default function GroupPayouts() {
     );
   }, [detail, search]);
 
+  // Sort AFTER filtering, so search + sort compose. Stripe returns lines
+  // newest-first, so "When" sorts by original position — the `when` string is
+  // NZ display text ("20 Jul 2026, 9:36 pm") and must never be parsed/compared.
+  const sortedLines = useMemo(() => {
+    if (!sort) return filteredLines;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const isText = sort.key === "programme" || sort.key === "player" || sort.key === "parent";
+    const text = (l: PayoutLine): string | null => {
+      switch (sort.key) {
+        case "programme": return l.resolved?.programme ?? l.description ?? null;
+        case "player": return l.resolved?.player ?? l.payerName ?? null;
+        case "parent": return l.resolved?.parent ?? l.payerEmail ?? null;
+        default: return null;
+      }
+    };
+    const num = (l: PayoutLine, i: number): number => {
+      switch (sort.key) {
+        case "gross": return l.grossCents;
+        case "fee": return l.feeCents;
+        case "net": return l.netCents;
+        default: return -i; // when: bigger = newer
+      }
+    };
+    return filteredLines
+      .map((l, i) => ({ l, i }))
+      .sort((a, b) => {
+        let cmp: number;
+        if (isText) {
+          const av = text(a.l);
+          const bv = text(b.l);
+          if (av === null && bv === null) cmp = 0;
+          else if (av === null) return 1; // blanks sink to the bottom either way
+          else if (bv === null) return -1;
+          else cmp = av.localeCompare(bv, undefined, { sensitivity: "base" }) * dir;
+        } else {
+          cmp = (num(a.l, a.i) - num(b.l, b.i)) * dir;
+        }
+        return cmp !== 0 ? cmp : a.i - b.i; // stable tie-break keeps time order
+      })
+      .map((x) => x.l);
+  }, [filteredLines, sort]);
+
+  function toggleSort(key: SortKey) {
+    setSort((s) => (s?.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: SORT_FIRST_DIR[key] }));
+  }
+
   function switchAccount(key: AccountKey) {
     setAccount(key);
     setCursorStack([]);
     setSelectedId(null);
     setSearch("");
+    setSort(null);
   }
 
   function downloadCsv() {
@@ -196,7 +287,7 @@ export default function GroupPayouts() {
     return (
       <div className="p-4 md:p-6 max-w-6xl mx-auto text-white/90">
         <button
-          onClick={() => { setSelectedId(null); setSearch(""); }}
+          onClick={() => { setSelectedId(null); setSearch(""); setSort(null); }}
           data-testid="button-back-to-payouts"
           className="inline-flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors mb-4"
         >
@@ -273,17 +364,17 @@ export default function GroupPayouts() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wide text-white/35 border-b border-white/[0.06]">
-                      <th className="px-4 py-2.5 font-medium hidden sm:table-cell">When</th>
-                      <th className="px-4 py-2.5 font-medium">Programme / what</th>
-                      <th className="px-4 py-2.5 font-medium hidden md:table-cell">Player</th>
-                      <th className="px-4 py-2.5 font-medium hidden md:table-cell">Parent</th>
-                      <th className="px-4 py-2.5 font-medium text-right hidden sm:table-cell">Gross</th>
-                      <th className="px-4 py-2.5 font-medium text-right hidden sm:table-cell">Fee</th>
-                      <th className="px-4 py-2.5 font-medium text-right">Net</th>
+                      <SortableTh label="When" k="when" sort={sort} onSort={toggleSort} className="hidden sm:table-cell" />
+                      <SortableTh label="Programme / what" k="programme" sort={sort} onSort={toggleSort} />
+                      <SortableTh label="Player" k="player" sort={sort} onSort={toggleSort} className="hidden md:table-cell" />
+                      <SortableTh label="Parent" k="parent" sort={sort} onSort={toggleSort} className="hidden md:table-cell" />
+                      <SortableTh label="Gross" k="gross" sort={sort} onSort={toggleSort} className="text-right hidden sm:table-cell" right />
+                      <SortableTh label="Fee" k="fee" sort={sort} onSort={toggleSort} className="text-right hidden sm:table-cell" right />
+                      <SortableTh label="Net" k="net" sort={sort} onSort={toggleSort} className="text-right" right />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredLines.map((l) => (
+                    {sortedLines.map((l) => (
                       <tr key={l.id} data-testid={`row-payout-line-${l.id}`} className="border-b border-white/[0.04] last:border-0">
                         <td className="px-4 py-2.5 whitespace-nowrap text-white/60 text-[13px] hidden sm:table-cell">{l.when}</td>
                         <td className="px-4 py-2.5 sm:min-w-[220px]">
