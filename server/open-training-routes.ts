@@ -32,8 +32,8 @@ import {
 } from "./email";
 
 const CUFC_ORG_SLUG = "christchurch-united";
-// Requests are reviewed by the academy office (Paul Holocher's inbox).
-const OPEN_TRAINING_NOTIFY_TO = "academy@cufc.co.nz";
+// The club's main admin inbox sees every request (Daniel, 2026-07-24).
+const OPEN_TRAINING_ADMIN_TO = "info@cufc.co.nz";
 
 export const OPEN_TRAINING_GROUPS = ["u4-u8", "u9-u12", "u13-plus"] as const;
 export type OpenTrainingGroup = (typeof OPEN_TRAINING_GROUPS)[number];
@@ -42,6 +42,17 @@ const GROUP_LABEL: Record<OpenTrainingGroup, string> = {
   "u9-u12": "U9–U12 (Juniors / Pre-Academy)",
   "u13-plus": "U13+ (Academy)",
 };
+// Each band's requests go to its programme lead — U4–U8 to Zach Bennett
+// (Head of Foundation Phase), U9–U20 to Paul Holocher (Academy Director) —
+// and every request also lands in info@ (Daniel, 2026-07-24).
+const GROUP_NOTIFY_TO: Record<OpenTrainingGroup, string> = {
+  "u4-u8": "grassroots@cufc.co.nz",
+  "u9-u12": "academy@cufc.co.nz",
+  "u13-plus": "academy@cufc.co.nz",
+};
+function notifyRecipientsFor(group: OpenTrainingGroup): string[] {
+  return Array.from(new Set([GROUP_NOTIFY_TO[group], OPEN_TRAINING_ADMIN_TO]));
+}
 
 const OPEN_TRAINING_STATUSES = ["pending", "approved", "declined"] as const;
 
@@ -136,7 +147,7 @@ export function registerOpenTrainingRoutes(app: Express) {
       const ageGroup = groupForGrade(grade);
       if (!ageGroup) {
         return res.status(400).json({
-          message: `Open trainings cover players from U4 to U20. For anything else, email ${OPEN_TRAINING_NOTIFY_TO}.`,
+          message: `Open trainings cover players from U4 to U20. For anything else, email ${OPEN_TRAINING_ADMIN_TO}.`,
         });
       }
 
@@ -163,13 +174,15 @@ export function registerOpenTrainingRoutes(app: Express) {
       sendCufcOpenTrainingReceived({
         to: email, guardianName, childName, groupLabel: GROUP_LABEL[ageGroup],
       }).catch((e) => console.error("[open-training] ack email failed:", e));
-      sendCufcOpenTrainingNotification({
-        to: OPEN_TRAINING_NOTIFY_TO,
-        childName, dob: childDob, grade, groupLabel: GROUP_LABEL[ageGroup],
-        guardianName, email, phone,
-        currentClub: row.currentClub, notes: row.notes,
-        sourceUrl: row.sourceUrl || undefined,
-      }).catch((e) => console.error("[open-training] notify email failed:", e));
+      for (const notifyTo of notifyRecipientsFor(ageGroup)) {
+        sendCufcOpenTrainingNotification({
+          to: notifyTo,
+          childName, dob: childDob, grade, groupLabel: GROUP_LABEL[ageGroup],
+          guardianName, email, phone,
+          currentClub: row.currentClub, notes: row.notes,
+          sourceUrl: row.sourceUrl || undefined,
+        }).catch((e) => console.error("[open-training] notify email failed:", e));
+      }
 
       res.json({ ok: true });
     } catch (e: any) {
