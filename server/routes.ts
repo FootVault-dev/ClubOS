@@ -90,6 +90,7 @@ import { buildLogoLicencePdf } from "./logo-licence-pdf";
 import { PDFDocument as PdfLibDocument } from "pdf-lib";
 import { registerShopRoutes, finalizeShopOrderPaid, finalizeShopSharePaid } from "./shop-routes";
 import { registerMediaRoutes } from "./media-routes";
+import { registerMarketingRoutes } from "./marketing/routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -22898,6 +22899,9 @@ export async function registerRoutes(
   // CIC Media Library — staff photo/video uploads + public catalog API. All
   // routes live in server/media-routes.ts.
   registerMediaRoutes(app);
+  // Marketing Suite ("MarketingOS", Phase B) — mounts the Resend webhook + public
+  // unsub/preference pages + the auth-gated admin API. One integration point.
+  registerMarketingRoutes(app);
 
   return httpServer;
 }
