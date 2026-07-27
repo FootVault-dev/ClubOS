@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, leaguePaymentReminders, leaguePaymentReminderEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents, attendance } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, leaguePaymentReminders, leaguePaymentReminderEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents, attendance, sessionCoaches } from "@shared/schema";
 import { isValidApiScope, API_SCOPES, normalizeProgramFilter, programFilterIsEmpty, programFilterSqlCondition, describeProgramFilter, rejectedProgramTokens, unknownProgramTypes, scopesOutsideProgramFilter, PROGRAM_TYPES, type ProgramFilter } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -3400,6 +3400,303 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
+  });
+
+  // ── Coaching roster ───────────────────────────────────────────────────────
+  // The other half of the roll: which COACHES are on which session, and did
+  // they turn up. Built for Zach (U4–U8 programme lead) — the player roll told
+  // him how many children came and nothing at all about who was coaching them.
+  //
+  // A coach is a `contacts` row of type 'staff' (Paul Holocher's Term 3 roster
+  // already lives there); assignment is per camp_date, which is a SLOT — the
+  // Saturday 09:30 U4–U6 and 10:30 U7–U8 sessions take different coaches.
+  const COACH_ROLES = ["lead", "coach", "assistant"] as const;
+
+  // Every coach route is fenced to the active workspace: a campId from another
+  // club must 404 rather than expose (or let a caller write) its roster.
+  async function coachProgramOrNull(req: any, campId: number) {
+    const prog = await storage.getProgram(campId);
+    if (!prog) return null;
+    const org = await workspaceOrg(req);
+    if (org && prog.organizationId && prog.organizationId !== org.id) return null;
+    return prog;
+  }
+
+  // Find someone to put on the roster. Staff only — the coach pool is not the
+  // 6,499 player contacts, and offering them here is how a child ends up
+  // recorded as having coached a session.
+  app.get("/api/admin/coach-search", requireAuth, async (req, res) => {
+    try {
+      const q = String(req.query.q ?? "").trim().slice(0, 80);
+      if (q.length < 1) return res.json([]);
+      const like = `%${q}%`;
+      const rows = await db.select({
+        id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName,
+        email: contacts.email, phone: contacts.phone,
+      })
+        .from(contacts)
+        .where(and(
+          eq(contacts.type, "staff"),
+          or(ilike(contacts.firstName, like), ilike(contacts.lastName, like)),
+        ))
+        .orderBy(asc(contacts.firstName), asc(contacts.lastName))
+        .limit(20);
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // The whole staff list, for the "who's available" picker on a phone where
+  // typing a search is slower than tapping a name.
+  app.get("/api/admin/coaches", requireAuth, async (_req, res) => {
+    try {
+      const rows = await db.select({
+        id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName,
+        email: contacts.email, phone: contacts.phone,
+      })
+        .from(contacts)
+        .where(eq(contacts.type, "staff"))
+        .orderBy(asc(contacts.firstName), asc(contacts.lastName));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Who's coaching this session.
+  app.get("/api/admin/camps/:id/session-coaches", requireAuth, async (req, res) => {
+    try {
+      const campId = parseInt(req.params.id);
+      const campDateId = parseInt(String(req.query.campDateId ?? ""));
+      if (!campDateId) return res.status(400).json({ message: "campDateId required" });
+      if (!(await coachProgramOrNull(req, campId))) return res.status(404).json({ message: "Program not found" });
+
+      const rows = await db.select({
+        id: sessionCoaches.id,
+        contactId: sessionCoaches.contactId,
+        role: sessionCoaches.role,
+        status: sessionCoaches.status,
+        markedAt: sessionCoaches.markedAt,
+        note: sessionCoaches.note,
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        phone: contacts.phone,
+        email: contacts.email,
+      })
+        .from(sessionCoaches)
+        .innerJoin(contacts, eq(sessionCoaches.contactId, contacts.id))
+        .where(and(eq(sessionCoaches.campId, campId), eq(sessionCoaches.campDateId, campDateId)))
+        .orderBy(asc(contacts.firstName), asc(contacts.lastName));
+      res.json(rows);
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // Roster a coach on. `applyTo: "series"` puts them on every REMAINING session
+  // that shares this one's weekday AND start time — the U4–U8 timetable is 68
+  // sessions across a term and assigning them one at a time is not a system
+  // anybody would use twice. The weekday is computed by Postgres from the date
+  // column: passing an ISO date through a JS `Date` reads a day early in NZ.
+  app.post("/api/admin/camps/:id/session-coaches", requireAuth, async (req, res) => {
+    try {
+      const campId = parseInt(req.params.id);
+      if (!(await coachProgramOrNull(req, campId))) return res.status(404).json({ message: "Program not found" });
+
+      const campDateId = parseInt(String(req.body?.campDateId ?? ""));
+      if (!campDateId) return res.status(400).json({ message: "campDateId is required" });
+      const role = String(req.body?.role ?? "coach");
+      if (!COACH_ROLES.includes(role as any)) {
+        return res.status(400).json({ message: `role must be one of ${COACH_ROLES.join(", ")}` });
+      }
+      const applyTo = req.body?.applyTo === "series" ? "series" : "this";
+
+      // The session must belong to THIS programme — a campDateId borrowed from
+      // another programme would otherwise write onto its roster.
+      const [session] = await db.select().from(campDates)
+        .where(and(eq(campDates.id, campDateId), eq(campDates.campId, campId)));
+      if (!session) return res.status(404).json({ message: "Session not found" });
+
+      // Existing staff contact, or a new one typed in on the spot. A real
+      // contact rather than a name on a line: a coach has to be countable
+      // across sessions, which a free-text name never is.
+      let contactId = req.body?.contactId ? parseInt(String(req.body.contactId)) : null;
+      if (contactId) {
+        const [existing] = await db.select().from(contacts)
+          .where(and(eq(contacts.id, contactId), eq(contacts.type, "staff")));
+        if (!existing) return res.status(404).json({ message: "Coach not found" });
+      } else {
+        const firstName = String(req.body?.firstName ?? "").trim().slice(0, 80);
+        const lastName = String(req.body?.lastName ?? "").trim().slice(0, 80);
+        if (!firstName || !lastName) return res.status(400).json({ message: "First and last name are required" });
+        const [created] = await db.insert(contacts).values({
+          type: "staff", firstName, lastName,
+          email: String(req.body?.email ?? "").trim() || null,
+          phone: String(req.body?.phone ?? "").trim() || null,
+          notes: "Coach, added from the session roster",
+        } as any).returning();
+        contactId = created.id;
+      }
+
+      const userId = req.session.userId ?? null;
+      let targetDateIds: number[] = [campDateId];
+      if (applyTo === "series") {
+        const series = await db.execute(sql`
+          SELECT id FROM camp_dates
+          WHERE camp_id = ${campId}
+            AND date >= (SELECT date FROM camp_dates WHERE id = ${campDateId})
+            AND EXTRACT(ISODOW FROM date) = (SELECT EXTRACT(ISODOW FROM date) FROM camp_dates WHERE id = ${campDateId})
+            AND start_time IS NOT DISTINCT FROM (SELECT start_time FROM camp_dates WHERE id = ${campDateId})
+          ORDER BY date
+        `);
+        targetDateIds = (series.rows as any[]).map(r => Number(r.id));
+      }
+
+      // onConflictDoNothing on (camp_date_id, contact_id): re-running a series
+      // assign must not double a coach up, and must NOT wipe the present/absent
+      // already recorded on the sessions that have happened.
+      await db.insert(sessionCoaches)
+        .values(targetDateIds.map(dateId => ({
+          campId, campDateId: dateId, contactId: contactId!, role,
+          createdByUserId: userId,
+        })) as any)
+        .onConflictDoNothing();
+
+      res.status(201).json({ ok: true, contactId, sessions: targetDateIds.length });
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Mark a coach present/absent, or change their role on the day.
+  app.patch("/api/admin/session-coaches/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const body: any = req.body ?? {};
+      const data: any = {};
+
+      if ("status" in body) {
+        const s = body.status;
+        if (s !== null && s !== "present" && s !== "absent") {
+          return res.status(400).json({ message: "status must be 'present', 'absent' or null" });
+        }
+        data.status = s;
+        // Stamped server-side: a roll records what a named adult observed, so
+        // the browser doesn't get to choose the time or the author. null clears
+        // a mis-tap back to "not marked", which stays distinct from "absent".
+        data.markedAt = s === null ? null : new Date();
+        data.markedByUserId = s === null ? null : (req.session.userId ?? null);
+      }
+      if ("role" in body) {
+        if (!COACH_ROLES.includes(body.role)) {
+          return res.status(400).json({ message: `role must be one of ${COACH_ROLES.join(", ")}` });
+        }
+        data.role = body.role;
+      }
+      if ("note" in body) data.note = body.note ? String(body.note).slice(0, 500) : null;
+      if (Object.keys(data).length === 0) return res.status(400).json({ message: "Nothing to update" });
+
+      const [row] = await db.update(sessionCoaches).set(data)
+        .where(eq(sessionCoaches.id, id)).returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(row);
+    } catch (error: any) { res.status(400).json({ message: error.message }); }
+  });
+
+  // Take a coach off. `?scope=series` removes them from this session and every
+  // later one at the same weekday+time — a coach who stops doing Tuesdays
+  // shouldn't have to be unpicked nine times. Past sessions are never touched:
+  // who coached last week is a record, not a plan.
+  app.delete("/api/admin/session-coaches/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const [row] = await db.select().from(sessionCoaches).where(eq(sessionCoaches.id, id));
+      if (!row) return res.status(404).json({ message: "Not found" });
+      if (!(await coachProgramOrNull(req, row.campId))) return res.status(404).json({ message: "Not found" });
+
+      if (String(req.query.scope) === "series") {
+        const result = await db.execute(sql`
+          DELETE FROM session_coaches sc
+          USING camp_dates cd
+          WHERE sc.camp_date_id = cd.id
+            AND sc.contact_id = ${row.contactId}
+            AND sc.camp_id = ${row.campId}
+            AND cd.date >= (SELECT date FROM camp_dates WHERE id = ${row.campDateId})
+            AND EXTRACT(ISODOW FROM cd.date) = (SELECT EXTRACT(ISODOW FROM date) FROM camp_dates WHERE id = ${row.campDateId})
+            AND cd.start_time IS NOT DISTINCT FROM (SELECT start_time FROM camp_dates WHERE id = ${row.campDateId})
+        `);
+        return res.json({ ok: true, removed: result.rowCount ?? 0 });
+      }
+
+      await db.delete(sessionCoaches).where(eq(sessionCoaches.id, id));
+      res.json({ ok: true, removed: 1 });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
+  });
+
+  // The term-wide picture: every session with the coaches on it, plus a
+  // per-coach tally. Two queries whatever the size — the registrations list
+  // taught us what a per-row query does to a 450-row page.
+  app.get("/api/admin/camps/:id/coach-overview", requireAuth, async (req, res) => {
+    try {
+      const campId = parseInt(req.params.id);
+      if (!(await coachProgramOrNull(req, campId))) return res.status(404).json({ message: "Program not found" });
+
+      // Dates as TEXT, never through a JS Date: a `date` column round-tripped
+      // through the driver's Date reads a day early in NZ.
+      const sessionRows = await db.execute(sql`
+        SELECT id, to_char(date, 'YYYY-MM-DD') AS date, start_time, end_time, name
+        FROM camp_dates WHERE camp_id = ${campId}
+        ORDER BY date, start_time NULLS FIRST
+      `);
+
+      const coachRows = await db.execute(sql`
+        SELECT sc.id, sc.camp_date_id, sc.contact_id, sc.role, sc.status,
+               sc.marked_at, c.first_name, c.last_name, c.phone
+        FROM session_coaches sc
+        JOIN contacts c ON c.id = sc.contact_id
+        WHERE sc.camp_id = ${campId}
+        ORDER BY c.first_name, c.last_name
+      `);
+
+      const byDate = new Map<number, any[]>();
+      for (const r of coachRows.rows as any[]) {
+        const list = byDate.get(Number(r.camp_date_id)) ?? [];
+        list.push({
+          id: Number(r.id), contactId: Number(r.contact_id), role: r.role,
+          status: r.status, markedAt: r.marked_at,
+          firstName: r.first_name, lastName: r.last_name, phone: r.phone,
+        });
+        byDate.set(Number(r.camp_date_id), list);
+      }
+
+      const sessions = (sessionRows.rows as any[]).map(s => ({
+        campDateId: Number(s.id),
+        date: s.date as string,
+        startTime: s.start_time as string | null,
+        endTime: s.end_time as string | null,
+        name: s.name as string | null,
+        coaches: byDate.get(Number(s.id)) ?? [],
+      }));
+
+      // Per-coach tally over the whole term. "Not marked" is its own column —
+      // folding it into absent would invent a no-show out of an untaken roll.
+      const tally = new Map<number, any>();
+      for (const s of sessions) {
+        for (const c of s.coaches) {
+          const t = tally.get(c.contactId) ?? {
+            contactId: c.contactId, firstName: c.firstName, lastName: c.lastName,
+            phone: c.phone, assigned: 0, present: 0, absent: 0, unmarked: 0, upcoming: 0,
+          };
+          t.assigned++;
+          if (c.status === "present") t.present++;
+          else if (c.status === "absent") t.absent++;
+          else t.unmarked++;
+          tally.set(c.contactId, t);
+        }
+      }
+
+      res.json({
+        // The server owns "today" — a browser in another timezone must not be
+        // what decides whether a session has happened yet.
+        today: nzTodayIso(),
+        sessions,
+        coaches: Array.from(tally.values()).sort((a, b) =>
+          a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName)),
+      });
+    } catch (error: any) { res.status(500).json({ message: error.message }); }
   });
 
   app.get("/api/admin/camps/:id/stats", requireAuth, async (req, res) => {

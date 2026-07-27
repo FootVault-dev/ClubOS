@@ -550,6 +550,46 @@ export const attendance = pgTable("attendance", {
   note: text("note"),
 });
 
+// Which coaches are rostered onto a session, and whether they turned up.
+// The sibling of `attendance`: that table answers "which children were here",
+// this one answers "which coaches did we have on, and did they show".
+//
+// A coach IS a `contacts` row (type='staff') — players and coaches already live
+// there (Paul Holocher's Term 3 roster was seeded into it), and forking them
+// would fork the club's database. Same reasoning as `club_squad_members`.
+//
+// Keyed on the camp_date, which is a SLOT not a day: the U4–U8 programme runs
+// Sat 09:30 (U4–U6) and Sat 10:30 (U7–U8) as separate sessions with separate
+// coaches. Both people/session FKs are NO ACTION — deleting a coach must never
+// erase the record of who ran a session.
+export const sessionCoaches = pgTable("session_coaches", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  campId: integer("camp_id").notNull().references(() => programs.id),
+  campDateId: integer("camp_date_id").notNull().references(() => campDates.id),
+  contactId: integer("contact_id").notNull().references(() => contacts.id),
+  // 'lead' | 'coach' | 'assistant'. Validated by the route, never a DB CHECK —
+  // a stale CHECK constraint is how the MFL checkout 500'd.
+  role: text("role").notNull().default("coach"),
+  // 'present' | 'absent' | NULL. NULL means NOT MARKED YET, which is a
+  // different fact from absent: a half-taken roll must never read as "nobody
+  // turned up", and "we never checked" is not the same as "he didn't come".
+  status: text("status"),
+  markedAt: timestamp("marked_at"),
+  markedByUserId: integer("marked_by_user_id").references(() => users.id),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdByUserId: integer("created_by_user_id").references(() => users.id),
+}, (t) => ({
+  // Assigning the same coach twice is a no-op, not a duplicate that would
+  // double every count on the overview.
+  uniqueCoach: uniqueIndex("session_coaches_unique").on(t.campDateId, t.contactId),
+  campIdx: index("session_coaches_camp_idx").on(t.campId),
+  contactIdx: index("session_coaches_contact_idx").on(t.contactId),
+}));
+export const insertSessionCoachSchema = createInsertSchema(sessionCoaches).omit({ id: true, createdAt: true });
+export type InsertSessionCoach = z.infer<typeof insertSessionCoachSchema>;
+export type SessionCoach = typeof sessionCoaches.$inferSelect;
+
 export const emailLogs = pgTable("email_logs", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   campId: integer("camp_id").references(() => programs.id),
@@ -6797,6 +6837,13 @@ export const sportySyncState = pgTable(
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
     contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+    // 'uat' | 'prod' (shared/sporty.ts sportyEnvironmentFor). A SportyId only means
+    // something in the environment that issued it, and the doctrine above sends any
+    // stored id on every later push — so UAT ids must never share a row with the
+    // production ones the live push reads. One state row per contact PER environment.
+    // Deliberately NO database default: a writer that doesn't name its environment
+    // must fail loudly rather than silently claim to be production.
+    environment: text("environment").notNull(),
     // The NRS registration id — see doctrine above. Null until Sporty first returns one.
     sportyId: integer("sporty_id"),
     personFifaId: text("person_fifa_id"),
@@ -6817,7 +6864,7 @@ export const sportySyncState = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (t) => [
-    unique("sporty_sync_state_contact_unique").on(t.contactId),
+    unique("sporty_sync_state_contact_env_unique").on(t.contactId, t.environment),
     index("sporty_sync_state_org_status_idx").on(t.organizationId, t.status),
   ],
 );
@@ -6855,10 +6902,14 @@ export const sportyReferenceCache = pgTable(
   {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     kind: text("kind").notNull(), // 'countries' | 'genders' | 'ethnicity_groups' | 'fantail_form_options'
+    // Vocabularies are per-environment too: UAT's country list is not proof of
+    // what production accepts, and mapping against the wrong one is how bad data
+    // reaches a national register. No default, for the same reason as sync state.
+    environment: text("environment").notNull(),
     payload: jsonb("payload").notNull(),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [unique("sporty_reference_cache_kind_unique").on(t.kind)],
+  (t) => [unique("sporty_reference_cache_kind_env_unique").on(t.kind, t.environment)],
 );
 
 export type SportySyncState = typeof sportySyncState.$inferSelect;

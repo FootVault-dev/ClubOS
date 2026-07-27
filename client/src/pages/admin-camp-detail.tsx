@@ -8,13 +8,14 @@ import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link, useLocation } from "wouter";
+import { CoachOverview } from "@/components/coach-overview";
 import { useWorkspace } from "@/lib/workspace-context";
 import { programBasePath, useProgramRoute } from "@/lib/program-path";
 import { tabsForOrgSlug } from "@shared/tabs";
 import { withFrom } from "@/lib/back-to";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/format";
-import { ArrowLeft, Calendar, DollarSign, Settings, Percent, Tent, Trash2, Plus, X, Save, FileText, BarChart3, Users, TrendingUp, ChevronRight, UserCheck, UserX, AlertTriangle, Phone, Mail, Clock, User, FlaskConical, Trophy, Eye, Ban, Pencil } from "lucide-react";
+import { ArrowLeft, Calendar, DollarSign, Settings, Percent, Tent, Trash2, Plus, X, Save, FileText, BarChart3, Users, TrendingUp, ChevronRight, UserCheck, UserX, AlertTriangle, Phone, Mail, Clock, User, FlaskConical, Trophy, Eye, Ban, Pencil, UserCog } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
 function OverviewTab({ camp, onUpdate }: { camp: any; onUpdate: (data: any) => void }) {
@@ -2255,7 +2256,13 @@ export default function AdminCampDetail() {
   // stays inside it and the sidebar keeps the right item highlighted.
   const route = useProgramRoute();
   const campId = route?.id || 0;
-  const [tab, setTab] = useState("players");
+  // Deep-linkable tabs (`…/academy/4#coaches`). Without this the Coaches view
+  // is unreachable by URL, so it can't be bookmarked, sent to a coach, or
+  // linked from anywhere. Read once on mount, then kept in the hash.
+  const [tab, setTab] = useState(() => {
+    const h = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
+    return h || "players";
+  });
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const { toast } = useToast();
@@ -2328,6 +2335,7 @@ export default function AdminCampDetail() {
   const tabs = [
     { key: "players", label: "Players", icon: Users },
     { key: "sessions", label: "Sessions", icon: BarChart3 },
+    ...(isTermProgram ? [{ key: "coaches", label: "Coaches", icon: UserCog }] : []),
     { key: "content", label: "Content", icon: FileText },
     { key: "dates", label: isTermProgram ? "Schedule" : "Dates & Capacity", icon: Calendar },
     { key: "pricing", label: "Pricing", icon: DollarSign },
@@ -2424,6 +2432,7 @@ export default function AdminCampDetail() {
       <div className="rounded-2xl glass-card p-3 sm:p-5 animate-fade-in-up" style={{ animationDelay: '100ms', opacity: 0 }}>
         {tab === "players" && <PlayersTab campId={campId} camp={camp} detailPath={detailPath} />}
         {tab === "sessions" && <SessionsTab campId={campId} camp={camp} detailPath={detailPath} />}
+        {tab === "coaches" && <CoachOverview campId={campId} detailPath={detailPath} />}
         {tab === "content" && <ContentTab camp={camp} onUpdate={(data) => updateMutation.mutate(data)} />}
         {tab === "dates" && (camp.scheduleType === "term" ? <ClassDatesTab campId={campId} camp={camp} /> : <DatesTab campId={campId} />)}
         {tab === "pricing" && (camp.scheduleType === "term" ? <ClassPricingTab campId={campId} camp={camp} /> : <PricingTab campId={campId} />)}

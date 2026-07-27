@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { isSportyProduction } from "@shared/sporty";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
@@ -62,7 +63,7 @@ interface SportyOverview {
     total: number; ready: number; needs_data: number; synced: number;
     changed: number; blocked: number; error: number; excluded: number; pending: number;
   };
-  config: { installed: boolean; baseUrl: string | null; autosync: boolean };
+  config: { installed: boolean; baseUrl: string | null; environment?: string; isProduction?: boolean; autosync: boolean };
   reference: { fetchedAt: string | null; countries: number; genders: string[]; ethnicityGroups: string[] };
   lastPushAt: string | null;
 }
@@ -122,9 +123,12 @@ const CHIP_DEFS: { key: string; label: string; countKey: keyof SportyOverview["c
 // already in sync, or has been deliberately parked.
 const SELECTABLE_STATUSES = new Set(["ready", "changed", "error"]);
 
-function isProdBaseUrl(baseUrl: string | null | undefined): boolean {
-  return !!baseUrl && baseUrl.includes("www.sporty.co.nz");
-}
+// Environment comes from the ONE shared helper imported at the top of this
+// file (production is an explicit allowlist there). A local
+// `includes("www.sporty.co.nz")` would call an unknown host "UAT" while the
+// server treated it as something else — and every SportyId on this screen
+// belongs to whichever namespace the SERVER means. The server now sends
+// `config.environment`, so prefer that and fall back to the shared helper.
 
 // ── Date helper — ISO string in, "17 Jul 2026" out. NEVER `new Date(iso)`. ──
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -298,7 +302,9 @@ export default function SportySync() {
   };
 
   const canPush = overview?.config.installed === true && selected.size > 0;
-  const prod = isProdBaseUrl(overview?.config.baseUrl);
+  // Trust the server's own verdict when it sends one; the shared helper is the
+  // fallback so both sides can never disagree about which register we're on.
+  const prod = overview?.config.isProduction ?? isSportyProduction(overview?.config.baseUrl);
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto text-white/90">
@@ -315,6 +321,14 @@ export default function SportySync() {
             <div className="flex items-center gap-2 mt-2 text-[11px] text-white/40">
               <span className="font-mono">{overview.config.baseUrl}</span>
               {prod ? <Pill label="PRODUCTION" color="#ef4444" /> : <Pill label="UAT" color="#94a3b8" />}
+              {/* Every SportyId below belongs to this namespace. A UAT id is not
+                  a real registration, and saying so plainly is cheaper than
+                  someone assuming it is. */}
+              {!prod && (
+                <span className="text-white/30">
+                  ids on this screen are {overview.config.environment ?? "test"} ids, not real registrations
+                </span>
+              )}
             </div>
           )}
         </div>

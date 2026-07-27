@@ -23,6 +23,68 @@ Lead — Community Football, rodrigo.stephanou@nzfootball.co.nz, 021 197 5429),
 | UI | `client/src/pages/sporty-sync.tsx` | The Sporty NRS tab (CUFC workspace, **SUPER_ADMIN_ONLY** through UAT). |
 | Tables | `migrations/2026-07-21_sporty_sync.sql` | `sporty_sync_state` / `sporty_push_log` / `sporty_reference_cache`. **APPLIED to prod DB 2026-07-21** (additive, inert until deploy). |
 
+## 🟢 UAT STATUS — keys received + tested 2026-07-27
+
+Rodrigo issued UAT credentials 2026-07-27 (link expired 2026-08-03; the values
+are in `.env`). **Connected, reference data pulled, 11 registrations pushed,
+update semantics proven.** Harness: `script/sporty-uat.ts`.
+
+```
+npx tsx --env-file=.env script/sporty-uat.ts connect     # auth + reachability
+npx tsx --env-file=.env script/sporty-uat.ts reference   # pull + cache their real vocab
+npx tsx --env-file=.env script/sporty-uat.ts scenarios --dry-run
+npx tsx --env-file=.env script/sporty-uat.ts scenarios   # push the 16-case matrix
+npx tsx --env-file=.env script/sporty-uat.ts verify      # re-send with stored ids → no duplicates
+npx tsx --env-file=.env script/sporty-uat.ts engine      # the REAL engine path vs real UAT
+npx tsx --env-file=.env script/sporty-uat.ts readiness   # how many real players would push
+```
+
+### 🔴 What UAT proved that the swagger got wrong
+
+1. **All six address fields are mandatory** — `StreetAddress`, `Suburb`, `City`,
+   **`Region`**, `AlphaPostCode`, `Country`. Their swagger marks NONE required
+   and shows Region as an optional string, and every failure returns the same
+   unhelpful `"Address is required."` whichever part is missing. Preflight now
+   names the missing part itself. Region is derived from the city
+   (`nzRegionForCity`) — an unrecognised city yields no region and blocks.
+2. **Country codes are FIFA/IOC-style, not ISO 3166-1 alpha-3** as documented:
+   Samoa `SAM` (not WSM), Tonga `TGA`, Fiji `FIJ`, South Africa `RSA`, Germany
+   `GER`, Netherlands `NED`; ENG/SCO/WAL exist alongside GBR. Codes are now
+   always read off THEIR list; aliases resolve via canonical country name.
+3. **Their ethnicity groups are NOT the six Stats-NZ groups our form collects.**
+   Theirs: NZ European(1) · Māori(2) · Pacific Peoples(3) · Asian(4) ·
+   Other(5) · MELAA(6) · Other European(7). So "European" matches TWO groups
+   (blocked unless the sub-ethnicity settles it) and "Other Ethnicity" is their
+   "Other" group + selection 294.
+4. **Substring matching silently mis-registered people.** Exact match now wins,
+   and a tie is refused: `Indian`→"Anglo Indian", `Chinese`→"Cambodian Chinese",
+   `Syrian`→"Assyrian", `Russian`→"Belorussian", `Ngāti Kahu`→a different iwi.
+5. **Overseas clearance is normal, not an error** — a non-NZ nationality or
+   country of birth returns 400 "Overseas clearance is required" WITH a
+   SportyId. The registration exists but is inactive pending NZF's process.
+
+### 🔴 Environment namespacing (added 2026-07-27, migration applied)
+
+ClubOS runs ONE database, so UAT and production share it. A SportyId only means
+something in the environment that issued it, and the doctrine sends any stored
+id on every later push — so a UAT id in the row the live push reads would be
+sent to the real register for a real child. `sporty_sync_state` and
+`sporty_reference_cache` are therefore keyed by `(natural key, environment)`;
+`environment` is NOT NULL with **no default** so a writer that doesn't name its
+environment fails loudly. Production is an explicit host allowlist
+(`sportyEnvironmentFor`) — an unknown host gets its own namespace, never `prod`.
+Migration: `migrations/2026-07-27_sporty_environment.sql` (applied + verified).
+
+### Data readiness (the real blocker, not the code)
+
+`readiness` on 2026-07-27: **8 of 116** confirmed academy registrants would push
+cleanly. Blockers: 68 bare "European" ethnicity · 29 need a specific ethnicity
+selection · 53 address problems (26 no address, 27 incomplete) · 14 nationality
+values that are demonyms-of-two or an ethnicity in the wrong field · 3 country
+of birth (incl. "Christchurch" and "ニュージーランド"). These are data-collection
+gaps in the club's own records. The registration form should collect a country
+from a list, ethnicity in Sporty's seven groups, and address as split fields.
+
 ## The five rules (why the code looks like it does)
 
 1. **SportyId doctrine.** Any response carrying a SportyId — success OR error
@@ -64,7 +126,7 @@ The mock (`script/mock-sporty.ts`) is faithful to their swagger: auth flow, 2/s
 rate limits, every documented RegisterPerson error, reference vocab incl. MELAA
 min-selection rules. Keep using it — tests must never depend on their UAT being up.
 
-## UAT onboarding (when Rodrigo sends keys)
+## UAT onboarding (done 2026-07-27 — kept for the production repeat)
 
 1. Paste the three `SPORTY_*` values into `.env` (base URL stays UAT).
 2. Sporty tab → **Test connection** (proves key + credentials + reachability).
@@ -94,8 +156,9 @@ min-selection rules. Keep using it — tests must never depend on their UAT bein
 ## Known limitations (deliberate)
 
 - **Address** is one free-text field in ClubOS; a conservative parser splits
-  street/suburb/city/postcode and flags anything unconfident for human eyeballing
-  in the preview. Verify Sporty's actual sub-field requirements during UAT.
+  street/suburb/city/postcode, derives the region from the city, and BLOCKS when
+  any of Sporty's six mandatory parts is absent (verified in UAT 2026-07-27 —
+  see above). Splitting the address on the registration form is the real fix.
 - **Coaches/officials/volunteers**: their API v1 is player-registration only.
   Ask Rodrigo where non-player roles register.
 - **Fantail endpoints** are implemented in the client but unwired — CUFC has no
