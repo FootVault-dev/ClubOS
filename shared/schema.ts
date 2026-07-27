@@ -1025,6 +1025,12 @@ export const leagueDivisions = pgTable("league_divisions", {
   teamCostCents: integer("team_cost_cents").default(0),
   playerCostCents: integer("player_cost_cents").default(0),
   sortOrder: integer("sort_order").default(0),
+  // Optional marketing ribbon on the public night card ("New league discount").
+  // Free text set per division in the league admin, so drawing attention to a
+  // night needs a row edit, never a deploy. NULL = no badge (the default, and
+  // what every existing division means). The "Sold out" ribbon still wins:
+  // a full night must never advertise a discount it cannot honour.
+  badgeText: text("badge_text"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

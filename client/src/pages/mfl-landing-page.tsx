@@ -29,7 +29,7 @@ const PIXEL_CONTENT = "MFL Term 3 Team Registration";
 interface Division {
   id: number; name: string; dayOfWeek: string | null; ageGroup: string | null;
   gender: string | null; maxTeams: number | null; teamCostCents: number;
-  teamCount: number; spotsLeft: number | null;
+  teamCount: number; spotsLeft: number | null; badgeText?: string | null;
 }
 interface RegisterData {
   program: any;
@@ -242,7 +242,16 @@ export default function MflLandingPage() {
                       Sold out
                     </span>
                   )}
-                  <div className="flex items-center justify-between">
+                  {/* Sold out always wins — a full night must never advertise a
+                      discount it can't honour. Sits above the title rather than
+                      as a corner ribbon because the price occupies the top-right
+                      of every night that is still open. */}
+                  {!full && d.badgeText && (
+                    <span className="self-start mb-2 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full" style={{ background: BRAND.gold, color: BRAND.black }} data-testid={`division-badge-${d.id}`}>
+                      {d.badgeText}
+                    </span>
+                  )}
+                  <div className="flex items-center justify-between gap-3">
                     <h3 className="text-lg font-bold">{d.name}</h3>
                     {!full && <span className="text-[15px] font-bold" style={{ color: BRAND.gold }}>{formatCurrency(d.teamCostCents, { fromCents: true })}</span>}
                   </div>

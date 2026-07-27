@@ -37,6 +37,7 @@ function DivisionModal({ competitionId, division, onClose }: { competitionId: nu
     maxTeams: division?.maxTeams?.toString() || "",
     teamCost: centsToDollarInput(division?.teamCostCents),
     playerCost: centsToDollarInput(division?.playerCostCents),
+    badgeText: division?.badgeText || "",
   });
 
   const createMut = useMutation({
@@ -58,6 +59,7 @@ function DivisionModal({ competitionId, division, onClose }: { competitionId: nu
       maxTeams: form.maxTeams ? parseInt(form.maxTeams) : null,
       teamCostCents: dollarInputToCents(form.teamCost),
       playerCostCents: dollarInputToCents(form.playerCost),
+      badgeText: form.badgeText.trim() || null,
     };
     division ? updateMut.mutate(data) : createMut.mutate(data);
   };
@@ -82,6 +84,11 @@ function DivisionModal({ competitionId, division, onClose }: { competitionId: nu
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-xs text-white/40 mb-1 block">Team Cost</label><MoneyInput value={form.teamCost} onChange={v => setForm(f => ({ ...f, teamCost: v }))} className="premium-input text-white" placeholder="600.00" /></div>
             <div><label className="text-xs text-white/40 mb-1 block">Player Cost</label><MoneyInput value={form.playerCost} onChange={v => setForm(f => ({ ...f, playerCost: v }))} className="premium-input text-white" placeholder="0.00" /></div>
+          </div>
+          <div>
+            <label className="text-xs text-white/40 mb-1 block">Badge <span className="text-white/25">— optional ribbon on the public night card</span></label>
+            <Input value={form.badgeText} onChange={e => setForm(f => ({ ...f, badgeText: e.target.value }))} className="premium-input text-white" placeholder="e.g. New league discount" maxLength={28} data-testid="input-div-badge" />
+            <p className="text-[11px] text-white/25 mt-1">Leave empty for no badge. Hidden automatically once the night sells out.</p>
           </div>
         </div>
         <div className="p-5 border-t border-white/5 flex gap-2 justify-end">

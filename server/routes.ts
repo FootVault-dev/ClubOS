@@ -20249,6 +20249,7 @@ export async function registerRoutes(
             gender: d.gender,
             maxTeams: d.maxTeams,
             teamCostCents: d.teamCostCents,
+            badgeText: d.badgeText || null,
             teamCount,
             spotsLeft: d.maxTeams != null ? Math.max(0, d.maxTeams - teamCount) : null,
           };
