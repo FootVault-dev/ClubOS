@@ -321,7 +321,7 @@ function AddMemberModal({
  * This narrows it. `null` is "all brands", which is what every membership meant
  * before this existed, so it stays the default and is never set implicitly.
  */
-function HiringBrandScope({ brands, value, onChange }: {
+export function HiringBrandScope({ brands, value, onChange }: {
   brands: string[];
   value: string[] | null;
   onChange: (next: string[] | null) => void;
