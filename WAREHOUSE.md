@@ -312,3 +312,112 @@ enough to catch a hand-edit in Shopify quickly).
 | `script/apply-warehouse.ts` / `script/seed-warehouse.ts` | migration runner / catalogue seeder (§2) |
 | `script/test-warehouse-*.ts` | DB-free logic tests (`npx tsx script/test-warehouse-<x>.ts`) — run these after any change to `shared/warehouse.ts` or `server/warehouse*.ts` |
 | `script/check-warehouse-gate.sh` | the real typecheck gate for this feature (`npm run check` alone is not — see `AGENTS.md`'s 2026-07-22 entry) |
+
+---
+
+# Warehouse v2 — assets, custom fields, counter sale (2026-07-27)
+
+Extends the live WMS. Design decisions **D18–D25** are documented in the header
+of `migrations/2026-07-27_warehouse_v2.sql` — read that before changing any of
+this. Source requirement: Dima's *ClubOS — Warehouse Module Specification (v1)*.
+
+## What v2 adds
+
+| | |
+|---|---|
+| **Assets** (`/admin/warehouse/assets`) | Things owned one-by-one — presses, tools, furniture. Serial, condition, warranty, and **where it is / who has it**. |
+| **Item fields** (`/admin/warehouse/fields`) | Add a field to a category and it appears on every item in it. No migration, no deploy. Admin-only to edit. |
+| **Custody locations** | `person` and `vehicle` join bin/zone/virtual, so "issued to Riley" and "in the van" are real locations. |
+| **Counter sale** | A tenth action on the scan station. **Works offline** — queues locally and posts when the connection returns. |
+
+## Deploy steps (in this order)
+
+1. **Rehearse the migration** — runs it inside a transaction and rolls back,
+   asserting every object exists AND that nothing existing changed:
+   ```
+   npx tsx --env-file=.env script/apply-warehouse-v2.ts
+   ```
+2. **Apply it** (still before the deploy — the columns are additive, so the
+   currently-running build ignores them):
+   ```
+   npx tsx --env-file=.env script/apply-warehouse-v2.ts --apply
+   ```
+3. **Deploy** from a clean detached worktree at your own commit, after
+   re-deriving the prod superset (see the deploy doctrine in CLAUDE.md).
+4. **Grant Dima the tab** — `/admin/team` → United Prints → tick **Warehouse**.
+   The tab is no longer super-admin-only, but access is still per-member.
+
+## The opening count — how stock actually gets in
+
+Quantities are all zero on purpose. **Opening stock comes from a real physical
+count, never a typed-in guess.** There is no bulk-import quantity field
+anywhere, by design: even the first stock take is a sequence of ledger rows, so
+the audit trail is complete from day one.
+
+1. Lay out the room and create the bins (`/admin/warehouse/locations`), then
+   print bin labels from the Locations page.
+2. Open a count (`/admin/warehouse/counts`) for a zone.
+3. Walk it with a phone: `/admin/warehouse/scan` → scan the bin → **Count** →
+   scan each item and enter what is on the shelf.
+4. Approve the count. **The counter cannot be the approver** — that is the
+   control, not an inconvenience.
+
+Counts are blind: the person counting never sees the expected number.
+
+## Assets — getting the first ones in
+
+1. Create the item (`/admin/warehouse/items`) with a category, e.g. *Production
+   equipment*.
+2. Switch it to **Tracked asset**. This is only possible while the item has no
+   history at all (D18) — after that it is a deliberate data migration, not a
+   toggle, and the API refuses it with an explanation.
+3. `/admin/warehouse/assets` → **Add asset** for each physical unit: asset tag,
+   serial, where it lives, warranty.
+4. Print its label. The QR encodes `AST:<tag>`, which the scan station resolves
+   straight to that one unit.
+
+**A move or a retirement is always a ledger entry.** The API refuses a PATCH
+that tries to change an asset's location or condition — that is not an
+oversight, it is the whole point.
+
+## Custom fields — the self-service bit
+
+`/admin/warehouse/fields` → **Add field**. Pick the category, the label, the
+kind of answer, and whether it describes **the item** (every roll of that vinyl
+is 610mm) or **each unit on its own** (this van's WOF expires in September).
+
+Two things worth knowing before you use it in anger:
+
+- The saved field name is derived from the label **once** and then frozen. You
+  can rename the label freely afterwards without losing a single answer.
+- **Deleting a field does not delete the answers.** They are kept, and the app
+  tells you how many were left behind. Add the field back and they reappear.
+
+## Counter sale + offline
+
+Scan the item → **Sell** → pick the bin → quantity. If the connection is down
+the sale is banked locally and an amber strip on the scan station shows what is
+waiting; it drains automatically when the network returns, and there is a
+**Send now** button.
+
+🔴 **The safety property:** the idempotency key is minted on the phone *before*
+the request goes out and stored with the queued sale, so a retry after a lost
+response is a no-op server-side rather than a second shirt off the shelf. Never
+"simplify" this by generating the key server-side or per-attempt.
+
+A sale the server permanently refuses (bad location, item gone) is dropped from
+the queue and reported, rather than wedging every sale behind it forever.
+
+## Files
+
+| Path | What |
+|---|---|
+| `migrations/2026-07-27_warehouse_v2.sql` | Schema + the D18–D25 rationale |
+| `script/apply-warehouse-v2.ts` | Dry-run/apply with additive assertions |
+| `server/warehouse-instances.ts` | Asset lifecycle + typed custom fields |
+| `server/warehouse-v2-routes.ts` | The v2 API |
+| `client/src/pages/warehouse-assets.tsx` | Assets screen |
+| `client/src/pages/warehouse-field-templates.tsx` | Field editor |
+| `client/src/components/warehouse-custom-fields.tsx` | Dynamic field renderer |
+| `client/src/lib/warehouse-offline-queue.ts` | Offline sale queue |
+| `script/test-warehouse-v2.ts` · `script/test-warehouse-offline.ts` | Tests |

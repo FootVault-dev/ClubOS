@@ -323,7 +323,6 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "market-research", // Sandbox — competitor & category intelligence. Daniel only while it's shaped.
   "store", // MFL Store (native e-commerce, Shopify replacement pilot) — dark launch, Daniel only. Remove to open to admins/managers.
   "media", // CIC Media Library — dark launch while Daniel shapes it with Max. Remove to open to Max (admin/manager).
-  "warehouse", // WMS v1 — dark launch while Daniel shapes it with Dima. Remove to open to Print managers.
   "invoices", // Tracked invoices — carries bank details. Daniel only while it's shaped.
   // "payouts" UNLOCKED 2026-07-23 (Daniel): the tab now follows the normal
   // permission system — workspace role + the per-member tabs whitelist set in
