@@ -944,7 +944,7 @@ export async function registerRoutes(
         lastName: user.lastName,
         globalRole: user.role,
         active: user.active,
-        memberships: memberships.map(m => ({ orgId: m.id, orgName: m.name, orgSlug: m.slug, role: m.userRole, tabs: m.userTabs })),
+        memberships: memberships.map(m => ({ orgId: m.id, orgName: m.name, orgSlug: m.slug, role: m.userRole, tabs: m.userTabs, hiringBrands: m.userHiringBrands })),
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -999,7 +999,7 @@ export async function registerRoutes(
       res.json({
         id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName,
         globalRole: user.role, active: user.active,
-        memberships: (await storage.getUserOrganizations(user.id)).map(o => ({ orgId: o.id, orgName: o.name, orgSlug: o.slug, role: o.userRole, tabs: o.userTabs })),
+        memberships: (await storage.getUserOrganizations(user.id)).map(o => ({ orgId: o.id, orgName: o.name, orgSlug: o.slug, role: o.userRole, tabs: o.userTabs, hiringBrands: o.userHiringBrands })),
       });
     } catch (error: any) {
       console.error("[Team create] failed:", error);
@@ -1007,16 +1007,31 @@ export async function registerRoutes(
     }
   });
 
+  /**
+   * Brand keys are lower-case throughout hiring (`hiringJobs.brand` is written
+   * lower-cased on create). Normalising on the way in means a membership saved
+   * as "MFL" from a stray capital still matches, instead of silently granting
+   * nothing. `null` stays `null` — all brands — and an empty array stays empty,
+   * because "none" is a choice a super admin is allowed to make.
+   */
+  const normaliseHiringBrands = (v: unknown): string[] | null =>
+    Array.isArray(v)
+      ? Array.from(new Set(v.map(b => String(b).trim().toLowerCase()).filter(Boolean)))
+      : null;
+
   // Manage individual workspace memberships
   app.post("/api/admin/team/:id/memberships", requireSuperAdmin, async (req, res) => {
     try {
       const userId = parseInt(req.params.id);
-      const { orgId, role, tabs } = req.body;
+      const { orgId, role, tabs, hiringBrands } = req.body;
       if (!orgId || !role) return res.status(400).json({ message: "orgId and role required" });
       if (tabs !== undefined && tabs !== null && !Array.isArray(tabs)) {
         return res.status(400).json({ message: "tabs must be null or array of strings" });
       }
-      const created = await storage.addUserToOrganization(userId, orgId, role, tabs ?? null);
+      if (hiringBrands !== undefined && hiringBrands !== null && !Array.isArray(hiringBrands)) {
+        return res.status(400).json({ message: "hiringBrands must be null (all brands) or an array of brand keys" });
+      }
+      const created = await storage.addUserToOrganization(userId, orgId, role, tabs ?? null, normaliseHiringBrands(hiringBrands));
       res.json(created);
     } catch (error: any) {
       // duplicate membership
@@ -1031,16 +1046,20 @@ export async function registerRoutes(
     try {
       const userId = parseInt(req.params.id);
       const orgId = parseInt(req.params.orgId);
-      const { role, tabs } = req.body;
-      if (role === undefined && tabs === undefined) {
-        return res.status(400).json({ message: "role or tabs required" });
+      const { role, tabs, hiringBrands } = req.body;
+      if (role === undefined && tabs === undefined && hiringBrands === undefined) {
+        return res.status(400).json({ message: "role, tabs or hiringBrands required" });
       }
       if (tabs !== undefined && tabs !== null && !Array.isArray(tabs)) {
         return res.status(400).json({ message: "tabs must be null or array of strings" });
       }
+      if (hiringBrands !== undefined && hiringBrands !== null && !Array.isArray(hiringBrands)) {
+        return res.status(400).json({ message: "hiringBrands must be null (all brands) or an array of brand keys" });
+      }
       const updated = await storage.updateUserOrgMembership(userId, orgId, {
         ...(role !== undefined ? { role } : {}),
         ...(tabs !== undefined ? { tabs } : {}),
+        ...(hiringBrands !== undefined ? { hiringBrands: normaliseHiringBrands(hiringBrands) } : {}),
       });
       if (!updated) return res.status(404).json({ message: "Membership not found" });
       res.json(updated);

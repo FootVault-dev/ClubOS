@@ -223,10 +223,10 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   getAllUsers(): Promise<User[]>;
   getAllUsersWithMemberships(): Promise<Array<User & { memberships: Array<{ orgId: number; orgName: string; orgSlug: string; role: string; tabs: string[] | null }> }>>;
-  addUserToOrganization(userId: number, organizationId: number, role?: string, tabs?: string[] | null): Promise<UserOrganization>;
+  addUserToOrganization(userId: number, organizationId: number, role?: string, tabs?: string[] | null, hiringBrands?: string[] | null): Promise<UserOrganization>;
   updateUserOrgRole(userId: number, organizationId: number, role: string): Promise<UserOrganization | undefined>;
   updateUserOrgTabs(userId: number, organizationId: number, tabs: string[] | null): Promise<UserOrganization | undefined>;
-  updateUserOrgMembership(userId: number, organizationId: number, updates: { role?: string; tabs?: string[] | null }): Promise<UserOrganization | undefined>;
+  updateUserOrgMembership(userId: number, organizationId: number, updates: { role?: string; tabs?: string[] | null; hiringBrands?: string[] | null }): Promise<UserOrganization | undefined>;
   removeUserFromOrganization(userId: number, organizationId: number): Promise<void>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: number, data: Partial<InsertUser>): Promise<User | undefined>;
@@ -268,7 +268,7 @@ export interface IStorage {
   getProgramDiscounts(programId: number): Promise<ProgramDiscount[]>;
   setProgramDiscounts(programId: number, discounts: { minBookings: number; discountPercent: string }[]): Promise<ProgramDiscount[]>;
 
-  getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null })[]>;
+  getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null; userHiringBrands: string[] | null })[]>;
 
   getFacilities(orgId: number): Promise<Facility[]>;
   getFacility(id: number): Promise<Facility | undefined>;
@@ -707,8 +707,8 @@ export class DatabaseStorage implements IStorage {
     return Array.from(map.values());
   }
 
-  async addUserToOrganization(userId: number, organizationId: number, role: string = "admin", tabs: string[] | null = null): Promise<UserOrganization> {
-    const [created] = await db.insert(userOrganizations).values({ userId, organizationId, role: role as any, tabs }).returning();
+  async addUserToOrganization(userId: number, organizationId: number, role: string = "admin", tabs: string[] | null = null, hiringBrands: string[] | null = null): Promise<UserOrganization> {
+    const [created] = await db.insert(userOrganizations).values({ userId, organizationId, role: role as any, tabs, hiringBrands }).returning();
     return created;
   }
 
@@ -728,10 +728,11 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async updateUserOrgMembership(userId: number, organizationId: number, updates: { role?: string; tabs?: string[] | null }): Promise<UserOrganization | undefined> {
+  async updateUserOrgMembership(userId: number, organizationId: number, updates: { role?: string; tabs?: string[] | null; hiringBrands?: string[] | null }): Promise<UserOrganization | undefined> {
     const set: any = {};
     if (updates.role !== undefined) set.role = updates.role;
     if (updates.tabs !== undefined) set.tabs = updates.tabs;
+    if (updates.hiringBrands !== undefined) set.hiringBrands = updates.hiringBrands;
     if (Object.keys(set).length === 0) return undefined;
     const [updated] = await db.update(userOrganizations)
       .set(set)
@@ -745,16 +746,24 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(userOrganizations.userId, userId), eq(userOrganizations.organizationId, organizationId)));
   }
 
-  async getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null })[]> {
+  async getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null; userHiringBrands: string[] | null })[]> {
     const rows = await db.select({
       org: organizations,
       userRole: userOrganizations.role,
       userTabs: userOrganizations.tabs,
+      userHiringBrands: userOrganizations.hiringBrands,
     }).from(userOrganizations)
       .innerJoin(organizations, eq(userOrganizations.organizationId, organizations.id))
       .where(eq(userOrganizations.userId, userId))
       .orderBy(asc(organizations.name));
-    return rows.map(r => ({ ...r.org, userRole: r.userRole, userTabs: (r.userTabs as string[] | null) ?? null }));
+    return rows.map(r => ({
+      ...r.org,
+      userRole: r.userRole,
+      userTabs: (r.userTabs as string[] | null) ?? null,
+      // `?? null` would be wrong here only if [] were meant to mean "all" — it
+      // isn't. [] means no brands, and it must survive the round trip.
+      userHiringBrands: Array.isArray(r.userHiringBrands) ? (r.userHiringBrands as string[]) : null,
+    }));
   }
 
   async createUser(user: InsertUser): Promise<User> {
