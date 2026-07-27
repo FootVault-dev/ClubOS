@@ -94,6 +94,41 @@ echo "  ⚠️  Run any DB migration BEFORE this deploy if the schema changed."
 echo "  ⚠️  After deploy, smoke-test /t.js (must be application/javascript, not text/html)."
 echo ""
 
+# ── CLIENT-ONLY REGRESSION GUARD (added 2026-07-27 after it bit twice) ───────
+# The 401/404 route probe CANNOT see a client-only feature. The MFL night badge
+# is a schema column + a public-payload field + a React render — it adds no
+# admin route — so it was silently deleted from prod twice in one afternoon by
+# deploys from branches that lacked its commit, and both deploys probed clean.
+#
+# Each marker below is a literal string that must be present in the source tree
+# whenever it is present in the LIVE bundle. If prod is serving it and the tree
+# you are about to ship is not, this deploy would remove a live feature — so it
+# stops. Add a line here whenever you ship a client-only feature.
+_LIVE_JS_PATH=$(curl -s --max-time 10 https://app.usg.co.nz/ | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' | head -1)
+if [ -n "$_LIVE_JS_PATH" ]; then
+  _LIVE_JS=$(curl -s --max-time 25 "https://app.usg.co.nz${_LIVE_JS_PATH}")
+  _regress=0
+  # marker<TAB>where-it-lives-in-source
+  printf '%s\n' \
+    "division-badge-|client/src/pages/mfl-landing-page.tsx|MFL league night badge" \
+  | while IFS='|' read -r _marker _file _label; do
+      [ -z "$_marker" ] && continue
+      if printf '%s' "$_LIVE_JS" | grep -q -- "$_marker"; then
+        if ! grep -rq -- "$_marker" "$_file" 2>/dev/null; then
+          echo "❌ REGRESSION: '$_label' is LIVE on prod but missing from this tree ($_file)."
+          echo "   Deploying would delete it. Merge the branch that has it, then retry."
+          exit 90
+        fi
+      fi
+    done
+  _regress=$?
+  [ "$_regress" = "90" ] && exit 1
+  echo "  ✓ client-only feature guard passed"
+else
+  echo "  ⚠️  could not read the live bundle — client-only guard SKIPPED (verify by hand after deploy)"
+fi
+echo ""
+
 exec flyctl deploy -a clubos \
   --build-arg VITE_STRIPE_PUBLISHABLE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY" \
   --build-arg VITE_META_PIXEL_ID="$VITE_META_PIXEL_ID" \
