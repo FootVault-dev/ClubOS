@@ -1,0 +1,11 @@
+import pg from 'pg'; import fs from 'fs';
+const env = Object.fromEntries(fs.readFileSync('.env','utf8').split('\n').filter(l=>l.includes('=')&&!l.startsWith('#')).map(l=>{const i=l.indexOf('=');return [l.slice(0,i).trim(), l.slice(i+1).trim().replace(/^["']|["']$/g,'')];}));
+const c = new pg.Client({ connectionString: env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+await c.connect();
+const q = async (label, sql) => { try { const r = await c.query(sql); console.log('###', label); console.table(r.rows); } catch(e){ console.log('###', label, 'ERR', e.message); } };
+await q('users cols', `select column_name from information_schema.columns where table_name='users' order by ordinal_position`);
+await q('users', `select id, email, role, first_name, last_name from users order by id limit 40`);
+await q('programmes', `select id, name, slug, schedule_type, program_type, organization_id, term_id, is_active from programs where program_type='academy' order by id`);
+await q('u4-u8 sessions', `select count(*) sessions, min(date) first, max(date) last from camp_dates where camp_id=4`);
+await q('sample staff notes', `select id, first_name, last_name, notes, created_at from contacts where type='staff' and id>=37254 order by id limit 5`);
+await c.end();
