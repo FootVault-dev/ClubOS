@@ -123,6 +123,18 @@ export default function WarehouseDashboard() {
             <ScanLine className="w-3.5 h-3.5" /> Scan station
           </button>
           <button
+            onClick={() => setLocation("/admin/warehouse/assets")}
+            className="px-3 py-2 rounded-lg text-xs text-white/70 bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] flex items-center gap-1.5"
+          >
+            Assets
+          </button>
+          <button
+            onClick={() => setLocation("/admin/warehouse/fields")}
+            className="px-3 py-2 rounded-lg text-xs text-white/70 bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] flex items-center gap-1.5"
+          >
+            Fields
+          </button>
+          <button
             onClick={() => setLocation("/admin/warehouse/items")}
             className="px-3 py-2 rounded-lg text-xs text-white bg-blue-600 hover:bg-blue-700 flex items-center gap-1.5"
           >
