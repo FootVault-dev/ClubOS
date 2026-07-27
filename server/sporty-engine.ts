@@ -31,6 +31,7 @@ import {
   classifySportyError,
   blockReasonFor,
   sportyPayloadHash,
+  sportyEnvironmentFor,
   type SportyBuildGuardian,
   type SportyBuildPlayer,
   type SportyBuildResult,
@@ -38,7 +39,13 @@ import {
   type SportyEthnicityGroup,
   type SportyCountry,
 } from "@shared/sporty";
-import { SportyClient, SportyTransportError, readSportyConfig } from "./sporty-client";
+import { SportyClient, SportyTransportError, readSportyConfig, SPORTY_UAT_BASE } from "./sporty-client";
+
+/** Which Sporty environment this process is configured to talk to. With no
+ *  credentials installed we are certainly not talking to production. */
+export function currentSportyEnvironment(): string {
+  return sportyEnvironmentFor(readSportyConfig()?.baseUrl ?? SPORTY_UAT_BASE);
+}
 
 // Football programme types that exist in the NRS. holiday_camp/event stay out.
 const SCOPE_TYPES: Record<string, string[]> = {
@@ -67,8 +74,13 @@ function scopeTypes(scope: string | undefined): string[] {
 
 // ── Reference data ──────────────────────────────────────────────────────────
 
-export async function loadReferenceData(): Promise<{ ref: SportyReferenceData; fetchedAt: Date | null }> {
-  const rows = await db.select().from(sportyReferenceCache);
+export async function loadReferenceData(
+  environment: string = currentSportyEnvironment(),
+): Promise<{ ref: SportyReferenceData; fetchedAt: Date | null }> {
+  const rows = await db
+    .select()
+    .from(sportyReferenceCache)
+    .where(eq(sportyReferenceCache.environment, environment));
   const ref: SportyReferenceData = {};
   let fetchedAt: Date | null = null;
   for (const row of rows) {
@@ -86,12 +98,13 @@ export async function refreshReferenceData(client: SportyClient): Promise<{ coun
     await client.getGenders(),
     await client.getEthnicityGroups(),
   ];
+  const environment = sportyEnvironmentFor(client.baseUrl);
   const upsert = async (kind: string, payload: unknown) => {
     await db
       .insert(sportyReferenceCache)
-      .values({ kind, payload: payload as any, fetchedAt: new Date() })
+      .values({ kind, environment, payload: payload as any, fetchedAt: new Date() })
       .onConflictDoUpdate({
-        target: sportyReferenceCache.kind,
+        target: [sportyReferenceCache.kind, sportyReferenceCache.environment],
         set: { payload: payload as any, fetchedAt: new Date() },
       });
   };
@@ -105,8 +118,9 @@ export async function refreshReferenceData(client: SportyClient): Promise<{ coun
 
 export async function listCandidates(
   orgId: number,
-  opts: { scope?: string; search?: string } = {},
+  opts: { scope?: string; search?: string; environment?: string } = {},
 ): Promise<SportyCandidate[]> {
+  const environment = opts.environment ?? currentSportyEnvironment();
   const types = scopeTypes(opts.scope);
   const search = (opts.search || "").trim();
 
@@ -137,7 +151,12 @@ export async function listCandidates(
   if (!rows.length) return [];
 
   const ids = rows.map((r) => Number(r.contact_id));
-  const states = await db.select().from(sportySyncState).where(inArray(sportySyncState.contactId, ids));
+  // Only this environment's state: a UAT SportyId must never surface as if it
+  // were the production registration for the same child.
+  const states = await db
+    .select()
+    .from(sportySyncState)
+    .where(and(inArray(sportySyncState.contactId, ids), eq(sportySyncState.environment, environment)));
   const stateByContact = new Map(states.map((s) => [s.contactId, s]));
 
   return rows.map((r) => ({
@@ -190,16 +209,17 @@ function toBuildGuardian(c: typeof contacts.$inferSelect | undefined): SportyBui
 
 export async function buildCandidates(
   orgId: number,
-  opts: { scope?: string; contactIds?: number[]; search?: string } = {},
+  opts: { scope?: string; contactIds?: number[]; search?: string; environment?: string } = {},
 ): Promise<BuiltCandidate[]> {
-  let candidates = await listCandidates(orgId, { scope: opts.scope, search: opts.search });
+  const environment = opts.environment ?? currentSportyEnvironment();
+  let candidates = await listCandidates(orgId, { scope: opts.scope, search: opts.search, environment });
   if (opts.contactIds?.length) {
     const wanted = new Set(opts.contactIds);
     candidates = candidates.filter((c) => wanted.has(c.contactId));
   }
   if (!candidates.length) return [];
 
-  const { ref } = await loadReferenceData();
+  const { ref } = await loadReferenceData(environment);
   const today = nzTodayIso();
 
   const playerIds = candidates.map((c) => c.contactId);
@@ -273,13 +293,14 @@ export interface PushRunResult {
 async function upsertState(
   orgId: number,
   contactId: number,
+  environment: string,
   patch: Partial<typeof sportySyncState.$inferInsert>,
 ): Promise<void> {
   await db
     .insert(sportySyncState)
-    .values({ organizationId: orgId, contactId, ...patch, updatedAt: new Date() } as any)
+    .values({ organizationId: orgId, contactId, environment, ...patch, updatedAt: new Date() } as any)
     .onConflictDoUpdate({
-      target: sportySyncState.contactId,
+      target: [sportySyncState.contactId, sportySyncState.environment],
       set: { ...patch, updatedAt: new Date() } as any,
     });
 }
@@ -319,16 +340,19 @@ export async function pushCandidates(
     throw new Error("Sporty API credentials are not installed (SPORTY_API_KEY / SPORTY_API_USERNAME / SPORTY_API_PASSWORD). UAT keys come from NZ Football once we confirm development is complete.");
   }
   const client = new SportyClient(config);
+  // Every read and write below is namespaced to the environment we are actually
+  // calling, so a UAT run can never read or overwrite production state.
+  const environment = sportyEnvironmentFor(client.baseUrl);
 
   // Reference data is required for a live push — mapping against guesses is
   // how bad data reaches a national register. Fetch it if missing or stale.
-  const { ref, fetchedAt } = await loadReferenceData();
+  const { ref, fetchedAt } = await loadReferenceData(environment);
   const staleMs = 7 * 24 * 60 * 60 * 1000;
   if (!ref.ethnicityGroups?.length || !ref.countries?.length || !fetchedAt || Date.now() - fetchedAt.getTime() > staleMs) {
     await refreshReferenceData(client);
   }
 
-  const built = await buildCandidates(orgId, { scope: opts.scope, contactIds });
+  const built = await buildCandidates(orgId, { scope: opts.scope, contactIds, environment });
   const results: PushResultRow[] = [];
 
   for (const item of built) {
@@ -361,7 +385,7 @@ export async function pushCandidates(
 
       // "Player already registered" with an id: save it, retry ONCE as update.
       if (!res.ok && res.sportyId && classifySportyError(res.message) === "already_registered") {
-        await upsertState(orgId, candidate.contactId, { sportyId: res.sportyId });
+        await upsertState(orgId, candidate.contactId, environment, { sportyId: res.sportyId });
         await appendLog(orgId, candidate.contactId, client.baseUrl, "already_registered", res.status, res.sportyId, res.message, payload, res.body);
         payload = { ...payload, SportyId: res.sportyId };
         res = await client.registerPerson(payload);
@@ -369,7 +393,7 @@ export async function pushCandidates(
 
       if (res.ok) {
         const sportyId = res.data.SportyId ?? payload.SportyId ?? null;
-        await upsertState(orgId, candidate.contactId, {
+        await upsertState(orgId, candidate.contactId, environment, {
           sportyId: typeof sportyId === "number" ? sportyId : null,
           personFifaId: res.data.PersonFifaId ?? state?.personFifaId ?? null,
           status: "synced",
@@ -389,7 +413,7 @@ export async function pushCandidates(
       // The doctrine: an id on ANY response is saved before anything else.
       const learnedSportyId = res.sportyId ?? state?.sportyId ?? null;
       if (block) {
-        await upsertState(orgId, candidate.contactId, {
+        await upsertState(orgId, candidate.contactId, environment, {
           sportyId: learnedSportyId,
           status: "blocked",
           blockReason: block,
@@ -399,7 +423,7 @@ export async function pushCandidates(
         await appendLog(orgId, candidate.contactId, client.baseUrl, "blocked", res.status, res.sportyId, res.message, payload, res.body);
         results.push({ contactId: candidate.contactId, name, outcome: "blocked", message: res.message, sportyId: learnedSportyId });
       } else {
-        await upsertState(orgId, candidate.contactId, {
+        await upsertState(orgId, candidate.contactId, environment, {
           sportyId: learnedSportyId,
           status: "error",
           lastError: res.message,
@@ -415,7 +439,7 @@ export async function pushCandidates(
         results.push({ contactId: candidate.contactId, name, outcome: "error", message: e.message });
         return { results, aborted: e.message };
       }
-      await upsertState(orgId, candidate.contactId, {
+      await upsertState(orgId, candidate.contactId, environment, {
         status: "error",
         lastError: e?.message || String(e),
         attempts: (state?.attempts ?? 0) + 1,
@@ -431,11 +455,12 @@ export async function pushCandidates(
 // ── Overview + log + exclude ────────────────────────────────────────────────
 
 export async function sportyOverview(orgId: number, scope?: string) {
-  const built = await buildCandidates(orgId, { scope });
+  const environment = currentSportyEnvironment();
+  const built = await buildCandidates(orgId, { scope, environment });
   const counts: Record<string, number> = { total: built.length, ready: 0, needs_data: 0, synced: 0, changed: 0, blocked: 0, error: 0, excluded: 0, pending: 0 };
   for (const b of built) counts[b.displayStatus] = (counts[b.displayStatus] ?? 0) + 1;
 
-  const { ref, fetchedAt } = await loadReferenceData();
+  const { ref, fetchedAt } = await loadReferenceData(environment);
   const [lastPush] = await db
     .select()
     .from(sportyPushLog)
@@ -448,6 +473,10 @@ export async function sportyOverview(orgId: number, scope?: string) {
     config: {
       installed: readSportyConfig() !== null,
       baseUrl: readSportyConfig()?.baseUrl ?? null,
+      // Which id-namespace every number on this screen belongs to. Staff must
+      // never read a UAT SportyId as if the child were registered for real.
+      environment,
+      isProduction: environment === "prod",
       autosync: process.env.SPORTY_AUTOSYNC === "1",
     },
     reference: {
@@ -472,10 +501,11 @@ export async function sportyLogFor(orgId: number, contactId?: number, limit = 10
 }
 
 export async function setExcluded(orgId: number, contactId: number, excluded: boolean, reason?: string) {
+  const environment = currentSportyEnvironment();
   if (excluded) {
-    await upsertState(orgId, contactId, { status: "excluded", excludedReason: reason || "Excluded by staff" });
+    await upsertState(orgId, contactId, environment, { status: "excluded", excludedReason: reason || "Excluded by staff" });
   } else {
     // Back to the derived world: pending until the next push decides otherwise.
-    await upsertState(orgId, contactId, { status: "pending", excludedReason: null });
+    await upsertState(orgId, contactId, environment, { status: "pending", excludedReason: null });
   }
 }
