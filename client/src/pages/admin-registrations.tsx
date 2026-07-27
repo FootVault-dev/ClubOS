@@ -1159,7 +1159,7 @@ export default function AdminRegistrations() {
           onOpenChange={(open) => { if (!open) setRefundingReg(null); }}
         />
       )}
-      <RegisterPlayerModal open={showRegister} onClose={() => setShowRegister(false)} />
+      <RegisterPlayerModal open={showRegister} onClose={() => setShowRegister(false)} scope="all" />
     </div>
   );
 }
