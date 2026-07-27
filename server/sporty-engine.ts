@@ -199,6 +199,21 @@ function toBuildPlayer(c: typeof contacts.$inferSelect): SportyBuildPlayer {
     subEthnicity: c.subEthnicity,
     ethnicity2: c.ethnicity2,
     subEthnicity2: c.subEthnicity2,
+    // Structured identity — when present these win over the free text above,
+    // because they were picked off NZ Football's own list at the moment the
+    // family answered. Nothing to resolve, nothing to guess.
+    nationalityCode: c.nationalityCode,
+    countryOfBirthCode: c.countryOfBirthCode,
+    ethnicityGroupId: c.ethnicityGroupId,
+    ethnicitySelectionIds: c.ethnicitySelectionIds,
+    ethnicity2GroupId: c.ethnicity2GroupId,
+    ethnicity2SelectionIds: c.ethnicity2SelectionIds,
+    addressStreet: c.addressStreet,
+    addressSuburb: c.addressSuburb,
+    addressCity: c.addressCity,
+    addressRegion: c.addressRegion,
+    addressPostcode: c.addressPostcode,
+    addressCountry: c.addressCountry,
   };
 }
 

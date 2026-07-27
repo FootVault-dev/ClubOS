@@ -9,7 +9,13 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Badge } from "@/components/ui/badge";
 import { OFFICE_PAYMENT_METHODS } from "@shared/payments";
-import { NZF_ETHNICITIES, GENDERS } from "@shared/academy";
+import { GENDERS } from "@shared/academy";
+import { NZF_COUNTRIES, NZF_ETHNICITY_GROUPS } from "@shared/nzf-vocabulary";
+import {
+  NzfIdentityFields,
+  EMPTY_NZF_IDENTITY,
+  type NzfIdentityValue,
+} from "@/components/nzf-identity-fields";
 import {
   X, ChevronRight, ChevronLeft, User, Baby, Calendar, CheckCircle,
   Plus, Trash2, Loader2, Building2, CreditCard, Banknote, AlertTriangle, Lock,
@@ -70,6 +76,17 @@ function formatProductType(pt: string) {
 // at a counter with a parent waiting, often on a laptop screen at an angle.
 const FIELD = "bg-white/[0.06] border-white/[0.14] text-white placeholder:text-white/40";
 const LABEL = "text-[11px] uppercase tracking-wide text-white/70 mb-1.5 block";
+
+// Theme for the shared NZF pickers, matched to this admin surface.
+const NZF_THEME = {
+  gold: "#D4AF37",
+  goldBright: "#E8CF6B",
+  line: "rgba(255,255,255,0.14)",
+  mute: "rgba(255,255,255,0.5)",
+  fieldCls: `w-full rounded-md px-3 py-2 text-sm border outline-none ${FIELD}`,
+  fieldStyle: {} as React.CSSProperties,
+  labelCls: LABEL,
+};
 
 // NZ calendar day, not toISOString() — that reports UTC and reads a day behind
 // here from midday on, which would let staff pick "tomorrow" as a birthday.
@@ -137,9 +154,11 @@ export function RegisterPlayerModal({
   const [playerDob, setPlayerDob] = useState("");
   const [playerGender, setPlayerGender] = useState("");
   const [playerSchool, setPlayerSchool] = useState("");
-  const [countryOfBirth, setCountryOfBirth] = useState("");
-  const [nationality, setNationality] = useState("");
-  const [ethnicity, setEthnicity] = useState("");
+  // Structured, exactly as the public form captures it — so a walk-up
+  // registration is as registerable as an online one. Still OPTIONAL here: a
+  // parent at the counter with a queue behind them should not be blocked, and a
+  // recorded gap is honest where a guessed ethnicity is not.
+  const [identity, setIdentity] = useState<NzfIdentityValue>(EMPTY_NZF_IDENTITY);
   const [allergies, setAllergies] = useState("");
   const [medicalNotes, setMedicalNotes] = useState("");
   const [relationship, setRelationship] = useState("parent");
@@ -274,7 +293,12 @@ export function RegisterPlayerModal({
           player: {
             firstName: playerFirst, lastName: playerLast, dateOfBirth: playerDob,
             gender: playerGender, school: playerSchool,
-            countryOfBirth, nationality, ethnicity,
+            countryOfBirthCode: identity.countryOfBirthCode || undefined,
+            nationalityCode: identity.nationalityCode || undefined,
+            ethnicityGroupId: identity.ethnicityGroupId ?? undefined,
+            ethnicitySelectionIds: identity.ethnicityGroupId ? identity.ethnicitySelectionIds : undefined,
+            ethnicity2GroupId: identity.ethnicity2GroupId ?? undefined,
+            ethnicity2SelectionIds: identity.ethnicity2GroupId ? identity.ethnicity2SelectionIds : undefined,
             allergies, medicalNotes,
           },
           emergency: { name: emergencyContact, phone: emergencyPhone },
@@ -348,7 +372,7 @@ export function RegisterPlayerModal({
     setItems([]);
     setOptionId(null); setPlan("term");
     setPlayerFirst(""); setPlayerLast(""); setPlayerDob(""); setPlayerGender(""); setPlayerSchool("");
-    setCountryOfBirth(""); setNationality(""); setEthnicity("");
+    setIdentity(EMPTY_NZF_IDENTITY);
     setAllergies(""); setMedicalNotes(""); setRelationship("parent");
     setPolicyAccepted(false); setAckAgeWarning(false);
     setIsPaid(true); setMethod("eftpos"); setAmountDollars(""); setAmountTouched(false);
@@ -663,20 +687,13 @@ export function RegisterPlayerModal({
                   Required for the annual NZF audit. You can save without them and add them later on the player's record —
                   they'll be flagged as missing rather than guessed.
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <Field label="Country of birth">
-                    <Input value={countryOfBirth} onChange={(e) => setCountryOfBirth(e.target.value)} placeholder="New Zealand" className={FIELD} />
-                  </Field>
-                  <Field label="Nationality">
-                    <Input value={nationality} onChange={(e) => setNationality(e.target.value)} placeholder="New Zealand" className={FIELD} />
-                  </Field>
-                  <Field label="Ethnic group">
-                    <select value={ethnicity} onChange={(e) => setEthnicity(e.target.value)} className={`w-full h-10 rounded-md px-3 text-sm ${FIELD} border`}>
-                      <option value="">—</option>
-                      {NZF_ETHNICITIES.map((e2: string) => <option key={e2} value={e2} className="bg-[#02060E]">{e2}</option>)}
-                    </select>
-                  </Field>
-                </div>
+                <NzfIdentityFields
+                  value={identity}
+                  onChange={setIdentity}
+                  countries={NZF_COUNTRIES as any}
+                  groups={NZF_ETHNICITY_GROUPS as any}
+                  theme={NZF_THEME}
+                />
               </div>
             </div>
           )}

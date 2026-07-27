@@ -15,6 +15,7 @@
 //  · Dates never round-trip through Date — calendar-part arithmetic only.
 
 import { NZF_ETHNICITIES } from "./academy";
+import { NZF_COUNTRIES } from "./nzf-vocabulary";
 
 // ── Sporty API types (Football API v1.1) ────────────────────────────────────
 
@@ -451,6 +452,63 @@ export interface EthnicityResolution {
   selectionAmbiguity?: { input: string; candidates: string[] };
 }
 
+/** Ethnicity straight from stored ids — no matching, no ambiguity, no guessing.
+ *
+ *  A record captured through the current registration form already holds NZ
+ *  Football's own group id and selection ids, chosen by the family from NZF's
+ *  published list. Returns null when there is no stored id (so the caller falls
+ *  back to resolving the legacy free text), and null when the reference data
+ *  says the id no longer exists — which surfaces as a normal "unresolved"
+ *  blocker rather than a silent push of a retired value.
+ *
+ *  With no reference data loaded we still trust the stored id — it came from
+ *  NZF originally — and mark it provisional so the group NAME is confirmed
+ *  before it is relied on. */
+export function resolveStoredEthnicity(
+  groupId: number | null | undefined,
+  selectionIds: number[] | null | undefined,
+  ref: SportyReferenceData | undefined,
+): EthnicityResolution | null {
+  if (typeof groupId !== "number" || !Number.isInteger(groupId)) return null;
+  const ids = (selectionIds ?? []).filter((n) => Number.isInteger(n));
+
+  const groups = ref?.ethnicityGroups;
+  if (!groups?.length) {
+    // No reference list to name the group. The id is real but the NAME is what
+    // the payload carries, so this cannot be completed — fall back to the
+    // free-text path rather than invent a group name.
+    return null;
+  }
+
+  const group = groups.find((g) => g.EthnicityGroupId === groupId);
+  if (!group) return null;
+
+  const valid = new Set(group.EthnicityGroupSelections.map((s) => s.EthnicityGroupSelectionId));
+  const kept = ids.filter((id) => valid.has(id));
+  if (kept.length !== ids.length) return null; // a retired selection → re-resolve/flag, never quietly drop
+
+  if (kept.length < group.MinimumSelectionsRequired) {
+    return {
+      groupName: group.EthnicityGroupName,
+      group,
+      selectionIds: kept,
+      provisional: false,
+      selectionShortfall: {
+        required: group.MinimumSelectionsRequired,
+        matched: kept.length,
+        available: group.EthnicityGroupSelections.map((s) => s.EthnicityGroupSelectionName),
+      },
+    };
+  }
+
+  return {
+    groupName: group.EthnicityGroupName,
+    group,
+    selectionIds: kept.slice(0, Math.max(group.MaximumSelectionsRequired, 0)),
+    provisional: false,
+  };
+}
+
 /** Settle a group tie using the sub-ethnicity — the person's own answer.
  *  Returns null when it genuinely cannot be settled, so a human decides. */
 function disambiguateGroup(
@@ -679,6 +737,56 @@ export function parseNzAddress(raw: string | null | undefined): ParsedAddress | 
   };
 }
 
+/** The six-part address as stored, or null when the record predates structured
+ *  capture. All six must be present: Sporty rejects the whole address if any
+ *  one is missing and returns the same message either way, so a partial set is
+ *  worth nothing — better to fall through to the parser and let the normal
+ *  "address_incomplete" blocker explain what's absent. */
+export function structuredAddressOf(
+  p: {
+    addressStreet?: string | null;
+    addressSuburb?: string | null;
+    addressCity?: string | null;
+    addressRegion?: string | null;
+    addressPostcode?: string | null;
+    addressCountry?: string | null;
+  },
+  ref?: SportyReferenceData,
+): { address: SportyAddress; confident: boolean } | null {
+  const street = (p.addressStreet || "").trim();
+  const suburb = (p.addressSuburb || "").trim();
+  const city = (p.addressCity || "").trim();
+  const region = (p.addressRegion || "").trim();
+  const postcode = (p.addressPostcode || "").trim();
+  const stored = (p.addressCountry || "").trim();
+  if (!street || !suburb || !city || !region || !postcode || !stored) return null;
+
+  // 🔴 Address.Country carries the country NAME, not the alpha-3 code — that is
+  // what the 11 accepted UAT registrations sent ("New Zealand"). We STORE the
+  // code because it survives renames, so it is resolved back to a name here.
+  // An unresolvable code returns null rather than sending the raw code: whether
+  // Sporty accepts a code in this field is untested, and the address is
+  // all-or-nothing, so a guess would fail the whole registration.
+  const code = stored.toUpperCase();
+  const name =
+    ref?.countries?.find((c) => c.CountryCode.toUpperCase() === code)?.CountryName ??
+    NZF_COUNTRIES.find((c) => c.code.toUpperCase() === code)?.name ??
+    null;
+  if (!name) return null;
+
+  return {
+    address: {
+      StreetAddress: street,
+      Suburb: suburb,
+      City: city,
+      Region: region,
+      AlphaPostCode: postcode,
+      Country: name,
+    },
+    confident: true,
+  };
+}
+
 // ── Minor determination (calendar-part comparison, never Date arithmetic) ────
 
 export function isMinorOn(dobIso: string | null | undefined, todayIso: string): boolean | null {
@@ -715,6 +823,26 @@ export interface SportyBuildPlayer {
   subEthnicity: string | null;
   ethnicity2: string | null;
   subEthnicity2: string | null;
+  // ── Structured identity (captured from NZF's own vocabulary, 2026-07-28+) ──
+  // When present these WIN outright: they were chosen from NZ Football's list
+  // at the moment the family answered, so there is nothing left to resolve and
+  // nothing left to get wrong. The free-text fields above remain the fallback
+  // for records captured before the form was fixed.
+  nationalityCode?: string | null;
+  countryOfBirthCode?: string | null;
+  ethnicityGroupId?: number | null;
+  ethnicitySelectionIds?: number[] | null;
+  ethnicity2GroupId?: number | null;
+  ethnicity2SelectionIds?: number[] | null;
+  // Six-part address. Present ⇒ used verbatim; the one-line `address` above is
+  // only parsed when these are absent, and that parse is the guessy path that
+  // once read "1272 Courtenay Road" as postcode 1272.
+  addressStreet?: string | null;
+  addressSuburb?: string | null;
+  addressCity?: string | null;
+  addressRegion?: string | null;
+  addressPostcode?: string | null;
+  addressCountry?: string | null;
 }
 
 export interface SportyBuildGuardian {
@@ -767,7 +895,14 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
     );
   }
 
-  const nationality = resolveCountryCode(player.nationality, ref);
+  // A stored code was picked off NZ Football's own list, so it needs no
+  // resolution — only a check that it is still a code they publish. That check
+  // matters: if NZF ever retires a code, we want a loud blocker, not a silent
+  // push of a value they no longer accept.
+  const storedNationality = (player.nationalityCode || "").trim().toUpperCase();
+  const nationality = storedNationality
+    ? { code: storedNationality, provisional: false }
+    : resolveCountryCode(player.nationality, ref);
   if (!nationality) {
     blocker(
       "nationality_unresolved",
@@ -776,11 +911,16 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
         ? `Nationality "${player.nationality}" couldn't be matched to a country code.`
         : "Nationality is missing — required by NZ Football.",
     );
+  } else if (storedNationality && ref?.countries?.length && !ref.countries.some((c) => c.CountryCode.toUpperCase() === storedNationality)) {
+    blocker("nationality_unresolved", "nationality", `Nationality code "${storedNationality}" is no longer in NZ Football's country list.`);
   } else if (nationality.provisional) {
     warning("nationality_provisional", "nationality", "Nationality mapped without Sporty's country list — refresh reference data to confirm.");
   }
 
-  const birthCountry = resolveCountryCode(player.countryOfBirth, ref);
+  const storedBirthCountry = (player.countryOfBirthCode || "").trim().toUpperCase();
+  const birthCountry = storedBirthCountry
+    ? { code: storedBirthCountry, provisional: false }
+    : resolveCountryCode(player.countryOfBirth, ref);
   if (!birthCountry) {
     blocker(
       "country_of_birth_unresolved",
@@ -789,6 +929,8 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
         ? `Country of birth "${player.countryOfBirth}" couldn't be matched to a country code.`
         : "Country of birth is missing — required by NZ Football.",
     );
+  } else if (storedBirthCountry && ref?.countries?.length && !ref.countries.some((c) => c.CountryCode.toUpperCase() === storedBirthCountry)) {
+    blocker("country_of_birth_unresolved", "countryOfBirth", `Country of birth code "${storedBirthCountry}" is no longer in NZ Football's country list.`);
   } else if (birthCountry.provisional) {
     warning("country_of_birth_provisional", "countryOfBirth", "Country of birth mapped without Sporty's country list — refresh reference data to confirm.");
   }
@@ -801,7 +943,12 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
   if (!phone) blocker("missing_phone", "phone", minor ? "No phone on the player or their guardian." : "Mobile phone is missing.");
 
   const rawAddress = (player.address || "").trim() || (minor ? (guardian?.address || "").trim() : "");
-  const parsedAddress = parseNzAddress(rawAddress);
+  // Six stored parts are used verbatim — the family typed them into separate
+  // boxes, so there is nothing to infer. Parsing a one-line address is the
+  // guessy path (it once read "1272 Courtenay Road" as postcode 1272) and is
+  // now only reached by records captured before the form was fixed.
+  const structuredAddress = structuredAddressOf(player, ref);
+  const parsedAddress = structuredAddress ?? parseNzAddress(rawAddress);
   if (!parsedAddress) {
     blocker("missing_address", "address", minor ? "No address on the player or their guardian." : "Address is missing.");
   } else {
@@ -821,7 +968,14 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
     }
   }
 
-  const primaryEth = resolveEthnicity(player.ethnicity, player.subEthnicity, ref);
+  // A stored group id came from NZ Football's own list at the moment the family
+  // answered — there is nothing to resolve and no ambiguity to settle. This is
+  // the entire point of capturing structured identity: the "European" tie, the
+  // "Indian" → "Anglo Indian" mis-match and the selection shortfalls below
+  // simply cannot arise for a record captured this way.
+  const primaryEth =
+    resolveStoredEthnicity(player.ethnicityGroupId, player.ethnicitySelectionIds, ref) ??
+    resolveEthnicity(player.ethnicity, player.subEthnicity, ref);
   if (!primaryEth) {
     blocker(
       "ethnicity_unresolved",
@@ -861,7 +1015,10 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
   }
 
   let secondaryEth: EthnicityResolution | null = null;
-  if ((player.ethnicity2 || "").trim()) {
+  const storedSecondary = resolveStoredEthnicity(player.ethnicity2GroupId, player.ethnicity2SelectionIds, ref);
+  if (storedSecondary) {
+    secondaryEth = storedSecondary;
+  } else if ((player.ethnicity2 || "").trim()) {
     secondaryEth = resolveEthnicity(player.ethnicity2, player.subEthnicity2, ref);
     if (!secondaryEth) {
       warning("ethnicity2_unresolved", "ethnicity2", `Second ethnicity "${player.ethnicity2}" couldn't be matched — it will be omitted.`);

@@ -117,6 +117,33 @@ export const contacts = pgTable("contacts", {
   subEthnicity: text("sub_ethnicity"),       // specific ethnic group / iwi
   ethnicity2: text("ethnicity2"),            // optional second ethnicity
   subEthnicity2: text("sub_ethnicity2"),
+  // ── Structured NZF identity (2026-07-28) ───────────────────────────────────
+  // The columns above hold the human-readable answer and stay the display
+  // value. These hold the machine values NZ Football keys on, captured from
+  // their own published vocabulary (shared/nzf-vocabulary.ts) at the moment the
+  // family answers — so the push never re-resolves a string, and a rename on
+  // their side cannot silently re-point a registration at a different group.
+  // Free text was the bug: it produced "Christchurch" as a country of birth and
+  // 68 bare "European" answers NZF cannot accept.
+  nationalityCode: text("nationality_code"),           // FIFA/IOC alpha-3, NOT ISO
+  countryOfBirthCode: text("country_of_birth_code"),
+  ethnicityGroupId: integer("ethnicity_group_id"),
+  ethnicitySelectionIds: integer("ethnicity_selection_ids").array(),
+  ethnicity2GroupId: integer("ethnicity2_group_id"),
+  ethnicity2SelectionIds: integer("ethnicity2_selection_ids").array(),
+  identityCapturedAt: timestamp("identity_captured_at", { withTimezone: true }),
+  identityCapturedSource: text("identity_captured_source"), // 'form' | 'staff' | 'import'
+  // ── Structured address ─────────────────────────────────────────────────────
+  // `address` above stays untouched (every existing read path depends on it).
+  // Sporty requires six SEPARATE fields and — contradicting its own swagger,
+  // verified against the live API — all six are mandatory including Region.
+  // A single line cannot be split back apart reliably.
+  addressStreet: text("address_street"),
+  addressSuburb: text("address_suburb"),
+  addressCity: text("address_city"),
+  addressRegion: text("address_region"),
+  addressPostcode: text("address_postcode"),
+  addressCountry: text("address_country"),             // FIFA/IOC alpha-3
   // Reconciliation key for the Friendly Manager historical import, so a family
   // who registers online is not duplicated when the export lands.
   friendlyManagerId: text("friendly_manager_id"),

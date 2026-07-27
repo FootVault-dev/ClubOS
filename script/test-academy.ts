@@ -3,6 +3,9 @@
 //
 // No DB, no network. Follows script/test-league-pricing.ts.
 import assert from "node:assert/strict";
+import { NZF_ETHNICITY_GROUPS } from "../shared/nzf-vocabulary";
+
+const NZ_EUROPEAN_ID = NZF_ETHNICITY_GROUPS.find((g) => g.name === "NZ European")!.id;
 import {
   POLICY_VERSION,
   TERMS_PER_YEAR,
@@ -337,10 +340,13 @@ function validInput(): AcademyRegistrationInput {
       dateOfBirth: "2019-04-01",
       gender: "female",
       school: "Ilam School",
-      countryOfBirth: "New Zealand",
-      nationality: "New Zealand",
-      ethnicity: "European",
-      subEthnicity: "New Zealand European",
+      // Structured NZF identity — codes and ids off NZ Football's own list.
+      // Was free text ("New Zealand" / "European") until 28 July 2026; that
+      // shape is unregisterable, which is why the contract changed.
+      countryOfBirthCode: "NZL",
+      nationalityCode: "NZL",
+      ethnicityGroupId: NZ_EUROPEAN_ID,
+      ethnicitySelectionIds: [],
     },
     guardian: {
       firstName: "Daniel",
@@ -348,6 +354,14 @@ function validInput(): AcademyRegistrationInput {
       email: "daniel@cufc.co.nz",
       phone: "021 446 212",
       relationship: "Father",
+      addressParts: {
+        street: "12 Example Road",
+        suburb: "Riccarton",
+        city: "Christchurch",
+        region: "Canterbury",
+        postcode: "8041",
+        country: "NZL",
+      },
     },
     emergency: { name: "Slava Meyn", phone: "0211234567" },
     consents: { policy: true, medical: true, photo: false, newsletter: true },
@@ -391,33 +405,53 @@ ok("bad email rejected", () => {
 // The whole point of the migration — these must never pass empty.
 ok("country of birth is required (NZF audit)", () => {
   const i = validInput();
-  i.child!.countryOfBirth = "";
+  i.child!.countryOfBirthCode = "";
   assert.match(validateAcademyRegistration(i).join(" "), /country of birth/i);
 });
 ok("ethnicity is required (NZF audit)", () => {
   const i = validInput();
-  i.child!.ethnicity = "";
+  i.child!.ethnicityGroupId = null;
   assert.match(validateAcademyRegistration(i).join(" "), /ethnic group/i);
 });
 ok("nationality is required (NZF audit)", () => {
   const i = validInput();
-  i.child!.nationality = "";
+  i.child!.nationalityCode = "";
   assert.match(validateAcademyRegistration(i).join(" "), /nationality/i);
 });
-ok("an invalid ethnicity is rejected, not coerced", () => {
+// 🔴 The regression that cost us the 30 July snapshot: free text let a city
+// through as a country of birth and a group NZF does not have through as an
+// ethnicity. Neither can happen now.
+ok("a city typed as a country of birth is rejected", () => {
   const i = validInput();
-  i.child!.ethnicity = "Pakeha";
+  i.child!.countryOfBirthCode = "Christchurch";
+  assert.match(validateAcademyRegistration(i).join(" "), /country of birth/i);
+});
+ok("an ethnic group NZF does not have is rejected, not coerced", () => {
+  const i = validInput();
+  i.child!.ethnicityGroupId = 9999;
   assert.match(validateAcademyRegistration(i).join(" "), /ethnic group/i);
 });
-ok("optional second ethnicity may be blank", () => {
+ok("optional second ethnicity may be absent", () => {
   const i = validInput();
-  i.child!.ethnicity2 = "";
+  i.child!.ethnicity2GroupId = undefined;
   assert.deepEqual(validateAcademyRegistration(i), []);
 });
 ok("but an invalid second ethnicity is rejected", () => {
   const i = validInput();
-  i.child!.ethnicity2 = "Klingon";
-  assert.match(validateAcademyRegistration(i).join(" "), /additional ethnic group/i);
+  i.child!.ethnicity2GroupId = 9999;
+  assert.match(validateAcademyRegistration(i).join(" "), /ethnic group/i);
+});
+// 🔴 Sporty rejects the whole address if any one part is missing, and Region is
+// mandatory despite its swagger saying otherwise.
+ok("a missing address region is rejected", () => {
+  const i = validInput();
+  i.guardian!.addressParts!.region = "";
+  assert.match(validateAcademyRegistration(i).join(" "), /region/i);
+});
+ok("a missing address entirely is rejected", () => {
+  const i = validInput();
+  delete i.guardian!.addressParts;
+  assert.match(validateAcademyRegistration(i).join(" "), /street address/i);
 });
 
 ok("policy consent is mandatory", () => {

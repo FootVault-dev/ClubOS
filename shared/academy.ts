@@ -5,11 +5,14 @@
 //                       2017 is U9 for the 2026 season. So grade = season − birthYear.
 //                       (Corroborated by the club's own Membership & Payment Policy
 //                       2026 §5, which frames age "as at 1 January of the season".)
-//   • Ethnicity       — Stats NZ level-1 classification, the standard NZF uses.
-//                       Friendly Manager collects exactly this shape today
-//                       (custom[ethnicity] + custom[subEthnicity] for iwi, plus a
-//                       second optional pair). Free text at the DB layer because
-//                       Sporty's accepted vocabulary is not yet confirmed.
+//   • Ethnicity       — NZ Football's OWN seven groups, pulled from their
+//                       reference endpoints (shared/nzf-vocabulary.ts) and
+//                       validated in shared/nzf-identity.ts. Was Stats NZ level-1
+//                       free text until 28 July 2026; that shape is unregisterable,
+//                       because NZF splits NZ European from Other European and
+//                       rejects a bare "European". Sporty refused a 495-person
+//                       import on exactly this. Never guess which side someone
+//                       belongs on — the family answers, we record.
 //   • 5% discount     — Membership & Payment Policy 2026: "5% discount on training
 //                       fees only when the full amount for all four terms ... is
 //                       paid in one single payment at the start of the season."
@@ -18,6 +21,8 @@
 //                       = 'core'. Getting this wrong under-charges families.
 //
 // Tested by script/test-academy.ts (npx tsx script/test-academy.ts).
+
+import { validateNzfAddress, validateNzfIdentity } from "./nzf-identity";
 
 // ── Policy constants ────────────────────────────────────────────────────────
 
@@ -366,7 +371,18 @@ export interface AcademyRegistrationInput {
     dateOfBirth?: unknown;
     gender?: unknown;
     school?: unknown;
-    // NZF audit fields
+    // NZF audit fields — structured. Codes and ids come straight off NZ
+    // Football's published vocabulary (shared/nzf-vocabulary.ts), so the answer
+    // is valid at the moment it is given. The old free-text twins below are
+    // still accepted from legacy callers, but they no longer satisfy the check.
+    countryOfBirthCode?: unknown;
+    nationalityCode?: unknown;
+    ethnicityGroupId?: unknown;
+    ethnicitySelectionIds?: unknown;
+    ethnicity2GroupId?: unknown;
+    ethnicity2SelectionIds?: unknown;
+    // Legacy free-text (kept so an older client doesn't 500; ignored for
+    // validation because these are precisely the values NZF rejects).
     countryOfBirth?: unknown;
     nationality?: unknown;
     ethnicity?: unknown;
@@ -383,7 +399,18 @@ export interface AcademyRegistrationInput {
     phone?: unknown;
     alternatePhone?: unknown;
     relationship?: unknown;
+    /** Legacy one-line address. Superseded by `addressParts`. */
     address?: unknown;
+    /** Six-part address — all parts required, because Sporty rejects the whole
+     *  address if any one is missing (Region included). */
+    addressParts?: {
+      street?: unknown;
+      suburb?: unknown;
+      city?: unknown;
+      region?: unknown;
+      postcode?: unknown;
+      country?: unknown;
+    };
   };
   emergency?: { name?: unknown; phone?: unknown };
   consents?: {
@@ -433,15 +460,25 @@ export function validateAcademyRegistration(input: AcademyRegistrationInput): st
     errors.push("Player's gender is required.");
   }
 
-  // NZ Football audit fields
-  if (!str(child.countryOfBirth)) errors.push("Player's country of birth is required by New Zealand Football.");
-  if (!str(child.nationality)) errors.push("Player's nationality is required by New Zealand Football.");
-  if (!isNzfEthnicity(str(child.ethnicity))) {
-    errors.push("Player's ethnic group is required by New Zealand Football.");
-  }
-  // A second ethnicity is optional, but if one is given it must be valid.
-  const e2 = str(child.ethnicity2);
-  if (e2 && !isNzfEthnicity(e2)) errors.push("Additional ethnic group is not a recognised option.");
+  // NZ Football audit fields — validated against NZF's own vocabulary rather
+  // than accepted as free text. This is the fix for the 28 July 2026 import
+  // refusal: free text produced values NZF cannot register ("Christchurch" as a
+  // country of birth, bare "European" as an ethnic group), and the failure only
+  // surfaced months later at their validation gate.
+  const identity = validateNzfIdentity({
+    countryOfBirthCode: child.countryOfBirthCode,
+    nationalityCode: child.nationalityCode,
+    ethnicityGroupId: child.ethnicityGroupId,
+    ethnicitySelectionIds: child.ethnicitySelectionIds,
+    ethnicity2GroupId: child.ethnicity2GroupId,
+    ethnicity2SelectionIds: child.ethnicity2SelectionIds,
+  });
+  if (!identity.ok) errors.push(...identity.errors);
+
+  // Address — six parts, all required. Sporty returns the same "Address is
+  // required." whichever part is absent, so there is no partial credit.
+  const address = validateNzfAddress(guardian.addressParts ?? {});
+  if (!address.ok) errors.push(...address.errors);
 
   // Guardian
   if (!str(guardian.firstName)) errors.push("Parent/guardian first name is required.");

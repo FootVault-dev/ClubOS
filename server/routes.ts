@@ -73,6 +73,14 @@ import {
   POLICY_VERSION as ACADEMY_POLICY_VERSION,
   NZF_ETHNICITIES as NZF_ETHNICITY_OPTIONS,
 } from "@shared/academy";
+import {
+  NZF_COUNTRIES,
+  NZF_ETHNICITY_GROUPS,
+  NZ_REGIONS,
+  validateNzfIdentity,
+  validateNzfAddress,
+  nzfIdentityGap,
+} from "@shared/nzf-identity";
 import { isOfficePaymentMethod } from "@shared/payments";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
 import { behaviorEventsToInsert } from "@shared/behavior";
@@ -2606,6 +2614,19 @@ export async function registerRoutes(
           ? { name: term.name, termNumber: term.termNumber, year: term.year, startDate: term.startDate, endDate: term.endDate }
           : null,
         policyVersion: ACADEMY_POLICY_VERSION,
+        // NZ Football's own vocabulary, so the form can only offer values they
+        // accept. Served from a checked-in snapshot (shared/nzf-vocabulary.ts)
+        // rather than a live Sporty call: production holds no SPORTY_*
+        // credentials, and a form whose dropdowns depend on them would render
+        // empty on prod — breaking the paying checkout to satisfy a compliance
+        // field. Regenerate with script/build-nzf-vocabulary.ts.
+        nzf: {
+          countries: NZF_COUNTRIES,
+          ethnicityGroups: NZF_ETHNICITY_GROUPS,
+          regions: NZ_REGIONS,
+        },
+        // Retained for older clients still reading `ethnicities`; the new form
+        // uses `nzf.ethnicityGroups`.
         ethnicities: NZF_ETHNICITY_OPTIONS,
       });
     } catch (e: any) {
@@ -2631,6 +2652,30 @@ export async function registerRoutes(
       const consents = body.consents ?? {};
       const plan: "term" | "year" = body.paymentPlan;
       const email = String(guardianIn.email).trim().toLowerCase();
+
+      // Re-resolve the NZF identity and address server-side. validateAcademy-
+      // Registration has already proved these are valid; this turns the codes
+      // and ids into the names we store alongside them. Never trust the display
+      // names the client sent — a caller could pair code "NZL" with the name
+      // "Australia" and we would file a child's country of birth as a lie.
+      const identity = validateNzfIdentity({
+        countryOfBirthCode: child.countryOfBirthCode,
+        nationalityCode: child.nationalityCode,
+        ethnicityGroupId: child.ethnicityGroupId,
+        ethnicitySelectionIds: child.ethnicitySelectionIds,
+        ethnicity2GroupId: child.ethnicity2GroupId,
+        ethnicity2SelectionIds: child.ethnicity2SelectionIds,
+      });
+      const address = validateNzfAddress(body.guardian?.addressParts ?? {});
+      if (!identity.ok || !address.ok) {
+        // Unreachable — the validator above ran on the same input. Guard anyway:
+        // silently storing a half-resolved identity is the failure mode this
+        // whole change exists to remove.
+        const errs = [...(identity.ok ? [] : identity.errors), ...(address.ok ? [] : address.errors)];
+        return res.status(400).json({ message: errs[0], errors: errs });
+      }
+      const nzf = identity.value;
+      const addr = address.value;
 
       // ── 2. Programme, and the gate that stops a priceless charge ────────────
       const program: any = await storage.getProgramBySlug(String(body.programSlug));
@@ -2732,14 +2777,33 @@ export async function registerRoutes(
           email,
           phone: String(guardianIn.phone).trim(),
           alternatePhone: guardianIn.alternatePhone ? String(guardianIn.alternatePhone).trim() : null,
-          address: guardianIn.address ? String(guardianIn.address).trim() : null,
+          // Legacy one-line column stays populated so every existing screen and
+          // export keeps rendering an address; the parts are what NZF needs.
+          address: addr.oneLine,
+          addressStreet: addr.street,
+          addressSuburb: addr.suburb,
+          addressCity: addr.city,
+          addressRegion: addr.region,
+          addressPostcode: addr.postcode,
+          addressCountry: addr.countryCode,
           newsletterConsent: consents.newsletter === true,
         } as any);
       } else {
-        const enrich: any = {};
+        // A returning family has just re-typed their address into a form that
+        // finally captures all six parts. Take it — an existing one-line
+        // address is exactly the unusable shape we are replacing. Structured
+        // parts always win; the legacy line is only filled if it was empty.
+        const enrich: any = {
+          addressStreet: addr.street,
+          addressSuburb: addr.suburb,
+          addressCity: addr.city,
+          addressRegion: addr.region,
+          addressPostcode: addr.postcode,
+          addressCountry: addr.countryCode,
+        };
         if (!guardian.phone && guardianIn.phone) enrich.phone = String(guardianIn.phone).trim();
-        if (!guardian.address && guardianIn.address) enrich.address = String(guardianIn.address).trim();
-        if (Object.keys(enrich).length > 0) await storage.updateContact(guardian.id, enrich);
+        if (!guardian.address) enrich.address = addr.oneLine;
+        await storage.updateContact(guardian.id, enrich);
       }
 
       // ── 7. Child: one contact per real child, not one per term. ─────────────
@@ -2765,12 +2829,32 @@ export async function registerRoutes(
       const childFields = {
         gender: child.gender ?? null,
         school: child.school ? String(child.school).trim() : null,
-        countryOfBirth: String(child.countryOfBirth).trim(),
-        nationality: String(child.nationality).trim(),
-        ethnicity: String(child.ethnicity).trim(),
-        subEthnicity: child.subEthnicity ? String(child.subEthnicity).trim() : null,
-        ethnicity2: child.ethnicity2 ? String(child.ethnicity2).trim() : null,
-        subEthnicity2: child.subEthnicity2 ? String(child.subEthnicity2).trim() : null,
+        // Names AND codes, both resolved server-side from NZF's vocabulary.
+        // The names keep every existing read path working; the codes are what
+        // the registration push actually sends.
+        countryOfBirth: nzf.countryOfBirth,
+        countryOfBirthCode: nzf.countryOfBirthCode,
+        nationality: nzf.nationality,
+        nationalityCode: nzf.nationalityCode,
+        ethnicity: nzf.ethnicity,
+        ethnicityGroupId: nzf.ethnicityGroupId,
+        ethnicitySelectionIds: nzf.ethnicitySelectionIds,
+        subEthnicity: nzf.subEthnicity,
+        ethnicity2: nzf.ethnicity2,
+        ethnicity2GroupId: nzf.ethnicity2GroupId,
+        ethnicity2SelectionIds: nzf.ethnicity2SelectionIds,
+        subEthnicity2: nzf.subEthnicity2,
+        identityCapturedAt: new Date(),
+        identityCapturedSource: "form",
+        // The child lives at the guardian's address. Sporty needs it on the
+        // player's own registration, not on a related contact.
+        address: addr.oneLine,
+        addressStreet: addr.street,
+        addressSuburb: addr.suburb,
+        addressCity: addr.city,
+        addressRegion: addr.region,
+        addressPostcode: addr.postcode,
+        addressCountry: addr.countryCode,
         medicalNotes: child.medicalNotes ? String(child.medicalNotes).trim() : null,
         allergies: child.allergies ? String(child.allergies).trim() : null,
         emergencyContact: String(emergency.name).trim(),
@@ -4513,10 +4597,40 @@ export async function registerRoutes(
         };
         setIf("gender", optional(playerIn.gender));
         setIf("school", optional(playerIn.school));
-        setIf("countryOfBirth", optional(playerIn.countryOfBirth));
-        setIf("nationality", optional(playerIn.nationality));
-        setIf("ethnicity", optional(playerIn.ethnicity));
-        setIf("subEthnicity", optional(playerIn.subEthnicity));
+        // NZF identity, structured. Optional at the counter — a queue is not a
+        // reason to invent a child's ethnicity — but anything staff DO enter is
+        // validated against NZ Football's own vocabulary, so a walk-up
+        // registration is exactly as registerable as an online one.
+        const anyIdentity =
+          playerIn.countryOfBirthCode || playerIn.nationalityCode || playerIn.ethnicityGroupId != null;
+        if (anyIdentity) {
+          const parsed = validateNzfIdentity({
+            countryOfBirthCode: playerIn.countryOfBirthCode,
+            nationalityCode: playerIn.nationalityCode,
+            ethnicityGroupId: playerIn.ethnicityGroupId,
+            ethnicitySelectionIds: playerIn.ethnicitySelectionIds,
+            ethnicity2GroupId: playerIn.ethnicity2GroupId,
+            ethnicity2SelectionIds: playerIn.ethnicity2SelectionIds,
+          });
+          if (!parsed.ok) {
+            return res.status(400).json({ message: parsed.errors[0], errors: parsed.errors });
+          }
+          const v = parsed.value;
+          playerFields.countryOfBirth = v.countryOfBirth;
+          playerFields.countryOfBirthCode = v.countryOfBirthCode;
+          playerFields.nationality = v.nationality;
+          playerFields.nationalityCode = v.nationalityCode;
+          playerFields.ethnicity = v.ethnicity;
+          playerFields.ethnicityGroupId = v.ethnicityGroupId;
+          playerFields.ethnicitySelectionIds = v.ethnicitySelectionIds;
+          playerFields.subEthnicity = v.subEthnicity;
+          playerFields.ethnicity2 = v.ethnicity2;
+          playerFields.ethnicity2GroupId = v.ethnicity2GroupId;
+          playerFields.ethnicity2SelectionIds = v.ethnicity2SelectionIds;
+          playerFields.subEthnicity2 = v.subEthnicity2;
+          playerFields.identityCapturedAt = new Date();
+          playerFields.identityCapturedSource = "staff";
+        }
         setIf("medicalNotes", optional(playerIn.medicalNotes));
         setIf("allergies", optional(playerIn.allergies));
         setIf("emergencyContact", optional(emergency.name));
@@ -4587,9 +4701,14 @@ export async function registerRoutes(
         // NZ Football needs these for the annual audit. We do not block a
         // counter payment on them, but we do say plainly what's still missing
         // rather than let the gap pass silently.
-        const nzfMissing = ["countryOfBirth", "nationality", "ethnicity", "gender"].filter(
-          (f) => !(player as any)[f],
-        );
+        const gap = nzfIdentityGap(player as any);
+        const nzfMissing = [
+          ...(gap.countryOfBirth ? ["countryOfBirth"] : []),
+          ...(gap.nationality ? ["nationality"] : []),
+          ...(gap.ethnicity ? ["ethnicity"] : []),
+          ...(gap.address ? ["address"] : []),
+          ...((player as any).gender ? [] : ["gender"]),
+        ];
 
         return res.json({
           registrationId: reg.id,

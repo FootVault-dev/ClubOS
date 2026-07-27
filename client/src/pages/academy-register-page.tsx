@@ -23,6 +23,16 @@ import {
 import { checkEligibility, GENDERS, type Gender, type AcademyPaymentPlan } from "@shared/academy";
 import { initPixel, trackEvent } from "@/lib/meta-pixel";
 import { purchaseEventId } from "@shared/meta-events";
+import {
+  NzfIdentityFields,
+  NzfAddressFields,
+  EMPTY_NZF_IDENTITY,
+  EMPTY_NZF_ADDRESS,
+  type NzfIdentityValue,
+  type NzfAddressValue,
+  type NzfCountryOption,
+  type NzfGroupOption,
+} from "@/components/nzf-identity-fields";
 
 // Only initialise Stripe if the publishable key was actually baked into the
 // build — otherwise render a clear message instead of a silently blank
@@ -121,7 +131,13 @@ interface ProgrammeResponse {
   quotes: Quote[];
   term: TermInfo | null;
   policyVersion: string;
-  ethnicities: string[];
+  nzf?: {
+    countries: NzfCountryOption[];
+    ethnicityGroups: NzfGroupOption[];
+    regions: string[];
+  };
+  /** Legacy free-text ethnicity list — superseded by `nzf`. */
+  ethnicities?: string[];
 }
 
 interface RegisterResponse {
@@ -142,12 +158,6 @@ interface ChildForm {
   dateOfBirth: string;
   gender: Gender | "";
   school: string;
-  countryOfBirth: string;
-  nationality: string;
-  ethnicity: string;
-  subEthnicity: string;
-  ethnicity2: string;
-  subEthnicity2: string;
   medicalNotes: string;
   allergies: string;
 }
@@ -159,7 +169,6 @@ interface GuardianForm {
   phone: string;
   alternatePhone: string;
   relationship: string;
-  address: string;
 }
 
 interface EmergencyForm {
@@ -176,11 +185,10 @@ interface ConsentsForm {
 
 const EMPTY_CHILD: ChildForm = {
   firstName: "", lastName: "", dateOfBirth: "", gender: "", school: "",
-  countryOfBirth: "", nationality: "", ethnicity: "", subEthnicity: "",
-  ethnicity2: "", subEthnicity2: "", medicalNotes: "", allergies: "",
+  medicalNotes: "", allergies: "",
 };
 const EMPTY_GUARDIAN: GuardianForm = {
-  firstName: "", lastName: "", email: "", phone: "", alternatePhone: "", relationship: "", address: "",
+  firstName: "", lastName: "", email: "", phone: "", alternatePhone: "", relationship: "",
 };
 const EMPTY_EMERGENCY: EmergencyForm = { name: "", phone: "" };
 const EMPTY_CONSENTS: ConsentsForm = { policy: false, medical: false, photo: false, newsletter: false };
@@ -192,6 +200,20 @@ const GENDER_LABELS: Record<Gender, string> = { male: "Male", female: "Female", 
 const fieldCls =
   "cufc-ar-field w-full rounded-xl px-4 py-3 text-[15px] outline-none transition-colors disabled:opacity-50";
 const fieldStyle: React.CSSProperties = { background: BRAND.ink, border: `1px solid ${BRAND.line}`, color: BRAND.white };
+
+// One theme object so the NZF pickers render identically to the native fields
+// around them — they are custom controls, not <select>s, because 247 countries
+// and 134 iwi in a native picker is unusable on a phone.
+const FIELD_THEME = {
+  gold: BRAND.gold,
+  goldBright: BRAND.goldBright,
+  line: BRAND.line,
+  mute: BRAND.mute,
+  fieldCls,
+  fieldStyle,
+  labelCls: "block text-[11px] font-bold uppercase tracking-[0.14em] mb-1.5",
+  labelStyle: { color: BRAND.mute },
+};
 
 function Label({ children, required }: { children: React.ReactNode; required?: boolean }) {
   return (
@@ -495,7 +517,11 @@ export default function AcademyRegisterPage() {
   const [programme, setProgramme] = useState<Programme | null>(null);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [term, setTerm] = useState<TermInfo | null>(null);
-  const [ethnicities, setEthnicities] = useState<string[]>([]);
+  const [nzfCountries, setNzfCountries] = useState<NzfCountryOption[]>([]);
+  const [nzfGroups, setNzfGroups] = useState<NzfGroupOption[]>([]);
+  const [nzfRegions, setNzfRegions] = useState<string[]>([]);
+  const [identity, setIdentity] = useState<NzfIdentityValue>(EMPTY_NZF_IDENTITY);
+  const [address, setAddress] = useState<NzfAddressValue>(EMPTY_NZF_ADDRESS);
   // Promo code. The client only ever holds the STRING — every amount comes back
   // from the server, which re-derives it from scratch when it charges the card.
   const [discountCode, setDiscountCode] = useState("");
@@ -508,7 +534,6 @@ export default function AcademyRegisterPage() {
   const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null);
   const [plan, setPlan] = useState<AcademyPaymentPlan>("term");
   const [child, setChild] = useState<ChildForm>(EMPTY_CHILD);
-  const [showSecondEthnicity, setShowSecondEthnicity] = useState(false);
   const [guardian, setGuardian] = useState<GuardianForm>(EMPTY_GUARDIAN);
   const [emergency, setEmergency] = useState<EmergencyForm>(EMPTY_EMERGENCY);
   const [consents, setConsents] = useState<ConsentsForm>(EMPTY_CONSENTS);
@@ -539,7 +564,9 @@ export default function AcademyRegisterPage() {
         setProgramme(body.programme);
         setQuotes(body.quotes || []);
         setTerm(body.term ?? null);
-        setEthnicities(body.ethnicities || []);
+        setNzfCountries(body.nzf?.countries || []);
+        setNzfGroups(body.nzf?.ethnicityGroups || []);
+        setNzfRegions(body.nzf?.regions || []);
         if (body.programme.options.length === 1) setSelectedOptionId(body.programme.options[0].id);
         document.title = `Register — ${body.programme.name} | Christchurch United FC`;
 
@@ -598,22 +625,47 @@ export default function AcademyRegisterPage() {
     : null;
 
   const chooseValid = !!selectedOption && !!selectedQuote;
+
+  // Client-side readiness only — it decides whether the "Continue" button is
+  // live. The server re-validates every one of these against NZ Football's
+  // vocabulary and is the authority; this just avoids sending a form we can
+  // already see is incomplete. Mirrors shared/nzf-identity.ts.
+  const ethnicityChoiceValid = (groupId: number | null, ids: number[]): boolean => {
+    if (groupId === null) return false;
+    const g = nzfGroups.find((x) => x.id === groupId);
+    if (!g) return false;
+    if (g.maxSelections === 0) return ids.length === 0;
+    return ids.length >= g.minSelections && ids.length <= g.maxSelections;
+  };
+  const identityValid =
+    !!identity.countryOfBirthCode &&
+    !!identity.nationalityCode &&
+    ethnicityChoiceValid(identity.ethnicityGroupId, identity.ethnicitySelectionIds) &&
+    // A second ethnicity is optional — but a half-filled one is not "absent".
+    (identity.ethnicity2GroupId === null
+      ? true
+      : ethnicityChoiceValid(identity.ethnicity2GroupId, identity.ethnicity2SelectionIds));
+  const addressValid =
+    address.street.trim() !== "" &&
+    address.suburb.trim() !== "" &&
+    address.city.trim() !== "" &&
+    address.region.trim() !== "" &&
+    address.postcode.trim() !== "" &&
+    address.country !== "";
   const playerValid =
     child.firstName.trim() !== "" &&
     child.lastName.trim() !== "" &&
     child.dateOfBirth !== "" &&
     (eligibility?.eligible ?? false) &&
     (GENDERS as readonly string[]).includes(child.gender) &&
-    child.countryOfBirth.trim() !== "" &&
-    child.nationality.trim() !== "" &&
-    ethnicities.includes(child.ethnicity) &&
-    (!child.ethnicity2 || ethnicities.includes(child.ethnicity2));
+    identityValid;
   const guardianValid =
     guardian.firstName.trim() !== "" &&
     guardian.lastName.trim() !== "" &&
     isEmail(guardian.email) &&
     isPhone(guardian.phone) &&
     guardian.relationship.trim() !== "" &&
+    addressValid &&
     emergency.name.trim() !== "" &&
     isPhone(emergency.phone);
   const consentsValid = consents.policy === true && consents.medical === true;
@@ -677,12 +729,15 @@ export default function AcademyRegisterPage() {
             dateOfBirth: child.dateOfBirth,
             gender: child.gender,
             school: child.school.trim() || undefined,
-            countryOfBirth: child.countryOfBirth.trim(),
-            nationality: child.nationality.trim(),
-            ethnicity: child.ethnicity,
-            subEthnicity: child.subEthnicity.trim() || undefined,
-            ethnicity2: child.ethnicity2 || undefined,
-            subEthnicity2: child.subEthnicity2.trim() || undefined,
+            // Codes and ids straight off NZ Football's list. The server
+            // re-resolves them to names — we deliberately do NOT send display
+            // names, so a mismatched pair can't be filed as fact.
+            countryOfBirthCode: identity.countryOfBirthCode,
+            nationalityCode: identity.nationalityCode,
+            ethnicityGroupId: identity.ethnicityGroupId,
+            ethnicitySelectionIds: identity.ethnicitySelectionIds,
+            ethnicity2GroupId: identity.ethnicity2GroupId ?? undefined,
+            ethnicity2SelectionIds: identity.ethnicity2GroupId ? identity.ethnicity2SelectionIds : undefined,
             medicalNotes: child.medicalNotes.trim() || undefined,
             allergies: child.allergies.trim() || undefined,
           },
@@ -693,7 +748,14 @@ export default function AcademyRegisterPage() {
             phone: guardian.phone.trim(),
             alternatePhone: guardian.alternatePhone.trim() || undefined,
             relationship: guardian.relationship.trim(),
-            address: guardian.address.trim() || undefined,
+            addressParts: {
+              street: address.street.trim(),
+              suburb: address.suburb.trim(),
+              city: address.city.trim(),
+              region: address.region.trim(),
+              postcode: address.postcode.trim(),
+              country: address.country,
+            },
           },
           emergency: { name: emergency.name.trim(), phone: emergency.phone.trim() },
           consents,
@@ -893,53 +955,13 @@ export default function AcademyRegisterPage() {
                     <TextInput value={child.school} onChange={(e) => setChild((c) => ({ ...c, school: e.target.value }))} data-testid="input-child-school" />
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <Label required>Country of birth</Label>
-                      <TextInput value={child.countryOfBirth} onChange={(e) => setChild((c) => ({ ...c, countryOfBirth: e.target.value }))} data-testid="input-child-country-of-birth" />
-                    </div>
-                    <div>
-                      <Label required>Nationality</Label>
-                      <TextInput value={child.nationality} onChange={(e) => setChild((c) => ({ ...c, nationality: e.target.value }))} data-testid="input-child-nationality" />
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl p-4 space-y-4" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${BRAND.line}` }}>
-                    <div className="flex items-start gap-2 text-[12px]" style={{ color: BRAND.mute }}>
-                      <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                      <span>Ethnicity is collected in the Stats NZ categories New Zealand Football uses for registration.</span>
-                    </div>
-                    <div>
-                      <Label required>Ethnic group</Label>
-                      <SelectInput value={child.ethnicity} onChange={(e) => setChild((c) => ({ ...c, ethnicity: e.target.value }))} data-testid="select-child-ethnicity">
-                        <option value="">Select…</option>
-                        {ethnicities.map((e) => <option key={e} value={e}>{e}</option>)}
-                      </SelectInput>
-                    </div>
-                    <div>
-                      <Label>Specific ethnic group / iwi (optional)</Label>
-                      <TextInput value={child.subEthnicity} onChange={(e) => setChild((c) => ({ ...c, subEthnicity: e.target.value }))} data-testid="input-child-sub-ethnicity" />
-                    </div>
-                    {!showSecondEthnicity ? (
-                      <button type="button" onClick={() => setShowSecondEthnicity(true)} className="text-[13px] font-semibold underline" style={{ color: BRAND.goldBright }}>
-                        + Add a second ethnicity
-                      </button>
-                    ) : (
-                      <div className="pt-1 space-y-4" style={{ borderTop: `1px solid ${BRAND.line}` }}>
-                        <div>
-                          <Label>Second ethnic group (optional)</Label>
-                          <SelectInput value={child.ethnicity2} onChange={(e) => setChild((c) => ({ ...c, ethnicity2: e.target.value }))} data-testid="select-child-ethnicity-2">
-                            <option value="">Select…</option>
-                            {ethnicities.map((e) => <option key={e} value={e}>{e}</option>)}
-                          </SelectInput>
-                        </div>
-                        <div>
-                          <Label>Specific ethnic group / iwi (optional)</Label>
-                          <TextInput value={child.subEthnicity2} onChange={(e) => setChild((c) => ({ ...c, subEthnicity2: e.target.value }))} data-testid="input-child-sub-ethnicity-2" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <NzfIdentityFields
+                    value={identity}
+                    onChange={setIdentity}
+                    countries={nzfCountries}
+                    groups={nzfGroups}
+                    theme={FIELD_THEME}
+                  />
 
                   <div>
                     <Label>Allergies (optional)</Label>
@@ -996,9 +1018,14 @@ export default function AcademyRegisterPage() {
                     <TextInput value={guardian.relationship} onChange={(e) => setGuardian((g) => ({ ...g, relationship: e.target.value }))} placeholder="e.g. Mother, Father, Guardian" data-testid="input-guardian-relationship" />
                   </div>
 
-                  <div>
-                    <Label>Address (optional)</Label>
-                    <TextInput value={guardian.address} onChange={(e) => setGuardian((g) => ({ ...g, address: e.target.value }))} data-testid="input-guardian-address" />
+                  <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${BRAND.line}` }}>
+                    <NzfAddressFields
+                      value={address}
+                      onChange={setAddress}
+                      countries={nzfCountries}
+                      regions={nzfRegions}
+                      theme={FIELD_THEME}
+                    />
                   </div>
 
                   <div className="rounded-xl p-4 space-y-4" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${BRAND.line}` }}>
