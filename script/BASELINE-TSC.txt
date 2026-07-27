@@ -16,7 +16,7 @@ server/feedback-routes.ts 2
 server/fm-competitions-routes.ts 1
 server/fm-history-routes.ts 1
 server/index.ts 1
-server/routes.ts 274
+server/routes.ts 279
 server/split-pay.ts 3
 server/storage.ts 93
 server/stripe.ts 1
@@ -24,4 +24,4 @@ server/tournament-brackets.ts 2
 server/tournament-schedule.ts 2
 shared/attribution-models.ts 5
 shared/meta-insights.ts 1
-shared/schema.ts 175
+shared/schema.ts 176
