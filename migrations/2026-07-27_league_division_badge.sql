@@ -1,0 +1,26 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- LEAGUE DIVISIONS — optional marketing badge on the public night card.
+--
+-- MFL Term 4 opened two nights that have no proven demand: Tuesday 7's, which
+-- finished Term 3 with zero teams after multiple terms of trying, and the
+-- brand-new Thursday cage. Both were dropped to $400 to pull teams in, but a
+-- cheaper number sitting quietly in a list of six nights does not announce
+-- itself — the discount needed to be *visible* on the card.
+--
+-- This column is that ribbon. It is free text rather than a boolean or an enum
+-- because the wording is a marketing decision that will change from term to
+-- term ("New league discount" now, "Last spots" or "New night" later), and the
+-- whole point is that Isaac can change it in the league admin without waiting
+-- on a deploy — the same reasoning as hiring_jobs.questions being jsonb.
+--
+--   NULL  no badge. This is what every existing division means, which is why
+--         the column is nullable with no default and no backfill: applying
+--         this migration must not put a ribbon on a single existing night.
+--
+-- The "Sold out" ribbon still takes precedence in the UI. A full night must
+-- never advertise a discount it cannot honour.
+--
+-- Additive and idempotent. Safe to run against prod while it is serving.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE league_divisions ADD COLUMN IF NOT EXISTS badge_text text;

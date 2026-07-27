@@ -37,6 +37,12 @@ export const userOrganizations = pgTable("user_organizations", {
   // [] = no tabs (effectively no access in workspace).
   // ["calendar", "projects"] = whitelist of tab slugs (see shared/tabs.ts).
   tabs: jsonb("tabs").$type<string[] | null>(),
+  // Hiring tab brand whitelist. The Hiring tab is one tab for every brand, so
+  // holding it used to mean seeing every brand's applicants. null = all brands
+  // (what every membership predating this column means — never narrow silently);
+  // ["mfl","cic"] = only those; [] = none, so the tab opens empty rather than
+  // full. Enforced server-side in server/hiring-routes.ts, not in the client.
+  hiringBrands: jsonb("hiring_brands").$type<string[] | null>(),
 });
 
 export const users = pgTable("users", {
@@ -1059,6 +1065,12 @@ export const leagueDivisions = pgTable("league_divisions", {
   teamCostCents: integer("team_cost_cents").default(0),
   playerCostCents: integer("player_cost_cents").default(0),
   sortOrder: integer("sort_order").default(0),
+  // Optional marketing ribbon on the public night card ("New league discount").
+  // Free text set per division in the league admin, so drawing attention to a
+  // night needs a row edit, never a deploy. NULL = no badge (the default, and
+  // what every existing division means). The "Sold out" ribbon still wins:
+  // a full night must never advertise a discount it cannot honour.
+  badgeText: text("badge_text"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

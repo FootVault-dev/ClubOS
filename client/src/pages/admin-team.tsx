@@ -11,7 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { tabsForOrgSlug, type TabDef } from "@shared/tabs";
 
-interface Membership { orgId: number; orgName: string; orgSlug: string; role: string; tabs: string[] | null; }
+// hiringBrands: null = every brand (the default, and what every membership
+// predating brand scoping means). [] = none. See the Hiring tab's brand scope
+// below and server/hiring-routes.ts, which is where it is actually enforced.
+interface Membership { orgId: number; orgName: string; orgSlug: string; role: string; tabs: string[] | null; hiringBrands: string[] | null; }
 interface TeamMember {
   id: number;
   email: string;
@@ -310,11 +313,107 @@ function AddMemberModal({
   );
 }
 
+/**
+ * Which brands' jobs and applicants this person sees inside the Hiring tab.
+ *
+ * The Hiring tab is one tab for every brand, so holding it used to mean seeing
+ * every brand's applicants — CVs, phone numbers and pay conversations included.
+ * This narrows it. `null` is "all brands", which is what every membership meant
+ * before this existed, so it stays the default and is never set implicitly.
+ */
+export function HiringBrandScope({ brands, value, onChange }: {
+  brands: string[];
+  value: string[] | null;
+  onChange: (next: string[] | null) => void;
+}) {
+  const [adding, setAdding] = useState("");
+  const scoped = value !== null;
+  const selected = value ?? [];
+  // A brand already granted but with no postings yet (CIC before its first job)
+  // must still show as ticked, so union the two rather than trusting the list.
+  const options = Array.from(new Set([...brands, ...selected])).sort();
+
+  const toggle = (b: string) =>
+    onChange(selected.includes(b) ? selected.filter(x => x !== b) : [...selected, b]);
+
+  const addTyped = () => {
+    const key = adding.trim().toLowerCase();
+    if (!key) return;
+    if (!selected.includes(key)) onChange([...selected, key]);
+    setAdding("");
+  };
+
+  return (
+    <div className="rounded-md bg-black/20 border border-white/[0.06] p-2.5">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[10px] uppercase tracking-wider font-semibold text-white/50">Hiring — which brands</p>
+        <button
+          type="button"
+          onClick={() => onChange(scoped ? null : [])}
+          className="text-[10px] text-blue-400 hover:text-blue-300"
+        >
+          {scoped ? "Allow all brands" : "Limit to certain brands"}
+        </button>
+      </div>
+
+      {!scoped ? (
+        <p className="text-[11px] text-white/50">
+          Sees <strong className="text-white/70">every brand's</strong> jobs and applicants.
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {options.map(b => {
+              const on = selected.includes(b);
+              return (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => toggle(b)}
+                  className={`px-2 py-1 rounded text-[11px] transition ${
+                    on ? "bg-blue-500/15 border border-blue-500/40 text-white" : "border border-white/10 text-white/45 hover:text-white/70"
+                  }`}
+                >
+                  {b}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input
+              value={adding}
+              onChange={e => setAdding(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTyped(); } }}
+              placeholder="add a brand key, e.g. cic"
+              className="flex-1 bg-white/[0.03] border border-white/10 rounded px-2 py-1 text-[11px] text-white/80 placeholder:text-white/25 focus:outline-none focus:border-blue-500/50"
+            />
+            <button type="button" onClick={addTyped} className="text-[10px] text-blue-400 hover:text-blue-300 px-1.5">Add</button>
+          </div>
+          {selected.length === 0 && (
+            <p className="text-[11px] text-amber-300/80 mt-2">
+              No brands ticked — the Hiring tab will open empty for them.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ManageMembershipsModal({
   open, onClose, member, organizations,
 }: { open: boolean; onClose: () => void; member: TeamMember | null; organizations: Org[] }) {
   const { toast } = useToast();
   const memberId = member?.id;
+
+  // The brand keys that real postings actually carry, rather than a hardcoded
+  // list that could drift from them. A brand with no jobs yet (CIC, at the time
+  // of writing) is added by typing it — see HiringBrandScope.
+  const { data: brandsData } = useQuery<{ brands: string[] }>({
+    queryKey: ["/api/admin/hiring/brands"],
+    enabled: open,
+  });
+  const knownBrands = brandsData?.brands ?? [];
 
   const addMembership = useMutation({
     mutationFn: async ({ orgId, role, tabs }: { orgId: number; role: string; tabs: string[] | null }) => {
@@ -329,10 +428,11 @@ function ManageMembershipsModal({
   });
 
   const updateMembership = useMutation({
-    mutationFn: async ({ orgId, role, tabs }: { orgId: number; role?: string; tabs?: string[] | null }) => {
+    mutationFn: async ({ orgId, role, tabs, hiringBrands }: { orgId: number; role?: string; tabs?: string[] | null; hiringBrands?: string[] | null }) => {
       const body: any = {};
       if (role !== undefined) body.role = role;
       if (tabs !== undefined) body.tabs = tabs;
+      if (hiringBrands !== undefined) body.hiringBrands = hiringBrands;
       const res = await apiRequest("PATCH", `/api/admin/team/${memberId}/memberships/${orgId}`, body);
       return res.json();
     },
@@ -422,6 +522,12 @@ function ManageMembershipsModal({
                   const fullAccessRole = m.role === "admin" || m.role === "manager";
                   const currentTabs: string[] = m.tabs ?? [];
                   const isLegacy = m.tabs === null && !fullAccessRole;
+                  // Only worth showing where the Hiring tab is reachable at all:
+                  // via the whitelist, or via a role/legacy state that grants
+                  // every tab in this workspace.
+                  const hasHiring =
+                    allTabs.some((t: TabDef) => t.slug === "hiring") &&
+                    (fullAccessRole || isLegacy || currentTabs.includes("hiring"));
                   return (
                     <div key={m.orgId} className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-2">
                       <div className="flex items-center gap-3">
@@ -513,6 +619,13 @@ function ManageMembershipsModal({
                           </div>
                         )}
                       </div>
+                      {hasHiring && (
+                        <HiringBrandScope
+                          brands={knownBrands}
+                          value={m.hiringBrands}
+                          onChange={(next) => updateMembership.mutate({ orgId: m.orgId, hiringBrands: next })}
+                        />
+                      )}
                     </div>
                   );
                 })}
