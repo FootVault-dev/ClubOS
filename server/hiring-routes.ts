@@ -6,7 +6,10 @@
 //   GET  /api/public/hiring/:brand/jobs/:slug       — one posting + its questions
 //   POST /api/public/hiring/:brand/jobs/:slug/apply — apply (JSON or multipart)
 //
-// Admin (session + the "hiring" tab, org-scoped to the managing workspace):
+// Admin (session + the "hiring" tab, then scoped BY BRAND — see allowedBrands
+// below and hiringBrandFilter in shared/hiring.ts. Not by owning org: every
+// posting is owned by the group org, so the Mini Football workspace's tab would
+// render permanently empty if it filtered on its own org):
 //   GET|POST                 /api/admin/hiring/jobs
 //   PATCH|DELETE             /api/admin/hiring/jobs/:id
 //   GET                      /api/admin/hiring/applications?jobId=
@@ -37,6 +40,8 @@ import {
   needsGuardianConsent,
   sanitiseAnswers,
   validateAnswers,
+  hiringBrandFilter,
+  HIRING_WORKSPACE_BRAND,
   type HiringQuestion,
 } from "@shared/hiring";
 import { sendHiringApplicationNotification } from "./email";
@@ -164,17 +169,25 @@ async function allowedBrands(req: Request): Promise<string[] | null> {
   if (!userId) return [];
   const user = await storage.getUser(userId);
   if (!user) return [];
-  if (user.role === "super_admin") return null;
 
   const slug = String(req.headers["x-workspace-slug"] || "").trim();
   if (!slug) return [];
-  const memberships = await storage.getUserOrganizations(userId);
-  const membership = memberships.find((m) => m.slug === slug);
-  if (!membership) return [];
 
-  const scope = membership.userHiringBrands;
-  if (scope == null) return null;
-  return scope.map((b) => String(b).trim().toLowerCase()).filter(Boolean);
+  const isSuperAdmin = user.role === "super_admin";
+  let memberBrands: string[] | null = null;
+  if (!isSuperAdmin) {
+    const memberships = await storage.getUserOrganizations(userId);
+    const membership = memberships.find((m) => m.slug === slug);
+    if (!membership) return [];
+    memberBrands =
+      membership.userHiringBrands == null
+        ? null
+        : membership.userHiringBrands.map((b) => String(b).trim().toLowerCase()).filter(Boolean);
+  }
+
+  // The workspace has the final say on width — a brand workspace never widens,
+  // not even for a super admin. See shared/hiring.ts.
+  return hiringBrandFilter(slug, memberBrands, isSuperAdmin);
 }
 
 /** Is `brand` inside this scope? `null` scope = every brand. */
@@ -187,12 +200,12 @@ const brandAllowed = (scope: string[] | null, brand: string | null | undefined):
  * treat both the same way, so a stranger's application id and an out-of-scope
  * one are indistinguishable from outside.
  */
-async function applicationBrand(id: number, orgId: number): Promise<string | null> {
+async function applicationBrand(id: number): Promise<string | null> {
   const [row] = await db
     .select({ brand: hiringJobs.brand })
     .from(hiringApplications)
     .innerJoin(hiringJobs, eq(hiringApplications.jobId, hiringJobs.id))
-    .where(and(eq(hiringApplications.id, id), eq(hiringApplications.organizationId, orgId)));
+    .where(eq(hiringApplications.id, id));
   return row?.brand ?? null;
 }
 
@@ -415,10 +428,10 @@ export function registerHiringRoutes(app: Express) {
       // empty list is not valid SQL. Answer it here rather than build a query.
       if (brands && brands.length === 0) return res.json({ jobs: [], allowedBrands: brands });
 
-      const jobs = await db.select().from(hiringJobs)
-        .where(brands
-          ? and(eq(hiringJobs.organizationId, org.id), inArray(hiringJobs.brand, brands))
-          : eq(hiringJobs.organizationId, org.id))
+      // Scoped by BRAND, not by owning org. MFL's postings are owned by the
+      // group org, so an org filter would leave the MFL workspace's tab empty.
+      const base = db.select().from(hiringJobs);
+      const jobs = await (brands ? base.where(inArray(hiringJobs.brand, brands)) : base)
         .orderBy(desc(hiringJobs.createdAt));
 
       // Application counts per job, in one query rather than N.
@@ -468,7 +481,10 @@ export function registerHiringRoutes(app: Express) {
       const org = await workspaceOrg(req);
       if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
       const title = s(req.body?.title, 160);
-      const brand = s(req.body?.brand, 40).toLowerCase();
+      // In a brand workspace the brand is the workspace's, not the caller's
+      // choice — posting an MFL job from the MFL tab cannot land under another
+      // brand no matter what the body says.
+      const brand = HIRING_WORKSPACE_BRAND[org.slug] ?? s(req.body?.brand, 40).toLowerCase();
       const slug = s(req.body?.slug, 120).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
       if (!title) return res.status(400).json({ message: "A job title is required" });
       if (!brand) return res.status(400).json({ message: "A brand is required" });
@@ -509,16 +525,13 @@ export function registerHiringRoutes(app: Express) {
       const id = parseInt(String(req.params.id), 10);
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
 
-      // Out-of-scope reads as "not found", the same as another workspace's job:
-      // a 403 would confirm the posting exists. `brand` is not patchable, so
-      // checking the stored row is the whole check.
+      // Out-of-scope reads as "not found": a 403 would confirm the posting
+      // exists. `brand` is not patchable, so the stored row is the whole check.
       const brands = await allowedBrands(req);
-      if (brands) {
-        const [existing] = await db.select({ brand: hiringJobs.brand }).from(hiringJobs)
-          .where(and(eq(hiringJobs.id, id), eq(hiringJobs.organizationId, org.id)));
-        if (!existing || !brandAllowed(brands, existing.brand)) {
-          return res.status(404).json({ message: "Job not found" });
-        }
+      const [existing] = await db.select({ brand: hiringJobs.brand }).from(hiringJobs)
+        .where(eq(hiringJobs.id, id));
+      if (!existing || !brandAllowed(brands, existing.brand)) {
+        return res.status(404).json({ message: "Job not found" });
       }
 
       const patch: Record<string, any> = { updatedAt: new Date() };
@@ -545,7 +558,7 @@ export function registerHiringRoutes(app: Express) {
       if (Array.isArray(req.body.questions)) patch.questions = req.body.questions.slice(0, HIRING_LIMITS.maxQuestions);
 
       const [updated] = await db.update(hiringJobs).set(patch)
-        .where(and(eq(hiringJobs.id, id), eq(hiringJobs.organizationId, org.id)))
+        .where(eq(hiringJobs.id, id))
         .returning();
       if (!updated) return res.status(404).json({ message: "Job not found" });
       res.json(updated);
@@ -562,12 +575,10 @@ export function registerHiringRoutes(app: Express) {
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
 
       const brands = await allowedBrands(req);
-      if (brands) {
-        const [existing] = await db.select({ brand: hiringJobs.brand }).from(hiringJobs)
-          .where(and(eq(hiringJobs.id, id), eq(hiringJobs.organizationId, org.id)));
-        if (!existing || !brandAllowed(brands, existing.brand)) {
-          return res.status(404).json({ message: "Job not found" });
-        }
+      const [existing] = await db.select({ brand: hiringJobs.brand }).from(hiringJobs)
+        .where(eq(hiringJobs.id, id));
+      if (!existing || !brandAllowed(brands, existing.brand)) {
+        return res.status(404).json({ message: "Job not found" });
       }
 
       // Deleting a job cascades its applications. Refuse if anyone applied —
@@ -580,7 +591,7 @@ export function registerHiringRoutes(app: Express) {
       }
 
       const [deleted] = await db.delete(hiringJobs)
-        .where(and(eq(hiringJobs.id, id), eq(hiringJobs.organizationId, org.id))).returning();
+        .where(eq(hiringJobs.id, id)).returning();
       if (!deleted) return res.status(404).json({ message: "Job not found" });
       res.json({ ok: true });
     } catch (e: any) {
@@ -600,12 +611,13 @@ export function registerHiringRoutes(app: Express) {
       // The brand lives on the job, and the query already inner-joins to it, so
       // the scope filter costs nothing extra. Without it a scoped user could
       // read every applicant's name, email, phone and answers by simply asking
-      // for the unfiltered list — the job filter above is a convenience, not a
-      // boundary.
-      const clauses = [eq(hiringApplications.organizationId, org.id)];
+      // for the unfiltered list — the ?jobId filter is a convenience, not a
+      // boundary. Brand replaces the old owning-org filter entirely: MFL's
+      // applicants belong to jobs owned by the group org.
+      const clauses = [];
       if (Number.isFinite(jobId)) clauses.push(eq(hiringApplications.jobId, jobId));
       if (brands) clauses.push(inArray(hiringJobs.brand, brands));
-      const where = and(...clauses);
+      const where = clauses.length ? and(...clauses) : undefined;
 
       const rows = await db
         .select({
@@ -648,7 +660,7 @@ export function registerHiringRoutes(app: Express) {
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
 
       const brands = await allowedBrands(req);
-      if (brands && !brandAllowed(brands, await applicationBrand(id, org.id))) {
+      if (!brandAllowed(brands, await applicationBrand(id))) {
         return res.status(404).json({ message: "Application not found" });
       }
 
@@ -670,7 +682,7 @@ export function registerHiringRoutes(app: Express) {
       if (req.body.reviewerNotes !== undefined) patch.reviewerNotes = s(req.body.reviewerNotes, 4000) || null;
 
       const [updated] = await db.update(hiringApplications).set(patch)
-        .where(and(eq(hiringApplications.id, id), eq(hiringApplications.organizationId, org.id)))
+        .where(eq(hiringApplications.id, id))
         .returning();
       if (!updated) return res.status(404).json({ message: "Application not found" });
       const { auditionObjectPath, ...safe } = updated;
@@ -688,12 +700,12 @@ export function registerHiringRoutes(app: Express) {
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
 
       const brands = await allowedBrands(req);
-      if (brands && !brandAllowed(brands, await applicationBrand(id, org.id))) {
+      if (!brandAllowed(brands, await applicationBrand(id))) {
         return res.status(404).json({ message: "Application not found" });
       }
 
       const [deleted] = await db.delete(hiringApplications)
-        .where(and(eq(hiringApplications.id, id), eq(hiringApplications.organizationId, org.id))).returning();
+        .where(eq(hiringApplications.id, id)).returning();
       if (!deleted) return res.status(404).json({ message: "Application not found" });
       res.json({ ok: true });
     } catch (e: any) {
@@ -720,12 +732,12 @@ export function registerHiringRoutes(app: Express) {
       // out a link that works for an hour with no further auth, so a brand check
       // that ran late would be no check at all.
       const brands = await allowedBrands(req);
-      if (brands && !brandAllowed(brands, await applicationBrand(id, org.id))) {
+      if (!brandAllowed(brands, await applicationBrand(id))) {
         return res.status(404).json({ message: "Application not found" });
       }
 
       const [row] = await db.select().from(hiringApplications)
-        .where(and(eq(hiringApplications.id, id), eq(hiringApplications.organizationId, org.id)));
+        .where(eq(hiringApplications.id, id));
       if (!row) return res.status(404).json({ message: "Application not found" });
       if (!row.auditionObjectPath) return res.status(404).json({ message: "No audition file was uploaded" });
 

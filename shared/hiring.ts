@@ -14,6 +14,58 @@
 // English word, different shape — merging them would ruin both.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Which workspace sees which brand ─────────────────────────────────────────
+//
+// The Hiring tab appears in two kinds of workspace, and they mean different
+// things.
+//
+// United Sports Group is the GROUP workspace: its tab is the whole club's
+// hiring, every brand, and a member can be narrowed to a subset of brands
+// (user_organizations.hiring_brands).
+//
+// Mini Football Leagues is a BRAND workspace: its tab is a view onto that same
+// data narrowed to its own brand. Note what it deliberately does NOT do — filter
+// by the owning org. Every posting today is owned by the group org, so a tab
+// that filtered on the MFL org would render permanently empty. Brand is the
+// namespace; the owning org is just who manages the row.
+
+/** Workspace slug → the single brand its Hiring tab shows. */
+export const HIRING_WORKSPACE_BRAND: Record<string, string> = {
+  "mini-football-leagues": "mfl",
+};
+
+/** The workspace whose Hiring tab is the whole club's, across every brand. */
+export const HIRING_GROUP_WORKSPACE = "united-sports-group";
+
+/**
+ * The brands a caller may see in a given workspace. `null` means every brand.
+ *
+ * Three rules, in order:
+ *  1. A brand workspace never widens. Even a super admin sees only that brand
+ *     there, because that is what the workspace MEANS — they switch to the
+ *     group workspace to see everything. A member narrowed to brands that
+ *     don't include it sees nothing.
+ *  2. The group workspace shows everything, minus the member's own brand scope.
+ *  3. Anything else — a workspace that somehow has the tab but is neither the
+ *     group nor bound to a brand — sees NOTHING. Fail closed: the failure mode
+ *     of guessing here is showing one brand's applicants to another's staff.
+ */
+export function hiringBrandFilter(
+  workspaceSlug: string,
+  memberBrands: string[] | null,
+  isSuperAdmin: boolean,
+): string[] | null {
+  const workspaceBrand = HIRING_WORKSPACE_BRAND[workspaceSlug];
+  if (workspaceBrand) {
+    if (isSuperAdmin || memberBrands === null) return [workspaceBrand];
+    return memberBrands.includes(workspaceBrand) ? [workspaceBrand] : [];
+  }
+  if (workspaceSlug === HIRING_GROUP_WORKSPACE) {
+    return isSuperAdmin ? null : memberBrands;
+  }
+  return [];
+}
+
 /** Where an applicant is in the selection process. Ordered. */
 export const APPLICATION_STATUSES = [
   "new",

@@ -180,7 +180,11 @@ export function RegisterPlayerModal({
     programme ? (programme.type === "academy" ? "academy" : "camp") : null;
 
   const STEP_ONE = scope === "camp" ? "Camp" : "Programme";
-  const STEPS = shape === "academy"
+  // Before a programme is picked there is no shape yet, so fall back to what
+  // the page can possibly offer. Without this the Academy page showed a
+  // "Parent › Children › Sessions" rail — the camp journey — until you clicked.
+  const assumedShape = shape ?? (scope === "academy" ? "academy" : scope === "camp" ? "camp" : null);
+  const STEPS = assumedShape === "academy"
     ? [STEP_ONE, "Family", "Payment", "Confirm"]
     : [STEP_ONE, "Parent", "Children", "Sessions", "Payment", "Confirm"];
 
