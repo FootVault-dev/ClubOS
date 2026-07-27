@@ -73,6 +73,7 @@ import {
   POLICY_VERSION as ACADEMY_POLICY_VERSION,
   NZF_ETHNICITIES as NZF_ETHNICITY_OPTIONS,
 } from "@shared/academy";
+import { isOfficePaymentMethod } from "@shared/payments";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
 import { behaviorEventsToInsert } from "@shared/behavior";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
@@ -903,6 +904,35 @@ export async function registerRoutes(
     try {
       const allUsers = await storage.getAllUsers();
       res.json(allUsers.map(u => ({ id: u.id, email: u.email, firstName: u.firstName, lastName: u.lastName, role: u.role, active: u.active, createdAt: u.createdAt })));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Staff directory — names only, for "who served this customer" pickers.
+  //
+  // Deliberately NOT requireSuperAdmin like the routes around it: Travis, Olga
+  // and Zach are workspace admins, and they are the people standing at the
+  // counter taking the payment. Gating this behind super-admin would leave the
+  // served-by field unusable by everyone who actually needs it.
+  //
+  // Returns id and name and nothing else — no email, no role, no membership.
+  // It answers "who works here", which any signed-in staff member already knows.
+  //
+  // Not workspace-scoped, on purpose. Office cover crosses workspaces (Olga is
+  // a USG team member but works the CUFC counter), and a directory that omits
+  // the person who actually served the customer would force staff to record
+  // the wrong name — which is worse than no field at all.
+  app.get("/api/admin/staff-directory", requireAuth, async (_req, res) => {
+    try {
+      const all = await storage.getAllUsers();
+      const staff = all
+        .filter((u) => u.active)
+        .map((u) => ({ id: u.id, firstName: u.firstName, lastName: u.lastName }))
+        .sort((a, b) =>
+          `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`, "en-NZ"),
+        );
+      res.json(staff);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -3592,27 +3622,18 @@ export async function registerRoutes(
     try {
       const campId = req.query.campId ? parseInt(req.query.campId as string) : undefined;
       const org = await workspaceOrg(req);
-      let regs;
-      if (campId) {
-        regs = await storage.getRegistrationsByProgram(campId);
+
+      // One batched read instead of ~5 queries per row. The old per-row
+      // Promise.all fan-out exhausted the 15-connection pooler on CUFC's
+      // ~450 registrations and 500'd this page with EMAXCONNSESSION.
+      let regs = await storage.getRegistrationsForList({ programId: campId });
+
+      if (org) {
         // A camp filter from another workspace returns nothing rather than
         // leaking cross-club registrations.
-        if (org) {
-          const prog = await storage.getProgram(campId);
-          if (prog?.organizationId && prog.organizationId !== org.id) regs = [];
-        }
-      } else {
-        regs = await storage.getRegistrations();
-        if (org) regs = regs.filter((r: any) => r.program?.organizationId === org.id);
+        regs = regs.filter((r: any) => !r.program?.organizationId || r.program.organizationId === org.id);
       }
-      const enriched = await Promise.all(regs.map(async (r: any) => {
-        const items = await storage.getRegistrationItems(r.id);
-        const parentContact = await storage.getContact(r.contactId);
-        const kids = parentContact ? await storage.getChildren(parentContact.id) : [];
-        const program = r.program || await storage.getProgram(r.programId);
-        return { ...r, items, contact: r.contact || parentContact, children: kids, program };
-      }));
-      res.json(enriched);
+      res.json(regs);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -3625,7 +3646,14 @@ export async function registerRoutes(
       const items = await storage.getRegistrationItems(reg.id);
       const contact = await storage.getContact(reg.contactId);
       const program = await storage.getProgram(reg.programId);
-      res.json({ ...reg, items, contact, program });
+      const servedBy = reg.servedByUserId ? await storage.getUser(reg.servedByUserId) : null;
+      res.json({
+        ...reg,
+        items,
+        contact,
+        program,
+        servedByName: servedBy ? `${servedBy.firstName} ${servedBy.lastName}`.trim() : null,
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -3887,15 +3915,382 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/registrations/manual", requireAuth, async (req, res) => {
+  /**
+   * The price an office registration will actually be recorded at.
+   *
+   * Exists so the number on the counter screen and the number written to the
+   * database come out of the same function on the same day. Quoting in the
+   * browser would drift the moment a term rolled over a session boundary, and
+   * pro-rata changes week to week.
+   *
+   * Read-only: it creates nothing.
+   */
+  app.get("/api/admin/registrations/manual/quote", requireAuth, async (req, res) => {
     try {
-      const { campId, parent, children: childrenData, items, isPaid } = req.body;
-      if (!campId || !parent || !childrenData || !items) {
-        return res.status(400).json({ message: "campId, parent, children, and items are required" });
+      const programId = Number(req.query.programId);
+      if (!Number.isFinite(programId)) return res.status(400).json({ message: "programId is required" });
+
+      const program: any = await storage.getProgram(programId);
+      if (!program) return res.status(404).json({ message: "Programme not found" });
+      if (program.type !== "academy") {
+        return res.status(400).json({ message: "Only academy programmes are quoted this way." });
       }
 
-      const camp = await storage.getProgram(campId);
-      if (!camp) return res.status(404).json({ message: "Camp not found" });
+      const section: "core" | "additional" = program.academySection === "additional" ? "additional" : "core";
+      const options = await storage.getProgramOptions(program.id, { activeOnly: true });
+      const sellable = options.filter((o: any) => (o.fullPriceCents ?? 0) > 0);
+
+      const term = await academyTermFor(program);
+      const plan: "term" | "year" = req.query.plan === "year" ? "year" : "term";
+      const allowFullYear = academyFullYearAvailable(section, term?.termNumber ?? null);
+
+      const optionId = req.query.programOptionId ? Number(req.query.programOptionId) : null;
+      const option = optionId != null
+        ? sellable.find((o: any) => o.id === optionId)
+        : sellable.length === 1 ? sellable[0] : null;
+
+      const quote =
+        option && (plan === "term" || allowFullYear)
+          ? academyQuoteFor(program, term, section, option.fullPriceCents, plan)
+          : null;
+
+      res.json({
+        programme: {
+          id: program.id,
+          name: program.name,
+          section,
+          // Surfaced so the counter screen can say "invite-only — not open to
+          // the public" rather than silently selling something closed.
+          registrationOpen: !!program.registrationOpen,
+          seasonYear: program.seasonYear ?? Number(nzTodayIso().slice(0, 4)),
+          ageMin: program.ageMin,
+          ageMax: program.ageMax,
+        },
+        term: term ? { name: term.name, termNumber: term.termNumber, startDate: term.startDate, endDate: term.endDate } : null,
+        allowFullYear,
+        options: sellable.map((o: any) => ({ id: o.id, name: o.name, fullPriceCents: o.fullPriceCents, scheduleText: o.scheduleText })),
+        quote,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  /**
+   * Manually register a walk-up — the parent who registers at the office and
+   * pays EFTPOS or cash over the counter.
+   *
+   * Handles BOTH registration shapes, because ClubOS has two:
+   *   • holiday camp — the player is a `children` row hanging off per-day
+   *     `registration_items`, priced from `camp_pricing`;
+   *   • academy      — the player IS a `contacts` row, priced from an active
+   *     `program_options` row and pro-rated across the term.
+   *
+   * Until now this route only spoke camp, which is why all 13 manual
+   * registrations in the database are holiday camps and not one is an academy
+   * enrolment: every CUFC academy programme has zero `camp_pricing` rows, so
+   * the old path would have quoted $0.
+   *
+   * Money is always priced server-side from the database. The request may name
+   * a programme and an option; it may never name a price.
+   */
+  app.post("/api/admin/registrations/manual", requireAuth, async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      // `campId` is the original field name and is still sent by older callers.
+      const programId = Number(body.programId ?? body.campId);
+      if (!Number.isFinite(programId)) {
+        return res.status(400).json({ message: "Choose a programme." });
+      }
+
+      const program: any = await storage.getProgram(programId);
+      if (!program) return res.status(404).json({ message: "Programme not found" });
+
+      // ── How it was paid, and who took it ──────────────────────────────────
+      // Shared by both shapes. Validated here so neither branch can write a
+      // tender we don't recognise or credit a staff member who doesn't exist.
+      const payment = body.payment ?? {};
+      const isPaid = payment.isPaid ?? body.isPaid ?? false;
+
+      let paymentMethod: string | null = null;
+      if (isPaid) {
+        if (!isOfficePaymentMethod(payment.method)) {
+          return res.status(400).json({ message: "Record how they paid — EFTPOS, cash, bank transfer or other." });
+        }
+        paymentMethod = payment.method;
+      } else if (payment.method != null && payment.method !== "") {
+        // A tender on an unpaid registration would read as money we hold.
+        return res.status(400).json({ message: "A payment method can only be recorded on a registration marked as paid." });
+      }
+
+      // Who served them. Optional — but if named, it must be a real, active
+      // staff member, because this is the audit trail for cash handling.
+      let servedByUserId: number | null = null;
+      if (body.servedByUserId != null && body.servedByUserId !== "") {
+        const candidate = Number(body.servedByUserId);
+        const staff = Number.isFinite(candidate) ? await storage.getUser(candidate) : undefined;
+        if (!staff || !staff.active) {
+          return res.status(400).json({ message: "That staff member isn't recognised." });
+        }
+        servedByUserId = staff.id;
+      }
+
+      const paymentReference =
+        typeof payment.reference === "string" && payment.reference.trim()
+          ? payment.reference.trim().slice(0, 200)
+          : null;
+
+      /**
+       * What actually gets written about the money.
+       *
+       * `amountPaid` is a decimal string of DOLLARS on this table. The old
+       * manual path never set it at all, so every confirmed office
+       * registration read $0.00 — the club could not tell what it had taken.
+       *
+       * A short payment is allowed (part-payments happen at a counter) but it
+       * never confirms the registration: only paying the full amount does.
+       */
+      const paymentFieldsFor = (totalCents: number) => {
+        const requested = Number(payment.amountPaidCents);
+        const paidCents = isPaid
+          ? Number.isFinite(requested) && requested >= 0
+            ? Math.min(Math.round(requested), totalCents)
+            : totalCents
+          : 0;
+        const fullyPaid = isPaid && paidCents >= totalCents && totalCents > 0;
+        return {
+          fullyPaid,
+          fields: {
+            amountPaid: (paidCents / 100).toFixed(2),
+            paymentMethod,
+            paymentReference,
+            servedByUserId,
+            paidAt: isPaid ? new Date() : null,
+          },
+        };
+      };
+
+      // ── Academy shape ─────────────────────────────────────────────────────
+      if (program.type === "academy") {
+        const playerIn = body.player ?? {};
+        const guardianIn = body.guardian ?? {};
+        const emergency = body.emergency ?? {};
+
+        const guardianEmail = String(guardianIn.email ?? "").trim().toLowerCase();
+        const guardianPhone = String(guardianIn.phone ?? "").trim();
+        const playerFirst = String(playerIn.firstName ?? "").trim();
+        const playerLast = String(playerIn.lastName ?? "").trim();
+        const playerDob = String(playerIn.dateOfBirth ?? "").trim();
+
+        if (!String(guardianIn.firstName ?? "").trim() || !String(guardianIn.lastName ?? "").trim()) {
+          return res.status(400).json({ message: "Parent/guardian name is required." });
+        }
+        // Email is the key we de-duplicate guardians on. Without it every
+        // walk-up mints a second copy of a parent already in the database.
+        if (!guardianEmail || !guardianEmail.includes("@")) {
+          return res.status(400).json({ message: "A parent/guardian email is required — it's how we match them to an existing family." });
+        }
+        if (!guardianPhone) {
+          return res.status(400).json({ message: "A parent/guardian phone number is required." });
+        }
+        if (!playerFirst || !playerLast) {
+          return res.status(400).json({ message: "Player's first and last name are required." });
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(playerDob)) {
+          return res.status(400).json({ message: "Player's date of birth is required (YYYY-MM-DD) — it sets their age grade." });
+        }
+
+        const section: "core" | "additional" = program.academySection === "additional" ? "additional" : "core";
+
+        // The programme need NOT be `registrationOpen`. Pre-Academy and Academy
+        // are deliberately invite-only — a child is invited after an open
+        // training and the parent then pays at the office. That IS this flow.
+        // What we will not do is sell a programme with no price on file.
+        const options = await storage.getProgramOptions(program.id, { activeOnly: true });
+        const sellable = options.filter((o: any) => (o.fullPriceCents ?? 0) > 0);
+        if (sellable.length === 0) {
+          return res.status(409).json({ message: `${program.name} has no fee on file, so it can't be sold. Set its price first.` });
+        }
+        const option: any =
+          body.programOptionId != null
+            ? sellable.find((o: any) => o.id === Number(body.programOptionId))
+            : sellable.length === 1
+              ? sellable[0]
+              : null;
+        if (!option) return res.status(400).json({ message: "Choose which age group / option they're registering for." });
+
+        const plan: "term" | "year" = body.paymentPlan === "year" ? "year" : "term";
+        const term = await academyTermFor(program);
+        if (plan === "year" && !academyFullYearAvailable(section, term?.termNumber ?? null)) {
+          return res.status(400).json({ message: "The full-year plan isn't available for this programme right now — it's charged per term." });
+        }
+
+        // Same quoting function as the public checkout, so an office price and
+        // an online price for the same child on the same day cannot differ.
+        const quote = academyQuoteFor(program, term, section, option.fullPriceCents, plan);
+        if (!quote) {
+          return res.status(409).json({ message: "This term has finished — there's nothing left to sell." });
+        }
+        if (quote.totalCents <= 0) {
+          return res.status(409).json({ message: "That works out to nothing owing. Check the programme's fee and term dates." });
+        }
+
+        const seasonYear: number = program.seasonYear ?? Number(nzTodayIso().slice(0, 4));
+        const eligibility = checkAcademyEligibility(playerDob, seasonYear, program.ageMin, program.ageMax);
+
+        // Deliberately a WARNING, not a block. Staff registering a walk-up in
+        // front of the parent may have a reason to place a child outside the
+        // advertised band; the public form blocks it, a human at the counter
+        // gets told and decides. The caller must acknowledge it explicitly.
+        if (!eligibility.eligible && body.acknowledgeAgeWarning !== true) {
+          return res.status(409).json({
+            code: "age_warning",
+            message: eligibility.reason,
+            ageWarning: eligibility.reason,
+          });
+        }
+
+        // ── Guardian: find, don't duplicate ─────────────────────────────────
+        let guardian: any = await academyFindGuardianByEmail(guardianEmail);
+        if (!guardian) {
+          guardian = await storage.createContact({
+            type: "guardian",
+            firstName: String(guardianIn.firstName).trim(),
+            lastName: String(guardianIn.lastName).trim(),
+            email: guardianEmail,
+            phone: guardianPhone,
+            address: guardianIn.address ? String(guardianIn.address).trim() : null,
+          } as any);
+        } else {
+          // Enrich blanks, never overwrite what's already on file.
+          const enrich: any = {};
+          if (!guardian.phone && guardianPhone) enrich.phone = guardianPhone;
+          if (!guardian.address && guardianIn.address) enrich.address = String(guardianIn.address).trim();
+          if (Object.keys(enrich).length > 0) await storage.updateContact(guardian.id, enrich);
+        }
+
+        // ── Player: one contact per real child, not one per term ────────────
+        const existingKids = await storage.getRelationships(guardian.id);
+        let player: any =
+          existingKids
+            .map((r: any) => r.player)
+            .find(
+              (p: any) =>
+                p &&
+                p.type === "player" &&
+                p.firstName?.trim().toLowerCase() === playerFirst.toLowerCase() &&
+                p.lastName?.trim().toLowerCase() === playerLast.toLowerCase() &&
+                p.dateOfBirth === playerDob,
+            ) ?? null;
+
+        // Only write what was actually typed. A blank field at the counter must
+        // never blank out data the family already gave us online, and an absent
+        // NZF answer is recorded as absent rather than invented.
+        const optional = (v: unknown) => {
+          const s = typeof v === "string" ? v.trim() : "";
+          return s ? s : undefined;
+        };
+        const playerFields: Record<string, unknown> = {};
+        const setIf = (key: string, value: string | undefined) => {
+          if (value !== undefined) playerFields[key] = value;
+        };
+        setIf("gender", optional(playerIn.gender));
+        setIf("school", optional(playerIn.school));
+        setIf("countryOfBirth", optional(playerIn.countryOfBirth));
+        setIf("nationality", optional(playerIn.nationality));
+        setIf("ethnicity", optional(playerIn.ethnicity));
+        setIf("subEthnicity", optional(playerIn.subEthnicity));
+        setIf("medicalNotes", optional(playerIn.medicalNotes));
+        setIf("allergies", optional(playerIn.allergies));
+        setIf("emergencyContact", optional(emergency.name));
+        setIf("emergencyPhone", optional(emergency.phone));
+
+        if (player) {
+          if (Object.keys(playerFields).length > 0) {
+            await storage.updateContact(player.id, playerFields as any);
+          }
+        } else {
+          player = await storage.createContact({
+            type: "player",
+            firstName: playerFirst,
+            lastName: playerLast,
+            dateOfBirth: playerDob,
+            ...playerFields,
+          } as any);
+          await storage.createRelationship({
+            guardianId: guardian.id,
+            playerId: player.id,
+            relationship: optional(guardianIn.relationship) ?? "parent",
+            isPrimaryContact: true,
+          } as any);
+        }
+
+        const { fullyPaid, fields } = paymentFieldsFor(quote.totalCents);
+
+        // Consent is evidence, and evidence is never auto-ticked to make a form
+        // pass. Stamped only when staff confirm the parent actually agreed.
+        const now = new Date();
+        const policyAccepted = body.policyAccepted === true;
+
+        const reg = await storage.createRegistration({
+          programId: program.id,
+          programOptionId: option.id,
+          contactId: player.id,
+          guardianId: guardian.id,
+          status: fullyPaid ? "confirmed" : "pending",
+          paymentMode: "upfront",
+          academyPaymentPlan: plan,
+          seasonYear,
+          subtotalCents: quote.subtotalCents,
+          discountCents: quote.discountCents,
+          totalCents: quote.totalCents,
+          currency: "NZD",
+          registrationLocation: "cufc_office",
+          source: "admin_manual",
+          notes: typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null,
+          policyAcceptedAt: policyAccepted ? now : null,
+          policyVersion: policyAccepted ? ACADEMY_POLICY_VERSION : null,
+          nzfConsentAt: policyAccepted ? now : null,
+          ...fields,
+        } as any);
+
+        if (fullyPaid) await storage.assignOrderNumber(reg.id);
+
+        await storage.createAuditLog({
+          userId: req.session.userId,
+          action: "create",
+          entity: "registration",
+          entityId: reg.id,
+          details:
+            `Office registration: ${playerFirst} ${playerLast} → ${program.name} (${option.name}), ` +
+            `${(quote.totalCents / 100).toFixed(2)} NZD, ${isPaid ? `paid by ${paymentMethod}` : "unpaid"}` +
+            (servedByUserId ? `, served by user ${servedByUserId}` : ""),
+        });
+
+        // NZ Football needs these for the annual audit. We do not block a
+        // counter payment on them, but we do say plainly what's still missing
+        // rather than let the gap pass silently.
+        const nzfMissing = ["countryOfBirth", "nationality", "ethnicity", "gender"].filter(
+          (f) => !(player as any)[f],
+        );
+
+        return res.json({
+          registrationId: reg.id,
+          totalCents: quote.totalCents,
+          status: reg.status,
+          shape: "academy",
+          player: { id: player.id, firstName: player.firstName, lastName: player.lastName, grade: eligibility.grade },
+          nzfMissing,
+          ageWarning: eligibility.eligible ? null : eligibility.reason,
+        });
+      }
+
+      // ── Holiday-camp shape (unchanged, plus the payment fields) ───────────
+      const camp = program;
+      const { parent, children: childrenData, items } = body;
+      if (!parent || !childrenData || !items) {
+        return res.status(400).json({ message: "parent, children, and items are required" });
+      }
 
       let parentContact = parent.email ? await storage.findContactByEmail(parent.email) : null;
       if (!parentContact) {
@@ -3967,20 +4362,23 @@ export async function registerRoutes(
       }
       const totalCents = subtotalCents - discountCents;
 
+      const { fullyPaid, fields } = paymentFieldsFor(totalCents);
+
       const registration = await storage.createRegistration({
         programId: camp.id,
         contactId: parentContact.id,
         guardianId: parentContact.id,
-        status: isPaid ? "confirmed" : "pending",
+        status: fullyPaid ? "confirmed" : "pending",
         subtotalCents,
         discountCents,
         totalCents,
         currency: "NZD",
         registrationLocation: "cufc_office",
         source: "admin_manual",
+        ...fields,
       });
 
-      if (isPaid) {
+      if (fullyPaid) {
         await storage.assignOrderNumber(registration.id);
       }
 
@@ -3991,7 +4389,6 @@ export async function registerRoutes(
         productType: item.productType,
       })));
 
-      const campDates = await storage.getCampDates(camp.id);
       const attendanceItems = registrationItems.map(item => ({
         campId: camp.id,
         campDateId: item.campDateId,
@@ -4001,12 +4398,23 @@ export async function registerRoutes(
         await storage.createAttendanceBulk(attendanceItems);
       }
 
-      res.json({ registrationId: registration.id, totalCents, status: registration.status });
+      await storage.createAuditLog({
+        userId: req.session.userId,
+        action: "create",
+        entity: "registration",
+        entityId: registration.id,
+        details:
+          `Office registration: ${camp.name}, ${(totalCents / 100).toFixed(2)} NZD, ` +
+          `${isPaid ? `paid by ${paymentMethod}` : "unpaid"}` +
+          (servedByUserId ? `, served by user ${servedByUserId}` : ""),
+      });
+
+      res.json({ registrationId: registration.id, totalCents, status: registration.status, shape: "camp" });
     } catch (error: any) {
+      console.error("[Manual registration] failed:", error);
       res.status(500).json({ message: error.message });
     }
   });
-
   app.get("/api/admin/attendance", requireAuth, async (req, res) => {
     try {
       const campId = parseInt(req.query.campId as string);

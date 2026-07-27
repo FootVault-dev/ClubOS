@@ -979,6 +979,100 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  /**
+   * The Registrations page's whole dataset, in a fixed number of queries.
+   *
+   * The route used to build this by hand: getRegistrations() (2 queries per
+   * row) and then, per row, getRegistrationItems (itself 2 queries per item),
+   * getContact, getChildren (1 per child) and getProgram — all fired
+   * concurrently through Promise.all. At CUFC's ~450 registrations that is a
+   * few thousand simultaneous queries against a 15-connection pooler, and it
+   * reproducibly 500'd the page with EMAXCONNSESSION. Exactly the failure that
+   * took out the contact-detail pages; same fix, applied to the list.
+   *
+   * Nine queries, whatever the row count.
+   */
+  async getRegistrationsForList(opts: { programId?: number } = {}): Promise<any[]> {
+    const statusFilter = sql`${registrations.status} IN ('confirmed', 'refunded', 'partially_refunded')`;
+    const regs = await db
+      .select()
+      .from(registrations)
+      .where(opts.programId ? and(eq(registrations.programId, opts.programId), statusFilter) : statusFilter)
+      .orderBy(desc(registrations.orderNumber), desc(registrations.registeredAt));
+    if (regs.length === 0) return [];
+
+    // Empty IN lists are invalid SQL, so every batch is guarded rather than
+    // trusted to be non-empty.
+    const uniq = <T,>(xs: (T | null | undefined)[]) => Array.from(new Set(xs.filter((x): x is T => x != null)));
+    const byId = <T extends { id: number }>(rows: T[]) => new Map(rows.map((r) => [r.id, r]));
+
+    const regIds = regs.map((r) => r.id);
+    const [items, progRows, contactRows, staffRows] = await Promise.all([
+      db.select().from(registrationItems).where(inArray(registrationItems.registrationId, regIds)),
+      (async () => { const ids = uniq(regs.map((r) => r.programId)); return ids.length ? db.select().from(programs).where(inArray(programs.id, ids)) : []; })(),
+      // Both people on the row. For a camp the registration's contact IS the
+      // parent; for an academy enrolment the contact is the PLAYER and the
+      // parent hangs off guardianId. Fetching only the contact is how the
+      // Registrations page ended up printing a child's name under
+      // "Parent / Guardian", with no phone number to ring.
+      (async () => {
+        const ids = uniq([...regs.map((r) => r.contactId), ...regs.map((r) => r.guardianId)]);
+        return ids.length ? db.select().from(contacts).where(inArray(contacts.id, ids)) : [];
+      })(),
+      (async () => { const ids = uniq(regs.map((r: any) => r.servedByUserId)); return ids.length ? db.select().from(users).where(inArray(users.id, ids)) : []; })(),
+    ]);
+
+    const itemChildIds = uniq(items.map((i) => i.childId));
+    const itemDateIds = uniq(items.map((i) => i.campDateId));
+    const parentIds = uniq(regs.map((r) => r.contactId));
+    const [itemChildren, itemDates, kidRows] = await Promise.all([
+      itemChildIds.length ? db.select().from(children).where(inArray(children.id, itemChildIds)) : [],
+      itemDateIds.length ? db.select().from(campDates).where(inArray(campDates.id, itemDateIds)) : [],
+      parentIds.length ? db.select().from(children).where(inArray(children.parentId, parentIds)) : [],
+    ]);
+
+    const medIds = uniq([...itemChildren.map((c) => c.id), ...kidRows.map((c) => c.id)]);
+    const medRows = medIds.length ? await db.select().from(childMedical).where(inArray(childMedical.childId, medIds)) : [];
+    const medByChild = new Map(medRows.map((m) => [m.childId, m]));
+
+    const progById = byId(progRows);
+    const contactById = byId(contactRows);
+    const childById = byId(itemChildren);
+    const dateById = byId(itemDates);
+    const staffById = new Map(staffRows.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+
+    const itemsByReg = new Map<number, any[]>();
+    for (const it of items) {
+      const list = itemsByReg.get(it.registrationId) ?? [];
+      const child = childById.get(it.childId);
+      list.push({ ...it, child: child ? { ...child, medical: medByChild.get(child.id) || undefined } : undefined, campDate: dateById.get(it.campDateId) });
+      itemsByReg.set(it.registrationId, list);
+    }
+    const kidsByParent = new Map<number, any[]>();
+    for (const k of kidRows) {
+      const list = kidsByParent.get(k.parentId!) ?? [];
+      list.push({ ...k, medical: medByChild.get(k.id) || undefined });
+      kidsByParent.set(k.parentId!, list);
+    }
+
+    return regs.map((r: any) => {
+      const contact = contactById.get(r.contactId);
+      const guardian = r.guardianId ? contactById.get(r.guardianId) : undefined;
+      return {
+        ...r,
+        program: progById.get(r.programId),
+        contact,
+        // Only when it is a genuinely different person — on a camp
+        // registration guardianId and contactId are the same row, and echoing
+        // the parent twice would just be noise.
+        guardian: guardian && guardian.id !== contact?.id ? guardian : undefined,
+        items: itemsByReg.get(r.id) ?? [],
+        children: kidsByParent.get(r.contactId) ?? [],
+        servedByName: r.servedByUserId ? staffById.get(r.servedByUserId) ?? null : null,
+      };
+    });
+  }
+
   async getRegistrationsByProgram(programId: number): Promise<(Registration & { contact?: Contact })[]> {
     const regs = await db.select().from(registrations).where(and(eq(registrations.programId, programId), sql`${registrations.status} IN ('confirmed', 'refunded', 'partially_refunded')`));
     return Promise.all(regs.map(async (r) => {

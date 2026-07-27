@@ -8,6 +8,10 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { formatCurrency } from "@/lib/format";
 import {
+  OFFICE_PAYMENT_METHODS, isOfficePaymentMethod, paymentMethodLabel, describePaymentMethod,
+} from "@shared/payments";
+import { RegisterPlayerModal } from "./admin-register-player";
+import {
   ClipboardCheck, Search, ChevronDown, ChevronUp, User, Phone, Mail,
   MapPin, Calendar, Clock, Baby, CreditCard, Pencil, X, Plus, Trash2, Check, Save,
   RotateCcw, AlertTriangle, Loader2,
@@ -67,7 +71,17 @@ type Registration = {
   stripeRefundId?: string | null;
   stripeRefundStatus?: string | null;
   stripePaymentIntentId?: string | null;
-  contact?: { firstName: string; lastName: string; email?: string; phone?: string; address?: string; emergencyContact?: string; emergencyPhone?: string };
+  // Office / walk-up payments: how it was tendered and who took it.
+  paymentMethod?: string | null;
+  paymentReference?: string | null;
+  servedByUserId?: number | null;
+  servedByName?: string | null;
+  paidAt?: string | null;
+  amountPaid?: string | null;
+  contact?: { id?: number; firstName: string; lastName: string; email?: string; phone?: string; address?: string; dateOfBirth?: string; emergencyContact?: string; emergencyPhone?: string };
+  // Present only when the parent is a DIFFERENT contact from the registration's
+  // own contact — i.e. an academy enrolment, where the contact is the player.
+  guardian?: { id?: number; firstName: string; lastName: string; email?: string; phone?: string; emergencyContact?: string; emergencyPhone?: string };
   program?: { id: number; name: string };
   items?: RegItem[];
   children?: RegChild[];
@@ -559,6 +573,11 @@ export default function AdminRegistrations() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [filterDay, setFilterDay] = useState<string>("");
   const [filterSession, setFilterSession] = useState<string>("");
+  // "How did we take the money" and "who served them" — the two questions the
+  // office asks when reconciling the till and the EFTPOS terminal.
+  const [filterPayment, setFilterPayment] = useState<string>("");
+  const [filterServedBy, setFilterServedBy] = useState<string>("");
+  const [showRegister, setShowRegister] = useState(false);
 
   const { data: registrations, isLoading } = useQuery<Registration[]>({
     queryKey: ["/api/admin/registrations", selectedCamp],
@@ -610,8 +629,45 @@ export default function AdminRegistrations() {
       list = list.filter(r => r.items?.some(item => item.productType.toUpperCase() === ft));
     }
 
+    if (filterPayment) {
+      list = filterPayment === "office"
+        // Everything taken over the counter, whatever the tender.
+        ? list.filter(r => isOfficePaymentMethod(r.paymentMethod))
+        : list.filter(r => describePaymentMethod(r).label === paymentMethodLabel(filterPayment));
+    }
+
+    if (filterServedBy) {
+      const id = parseInt(filterServedBy);
+      list = list.filter(r => r.servedByUserId === id);
+    }
+
     return list;
-  }, [registrations, searchTerm, filterDay, filterSession]);
+  }, [registrations, searchTerm, filterDay, filterSession, filterPayment, filterServedBy]);
+
+  // Only the people who have actually served someone — a dropdown of all 16
+  // staff when three of them work the counter is noise, not a filter.
+  const servers = useMemo(() => {
+    const seen = new Map<number, string>();
+    (registrations || []).forEach(r => {
+      if (r.servedByUserId && r.servedByName) seen.set(r.servedByUserId, r.servedByName);
+    });
+    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1], "en-NZ"));
+  }, [registrations]);
+
+  // What the visible rows add up to, split by tender. This is the number
+  // someone cashing up at the end of the day is actually looking for.
+  const takings = useMemo(() => {
+    const byMethod = new Map<string, number>();
+    let total = 0;
+    filtered.forEach(r => {
+      if (!isOfficePaymentMethod(r.paymentMethod)) return;
+      const cents = Math.round(Number(r.amountPaid ?? 0) * 100);
+      if (!cents) return;
+      byMethod.set(r.paymentMethod!, (byMethod.get(r.paymentMethod!) ?? 0) + cents);
+      total += cents;
+    });
+    return { byMethod: Array.from(byMethod.entries()), total };
+  }, [filtered]);
 
   const statusColors: Record<string, string> = {
     pending: "text-amber-400/70 bg-amber-500/10 border-amber-500/15",
@@ -651,9 +707,19 @@ export default function AdminRegistrations() {
 
   return (
     <div className="p-4 sm:p-8 space-y-6 max-w-5xl mx-auto">
-      <div className="animate-fade-in-up" style={{ animationDelay: '0ms', opacity: 0 }}>
-        <h1 className="text-2xl font-semibold text-white tracking-tight" data-testid="text-page-title">Registrations</h1>
-        <p className="text-blue-400/35 text-[13px] mt-1">View and manage bookings</p>
+      <div className="flex items-start justify-between gap-3 flex-wrap animate-fade-in-up" style={{ animationDelay: '0ms', opacity: 0 }}>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold text-white tracking-tight" data-testid="text-page-title">Registrations</h1>
+          <p className="text-blue-400/35 text-[13px] mt-1">View and manage bookings</p>
+        </div>
+        <Button
+          size="sm"
+          onClick={() => setShowRegister(true)}
+          className="bg-blue-600 hover:bg-blue-700 text-white shrink-0"
+          data-testid="button-open-office-registration"
+        >
+          <Plus className="w-3.5 h-3.5 mr-1" />Register at the office
+        </Button>
       </div>
 
       <div className="flex gap-3 flex-wrap animate-fade-in-up" style={{ animationDelay: '50ms', opacity: 0 }}>
@@ -689,11 +755,55 @@ export default function AdminRegistrations() {
           <option value="FULL_DAY">Full Day</option>
         </select>
 
+        <select
+          value={filterPayment}
+          onChange={e => setFilterPayment(e.target.value)}
+          className="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[13px] text-white/70 focus:outline-none focus:border-blue-500/30 cursor-pointer"
+          data-testid="select-payment-filter"
+        >
+          <option value="">All payments</option>
+          <option value="office">Paid at the office</option>
+          {OFFICE_PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+
+        {servers.length > 0 && (
+          <select
+            value={filterServedBy}
+            onChange={e => setFilterServedBy(e.target.value)}
+            className="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[13px] text-white/70 focus:outline-none focus:border-blue-500/30 cursor-pointer"
+            data-testid="select-served-by-filter"
+          >
+            <option value="">Anyone served</option>
+            {servers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
+        )}
+
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
           <Input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by name or email..." className="pl-10 premium-input text-white/80 rounded-xl h-9" data-testid="input-search-registrations" />
         </div>
       </div>
+
+      {/* Cash-up strip — what the rows on screen add up to, split by tender.
+          Only appears once there is something taken over the counter, so it
+          never sits there reading $0.00 on an all-online list. */}
+      {takings.total > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 rounded-2xl bg-emerald-500/[0.04] border border-emerald-500/15 animate-fade-in-up"
+          style={{ animationDelay: '75ms', opacity: 0 }}
+          data-testid="panel-office-takings"
+        >
+          <span className="text-[11px] uppercase tracking-wider text-emerald-300/45 font-semibold">Taken at the office</span>
+          {takings.byMethod.map(([m, cents]) => (
+            <span key={m} className="text-[12.5px] text-white/55">
+              {paymentMethodLabel(m)} <span className="text-white/80 font-medium">{formatCurrency(cents, { fromCents: true })}</span>
+            </span>
+          ))}
+          <span className="text-[12.5px] text-white/40 ml-auto">
+            Total <span className="text-emerald-300/80 font-semibold" data-testid="text-office-takings-total">{formatCurrency(takings.total, { fromCents: true })}</span>
+          </span>
+        </div>
+      )}
 
       <div className="rounded-2xl glass-card overflow-hidden animate-fade-in-up" style={{ animationDelay: '100ms', opacity: 0 }}>
         {isLoading ? (
@@ -726,6 +836,15 @@ export default function AdminRegistrations() {
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
+                      {isOfficePaymentMethod(reg.paymentMethod) && (
+                        <span
+                          className="hidden sm:inline-flex items-center gap-1 text-[9.5px] px-1.5 py-0.5 rounded-md border border-emerald-500/15 bg-emerald-500/[0.07] text-emerald-300/70 whitespace-nowrap"
+                          data-testid={`badge-reg-payment-${reg.id}`}
+                        >
+                          {paymentMethodLabel(reg.paymentMethod)}
+                          {reg.servedByName ? ` · ${reg.servedByName}` : ""}
+                        </span>
+                      )}
                       <span className="text-[13px] font-medium text-white/60" data-testid={`text-reg-total-${reg.id}`}>
                         {formatCurrency(reg.totalCents || 0, { fromCents: true })}
                       </span>
@@ -740,29 +859,54 @@ export default function AdminRegistrations() {
                     <div className="px-5 pb-4 space-y-3 animate-fade-in-up" style={{ animationDelay: '0ms', opacity: 0 }}>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <div className="rounded-xl bg-white/[0.02] border border-white/[0.04] p-4 space-y-3">
-                          <p className="text-[11px] text-blue-300/25 uppercase tracking-wider font-semibold">Parent / Guardian</p>
-                          <div className="flex items-center gap-3">
-                            <User className="w-4 h-4 text-white/20 flex-shrink-0" />
-                            <span className="text-[13px] text-white/60" data-testid={`text-reg-parent-${reg.id}`}>{reg.contact?.firstName} {reg.contact?.lastName}</span>
-                          </div>
-                          {reg.contact?.email && (
-                            <div className="flex items-center gap-3">
-                              <Mail className="w-4 h-4 text-white/20 flex-shrink-0" />
-                              <a href={`mailto:${reg.contact.email}`} className="text-[13px] text-blue-400/60 hover:text-blue-400 truncate" data-testid={`text-reg-email-${reg.id}`}>{reg.contact.email}</a>
-                            </div>
-                          )}
-                          {reg.contact?.phone && (
-                            <div className="flex items-center gap-3">
-                              <Phone className="w-4 h-4 text-white/20 flex-shrink-0" />
-                              <a href={`tel:${reg.contact.phone}`} className="text-[13px] text-blue-400/60 hover:text-blue-400" data-testid={`text-reg-phone-${reg.id}`}>{reg.contact.phone}</a>
-                            </div>
-                          )}
-                          {reg.contact?.emergencyContact && (
-                            <div className="flex items-center gap-3 pt-1 border-t border-white/[0.04]">
-                              <Phone className="w-4 h-4 text-amber-400/30 flex-shrink-0" />
-                              <span className="text-[12px] text-white/40">Emergency: {reg.contact.emergencyContact} {reg.contact.emergencyPhone ? `(${reg.contact.emergencyPhone})` : ""}</span>
-                            </div>
-                          )}
+                          {/* On an academy enrolment the registration's contact
+                              is the PLAYER and the parent is on `guardian`; on a
+                              camp they are the same person. Show whoever is
+                              actually the adult here, so this panel always
+                              carries a number someone can ring. */}
+                          {(() => {
+                            const adult = reg.guardian ?? reg.contact;
+                            const player = reg.guardian ? reg.contact : null;
+                            return (
+                              <>
+                                <p className="text-[11px] text-blue-300/25 uppercase tracking-wider font-semibold">Parent / Guardian</p>
+                                <div className="flex items-center gap-3">
+                                  <User className="w-4 h-4 text-white/20 flex-shrink-0" />
+                                  <span className="text-[13px] text-white/60" data-testid={`text-reg-parent-${reg.id}`}>{adult?.firstName} {adult?.lastName}</span>
+                                </div>
+                                {adult?.email && (
+                                  <div className="flex items-center gap-3">
+                                    <Mail className="w-4 h-4 text-white/20 flex-shrink-0" />
+                                    <a href={`mailto:${adult.email}`} className="text-[13px] text-blue-400/60 hover:text-blue-400 truncate" data-testid={`text-reg-email-${reg.id}`}>{adult.email}</a>
+                                  </div>
+                                )}
+                                {adult?.phone && (
+                                  <div className="flex items-center gap-3">
+                                    <Phone className="w-4 h-4 text-white/20 flex-shrink-0" />
+                                    <a href={`tel:${adult.phone}`} className="text-[13px] text-blue-400/60 hover:text-blue-400" data-testid={`text-reg-phone-${reg.id}`}>{adult.phone}</a>
+                                  </div>
+                                )}
+                                {player && (
+                                  <div className="flex items-center gap-3 pt-1 border-t border-white/[0.04]">
+                                    <Baby className="w-4 h-4 text-white/20 flex-shrink-0" />
+                                    <span className="text-[13px] text-white/60" data-testid={`text-reg-player-${reg.id}`}>
+                                      Player: {player.firstName} {player.lastName}
+                                      {player.dateOfBirth ? ` (${calcAge(player.dateOfBirth)})` : ""}
+                                    </span>
+                                  </div>
+                                )}
+                                {(adult?.emergencyContact || reg.contact?.emergencyContact) && (
+                                  <div className="flex items-center gap-3 pt-1 border-t border-white/[0.04]">
+                                    <Phone className="w-4 h-4 text-amber-400/30 flex-shrink-0" />
+                                    <span className="text-[12px] text-white/40 break-words min-w-0">
+                                      Emergency: {adult?.emergencyContact || reg.contact?.emergencyContact}{" "}
+                                      {(adult?.emergencyPhone || reg.contact?.emergencyPhone) ? `(${adult?.emergencyPhone || reg.contact?.emergencyPhone})` : ""}
+                                    </span>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
 
                         <div className="rounded-xl bg-white/[0.02] border border-white/[0.04] p-4 space-y-3">
@@ -773,6 +917,28 @@ export default function AdminRegistrations() {
                             <p className="text-[12px] text-white/40">Subtotal: {formatCurrency(reg.subtotalCents || 0, { fromCents: true })}</p>
                             {(reg.discountCents || 0) > 0 && <p className="text-[12px] text-emerald-400/60">Discount: -{formatCurrency(reg.discountCents || 0, { fromCents: true })}</p>}
                             <p className="text-[13px] text-white/70 font-medium">Total: {formatCurrency(reg.totalCents || 0, { fromCents: true })}</p>
+                            {/* How the money came in. Shown for every registration:
+                                an online one reads as a card payment from its
+                                PaymentIntent, an older row with neither honestly
+                                reads "Not recorded" rather than being guessed at. */}
+                            <div className="pt-2 mt-1 border-t border-white/[0.04] space-y-1">
+                              <p className="text-[12px] text-white/40" data-testid={`text-reg-method-${reg.id}`}>
+                                Paid by: <span className={describePaymentMethod(reg).known ? "text-white/60" : "text-white/30 italic"}>
+                                  {describePaymentMethod(reg).label}
+                                </span>
+                                {Number(reg.amountPaid ?? 0) > 0 && (
+                                  <span className="text-white/40"> · {formatCurrency(Math.round(Number(reg.amountPaid) * 100), { fromCents: true })} taken</span>
+                                )}
+                              </p>
+                              {reg.paymentReference && (
+                                <p className="text-[12px] text-white/40 break-words">Ref: <span className="text-white/60">{reg.paymentReference}</span></p>
+                              )}
+                              {reg.servedByName && (
+                                <p className="text-[12px] text-white/40" data-testid={`text-reg-servedby-${reg.id}`}>
+                                  Served by: <span className="text-white/60">{reg.servedByName}</span>
+                                </p>
+                              )}
+                            </div>
                             {reg.refundedAt && (reg.refundedAmountCents || 0) > 0 && (
                               <div className="rounded-lg bg-purple-500/[0.06] border border-purple-500/20 p-2.5 mt-2 space-y-1.5" data-testid={`refund-summary-${reg.id}`}>
                                 <div className="flex items-center justify-between">
@@ -993,6 +1159,7 @@ export default function AdminRegistrations() {
           onOpenChange={(open) => { if (!open) setRefundingReg(null); }}
         />
       )}
+      <RegisterPlayerModal open={showRegister} onClose={() => setShowRegister(false)} />
     </div>
   );
 }

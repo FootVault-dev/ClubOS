@@ -413,6 +413,21 @@ export const registrations = pgTable("registrations", {
   // Provenance. NULL = created in ClubOS. 'friendly_manager' = imported.
   legacySource: text("legacy_source"),
   legacyExternalId: text("legacy_external_id"),
+  // ── Office / walk-up payments (2026-07-27) ─────────────────────────────────
+  // A parent registers at the counter and pays EFTPOS or cash. Values live in
+  // shared/payments.ts; deliberately no DB CHECK on this column.
+  paymentMethod: text("payment_method"),
+  // The EFTPOS terminal reference, receipt number, or bank-transfer particulars
+  // — whatever the person reconciling the till will need to match it up.
+  paymentReference: text("payment_reference"),
+  // Who took the money. ON DELETE RESTRICT: deleting a staff member must never
+  // erase the record of who handled a cash payment. Deactivate, don't delete.
+  servedByUserId: integer("served_by_user_id").references(() => users.id, { onDelete: "restrict" }),
+  // When the money changed hands — distinct from registeredAt, which is when
+  // the row was typed in. A till reconciliation needs the payment's clock.
+  // withTimezone because a bare timestamp read back through a JS Date is
+  // interpreted as local and lands 12 hours out in NZ.
+  paidAt: timestamp("paid_at", { withTimezone: true }),
   registeredAt: timestamp("registered_at").defaultNow().notNull(),
 });
 
