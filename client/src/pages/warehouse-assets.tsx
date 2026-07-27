@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { WarehouseCustomFields } from "@/components/warehouse-custom-fields";
+import { WarehouseCustomFields, ModalPortal } from "@/components/warehouse-custom-fields";
 import {
   INSTANCE_CONDITIONS, INSTANCE_CONDITION_LABELS, LOCATION_KIND_LABELS,
   type InstanceCondition, type LocationKind, type WarrantyStatus,
@@ -139,6 +139,7 @@ function DetailSheet({ instance, onClose }: { instance: Instance; onClose: () =>
   const moveTargets = (locations ?? []).filter((l) => l.kind !== "virtual" && l.id !== instance.locationId && l.active);
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-50 flex sm:items-center sm:justify-center">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
       <div className="relative w-full sm:max-w-2xl sm:rounded-2xl bg-[#0f1216] border border-white/10 mt-auto sm:mt-0 max-h-[92vh] overflow-y-auto">
@@ -272,6 +273,7 @@ function DetailSheet({ instance, onClose }: { instance: Instance; onClose: () =>
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -318,6 +320,7 @@ function AddSheet({ items, onClose }: { items: Overview["items"]; onClose: () =>
   const placeable = (locations ?? []).filter((l) => l.kind !== "virtual" && l.active);
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-50 flex sm:items-center sm:justify-center">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
       <div className="relative w-full sm:max-w-lg sm:rounded-2xl bg-[#0f1216] border border-white/10 mt-auto sm:mt-0 max-h-[92vh] overflow-y-auto">
@@ -411,6 +414,7 @@ function AddSheet({ items, onClose }: { items: Overview["items"]; onClose: () =>
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 

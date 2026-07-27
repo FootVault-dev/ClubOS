@@ -8,7 +8,8 @@
 // posted back raw — the server does the coercion into the right typed column
 // (shared/warehouse.ts's coerceFieldValue), because a browser is the last place
 // that should decide what a date is.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, Save } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -20,6 +21,27 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { missingRequiredFields, type FieldTemplateLike, type TypedFieldValue } from "@shared/warehouse";
 
 type OwnerKind = "item" | "instance";
+
+/**
+ * Renders a full-screen overlay into <body>, never in place.
+ *
+ * A `fixed inset-0` sheet left inside the page tree still inherits layout
+ * utilities from its parent — and every warehouse page's root is a
+ * `space-y-*` container, whose `> * + *` rule puts a 20px margin-top on any
+ * child that isn't the first. That margin shifts the overlay down, leaving a
+ * dead strip across the top of the screen where taps fall THROUGH an open
+ * modal onto the page behind it. (Verified: the element at y=8 with a sheet
+ * open was the page, not the backdrop.)
+ *
+ * Same class of bug as the coaching platform's picker, where a leftover
+ * page-entrance transform made an ancestor the containing block. Portalling is
+ * the standing fix for both: a modal belongs to the viewport, not to whatever
+ * happens to be around it.
+ */
+export function ModalPortal({ children }: { children: ReactNode }) {
+  if (typeof document === "undefined") return null;
+  return createPortal(children, document.body);
+}
 
 interface FieldsResponse {
   category: string | null;

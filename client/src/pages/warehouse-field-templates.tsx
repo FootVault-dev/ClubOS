@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ModalPortal } from "@/components/warehouse-custom-fields";
 import {
   FIELD_TYPES, FIELD_TYPE_LABELS, FIELD_APPLIES_TO, FIELD_APPLIES_TO_LABELS,
   slugifyFieldKey, type FieldType, type FieldAppliesTo,
@@ -77,6 +78,7 @@ function AddFieldSheet({ categories, presetCategory, onClose }: { categories: st
   const previewKey = label ? slugifyFieldKey(label) : "";
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-50 flex sm:items-center sm:justify-center">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
       <div className="relative w-full sm:max-w-lg sm:rounded-2xl bg-[#0f1216] border border-white/10 mt-auto sm:mt-0 max-h-[92vh] overflow-y-auto">
@@ -175,6 +177,7 @@ function AddFieldSheet({ categories, presetCategory, onClose }: { categories: st
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -264,7 +267,7 @@ export default function WarehouseFieldTemplates() {
                 {canEdit && (
                   <button
                     onClick={() => { setAdding(category); setShowAdd(true); }}
-                    className="text-[11px] text-blue-400/70 hover:text-blue-400"
+                    className="text-[11px] text-blue-400/70 hover:text-blue-400 min-h-[44px] px-2 -mr-2"
                   >
                     Add to this category
                   </button>
@@ -299,8 +302,12 @@ export default function WarehouseFieldTemplates() {
                     </div>
 
                     {canEdit && (
-                      <div className="flex items-center gap-2 shrink-0">
-                        <label className="flex items-center gap-1.5 text-[11px] text-white/40">
+                      // Both controls carry a 44px-tall hit area on a phone —
+                      // a 16px checkbox is a miss waiting to happen, and this
+                      // page is used standing in the warehouse. The visual
+                      // size is unchanged; only the touch surface grows.
+                      <div className="flex items-center gap-1 shrink-0">
+                        <label className="flex items-center gap-1.5 text-[11px] text-white/40 min-h-[44px] px-1.5 cursor-pointer">
                           <Checkbox
                             checked={t.required}
                             onCheckedChange={(c) => patch.mutate({ id: t.id, body: { required: c === true } })}
@@ -309,10 +316,10 @@ export default function WarehouseFieldTemplates() {
                         </label>
                         <button
                           onClick={() => remove.mutate(t.id)}
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/25 hover:text-red-400"
+                          className="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-red-500/10 text-white/25 hover:text-red-400"
                           title="Remove this field (recorded answers are kept)"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     )}
