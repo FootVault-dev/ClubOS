@@ -123,7 +123,8 @@ await ok("an exact SKU match resolves to an item with packQty 1, matchedVia sku"
     assert.equal(result.matchedVia, "sku");
     assert.equal(result.packQty, 1);
     assert.equal(result.aliasCode, undefined);
-    assert.deepEqual(result.actions, ["putaway", "pick", "dispatch", "transfer", "consume"]);
+    // 'sale' joined in v2 — the counter sale runs off the same scan screen.
+    assert.deepEqual(result.actions, ["putaway", "pick", "dispatch", "transfer", "consume", "sale"]);
   }
 });
 

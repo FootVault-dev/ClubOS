@@ -64,7 +64,9 @@ ok("roll is a unit", () => assert.equal(isUnit("roll"), true));
 ok("junk unit rejected", () => assert.equal(isUnit("kg"), false));
 
 // ── Location kinds / zones ────────────────────────────────────────────────
-ok("three location kinds", () => assert.equal(LOCATION_KINDS.length, 3));
+// Five since v2/D20 — 'person' and 'vehicle' joined bin/zone/virtual so that
+// "issued to Riley" and "in the van" are locations rather than free text.
+ok("five location kinds", () => assert.equal(LOCATION_KINDS.length, 5));
 ok("bin is a location kind", () => assert.equal(isLocationKind("bin"), true));
 ok("junk location kind rejected", () => assert.equal(isLocationKind("shelf"), false));
 ok("four named zones", () => assert.equal(NAMED_ZONES.length, 4));
@@ -114,7 +116,9 @@ ok("alias code only trims, does not reshape", () => assert.equal(normaliseAliasC
 ok("alias code preserves case/format (not a SKU)", () => assert.equal(normaliseAliasCode("abc-123_XYZ"), "abc-123_XYZ"));
 
 // ── Movement taxonomy (D15) ───────────────────────────────────────────────
-ok("eleven movement types", () => assert.equal(MOVEMENT_TYPES.length, 11));
+// Thirteen since v2 — 'sale' (a counter sale, with no order behind it) and
+// 'decommission' (an asset leaves service but keeps its ledger).
+ok("thirteen movement types", () => assert.equal(MOVEMENT_TYPES.length, 13));
 ok("receipt is a movement type", () => assert.equal(isMovementType("receipt"), true));
 ok("junk movement type rejected", () => assert.equal(isMovementType("teleport"), false));
 ok("every movement type has a label", () => {
@@ -574,13 +578,19 @@ ok("an empty code has no prefix either", () => {
 
 ok("scanActionsForItem: a non-loanable item never offers loan actions", () => {
   const actions = scanActionsForItem({ isLoanable: false });
-  assert.deepEqual(actions, ["putaway", "pick", "dispatch", "transfer", "consume"]);
+  // 'sale' joined in v2 — the counter sale runs off the same scan screen.
+  assert.deepEqual(actions, ["putaway", "pick", "dispatch", "transfer", "consume", "sale"]);
 });
 ok("scanActionsForItem: a loanable item adds loan_out + loan_return", () => {
   const actions = scanActionsForItem({ isLoanable: true });
   assert.ok(actions.includes("loan_out"));
   assert.ok(actions.includes("loan_return"));
-  assert.equal(actions.length, 7);
+  assert.equal(actions.length, 8);
+});
+ok("scanActionsForItem: an asset's DEFINITION offers nothing (D19)", () => {
+  // An asset is moved as a named object via its own tag, never as a quantity;
+  // the scan station routes to the unit list instead.
+  assert.deepEqual(scanActionsForItem({ isLoanable: true, trackingMode: "asset" }), []);
 });
 
 ok("scanActionsForLocation: a virtual location offers nothing (no printed label anyone scans)", () => {

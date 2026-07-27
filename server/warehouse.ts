@@ -52,6 +52,11 @@ import {
 
 export interface MovementLeg {
   itemId: number;
+  /** D19 — set for an asset item's leg, where `delta` is always exactly ±1.
+   *  The SAME ledger carries both stock and assets, so wh_stock.on_hand for an
+   *  asset item at a location is just the count of instances standing there
+   *  and no existing query needed changing. Null for ordinary bulk stock. */
+  instanceId?: number | null;
   locationId: number;
   /** The location's own code (e.g. 'A-01-2', 'QUARANTINE') — used ONLY for a
    *  clean "insufficient stock at <LOCATION>" error message. The caller
@@ -134,6 +139,7 @@ export interface WarehouseDb {
 export interface NewMovementRow {
   groupId: string;
   itemId: number;
+  instanceId: number | null;
   locationId: number;
   delta: string; // numeric column — Drizzle maps numeric to string (AGENTS.md)
   movementType: MovementType;
@@ -228,6 +234,14 @@ function assertValidGroup(input: PostMovementGroupInput): void {
     if (leg.reasonCode != null && !isReasonCode(leg.reasonCode)) {
       throw new Error(`postMovementGroup: unknown leg reason code "${leg.reasonCode}"`);
     }
+    // D19 — an instance IS one physical object. A leg claiming to move 3 of a
+    // specific heat press is nonsense, and would silently corrupt wh_stock
+    // (whose on_hand for an asset item is a count of instances).
+    if (leg.instanceId != null && Math.abs(leg.delta) !== 1) {
+      throw new Error(
+        `postMovementGroup: an instance leg must move exactly one unit (instance ${leg.instanceId} got delta ${leg.delta})`,
+      );
+    }
   }
   if (input.movementType === "transfer" && !legsSumToZero(input.legs.map((l) => l.delta))) {
     throw new Error("postMovementGroup: transfer legs must sum to zero");
@@ -274,6 +288,7 @@ export async function postMovementGroup(
   const rows: NewMovementRow[] = input.legs.map((leg, i) => ({
     groupId,
     itemId: leg.itemId,
+    instanceId: leg.instanceId ?? null,
     locationId: leg.locationId,
     delta: String(leg.delta),
     movementType: input.movementType,
