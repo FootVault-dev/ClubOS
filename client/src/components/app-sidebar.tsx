@@ -83,6 +83,7 @@ import {
   Wrench,
   ClipboardList,
   CloudUpload,
+  Megaphone,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -142,6 +143,7 @@ const campsNav = [
   { tab: "football-institute", title: "Football Institute", url: "/admin/football-institute", icon: School },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 // South Island United shares the camps workspace type with CUFC but adds its own
@@ -171,6 +173,7 @@ const venueNav = [
   { tab: "maintenance", title: "Maintenance", url: "/admin/maintenance", icon: Wrench },
   { tab: "people", title: "People & Access", url: "/admin/people", icon: Users },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const campsSecondary = [
@@ -198,6 +201,7 @@ const leagueNav = [
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "business-plan", title: "Business Plan", url: "/admin/business-plan", icon: FileText },
   { tab: "store", title: "Store", url: "/admin/store", icon: ShoppingCart },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const venueSecondary = [
@@ -236,6 +240,7 @@ const tournamentNav = [
   { tab: "media", title: "Media", url: "/admin/media", icon: Images },
   { tab: "cic-content-marketplace", title: "Content Marketplace", url: "/admin/cic-content-marketplace", icon: BarChart3 },
   { tab: "cic-referees", title: "Referees", url: "/admin/cic-referees", icon: ClipboardCheck },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const tournamentSecondary = [
@@ -263,6 +268,7 @@ const gymnasticsNav = [
   { tab: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics", icon: BarChart3 },
   { tab: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox", icon: Inbox },
   { tab: "cugc-livechat", title: "Live Chat", url: "/admin/cugc-livechat", icon: MessageCircle },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const gymnasticsSecondary = [
@@ -294,6 +300,7 @@ const groupNav = [
   { tab: "sponsor-traffic", title: "Sponsor Traffic", url: "/admin/sponsor-traffic", icon: Share2 },
   // `Video`, not `Clapperboard` — Content owns Clapperboard in this nav.
   { tab: "videos", title: "Videos", url: "/admin/videos", icon: Video },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const groupSecondary = [
@@ -322,6 +329,7 @@ const printsNav = [
   { tab: "landing", title: "Landing Pages", url: "/admin/print-landing", icon: FileText },
   { tab: "email", title: "Email Sender", url: "/admin/print-email", icon: Send },
   { tab: "warehouse", title: "Warehouse", url: "/admin/warehouse", icon: Warehouse },
+  { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 
 const printsSecondary = [

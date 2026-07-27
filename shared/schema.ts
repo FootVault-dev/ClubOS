@@ -6770,3 +6770,447 @@ export const leaguePaymentReminderEvents = pgTable("league_payment_reminder_even
 
 export type LeaguePaymentReminder = typeof leaguePaymentReminders.$inferSelect;
 export type LeaguePaymentReminderEvent = typeof leaguePaymentReminderEvents.$inferSelect;
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MARKETING SUITE ("MarketingOS") — Phase A foundation.
+// Additive, all tables prefixed `mkt_`. The whole suite is an event-stream DB
+// with a marketing UI on top: three load-bearing tables (profiles / consent /
+// events) + queries over them. See plans/2026-07-09-clubos-marketing-suite.md
+// and the synthesis §(a) for the ground-truth spec.
+//
+// Conventions match the rest of this file: identity PKs (never composite PKs —
+// natural keys are enforced with unique indexes), timestamptz timestamps, index()
+// helpers. pgEnums only for genuinely closed vocab (channel / consent axes /
+// suppression scope+reason / encoding / stream / flow trigger); open-ended
+// status/type fields stay `text` (validated in the app) to dodge prod enum-drift.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Closed-vocab enums (safe to model as Postgres enums — these value sets are fixed).
+export const mktChannelEnum = pgEnum("mkt_channel", ["email", "sms"]);
+// Klaviyo subscription-state axis.
+export const mktSubStateEnum = pgEnum("mkt_sub_state", ["subscribed", "unsubscribed", "never"]);
+// NZ UEM Act legal-basis axis (orthogonal to sub_state — a marketing send needs BOTH).
+export const mktLegalBasisEnum = pgEnum("mkt_legal_basis", ["express", "inferred", "deemed", "none", "opted_out"]);
+export const mktSuppressionScopeEnum = pgEnum("mkt_suppression_scope", ["global", "brand", "category", "list"]);
+export const mktSuppressionReasonEnum = pgEnum("mkt_suppression_reason", ["unsub_oneclick", "unsub_prefs", "complaint", "hard_bounce", "manual", "invalid"]);
+export const mktEmailStreamEnum = pgEnum("mkt_email_stream", ["marketing", "transactional"]);
+export const mktSmsEncodingEnum = pgEnum("mkt_sms_encoding", ["gsm7", "ucs2"]);
+export const mktFlowTriggerTypeEnum = pgEnum("mkt_flow_trigger_type", ["event", "list", "segment", "date_property"]);
+
+// ── mkt_profiles — the canonical marketing identity (resolves C6) ─────────────
+// A workspace-scoped superset of the attribution `persons` spine. Populated by the
+// idempotent ingest ETL (server/marketing/ingest.ts) from every existing audience
+// table, deduped on (workspace_id, lower(email)).
+export const mktProfiles = pgTable("mkt_profiles", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  email: text("email"),
+  phoneE164: text("phone_e164"),
+  externalId: text("external_id"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  // {sources:["contacts","members"], phone_raw?:"..."} — provenance + un-parseable phones.
+  props: jsonb("props").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  lastEventAt: timestamp("last_event_at", { withTimezone: true }),
+  // Forward-compat pointer to the attribution `persons` spine. NO FK — that table
+  // is stranded in the loop/attribution worktree and does NOT exist in this branch.
+  // Backfilled when attribution lands (D1); the suite then pivots joins gradually.
+  personId: integer("person_id"),
+  // Optional link to the CUFC CRM.
+  contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // Partial-unique so many null identifiers don't collide (nulls are only "equal"
+  // under a normal unique index; the WHERE excludes them entirely). Case-insensitive
+  // email dedup mirrors the predictor_entrants pattern.
+  emailUnq: uniqueIndex("mkt_profiles_ws_email_unq").on(t.workspaceId, sql`lower(${t.email})`).where(sql`${t.email} IS NOT NULL`),
+  phoneUnq: uniqueIndex("mkt_profiles_ws_phone_unq").on(t.workspaceId, t.phoneE164).where(sql`${t.phoneE164} IS NOT NULL`),
+  wsIdx: index("mkt_profiles_ws_idx").on(t.workspaceId),
+  contactIdx: index("mkt_profiles_contact_idx").on(t.contactId),
+}));
+
+// ── mkt_consent — two orthogonal axes per channel (resolves C3) ───────────────
+// Natural key (profile_id, channel) enforced by a unique index (identity id PK to
+// match this file's convention). A marketing send requires sub_state='subscribed'
+// AND an appropriate legal_basis; SMS marketing specifically requires 'express'.
+export const mktConsent = pgTable("mkt_consent", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  profileId: integer("profile_id").notNull().references(() => mktProfiles.id, { onDelete: "cascade" }),
+  channel: mktChannelEnum("channel").notNull(),
+  subState: mktSubStateEnum("sub_state").notNull().default("never"),
+  legalBasis: mktLegalBasisEnum("legal_basis").notNull().default("inferred"),
+  // Convenience flag = (sub_state = 'subscribed'); the query-time gate still checks both axes.
+  canReceive: boolean("can_receive").notNull().default(false),
+  source: text("source"),
+  methodDetail: text("method_detail"),
+  doubleOptin: boolean("double_optin").notNull().default(false),
+  // Privacy Act IPP1/IPP3 + UEMA s9(3) burden-of-proof: the exact wording shown.
+  privacyNoticeText: text("privacy_notice_text"),
+  consentShownText: text("consent_shown_text"),
+  consentAt: timestamp("consent_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  profileChannelUnq: uniqueIndex("mkt_consent_profile_channel_unq").on(t.profileId, t.channel),
+}));
+
+// ── mkt_suppressions — 4-scope superset, never leaks across brands (resolves C2) ─
+// Enforced as a filter join before EVERY send. `phone_e164` extends the synthesis
+// spec (which only named `email`) so SMS STOP opt-outs (Phase F) share the table.
+export const mktSuppressions = pgTable("mkt_suppressions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  email: text("email"),
+  phoneE164: text("phone_e164"),
+  channel: mktChannelEnum("channel").notNull(),
+  scope: mktSuppressionScopeEnum("scope").notNull().default("global"),
+  brandKey: text("brand_key"),
+  category: text("category"),
+  listId: integer("list_id"),
+  reason: mktSuppressionReasonEnum("reason").notNull().default("manual"),
+  source: text("source"),
+  // Phase B: a NULL expiry = permanent. A future expiry powers "pause 30 days"
+  // (preference centre) — the send gate ignores suppressions whose expires_at has
+  // passed, so the profile silently resumes without a cron un-suppress.
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // NULLS NOT DISTINCT so an email-only global suppression can't be inserted twice
+  // (nullable scope columns would otherwise be treated as distinct on every insert).
+  // Expressed as a table UNIQUE constraint (drizzle 0.39 exposes nullsNotDistinct
+  // there, not on uniqueIndex); the SQL migration mirrors it as a UNIQUE INDEX …
+  // NULLS NOT DISTINCT of the same name — semantically identical.
+  scopeUnq: unique("mkt_suppressions_scope_unq").on(t.email, t.phoneE164, t.channel, t.scope, t.brandKey, t.category, t.listId).nullsNotDistinct(),
+  emailIdx: index("mkt_suppressions_email_idx").on(t.email, t.channel),
+  phoneIdx: index("mkt_suppressions_phone_idx").on(t.phoneE164, t.channel),
+}));
+
+// ── mkt_metrics — event-type registry, auto-created on first use ──────────────
+export const mktMetrics = pgTable("mkt_metrics", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  wsNameUnq: uniqueIndex("mkt_metrics_ws_name_unq").on(t.workspaceId, t.name),
+}));
+
+// ── mkt_events — the append-only keystone stream ─────────────────────────────
+// bigint id (volume). Dedup on (profile_id, metric_id, unique_id) with NULLS
+// DISTINCT (default): events with no unique_id are always inserted (not idempotent),
+// events carrying one are deduped.
+export const mktEvents = pgTable("mkt_events", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  profileId: integer("profile_id").notNull().references(() => mktProfiles.id, { onDelete: "cascade" }),
+  metricId: integer("metric_id").notNull().references(() => mktMetrics.id, { onDelete: "cascade" }),
+  properties: jsonb("properties").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  value: decimal("value", { precision: 14, scale: 2 }),
+  valueCurrency: text("value_currency"),
+  uniqueId: text("unique_id"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  dedupeUnq: uniqueIndex("mkt_events_dedupe_unq").on(t.profileId, t.metricId, t.uniqueId),
+  wsMetricIdx: index("mkt_events_ws_metric_idx").on(t.workspaceId, t.metricId, t.occurredAt),
+  profileIdx: index("mkt_events_profile_idx").on(t.profileId),
+}));
+
+// ── mkt_lists / mkt_list_members — static membership ─────────────────────────
+export const mktLists = pgTable("mkt_lists", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  wsIdx: index("mkt_lists_ws_idx").on(t.workspaceId),
+}));
+
+export const mktListMembers = pgTable("mkt_list_members", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  listId: integer("list_id").notNull().references(() => mktLists.id, { onDelete: "cascade" }),
+  profileId: integer("profile_id").notNull().references(() => mktProfiles.id, { onDelete: "cascade" }),
+  source: text("source"),
+  addedAt: timestamp("added_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  listProfileUnq: uniqueIndex("mkt_list_members_list_profile_unq").on(t.listId, t.profileId),
+  profileIdx: index("mkt_list_members_profile_idx").on(t.profileId),
+}));
+
+// ── mkt_segments / mkt_segment_members — dynamic, definition-driven ──────────
+// definition = one boolean tree {all:[…],any:[…]} evaluated by the shared engine
+// (UI capped at 2 levels / ≤100 conds). members = materialised cache.
+export const mktSegments = pgTable("mkt_segments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  name: text("name").notNull(),
+  definition: jsonb("definition").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  status: text("status").notNull().default("active"), // active | archived
+  memberCount: integer("member_count").notNull().default(0),
+  lastComputedAt: timestamp("last_computed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  wsIdx: index("mkt_segments_ws_idx").on(t.workspaceId),
+}));
+
+export const mktSegmentMembers = pgTable("mkt_segment_members", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  segmentId: integer("segment_id").notNull().references(() => mktSegments.id, { onDelete: "cascade" }),
+  profileId: integer("profile_id").notNull().references(() => mktProfiles.id, { onDelete: "cascade" }),
+  computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  segProfileUnq: uniqueIndex("mkt_segment_members_seg_profile_unq").on(t.segmentId, t.profileId),
+  profileIdx: index("mkt_segment_members_profile_idx").on(t.profileId),
+}));
+
+// ── mkt_templates — reusable content; block_tree is Tiptap JSON, NEVER raw HTML ─
+export const mktTemplates = pgTable("mkt_templates", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  name: text("name").notNull(),
+  channel: text("channel").notNull().default("email"), // email | sms (text: leaves room for push)
+  kind: text("kind").notNull().default("template"),     // template | synced_block
+  subject: text("subject"),
+  blockTree: jsonb("block_tree").$type<Record<string, unknown>>(),
+  isMarketing: boolean("is_marketing").notNull().default(true), // drives SMS consent gate + quiet hours
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  wsIdx: index("mkt_templates_ws_idx").on(t.workspaceId),
+}));
+
+// ── mkt_campaigns — one consolidated engine (replaces the 4 copy-paste mailers) ─
+export const mktCampaigns = pgTable("mkt_campaigns", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  name: text("name").notNull(),
+  channel: text("channel").notNull().default("email"), // email | sms
+  subject: text("subject"),
+  preheader: text("preheader"),
+  fromName: text("from_name"),
+  fromEmail: text("from_email"),
+  replyTo: text("reply_to"),
+  templateId: integer("template_id").references(() => mktTemplates.id, { onDelete: "set null" }),
+  // Phase B: the compiled, ready-to-send email HTML. The Tiptap block tree lives on
+  // the linked template (block_tree); Phase D's serializer populates this. Until then
+  // the send engine reads body_html directly, so the pipeline is end-to-end today.
+  bodyHtml: text("body_html"),
+  // {include:[…], exclude:[…]} of list/segment refs.
+  audience: jsonb("audience").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  smartSend: boolean("smart_send").notNull().default(true),
+  utm: jsonb("utm").$type<Record<string, unknown>>(),
+  isMarketing: boolean("is_marketing").notNull().default(true),
+  status: text("status").notNull().default("draft"), // draft|scheduled|sending|sent|paused|cancelled|failed
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  recipientCount: integer("recipient_count").notNull().default(0),
+  sentCount: integer("sent_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  wsStatusIdx: index("mkt_campaigns_ws_status_idx").on(t.workspaceId, t.status),
+}));
+
+// ── mkt_flows / versions / enrollments / step_runs — the automation engine ────
+// live_version_id is a SOFT pointer (plain int, no FK) to sidestep the circular
+// flows↔flow_versions dependency; resolved in code.
+export const mktFlows = pgTable("mkt_flows", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  workspaceId: integer("workspace_id").notNull(),
+  brandKey: text("brand_key"),
+  name: text("name").notNull(),
+  status: text("status").notNull().default("draft"), // draft|live|paused|archived
+  triggerType: mktFlowTriggerTypeEnum("trigger_type").notNull(),
+  triggerConfig: jsonb("trigger_config").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  entryFilter: jsonb("entry_filter").$type<Record<string, unknown>>(),
+  reEntry: boolean("re_entry").notNull().default(false),
+  quietHours: jsonb("quiet_hours").$type<Record<string, unknown>>().notNull().default(sql`'{"start":"20:00","end":"08:00","tz":"Pacific/Auckland"}'::jsonb`),
+  // smart-send suppression window, in SECONDS (this file imports no interval type).
+  smartSendWindowSeconds: integer("smart_send_window_seconds"),
+  liveVersionId: integer("live_version_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  wsIdx: index("mkt_flows_ws_idx").on(t.workspaceId),
+}));
+
+export const mktFlowVersions = pgTable("mkt_flow_versions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  flowId: integer("flow_id").notNull().references(() => mktFlows.id, { onDelete: "cascade" }),
+  versionNo: integer("version_no").notNull(),
+  graph: jsonb("graph").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  flowVersionUnq: uniqueIndex("mkt_flow_versions_flow_version_unq").on(t.flowId, t.versionNo),
+}));
+
+export const mktFlowEnrollments = pgTable("mkt_flow_enrollments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  flowId: integer("flow_id").notNull().references(() => mktFlows.id, { onDelete: "cascade" }),
+  // PINNED: an enrollment runs the immutable version it entered on.
+  flowVersionId: integer("flow_version_id").notNull().references(() => mktFlowVersions.id, { onDelete: "cascade" }),
+  profileId: integer("profile_id").notNull().references(() => mktProfiles.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("active"), // active|completed|exited|cancelled
+  currentStepId: text("current_step_id"),
+  triggerEvent: jsonb("trigger_event").$type<Record<string, unknown>>(),
+  enteredAt: timestamp("entered_at", { withTimezone: true }).defaultNow().notNull(),
+  exitedAt: timestamp("exited_at", { withTimezone: true }),
+  exitReason: text("exit_reason"),
+  // graphile-worker job_key for the next scheduled step (debounce/cancel).
+  nextRunJobKey: text("next_run_job_key"),
+}, (t) => ({
+  flowStatusIdx: index("mkt_flow_enrollments_flow_status_idx").on(t.flowId, t.status),
+  profileIdx: index("mkt_flow_enrollments_profile_idx").on(t.profileId),
+}));
+
+export const mktFlowStepRuns = pgTable("mkt_flow_step_runs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  enrollmentId: integer("enrollment_id").notNull().references(() => mktFlowEnrollments.id, { onDelete: "cascade" }),
+  stepId: text("step_id").notNull(),
+  status: text("status").notNull().default("pending"), // pending|scheduled|sent|skipped|failed
+  channel: text("channel"),
+  // Polymorphic (email OR sms message) — plain int, no FK.
+  messageId: integer("message_id"),
+  idempotencyKey: text("idempotency_key"),
+  scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
+  executedAt: timestamp("executed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  idemUnq: uniqueIndex("mkt_flow_step_runs_idem_unq").on(t.idempotencyKey),
+  enrollmentIdx: index("mkt_flow_step_runs_enrollment_idx").on(t.enrollmentId),
+}));
+
+// ── mkt_email_messages — one row per recipient per send ──────────────────────
+export const mktEmailMessages = pgTable("mkt_email_messages", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  brandKey: text("brand_key"),
+  workspaceId: integer("workspace_id"),
+  campaignId: integer("campaign_id").references(() => mktCampaigns.id, { onDelete: "set null" }),
+  flowId: integer("flow_id").references(() => mktFlows.id, { onDelete: "set null" }),
+  profileId: integer("profile_id").references(() => mktProfiles.id, { onDelete: "set null" }),
+  resendEmailId: text("resend_email_id"),
+  stream: mktEmailStreamEnum("stream").notNull().default("marketing"),
+  toEmail: text("to_email"),
+  subject: text("subject"),
+  status: text("status").notNull().default("queued"), // queued|scheduled|sent|delivered|bounced|complained|failed
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+  complainedAt: timestamp("complained_at", { withTimezone: true }),
+  firstOpenedAt: timestamp("first_opened_at", { withTimezone: true }),
+  firstClickedAt: timestamp("first_clicked_at", { withTimezone: true }),
+  openCount: integer("open_count").notNull().default(0),
+  humanOpenCount: integer("human_open_count").notNull().default(0),
+  clickCount: integer("click_count").notNull().default(0),
+  humanClickCount: integer("human_click_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  resendIdUnq: uniqueIndex("mkt_email_messages_resend_id_unq").on(t.resendEmailId).where(sql`${t.resendEmailId} IS NOT NULL`),
+  // Phase B: idempotency for the campaign orchestrator — a re-run of `campaign:send`
+  // re-inserts the same (campaign_id, profile_id) rows with ON CONFLICT DO NOTHING,
+  // so nobody is double-mailed. NULLS DISTINCT (default) means flow messages
+  // (campaign_id NULL) never collide, so this never blocks the flow send path.
+  campaignProfileUnq: uniqueIndex("mkt_email_messages_campaign_profile_unq").on(t.campaignId, t.profileId),
+  campaignIdx: index("mkt_email_messages_campaign_idx").on(t.campaignId),
+  flowIdx: index("mkt_email_messages_flow_idx").on(t.flowId),
+  profileIdx: index("mkt_email_messages_profile_idx").on(t.profileId),
+}));
+
+// ── mkt_email_events — raw Resend stream, append-only, idempotent on svix_id ──
+export const mktEmailEvents = pgTable("mkt_email_events", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  svixId: text("svix_id"),
+  eventType: text("event_type").notNull(),
+  resendEmailId: text("resend_email_id"),
+  messageId: bigint("message_id", { mode: "number" }).references(() => mktEmailMessages.id, { onDelete: "set null" }),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }),
+  receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  linkUrl: text("link_url"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  isMachine: boolean("is_machine").notNull().default(false),
+  machineReason: text("machine_reason"),
+  rawPayload: jsonb("raw_payload").$type<Record<string, unknown>>(),
+}, (t) => ({
+  svixUnq: uniqueIndex("mkt_email_events_svix_unq").on(t.svixId).where(sql`${t.svixId} IS NOT NULL`),
+  resendIdIdx: index("mkt_email_events_resend_id_idx").on(t.resendEmailId),
+  messageIdx: index("mkt_email_events_message_idx").on(t.messageId),
+}));
+
+export const mktEmailLinkClicks = pgTable("mkt_email_link_clicks", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  messageId: bigint("message_id", { mode: "number" }).references(() => mktEmailMessages.id, { onDelete: "cascade" }),
+  campaignId: integer("campaign_id").references(() => mktCampaigns.id, { onDelete: "set null" }),
+  profileId: integer("profile_id").references(() => mktProfiles.id, { onDelete: "set null" }),
+  linkUrl: text("link_url"),
+  isBot: boolean("is_bot").notNull().default(false),
+  clickedAt: timestamp("clicked_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  campaignIdx: index("mkt_email_link_clicks_campaign_idx").on(t.campaignId),
+  messageIdx: index("mkt_email_link_clicks_message_idx").on(t.messageId),
+}));
+
+// ── mkt_conversions — materialised AND recomputable (resolves M10) ────────────
+export const mktConversions = pgTable("mkt_conversions", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  profileId: integer("profile_id").references(() => mktProfiles.id, { onDelete: "cascade" }),
+  messageId: bigint("message_id", { mode: "number" }).references(() => mktEmailMessages.id, { onDelete: "set null" }),
+  campaignId: integer("campaign_id").references(() => mktCampaigns.id, { onDelete: "set null" }),
+  conversionType: text("conversion_type"),
+  revenueCents: integer("revenue_cents"),
+  currency: text("currency").notNull().default("NZD"),
+  attributedClickAt: timestamp("attributed_click_at", { withTimezone: true }),
+  convertedAt: timestamp("converted_at", { withTimezone: true }).defaultNow().notNull(),
+  windowDays: integer("window_days").notNull().default(3),
+  model: text("model").notNull().default("last_touch_click"),
+}, (t) => ({
+  profileIdx: index("mkt_conversions_profile_idx").on(t.profileId),
+  campaignIdx: index("mkt_conversions_campaign_idx").on(t.campaignId),
+}));
+
+// ── SMS ──────────────────────────────────────────────────────────────────────
+export const mktSmsMessages = pgTable("mkt_sms_messages", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  profileId: integer("profile_id").references(() => mktProfiles.id, { onDelete: "set null" }),
+  phoneE164: text("phone_e164").notNull(),
+  campaignId: integer("campaign_id").references(() => mktCampaigns.id, { onDelete: "set null" }),
+  body: text("body").notNull(),
+  encoding: mktSmsEncodingEnum("encoding").notNull().default("gsm7"),
+  segments: integer("segments"),
+  costCents: integer("cost_cents"),
+  provider: text("provider"),
+  providerMessageId: text("provider_message_id"),
+  senderId: text("sender_id"),
+  status: text("status").notNull().default("queued"), // queued|sent|delivered|failed|undelivered
+  isMarketing: boolean("is_marketing").notNull().default(true),
+  queuedFor: timestamp("queued_for", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  profileIdx: index("mkt_sms_messages_profile_idx").on(t.profileId),
+  campaignIdx: index("mkt_sms_messages_campaign_idx").on(t.campaignId),
+}));
+
+export const mktSmsInbound = pgTable("mkt_sms_inbound", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  phoneE164: text("phone_e164").notNull(),
+  body: text("body"),
+  matchedKeyword: text("matched_keyword"), // STOP | HELP | START | …
+  providerMessageId: text("provider_message_id"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  phoneIdx: index("mkt_sms_inbound_phone_idx").on(t.phoneE164),
+}));
+
+// Convenience types for the ingest ETL + Phase B.
+export type MktProfile = typeof mktProfiles.$inferSelect;
+export type InsertMktProfile = typeof mktProfiles.$inferInsert;
+export type MktConsent = typeof mktConsent.$inferSelect;
+export type MktSuppression = typeof mktSuppressions.$inferSelect;
