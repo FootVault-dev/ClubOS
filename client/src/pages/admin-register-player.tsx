@@ -66,8 +66,10 @@ function formatProductType(pt: string) {
   return pt;
 }
 
-const FIELD = "bg-white/[0.03] border-white/[0.08] text-white/90 placeholder:text-white/25";
-const LABEL = "text-[11px] uppercase tracking-wide text-white/40 mb-1.5 block";
+// Contrast deliberately higher than the rest of the admin: this form gets used
+// at a counter with a parent waiting, often on a laptop screen at an angle.
+const FIELD = "bg-white/[0.06] border-white/[0.14] text-white placeholder:text-white/40";
+const LABEL = "text-[11px] uppercase tracking-wide text-white/70 mb-1.5 block";
 
 // NZ calendar day, not toISOString() — that reports UTC and reads a day behind
 // here from midday on, which would let staff pick "tomorrow" as a birthday.
@@ -88,12 +90,28 @@ function Field({ label, required, children, hint }: { label: string; required?: 
         {label}{required && <span className="text-blue-400 ml-0.5">*</span>}
       </label>
       {children}
-      {hint && <p className="text-[10.5px] text-white/30 mt-1 leading-snug">{hint}</p>}
+      {hint && <p className="text-[11px] text-white/50 mt-1 leading-snug">{hint}</p>}
     </div>
   );
 }
 
-export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+/**
+ * `scope` decides which programmes the picker offers.
+ *
+ * Opened from the Academy page it must show academy programmes — showing a
+ * "Select camp" list there is just wrong, and on this workspace both camps are
+ * inactive so the list came up empty. Opened from Camps it shows camps. Opened
+ * from Registrations (which covers the whole workspace) it shows both.
+ */
+export function RegisterPlayerModal({
+  open,
+  onClose,
+  scope = "all",
+}: {
+  open: boolean;
+  onClose: () => void;
+  scope?: "academy" | "camp" | "all";
+}) {
   const { toast } = useToast();
   const [step, setStep] = useState(0);
 
@@ -150,18 +168,21 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
   }, [me?.id, servedById]);
 
   const programmes: ProgrammeRow[] = useMemo(() => {
-    const a = (academy || []).map((p) => ({ ...p, type: "academy" }));
-    const c = (camps || []).map((p) => ({ ...p, type: "holiday_camp" }));
+    const a = scope === "camp" ? [] : (academy || []).map((p) => ({ ...p, type: "academy" }));
+    const c = scope === "academy" ? [] : (camps || []).map((p) => ({ ...p, type: "holiday_camp" }));
     return [...a, ...c];
-  }, [academy, camps]);
+  }, [academy, camps, scope]);
+
+  const noun = scope === "academy" ? "programme" : scope === "camp" ? "camp" : "programme";
 
   const programme = programmes.find((p) => p.id === selectedProgramId) || null;
   const shape: "academy" | "camp" | null =
     programme ? (programme.type === "academy" ? "academy" : "camp") : null;
 
+  const STEP_ONE = scope === "camp" ? "Camp" : "Programme";
   const STEPS = shape === "academy"
-    ? ["Programme", "Family", "Payment", "Confirm"]
-    : ["Programme", "Parent", "Children", "Sessions", "Payment", "Confirm"];
+    ? [STEP_ONE, "Family", "Payment", "Confirm"]
+    : [STEP_ONE, "Parent", "Children", "Sessions", "Payment", "Confirm"];
 
   // ── Academy pricing: quoted by the server, never computed here ────────────
   const { data: academyData, isFetching: quoting } = useQuery<AcademyQuote>({
@@ -352,7 +373,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
   const stepName = STEPS[step];
 
   const canNextStep = () => {
-    if (stepName === "Programme") {
+    if (stepName === STEP_ONE) {
       if (!selectedProgramId) return false;
       if (shape === "academy") return !!optionId && !!academyData?.quote;
       return true;
@@ -401,7 +422,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
         <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08] sticky top-0 z-10 rounded-t-2xl" style={{ background: "#02060E" }}>
           <div className="min-w-0">
             <h3 className="text-[14px] font-semibold text-white/80">Register at the office</h3>
-            <p className="text-[11px] text-white/35 mt-0.5">Walk-up registration — records how they paid and who served them</p>
+            <p className="text-[11px] text-white/55 mt-0.5">Walk-up registration — records how they paid and who served them</p>
           </div>
           <button onClick={close} className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.08] transition-colors shrink-0" data-testid="button-close-register">
             <X className="w-3.5 h-3.5 text-white/40" />
@@ -413,8 +434,8 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
             <Fragment key={label}>
               {i > 0 && <ChevronRight className="w-3 h-3 text-white/15 shrink-0" />}
               <span className={`text-[11px] whitespace-nowrap px-2 py-1 rounded-md transition-colors ${
-                i === step ? "text-white bg-blue-500/15 border border-blue-500/25"
-                : i < step ? "text-white/45" : "text-white/20"
+                i === step ? "text-white bg-blue-500/25 border border-blue-500/40 font-medium"
+                : i < step ? "text-white/65" : "text-white/40"
               }`}>{label}</span>
             </Fragment>
           ))}
@@ -422,11 +443,24 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
 
         <div className="px-5 py-5 space-y-4 min-w-0">
           {/* ── Programme ────────────────────────────────────────────────── */}
-          {stepName === "Programme" && (
+          {stepName === STEP_ONE && (
             <div className="space-y-4">
               <div className="space-y-2">
                 {programmes.length === 0 && (
-                  <p className="text-[12px] text-white/40">No programmes in this workspace yet.</p>
+                  <div className="px-4 py-6 rounded-xl bg-white/[0.03] border border-white/[0.10] text-center">
+                    <p className="text-[13px] text-white/70">
+                      {scope === "camp"
+                        ? "No holiday camps are set up in this workspace yet."
+                        : scope === "academy"
+                          ? "No academy programmes in this workspace yet."
+                          : "No programmes in this workspace yet."}
+                    </p>
+                    <p className="text-[11.5px] text-white/45 mt-1">
+                      {scope === "camp"
+                        ? "Create a camp first, then register players against it."
+                        : "Create one first, then register players against it."}
+                    </p>
+                  </div>
                 )}
                 {programmes.map((p) => (
                   <button
@@ -435,14 +469,14 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                     className={`w-full text-left px-4 py-3 rounded-xl border transition-colors min-w-0 ${
                       selectedProgramId === p.id
                         ? "bg-blue-500/10 border-blue-500/30"
-                        : "bg-white/[0.02] border-white/[0.06] hover:bg-white/[0.04]"
+                        : "bg-white/[0.05] border-white/[0.12] hover:bg-white/[0.09]"
                     }`}
                     data-testid={`option-programme-${p.id}`}
                   >
                     <div className="flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-[13px] text-white/85 break-words min-w-0">{p.name}</span>
+                      <span className="text-[13.5px] text-white/95 break-words min-w-0 font-medium">{p.name}</span>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <Badge variant="outline" className="text-[10px] border-white/10 text-white/40">
+                        <Badge variant="outline" className="text-[10px] border-white/20 text-white/65">
                           {p.type === "academy" ? "Academy" : "Camp"}
                         </Badge>
                         {p.type === "academy" && p.registrationOpen === false && (
@@ -477,12 +511,12 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                             key={o.id}
                             onClick={() => { setOptionId(o.id); setAmountTouched(false); }}
                             className={`px-3 py-2.5 rounded-lg border text-left transition-colors min-w-0 ${
-                              optionId === o.id ? "bg-blue-500/10 border-blue-500/30" : "bg-white/[0.02] border-white/[0.06] hover:bg-white/[0.04]"
+                              optionId === o.id ? "bg-blue-500/10 border-blue-500/30" : "bg-white/[0.05] border-white/[0.12] hover:bg-white/[0.09]"
                             }`}
                             data-testid={`option-academy-${o.id}`}
                           >
-                            <div className="text-[12.5px] text-white/85 break-words">{o.name}</div>
-                            <div className="text-[11px] text-white/40 mt-0.5">{formatCurrency(o.fullPriceCents, { fromCents: true })} / term</div>
+                            <div className="text-[13px] text-white/95 break-words font-medium">{o.name}</div>
+                            <div className="text-[12px] text-white/65 mt-0.5">{formatCurrency(o.fullPriceCents, { fromCents: true })} / term</div>
                           </button>
                         ))}
                       </div>
@@ -497,7 +531,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                             key={p}
                             onClick={() => { setPlan(p); setAmountTouched(false); }}
                             className={`px-3 py-2 rounded-lg border text-[12px] transition-colors ${
-                              plan === p ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-white/[0.02] border-white/[0.06] text-white/50"
+                              plan === p ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"
                             }`}
                           >
                             {p === "term" ? "This term" : "Full year (5% off)"}
@@ -508,7 +542,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                   )}
 
                   {academyData?.quote && (
-                    <div className="px-4 py-3 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-1.5">
+                    <div className="px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.10] space-y-1.5">
                       {academyData.quote.discountCents > 0 && (
                         <>
                           <div className="flex justify-between text-[12px] text-white/45">
@@ -526,7 +560,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                         <span>{formatCurrency(academyData.quote.totalCents, { fromCents: true })}</span>
                       </div>
                       {academyData.term && (
-                        <p className="text-[10.5px] text-white/30 pt-0.5">
+                        <p className="text-[11px] text-white/50 pt-0.5">
                           {academyData.term.name} · {formatDate(academyData.term.startDate)} – {formatDate(academyData.term.endDate)}
                           {academyData.quote.sessionsRemaining != null && academyData.quote.totalSessions != null &&
                             ` · ${academyData.quote.sessionsRemaining} of ${academyData.quote.totalSessions} sessions left`}
@@ -545,7 +579,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <User className="w-3.5 h-3.5 text-blue-400/70" />
-                  <span className="text-[12px] font-medium text-white/70">Parent / guardian</span>
+                  <span className="text-[12.5px] font-semibold text-white/85">Parent / guardian</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="First name" required>
@@ -566,7 +600,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <Baby className="w-3.5 h-3.5 text-blue-400/70" />
-                  <span className="text-[12px] font-medium text-white/70">Player</span>
+                  <span className="text-[12.5px] font-semibold text-white/85">Player</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="First name" required>
@@ -619,9 +653,9 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
 
               <div>
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[12px] font-medium text-white/70">New Zealand Football details</span>
+                  <span className="text-[12.5px] font-semibold text-white/85">New Zealand Football details</span>
                 </div>
-                <p className="text-[10.5px] text-white/30 mb-3 leading-snug">
+                <p className="text-[11px] text-white/50 mb-3 leading-snug">
                   Required for the annual NZF audit. You can save without them and add them later on the player's record —
                   they'll be flagged as missing rather than guessed.
                 </p>
@@ -659,9 +693,9 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
           {stepName === "Children" && (
             <div className="space-y-3">
               {children.map((c, idx) => (
-                <div key={idx} className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-3 min-w-0">
+                <div key={idx} className="p-3 rounded-xl bg-white/[0.04] border border-white/[0.10] space-y-3 min-w-0">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-white/40">Child {idx + 1}</span>
+                    <span className="text-[11.5px] text-white/65">Child {idx + 1}</span>
                     {children.length > 1 && (
                       <button onClick={() => removeChild(idx)} className="text-white/30 hover:text-red-300"><Trash2 className="w-3.5 h-3.5" /></button>
                     )}
@@ -698,8 +732,8 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
             <div className="space-y-2">
               {dates.length === 0 && <p className="text-[12px] text-white/40">This camp has no dates set up yet.</p>}
               {dates.map((d: any) => (
-                <div key={d.id} className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] min-w-0">
-                  <div className="text-[12px] text-white/70 mb-2">{formatDate(d.date)}</div>
+                <div key={d.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/[0.10] min-w-0">
+                  <div className="text-[12.5px] text-white/85 mb-2 font-medium">{formatDate(d.date)}</div>
                   <div className="flex flex-wrap gap-2">
                     {pricing.map((p: any) => {
                       const active = items.some((i) => i.campDateId === d.id && i.productType === p.productType);
@@ -708,7 +742,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                           key={p.productType}
                           onClick={() => toggleItem(d.id, p.productType)}
                           className={`px-3 py-1.5 rounded-lg border text-[11.5px] transition-colors ${
-                            active ? "bg-blue-500/15 border-blue-500/30 text-white/85" : "bg-white/[0.02] border-white/[0.06] text-white/45"
+                            active ? "bg-blue-500/15 border-blue-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"
                           }`}
                         >
                           {formatProductType(p.productType)} · {formatCurrency(p.priceCents, { fromCents: true })}
@@ -724,20 +758,20 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
           {/* ── Payment ──────────────────────────────────────────────────── */}
           {stepName === "Payment" && (
             <div className="space-y-4">
-              <div className="px-4 py-3 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between gap-2">
-                <span className="text-[12px] text-white/50">Total owing</span>
+              <div className="px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.10] flex items-center justify-between gap-2">
+                <span className="text-[12.5px] text-white/70">Total owing</span>
                 <span className="text-[16px] font-semibold text-white/90">{formatCurrency(totalCents, { fromCents: true })}</span>
               </div>
 
               <div className="flex gap-2">
                 <button
                   onClick={() => setIsPaid(true)}
-                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${isPaid ? "bg-emerald-500/10 border-emerald-500/30 text-white/85" : "bg-white/[0.02] border-white/[0.06] text-white/45"}`}
+                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${isPaid ? "bg-emerald-500/10 border-emerald-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"}`}
                   data-testid="button-paid-yes"
                 >Paid now</button>
                 <button
                   onClick={() => setIsPaid(false)}
-                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${!isPaid ? "bg-amber-500/10 border-amber-500/30 text-white/85" : "bg-white/[0.02] border-white/[0.06] text-white/45"}`}
+                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${!isPaid ? "bg-amber-500/10 border-amber-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"}`}
                   data-testid="button-paid-no"
                 >Not paid yet</button>
               </div>
@@ -751,7 +785,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                           key={m.value}
                           onClick={() => setMethod(m.value)}
                           className={`px-2 py-2.5 rounded-lg border text-[12px] transition-colors min-w-0 break-words ${
-                            method === m.value ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-white/[0.02] border-white/[0.06] text-white/45"
+                            method === m.value ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"
                           }`}
                           data-testid={`button-method-${m.value}`}
                         >{m.label}</button>
@@ -784,7 +818,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
                   )}
                 </>
               ) : (
-                <p className="text-[11.5px] text-white/40 leading-snug">
+                <p className="text-[12px] text-white/60 leading-snug">
                   Saved as pending — no money recorded. Come back and mark it paid when they settle up.
                 </p>
               )}
@@ -810,7 +844,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
               {shape === "academy" && (
                 <label className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-white/[0.02] border border-white/[0.06] cursor-pointer">
                   <input type="checkbox" checked={policyAccepted} onChange={(e) => setPolicyAccepted(e.target.checked)} className="accent-blue-500 mt-0.5" data-testid="checkbox-policy" />
-                  <span className="text-[11.5px] text-white/55 leading-snug min-w-0">
+                  <span className="text-[12px] text-white/75 leading-snug min-w-0">
                     The parent confirmed they accept the academy policy and NZF registration terms.
                     Leave unticked if they haven't — it's recorded as evidence, so it must be true.
                   </span>
@@ -822,7 +856,7 @@ export function RegisterPlayerModal({ open, onClose }: { open: boolean; onClose:
           {/* ── Confirm ──────────────────────────────────────────────────── */}
           {stepName === "Confirm" && (
             <div className="space-y-3">
-              <div className="px-4 py-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-2.5 min-w-0">
+              <div className="px-4 py-3.5 rounded-xl bg-white/[0.04] border border-white/[0.10] space-y-2.5 min-w-0">
                 <Row label="Programme" value={programme?.name ?? "—"} />
                 {shape === "academy" && (
                   <>

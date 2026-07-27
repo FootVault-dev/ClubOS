@@ -346,7 +346,7 @@ export default function AdminCamps() {
         prefill={prefill}
         key={prefill ? `${prefill.startDate}-${prefill.name}` : "blank"}
       />
-      <RegisterPlayerModal open={showRegister} onClose={() => setShowRegister(false)} />
+      <RegisterPlayerModal open={showRegister} onClose={() => setShowRegister(false)} scope="camp" />
     </div>
   );
 }

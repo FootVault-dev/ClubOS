@@ -330,7 +330,7 @@ export default function AdminAcademy() {
       </div>
 
       <CreateAcademyModal open={showCreate} onClose={() => setShowCreate(false)} />
-      <RegisterPlayerModal open={showRegister} onClose={() => setShowRegister(false)} />
+      <RegisterPlayerModal open={showRegister} onClose={() => setShowRegister(false)} scope="academy" />
     </div>
   );
 }
