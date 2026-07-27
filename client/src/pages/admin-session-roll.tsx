@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link } from "wouter";
 import { useProgramRoute } from "@/lib/program-path";
+import { SessionCoachesCard } from "@/components/session-coaches";
 import { ArrowLeft, UserCheck, UserX, AlertTriangle, Clock, Users, Phone, Mail, User, X, Search, Info, UserPlus } from "lucide-react";
 
 type RollPlayer = {
@@ -472,6 +473,17 @@ export default function AdminSessionRoll() {
           </div>
         )}
       </div>
+
+      {/* Who's coaching tonight, above the children. Zach's first question on
+          arriving at a session is "have I got my coaches", not "who's here". */}
+      {isTermRoll && dateId > 0 && (
+        <SessionCoachesCard
+          campId={campId}
+          campDateId={dateId}
+          sessionDate={sessionDate}
+          sessionTime={sessionInfo?.startTime}
+        />
+      )}
 
       {isTermRoll && (
         <div className="flex flex-wrap items-center justify-between gap-3 -mt-2">

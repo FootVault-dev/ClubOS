@@ -544,6 +544,46 @@ export const attendance = pgTable("attendance", {
   note: text("note"),
 });
 
+// Which coaches are rostered onto a session, and whether they turned up.
+// The sibling of `attendance`: that table answers "which children were here",
+// this one answers "which coaches did we have on, and did they show".
+//
+// A coach IS a `contacts` row (type='staff') — players and coaches already live
+// there (Paul Holocher's Term 3 roster was seeded into it), and forking them
+// would fork the club's database. Same reasoning as `club_squad_members`.
+//
+// Keyed on the camp_date, which is a SLOT not a day: the U4–U8 programme runs
+// Sat 09:30 (U4–U6) and Sat 10:30 (U7–U8) as separate sessions with separate
+// coaches. Both people/session FKs are NO ACTION — deleting a coach must never
+// erase the record of who ran a session.
+export const sessionCoaches = pgTable("session_coaches", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  campId: integer("camp_id").notNull().references(() => programs.id),
+  campDateId: integer("camp_date_id").notNull().references(() => campDates.id),
+  contactId: integer("contact_id").notNull().references(() => contacts.id),
+  // 'lead' | 'coach' | 'assistant'. Validated by the route, never a DB CHECK —
+  // a stale CHECK constraint is how the MFL checkout 500'd.
+  role: text("role").notNull().default("coach"),
+  // 'present' | 'absent' | NULL. NULL means NOT MARKED YET, which is a
+  // different fact from absent: a half-taken roll must never read as "nobody
+  // turned up", and "we never checked" is not the same as "he didn't come".
+  status: text("status"),
+  markedAt: timestamp("marked_at"),
+  markedByUserId: integer("marked_by_user_id").references(() => users.id),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdByUserId: integer("created_by_user_id").references(() => users.id),
+}, (t) => ({
+  // Assigning the same coach twice is a no-op, not a duplicate that would
+  // double every count on the overview.
+  uniqueCoach: uniqueIndex("session_coaches_unique").on(t.campDateId, t.contactId),
+  campIdx: index("session_coaches_camp_idx").on(t.campId),
+  contactIdx: index("session_coaches_contact_idx").on(t.contactId),
+}));
+export const insertSessionCoachSchema = createInsertSchema(sessionCoaches).omit({ id: true, createdAt: true });
+export type InsertSessionCoach = z.infer<typeof insertSessionCoachSchema>;
+export type SessionCoach = typeof sessionCoaches.$inferSelect;
+
 export const emailLogs = pgTable("email_logs", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   campId: integer("camp_id").references(() => programs.id),
