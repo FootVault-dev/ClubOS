@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ModalPortal } from "@/components/warehouse-custom-fields";
+import { FormLayoutEditor } from "@/components/warehouse-form-layout-editor";
 import {
   FIELD_TYPES, FIELD_TYPE_LABELS, FIELD_APPLIES_TO, FIELD_APPLIES_TO_LABELS,
   slugifyFieldKey, type FieldType, type FieldAppliesTo,
@@ -226,10 +227,9 @@ export default function WarehouseFieldTemplates() {
     <div className="p-4 sm:p-6 space-y-5">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-white">Item fields</h1>
+          <h1 className="text-2xl font-bold text-white">Item form &amp; fields</h1>
           <p className="text-sm text-white/40 mt-0.5 max-w-xl">
-            Decide what gets recorded about each kind of item. Add a field here and it appears on every item in that
-            category immediately — nothing to deploy.
+            Arrange the New-item form, and add your own fields per category. Both take effect immediately — nothing to deploy.
           </p>
         </div>
         {canEdit && (
@@ -238,6 +238,10 @@ export default function WarehouseFieldTemplates() {
           </Button>
         )}
       </div>
+
+      {/* D26 — the form layout sits above the per-category extras, because it
+          is the thing an admin reaches for first: "what does New item ask?" */}
+      <FormLayoutEditor />
 
       {!canEdit && (
         <div className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-xs text-white/50 flex items-center gap-2">

@@ -18,7 +18,7 @@
 //     replays it and an unkeyed replay would sell the same shirt twice.
 
 import type { Express, Request, Response } from "express";
-import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
 import { storage } from "./storage";
@@ -34,6 +34,7 @@ import {
   isInstanceCondition,
   isSellableLocation,
   isValidFieldKey,
+  isTrackingMode,
   normaliseAssetTag,
   readFieldValue,
   slugifyFieldKey,
@@ -44,6 +45,9 @@ import {
   type InstanceCondition,
   type LocationKind,
 } from "@shared/warehouse";
+import {
+  CORE_FIELDS, CORE_FIELD_BY_KEY, defaultLayout, isCoreFieldKey, resolveLayout, validateLayout,
+} from "@shared/warehouse-form";
 import { runMovementGroup, InsufficientStockError } from "./warehouse";
 import {
   InstanceError,
@@ -292,6 +296,107 @@ export function registerWarehouseV2Routes(app: Express) {
       res.json({ ok: true, orphanedValues: Number(n) });
     } catch (e: any) {
       handleError(res, e, "delete field template");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // The item form layout (D26) — which questions New-item asks, in what
+  // order. Reading is open to anyone with the tab (the form can't render
+  // without it); saving is admin-only, like the field editor.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/admin/warehouse/form-layout", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const mode = clean(req.query.mode) ?? "stock";
+      if (!isTrackingMode(mode)) throw new V2Error("mode must be 'stock' or 'asset'");
+      const category = clean(req.query.category) ?? null;
+
+      const rows = await db.select().from(whFieldTemplates);
+      const layout = resolveLayout(rows as any, mode, category);
+
+      res.json({
+        mode,
+        category,
+        layout,
+        // Everything an admin could place, so the editor can offer what isn't
+        // on the form yet without hardcoding a second copy of the registry.
+        coreFields: CORE_FIELDS.filter((f) => !f.onlyFor || f.onlyFor === mode),
+        // True when nothing has been customised — the editor says so rather
+        // than pretending an empty table means an empty form.
+        isDefault: !rows.some((r) => r.coreField && (r.trackingMode == null || r.trackingMode === mode)),
+        canEdit: await isWarehouseAdmin(req.session.userId!),
+      });
+    } catch (e: any) {
+      handleError(res, e, "read form layout");
+    }
+  });
+
+  /** Body: { mode, fields: [{ coreField, label?, active, required? }] }.
+   *  Replaces the whole layout for one mode in a single transaction — a
+   *  partially-saved form order would be worse than none. */
+  app.put("/api/admin/warehouse/form-layout", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      await assertAdmin(req);
+      const b = req.body || {};
+      const mode = clean(b.mode);
+      if (!isTrackingMode(mode)) throw new V2Error("mode must be 'stock' or 'asset'");
+
+      const incoming: Array<{ coreField: string; label: string; active: boolean; required: boolean }> =
+        Array.isArray(b.fields) ? b.fields : [];
+      if (incoming.length === 0) throw new V2Error("A form needs at least the fields we key on");
+
+      for (const f of incoming) {
+        if (!isCoreFieldKey(f.coreField)) throw new V2Error(`"${f.coreField}" isn't a field we know about`);
+      }
+
+      // The mandatory-field guard, server-side. The client shows the same
+      // messages, but a layout can also arrive from a script or a stale tab.
+      const check = validateLayout(incoming.map((f) => ({ coreField: f.coreField, active: f.active !== false })));
+      if (!check.ok) throw new V2Error(check.errors.join(" "), 422);
+
+      await db.transaction(async (tx) => {
+        // Replace rather than merge: the incoming array IS the order, and
+        // leaving orphans behind would resurrect fields the admin removed.
+        await tx
+          .delete(whFieldTemplates)
+          .where(and(isNotNull(whFieldTemplates.coreField), eq(whFieldTemplates.trackingMode, mode)));
+
+        for (let i = 0; i < incoming.length; i++) {
+          const f = incoming[i];
+          const def = CORE_FIELD_BY_KEY[f.coreField];
+          await tx.insert(whFieldTemplates).values({
+            coreField: f.coreField,
+            trackingMode: mode,
+            category: null,
+            fieldKey: f.coreField,
+            label: clean(f.label) ?? def.label,
+            fieldType: "text",           // unused for a core placement
+            required: def.mandatory === true || f.required === true,
+            sortOrder: i,
+            active: def.mandatory === true ? true : f.active !== false,
+          });
+        }
+      });
+
+      const rows = await db.select().from(whFieldTemplates);
+      res.json({ ok: true, layout: resolveLayout(rows as any, mode, null) });
+    } catch (e: any) {
+      handleError(res, e, "save form layout");
+    }
+  });
+
+  /** Puts a mode's layout back to the built-in default by clearing its rows. */
+  app.delete("/api/admin/warehouse/form-layout", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      await assertAdmin(req);
+      const mode = clean(req.query.mode);
+      if (!isTrackingMode(mode)) throw new V2Error("mode must be 'stock' or 'asset'");
+      await db
+        .delete(whFieldTemplates)
+        .where(and(isNotNull(whFieldTemplates.coreField), eq(whFieldTemplates.trackingMode, mode)));
+      res.json({ ok: true, layout: defaultLayout(mode) });
+    } catch (e: any) {
+      handleError(res, e, "reset form layout");
     }
   });
 

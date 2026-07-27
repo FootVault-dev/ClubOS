@@ -5420,7 +5420,15 @@ export type WhItemInstance = typeof whItemInstances.$inferSelect;
 // developer. Keyed on wh_items.category (our extensible leaf).
 export const whFieldTemplates = pgTable("wh_field_templates", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
-  category: text("category").notNull(),
+  // D26 — null for a CUSTOM field (stored in wh_item_fields, as before); set
+  // to a CoreFieldKey ('sku', 'name', 'barcodes'…) when the row is instead a
+  // placement of a built-in control, whose value goes to its own column.
+  coreField: text("core_field"),
+  // D26 — null shows on both stock and asset forms; 'stock'/'asset' scopes it.
+  trackingMode: text("tracking_mode"),
+  // Nullable since D26: a core-field placement belongs to the whole form, not
+  // to one category. Still required in practice for custom fields.
+  category: text("category"),
   fieldKey: text("field_key").notNull(),          // slugified from label, stable once created
   label: text("label").notNull(),
   fieldType: text("field_type").notNull().default("text"), // FieldType — validated in shared/warehouse.ts
@@ -5435,7 +5443,9 @@ export const whFieldTemplates = pgTable("wh_field_templates", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
-  categoryKeyUnq: uniqueIndex("wh_field_templates_category_key_unique").on(t.category, t.fieldKey),
+  categoryKeyUnq: uniqueIndex("wh_field_templates_category_key_unique")
+    .on(t.category, t.fieldKey)
+    .where(sql`${t.coreField} IS NULL`),
 }));
 export const insertWhFieldTemplateSchema = createInsertSchema(whFieldTemplates); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
 export type InsertWhFieldTemplate = z.infer<typeof insertWhFieldTemplateSchema>;
