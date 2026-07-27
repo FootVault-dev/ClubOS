@@ -6720,6 +6720,13 @@ export const sportySyncState = pgTable(
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
     contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+    // 'uat' | 'prod' (shared/sporty.ts sportyEnvironmentFor). A SportyId only means
+    // something in the environment that issued it, and the doctrine above sends any
+    // stored id on every later push — so UAT ids must never share a row with the
+    // production ones the live push reads. One state row per contact PER environment.
+    // Deliberately NO database default: a writer that doesn't name its environment
+    // must fail loudly rather than silently claim to be production.
+    environment: text("environment").notNull(),
     // The NRS registration id — see doctrine above. Null until Sporty first returns one.
     sportyId: integer("sporty_id"),
     personFifaId: text("person_fifa_id"),
@@ -6740,7 +6747,7 @@ export const sportySyncState = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (t) => [
-    unique("sporty_sync_state_contact_unique").on(t.contactId),
+    unique("sporty_sync_state_contact_env_unique").on(t.contactId, t.environment),
     index("sporty_sync_state_org_status_idx").on(t.organizationId, t.status),
   ],
 );
@@ -6778,10 +6785,14 @@ export const sportyReferenceCache = pgTable(
   {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     kind: text("kind").notNull(), // 'countries' | 'genders' | 'ethnicity_groups' | 'fantail_form_options'
+    // Vocabularies are per-environment too: UAT's country list is not proof of
+    // what production accepts, and mapping against the wrong one is how bad data
+    // reaches a national register. No default, for the same reason as sync state.
+    environment: text("environment").notNull(),
     payload: jsonb("payload").notNull(),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [unique("sporty_reference_cache_kind_unique").on(t.kind)],
+  (t) => [unique("sporty_reference_cache_kind_env_unique").on(t.kind, t.environment)],
 );
 
 export type SportySyncState = typeof sportySyncState.$inferSelect;

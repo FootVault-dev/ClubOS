@@ -86,6 +86,41 @@ export interface SportyReferenceData {
   ethnicityGroups?: SportyEthnicityGroup[];
 }
 
+// ── Environment namespacing ─────────────────────────────────────────────────
+// A SportyId only means something inside the environment that issued it. UAT
+// and production are different universes: registration 41822 in UAT is a test
+// row, and 41822 in production is somebody's child. Because the SportyId
+// doctrine sends any stored id on every later push, a UAT id left in the same
+// state row the live push reads would be sent to the real national register.
+// So sync state and reference data are namespaced by environment, and the
+// PRODUCTION namespace is an explicit allowlist — an unrecognised host gets its
+// own namespace rather than being trusted as live.
+
+export type SportyEnvironment = string;
+
+const SPORTY_PROD_HOSTS = ["sporty.co.nz", "www.sporty.co.nz"];
+
+export function sportyEnvironmentFor(baseUrl: string | null | undefined): SportyEnvironment {
+  const raw = String(baseUrl || "").trim();
+  let host = raw.toLowerCase();
+  try {
+    host = new URL(raw).host.toLowerCase();
+  } catch {
+    host = host.replace(/^[a-z]+:\/\//, "").split("/")[0];
+  }
+  if (!host) return "unknown";
+  if (SPORTY_PROD_HOSTS.includes(host)) return "prod";
+  if (/(^|\.)uat(\.|-|$)/.test(host)) return "uat";
+  // A third environment (a mock, a staging host) gets its own namespace so its
+  // ids can never collide with UAT's or production's.
+  return host.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "unknown";
+}
+
+/** True only for the real national register — used to gate destructive/live copy. */
+export function isSportyProduction(baseUrl: string | null | undefined): boolean {
+  return sportyEnvironmentFor(baseUrl) === "prod";
+}
+
 // ── Sync-state vocabulary (stored in sporty_sync_state, validated app-side) ──
 
 export const SPORTY_SYNC_STATUSES = ["pending", "synced", "blocked", "error", "excluded"] as const;
@@ -163,82 +198,138 @@ export function sportyGenderFor(clubosGender: string | null | undefined, ref?: S
   return mapped;
 }
 
-// ── Country resolution (nationality + country of birth, free text → alpha-3) ─
+// ── Country resolution (nationality + country of birth, free text → their code) ─
+//
+// 🔴 Sporty's country codes are FIFA/IOC-style, NOT the ISO 3166-1 alpha-3 their
+// swagger claims. Verified live against UAT 2026-07-27: Samoa=SAM (not WSM),
+// Tonga=TGA (not TON), Fiji=FIJ (not FJI), South Africa=RSA (not ZAF),
+// Germany=GER (not DEU), Netherlands=NED (not NLD); the home nations exist
+// separately (ENG/SCO/WAL) alongside GBR "United Kingdom".
+//
+// So aliases resolve to a canonical country NAME and the code is read off
+// Sporty's own list. Hard-coding codes here is how a player's country of birth
+// silently becomes a country their system has never heard of.
 
 const COUNTRY_ALIASES: Record<string, string> = {
-  newzealand: "NZL",
-  nz: "NZL",
-  aotearoa: "NZL",
-  aotearoanewzealand: "NZL",
-  newzealandaotearoa: "NZL",
-  australia: "AUS",
-  england: "GBR",
-  unitedkingdom: "GBR",
-  uk: "GBR",
-  greatbritain: "GBR",
-  scotland: "GBR",
-  wales: "GBR",
-  northernireland: "GBR",
-  ireland: "IRL",
-  republicofireland: "IRL",
+  nz: "New Zealand",
+  nzl: "New Zealand",
+  aotearoa: "New Zealand",
+  aotearoanewzealand: "New Zealand",
+  newzealandaotearoa: "New Zealand",
+  uk: "United Kingdom",
+  gb: "United Kingdom",
+  greatbritain: "United Kingdom",
+  britain: "United Kingdom",
   unitedstates: "USA",
   unitedstatesofamerica: "USA",
-  usa: "USA",
   america: "USA",
-  southafrica: "ZAF",
-  fiji: "FJI",
-  samoa: "WSM",
-  tonga: "TON",
-  cookislands: "COK",
-  papuanewguinea: "PNG",
-  india: "IND",
-  china: "CHN",
-  japan: "JPN",
-  southkorea: "KOR",
-  korea: "KOR",
-  philippines: "PHL",
-  brazil: "BRA",
-  argentina: "ARG",
-  chile: "CHL",
-  germany: "DEU",
-  france: "FRA",
-  spain: "ESP",
-  portugal: "PRT",
-  italy: "ITA",
-  netherlands: "NLD",
-  holland: "NLD",
-  croatia: "HRV",
-  russia: "RUS",
-  ukraine: "UKR",
-  canada: "CAN",
-  mexico: "MEX",
-  colombia: "COL",
-  uruguay: "URY",
-  malaysia: "MYS",
-  singapore: "SGP",
-  thailand: "THA",
-  vietnam: "VNM",
-  indonesia: "IDN",
-  srilanka: "LKA",
-  pakistan: "PAK",
-  bangladesh: "BGD",
-  nepal: "NPL",
-  afghanistan: "AFG",
-  iran: "IRN",
-  iraq: "IRQ",
-  israel: "ISR",
-  turkey: "TUR",
-  egypt: "EGY",
-  nigeria: "NGA",
-  kenya: "KEN",
-  zimbabwe: "ZWE",
-  somalia: "SOM",
-  ethiopia: "ETH",
+  us: "USA",
+  southkorea: "Korea Republic",
+  korea: "Korea Republic",
+  northkorea: "Korea DPR",
+  holland: "Netherlands",
+  thenetherlands: "Netherlands",
+  ivorycoast: "Cote d'Ivoire",
+  capeverde: "Cabo Verde",
+  burma: "Myanmar",
+  czechrepublic: "Czechia",
+  republicofireland: "Ireland",
+  eire: "Ireland",
+  uae: "United Arab Emirates",
+  drc: "Congo DR",
+  westernsamoa: "Samoa",
+  png: "Papua New Guinea",
+  taiwan: "Chinese Taipei",
+  russianfederation: "Russia",
+
+  // Demonyms. Real CUFC data puts "Chinese", "British", "Japanese", "Russian"
+  // in the nationality field — a demonym names exactly one country, so this is
+  // a fact, not a guess. Values that name TWO ("New Zealand / USA",
+  // "French/Japanese") or that are really an ethnicity ("NZ European") are
+  // deliberately absent: a human picks those.
+  newzealander: "New Zealand",
+  kiwi: "New Zealand",
+  australian: "Australia",
+  british: "United Kingdom",
+  english: "England",
+  scottish: "Scotland",
+  welsh: "Wales",
+  irish: "Ireland",
+  american: "USA",
+  canadian: "Canada",
+  chinese: "China",
+  japanese: "Japan",
+  korean: "Korea Republic",
+  indian: "India",
+  filipino: "Philippines",
+  filipina: "Philippines",
+  malaysian: "Malaysia",
+  singaporean: "Singapore",
+  thai: "Thailand",
+  vietnamese: "Vietnam",
+  indonesian: "Indonesia",
+  srilankan: "Sri Lanka",
+  pakistani: "Pakistan",
+  bangladeshi: "Bangladesh",
+  nepali: "Nepal",
+  nepalese: "Nepal",
+  afghan: "Afghanistan",
+  afghani: "Afghanistan",
+  iranian: "Iran",
+  iraqi: "Iraq",
+  israeli: "Israel",
+  turkish: "Turkey",
+  egyptian: "Egypt",
+  nigerian: "Nigeria",
+  kenyan: "Kenya",
+  zimbabwean: "Zimbabwe",
+  somali: "Somalia",
+  ethiopian: "Ethiopia",
+  southafrican: "South Africa",
+  brazilian: "Brazil",
+  argentinian: "Argentina",
+  argentine: "Argentina",
+  chilean: "Chile",
+  colombian: "Colombia",
+  mexican: "Mexico",
+  uruguayan: "Uruguay",
+  german: "Germany",
+  french: "France",
+  spanish: "Spain",
+  portuguese: "Portugal",
+  italian: "Italy",
+  dutch: "Netherlands",
+  croatian: "Croatia",
+  serbian: "Serbia",
+  russian: "Russia",
+  ukrainian: "Ukraine",
+  polish: "Poland",
+  fijian: "Fiji",
+  samoan: "Samoa",
+  tongan: "Tonga",
+  cookislander: "Cook Islands",
+  niuean: "Niue",
+  tokelauan: "Tokelau",
+  tuvaluan: "Tuvalu",
+  nivanuatu: "Vanuatu",
+  solomonislander: "Solomon Islands",
+  papuanewguinean: "Papua New Guinea",
+};
+
+/** Last-resort codes for the preview UI BEFORE reference data has been fetched.
+ *  Deliberately tiny and always marked provisional — a live push refreshes the
+ *  real list first, so these never decide what reaches the register. */
+const PROVISIONAL_CODES: Record<string, string> = {
+  newzealand: "NZL",
+  australia: "AUS",
+  unitedkingdom: "GBR",
+  england: "ENG",
+  usa: "USA",
 };
 
 export interface CountryResolution {
   code: string;
-  /** True when resolved from our alias table without Sporty's country list to confirm. */
+  /** True when resolved without Sporty's country list to confirm it. */
   provisional: boolean;
 }
 
@@ -249,26 +340,36 @@ export function resolveCountryCode(
   const raw = (input || "").trim();
   if (!raw) return null;
   const countries = ref?.countries;
-
-  // Already an alpha-3 code?
-  if (/^[A-Za-z]{3}$/.test(raw)) {
-    const code = raw.toUpperCase();
-    if (countries?.length) {
-      return countries.some((c) => c.CountryCode.toUpperCase() === code) ? { code, provisional: false } : null;
-    }
-    // Without the reference list, only accept codes our alias table can vouch for.
-    return Object.values(COUNTRY_ALIASES).includes(code) ? { code, provisional: true } : null;
-  }
-
   const norm = normalizeName(raw);
+  const canonical = COUNTRY_ALIASES[norm];
+
   if (countries?.length) {
-    const hit = countries.find((c) => normalizeName(c.CountryName) === norm);
-    if (hit) return { code: hit.CountryCode.toUpperCase(), provisional: false };
+    // 1. Already one of THEIR codes?
+    if (/^[A-Za-z]{3}$/.test(raw)) {
+      const byCode = countries.find((c) => c.CountryCode.toUpperCase() === raw.toUpperCase());
+      if (byCode) return { code: byCode.CountryCode.toUpperCase(), provisional: false };
+      // A 3-letter string that is not one of their codes may still be an alias
+      // ("NZL" where they use something else) — fall through to the name paths.
+    }
+    // 2. Their own country name.
+    const byName = countries.find((c) => normalizeName(c.CountryName) === norm);
+    if (byName) return { code: byName.CountryCode.toUpperCase(), provisional: false };
+    // 3. Our alias → their canonical name.
+    if (canonical) {
+      const viaAlias = countries.find((c) => normalizeName(c.CountryName) === normalizeName(canonical));
+      if (viaAlias) return { code: viaAlias.CountryCode.toUpperCase(), provisional: false };
+    }
+    // Refuse rather than invent a code their system will reject or misread.
+    return null;
   }
-  const alias = COUNTRY_ALIASES[norm];
-  if (alias) {
-    if (countries?.length && !countries.some((c) => c.CountryCode.toUpperCase() === alias)) return null;
-    return { code: alias, provisional: !countries?.length };
+
+  // No reference data yet (preview only) — provisional, and only for the handful
+  // we can vouch for without their list.
+  const provisionalKey = canonical ? normalizeName(canonical) : norm;
+  const code = PROVISIONAL_CODES[provisionalKey];
+  if (code) return { code, provisional: true };
+  if (/^[A-Za-z]{3}$/.test(raw) && Object.values(PROVISIONAL_CODES).includes(raw.toUpperCase())) {
+    return { code: raw.toUpperCase(), provisional: true };
   }
   return null;
 }
@@ -280,14 +381,59 @@ export function resolveCountryCode(
 // (contacts.subEthnicity free text, incl. iwi) are matched against the group's
 // selection list when the reference cache holds it.
 
+// Verified against the LIVE UAT vocabulary 2026-07-27. Sporty's seven groups are
+// NOT the six Stats-NZ level-1 groups our form collects:
+//   NZ European(1) · Māori(2) · Pacific Peoples(3) · Asian(4) · Other(5) · MELAA(6) · Other European(7)
+// So "European" matches TWO of their groups and "Other Ethnicity" matches none
+// by name — it is their "Other" group, whose selection 294 is literally called
+// "Other Ethnicity".
 const ETHNICITY_FALLBACK_NAMES: Record<string, string> = {
-  European: "European",
+  European: "European", // deliberately ambiguous → resolved via sub-ethnicity or refused
   "Māori": "Māori",
   "Pacific Peoples": "Pacific Peoples",
   Asian: "Asian",
   "Middle Eastern / Latin American / African": "MELAA",
-  "Other Ethnicity": "Other Ethnicity",
+  "Other Ethnicity": "Other",
 };
+
+/** When our group name maps 1:1 to one of their selections, that selection IS
+ *  the faithful translation — not a guess. Only exact same-meaning pairs here. */
+const ETHNICITY_IMPLIED_SELECTION: Record<string, string> = {
+  "Other Ethnicity": "Other Ethnicity", // their group "Other" → selection "Other Ethnicity"
+};
+
+/** A sub-ethnicity that names one of their GROUPS outright settles an ambiguous
+ *  group ("European" → NZ European vs Other European). These are the person's
+ *  own words for their group, not our inference. */
+const SUB_NAMES_A_GROUP: Record<string, string> = {
+  newzealandeuropean: "NZ European",
+  nzeuropean: "NZ European",
+  pakeha: "NZ European",
+  nzpakeha: "NZ European",
+  newzealandpakeha: "NZ European",
+  othereuropean: "Other European",
+};
+
+/** Exact match first, then containment but ONLY when it is unambiguous.
+ *  Substring-first is how "Indian" becomes "Anglo Indian", "Chinese" becomes
+ *  "Cambodian Chinese", "Syrian" becomes "Assyrian" and "Ngāti Kahu" becomes
+ *  "Ngāpuhi ki Whaingaroa-Ngāti Kahu ki Whaingaroa" — all verified collisions in
+ *  their real list. A tie is a human decision, never a coin toss. */
+function matchOne<T>(items: T[], nameOf: (t: T) => string, input: string): { hit: T } | { ambiguous: T[] } | null {
+  const norm = normalizeName(input);
+  if (!norm) return null;
+  const exact = items.filter((i) => normalizeName(nameOf(i)) === norm);
+  if (exact.length === 1) return { hit: exact[0] };
+  if (exact.length > 1) return { ambiguous: exact };
+  if (norm.length < 4) return null; // too short to fuzzy-match safely
+  const loose = items.filter((i) => {
+    const n = normalizeName(nameOf(i));
+    return n.includes(norm) || norm.includes(n);
+  });
+  if (loose.length === 1) return { hit: loose[0] };
+  if (loose.length > 1) return { ambiguous: loose };
+  return null;
+}
 
 export interface EthnicityResolution {
   groupName: string;
@@ -297,6 +443,36 @@ export interface EthnicityResolution {
   provisional: boolean;
   /** Set when the group requires selections we couldn't match. */
   selectionShortfall?: { required: number; matched: number; available: string[] };
+  /** Our stored name maps to MORE THAN ONE of Sporty's groups (e.g. "European"
+   *  → "NZ European" and "Other European"). A human picks; we never do. */
+  groupAmbiguity?: { input: string; candidates: string[] };
+  /** The sub-ethnicity matched more than one selection (e.g. "Indian" also hits
+   *  "Anglo Indian", "Fijian Indian", "Indian Tamil"…). */
+  selectionAmbiguity?: { input: string; candidates: string[] };
+}
+
+/** Settle a group tie using the sub-ethnicity — the person's own answer.
+ *  Returns null when it genuinely cannot be settled, so a human decides. */
+function disambiguateGroup(
+  candidates: SportyEthnicityGroup[],
+  subEthnicity: string | null | undefined,
+): SportyEthnicityGroup | null {
+  const sub = (subEthnicity || "").trim();
+  if (!sub) return null;
+
+  // 1. The sub names one of the groups outright ("New Zealand European").
+  const named = SUB_NAMES_A_GROUP[normalizeName(sub)];
+  if (named) {
+    const hit = candidates.find((g) => normalizeName(g.EthnicityGroupName) === normalizeName(named));
+    if (hit) return hit;
+  }
+  // 2. The sub matches a selection inside exactly ONE of the candidates
+  //    ("British" exists only under Other European).
+  const owners = candidates.filter((g) => {
+    const m = matchOne(g.EthnicityGroupSelections || [], (s) => s.EthnicityGroupSelectionName, sub);
+    return !!m && "hit" in m;
+  });
+  return owners.length === 1 ? owners[0] : null;
 }
 
 export function resolveEthnicity(
@@ -313,28 +489,41 @@ export function resolveEthnicity(
     return { groupName: fallback, selectionIds: [], provisional: true };
   }
 
-  const oursNorm = normalizeName(ours);
-  const fallbackNorm = normalizeName(fallback);
-  const group = groups.find((g) => {
-    const gn = normalizeName(g.EthnicityGroupName);
-    // Exact match on either our Stats-NZ name or the expected Sporty name; a
-    // containment check covers styles like "MELAA (Middle Eastern/Latin
-    // American/African)" without letting short strings false-match.
-    if (gn === oursNorm || gn === fallbackNorm) return true;
-    return fallbackNorm.length >= 5 ? gn.includes(fallbackNorm) : gn.startsWith(fallbackNorm);
-  });
-  if (!group) return null;
+  // Try our stored name, then the expected Sporty name. Exact wins; a tie
+  // between two of their groups is reported, never silently broken.
+  const byOurs = matchOne(groups, (g) => g.EthnicityGroupName, ours);
+  const byFallback = matchOne(groups, (g) => g.EthnicityGroupName, fallback);
+  const picked = byOurs && "hit" in byOurs ? byOurs : byFallback && "hit" in byFallback ? byFallback : byOurs ?? byFallback;
+
+  if (!picked) return null;
+
+  let group: SportyEthnicityGroup;
+  if ("ambiguous" in picked) {
+    // Their vocabulary splits one of our groups in two (European → NZ European /
+    // Other European). The family's own sub-ethnicity settles it: either it
+    // names one of the groups, or it matches a selection inside exactly one.
+    const settled = disambiguateGroup(picked.ambiguous, subEthnicity);
+    if (!settled) {
+      return {
+        groupName: fallback,
+        selectionIds: [],
+        provisional: false,
+        groupAmbiguity: { input: ours, candidates: picked.ambiguous.map((g) => g.EthnicityGroupName) },
+      };
+    }
+    group = settled;
+  } else {
+    group = picked.hit;
+  }
 
   const selectionIds: number[] = [];
-  const sub = (subEthnicity || "").trim();
+  let selectionAmbiguity: EthnicityResolution["selectionAmbiguity"];
+  const sub = (subEthnicity || "").trim() || ETHNICITY_IMPLIED_SELECTION[ours] || "";
   if (sub) {
-    const subNorm = normalizeName(sub);
-    for (const s of group.EthnicityGroupSelections || []) {
-      const sn = normalizeName(s.EthnicityGroupSelectionName);
-      if (sn === subNorm || (subNorm.length >= 4 && (sn.includes(subNorm) || subNorm.includes(sn)))) {
-        selectionIds.push(s.EthnicityGroupSelectionId);
-        break;
-      }
+    const m = matchOne(group.EthnicityGroupSelections || [], (s) => s.EthnicityGroupSelectionName, sub);
+    if (m && "hit" in m) selectionIds.push(m.hit.EthnicityGroupSelectionId);
+    else if (m && "ambiguous" in m) {
+      selectionAmbiguity = { input: sub, candidates: m.ambiguous.map((s) => s.EthnicityGroupSelectionName) };
     }
   }
 
@@ -346,6 +535,7 @@ export function resolveEthnicity(
     group,
     selectionIds: capped,
     provisional: false,
+    selectionAmbiguity,
   };
   if (min > 0 && capped.length < min) {
     result.selectionShortfall = {
@@ -362,6 +552,76 @@ export function resolveEthnicity(
 // token as the postcode. Anything we can't confidently place stays in
 // StreetAddress and the payload is flagged for the dry-run preview — a human
 // eyeballs it, we never fabricate a suburb.
+//
+// 🔴 Proved against live UAT 2026-07-27: Sporty requires ALL SIX of
+// StreetAddress, Suburb, City, Region, AlphaPostCode and Country, and answers
+// with a single unhelpful "Address is required." whichever one is missing —
+// even though their swagger marks none of them required and shows Region as an
+// optional string. So we validate all six ourselves and tell staff exactly
+// which part is absent.
+
+export const SPORTY_REQUIRED_ADDRESS_PARTS = [
+  ["StreetAddress", "street address"],
+  ["Suburb", "suburb"],
+  ["City", "city or town"],
+  ["Region", "region"],
+  ["AlphaPostCode", "postcode"],
+  ["Country", "country"],
+] as const;
+
+/** Which of Sporty's six mandatory address parts are missing. */
+export function missingAddressParts(address: SportyAddress | null | undefined): string[] {
+  if (!address) return SPORTY_REQUIRED_ADDRESS_PARTS.map(([, label]) => label);
+  return SPORTY_REQUIRED_ADDRESS_PARTS.filter(([key]) => !String((address as any)[key] ?? "").trim()).map(
+    ([, label]) => label,
+  );
+}
+
+// NZ's regions and the cities/districts inside them. A city's region is a
+// geographic fact, not a guess — the same class of lookup as "New Zealand" →
+// NZL. A city we don't recognise yields NO region, and the player is blocked
+// rather than filed under an invented one.
+const NZ_CITY_REGION: Record<string, string> = {};
+const NZ_REGION_PLACES: Record<string, string[]> = {
+  Canterbury: [
+    "Christchurch", "Rolleston", "Lincoln", "Rangiora", "Kaiapoi", "Ashburton", "Timaru", "Selwyn",
+    "Selwyn District", "Waimakariri", "West Melton", "Prebbleton", "Darfield", "Leeston", "Amberley",
+    "Oxford", "Woodend", "Pegasus", "Geraldine", "Temuka", "Methven", "Akaroa", "Lyttelton", "Hawarden",
+    "Culverden", "Cheviot", "Waikari", "Springston", "Tai Tapu", "Governors Bay", "Diamond Harbour",
+    "Kaikoura", "Kaikōura", "Fairlie", "Twizel", "Pleasant Point", "Waimate", "Rakaia", "Southbridge",
+  ],
+  Auckland: ["Auckland", "Manukau", "Waitakere", "North Shore", "Papakura", "Pukekohe", "Warkworth", "Helensville"],
+  Wellington: ["Wellington", "Lower Hutt", "Upper Hutt", "Porirua", "Kapiti", "Paraparaumu", "Waikanae", "Masterton", "Carterton"],
+  Waikato: ["Hamilton", "Cambridge", "Te Awamutu", "Taupo", "Taupō", "Tokoroa", "Thames", "Matamata", "Morrinsville", "Huntly", "Ngaruawahia", "Raglan"],
+  "Bay of Plenty": ["Tauranga", "Rotorua", "Whakatane", "Whakatāne", "Mount Maunganui", "Papamoa", "Te Puke", "Kawerau", "Opotiki"],
+  Otago: ["Dunedin", "Queenstown", "Wanaka", "Wānaka", "Oamaru", "Alexandra", "Cromwell", "Balclutha", "Mosgiel", "Arrowtown"],
+  Southland: ["Invercargill", "Gore", "Te Anau", "Winton", "Bluff", "Riverton"],
+  "Hawke's Bay": ["Napier", "Hastings", "Havelock North", "Waipukurau", "Wairoa"],
+  Taranaki: ["New Plymouth", "Hawera", "Hāwera", "Stratford", "Inglewood", "Waitara"],
+  Manawatu: ["Palmerston North", "Whanganui", "Wanganui", "Levin", "Feilding", "Marton", "Dannevirke", "Foxton"],
+  Northland: ["Whangarei", "Whangārei", "Kerikeri", "Kaitaia", "Dargaville", "Paihia", "Kaikohe"],
+  Gisborne: ["Gisborne", "Ruatoria"],
+  Marlborough: ["Blenheim", "Picton", "Renwick", "Havelock"],
+  Nelson: ["Nelson", "Richmond", "Motueka", "Takaka", "Wakefield", "Brightwater"],
+  "West Coast": ["Greymouth", "Westport", "Hokitika", "Reefton", "Franz Josef"],
+};
+for (const [region, places] of Object.entries(NZ_REGION_PLACES)) {
+  for (const place of places) NZ_CITY_REGION[normalizeName(place)] = region;
+}
+
+/** The NZ region containing a city/town, or null when we don't know it. */
+export function nzRegionForCity(city: string | null | undefined): string | null {
+  const norm = normalizeName(city || "");
+  if (!norm) return null;
+  if (NZ_CITY_REGION[norm]) return NZ_CITY_REGION[norm];
+  // "Christchurch CBD", "North Addington Christchurch" — a known city inside a
+  // longer free-text string still identifies the region unambiguously.
+  const hits = new Set<string>();
+  for (const [place, region] of Object.entries(NZ_CITY_REGION)) {
+    if (place.length >= 5 && norm.includes(place)) hits.add(region);
+  }
+  return hits.size === 1 ? Array.from(hits)[0] : null;
+}
 
 export interface ParsedAddress {
   address: SportyAddress;
@@ -373,8 +633,10 @@ export function parseNzAddress(raw: string | null | undefined): ParsedAddress | 
   if (!text) return null;
 
   let postcode: string | undefined;
-  // The LAST standalone 4-digit token is the postcode (street numbers come first).
-  const pcMatches = Array.from(text.matchAll(/(?:^|[\s,])(\d{4})(?=$|[\s,])/g));
+  // The LAST standalone 4-digit token is the postcode — EXCEPT one that opens
+  // the address, which is a street number. Real example that broke this:
+  // "1272 Courtenay Road" was read as postcode 1272 on "Courtenay Road".
+  const pcMatches = Array.from(text.matchAll(/(?:^|[\s,])(\d{4})(?=$|[\s,])/g)).filter((m) => m.index !== 0);
   if (pcMatches.length) postcode = pcMatches[pcMatches.length - 1][1];
 
   let working = postcode
@@ -409,6 +671,7 @@ export function parseNzAddress(raw: string | null | undefined): ParsedAddress | 
       StreetAddress: street,
       Suburb: suburb,
       City: city,
+      Region: nzRegionForCity(city) ?? undefined,
       AlphaPostCode: postcode,
       Country: country,
     },
@@ -541,8 +804,21 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
   const parsedAddress = parseNzAddress(rawAddress);
   if (!parsedAddress) {
     blocker("missing_address", "address", minor ? "No address on the player or their guardian." : "Address is missing.");
-  } else if (!parsedAddress.confident) {
-    warning("address_unstructured", "address", `Address "${rawAddress}" couldn't be split into street/suburb/city — it will be sent as the street line. Check the preview.`);
+  } else {
+    // Sporty requires all six parts and will not say which one is absent.
+    const missing = missingAddressParts(parsedAddress.address);
+    if (missing.length) {
+      blocker(
+        "address_incomplete",
+        "address",
+        `NZ Football requires a full address — street, suburb, city, region, postcode and country. "${rawAddress}" is missing: ${missing.join(", ")}.` +
+          (missing.includes("region") && parsedAddress.address.City
+            ? ` (We derive the region from the city, and "${parsedAddress.address.City}" isn't one we recognise.)`
+            : ""),
+      );
+    } else if (!parsedAddress.confident) {
+      warning("address_unstructured", "address", `Address "${rawAddress}" couldn't be split into street/suburb/city — it will be sent as the street line. Check the preview.`);
+    }
   }
 
   const primaryEth = resolveEthnicity(player.ethnicity, player.subEthnicity, ref);
@@ -557,6 +833,22 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
   } else {
     if (primaryEth.provisional) {
       warning("ethnicity_provisional", "ethnicity", "Ethnicity group mapped without Sporty's reference list — refresh reference data to confirm.");
+    }
+    if (primaryEth.groupAmbiguity) {
+      const a = primaryEth.groupAmbiguity;
+      blocker(
+        "ethnicity_group_ambiguous",
+        "ethnicity",
+        `NZ Football splits "${a.input}" into ${a.candidates.map((c) => `"${c}"`).join(" and ")}. Set the sub-ethnicity on the contact (or pick the group with the family) — we never choose someone's ethnicity for them.`,
+      );
+    }
+    if (primaryEth.selectionAmbiguity) {
+      const a = primaryEth.selectionAmbiguity;
+      blocker(
+        "ethnicity_selection_ambiguous",
+        "subEthnicity",
+        `"${a.input}" matches ${a.candidates.length} of NZ Football's options (${a.candidates.slice(0, 6).join(", ")}${a.candidates.length > 6 ? "…" : ""}). Choose the exact one on the contact record.`,
+      );
     }
     if (primaryEth.selectionShortfall) {
       const s = primaryEth.selectionShortfall;
@@ -573,6 +865,16 @@ export function buildRegisterPerson(input: SportyBuildInput): SportyBuildResult 
     secondaryEth = resolveEthnicity(player.ethnicity2, player.subEthnicity2, ref);
     if (!secondaryEth) {
       warning("ethnicity2_unresolved", "ethnicity2", `Second ethnicity "${player.ethnicity2}" couldn't be matched — it will be omitted.`);
+    } else if (secondaryEth.groupAmbiguity || secondaryEth.selectionAmbiguity) {
+      // A second ethnicity is optional, so an ambiguous one is dropped rather
+      // than blocking the whole registration — but never guessed.
+      const a = secondaryEth.groupAmbiguity ?? secondaryEth.selectionAmbiguity!;
+      warning(
+        "ethnicity2_ambiguous",
+        "ethnicity2",
+        `Second ethnicity "${a.input}" matches more than one NZ Football option (${a.candidates.slice(0, 4).join(", ")}) — it will be omitted rather than guessed.`,
+      );
+      secondaryEth = null;
     } else if (secondaryEth.selectionShortfall) {
       const s = secondaryEth.selectionShortfall;
       warning(
