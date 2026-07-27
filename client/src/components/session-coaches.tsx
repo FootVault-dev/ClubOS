@@ -371,7 +371,11 @@ export function SessionCoachesCard({
                   }`}
                   data-testid={`button-coach-present-${c.contactId}`}
                 >
-                  <UserCheck className="w-4 h-4 inline-block" />
+                  {/* Labelled from `sm` up so this reads the same as the player
+                      roll directly below it; icon-only on a phone, where the
+                      two buttons plus the name have to fit 390px. */}
+                  <UserCheck className="w-4 h-4 inline-block sm:mr-1.5" />
+                  <span className="hidden sm:inline">Present</span>
                 </button>
                 <button
                   onClick={() => mark.mutate({ id: c.id, status: isAway ? null : "absent" })}
@@ -383,7 +387,8 @@ export function SessionCoachesCard({
                   }`}
                   data-testid={`button-coach-absent-${c.contactId}`}
                 >
-                  <UserX className="w-4 h-4 inline-block" />
+                  <UserX className="w-4 h-4 inline-block sm:mr-1.5" />
+                  <span className="hidden sm:inline">Absent</span>
                 </button>
                 <button
                   onClick={() => {
