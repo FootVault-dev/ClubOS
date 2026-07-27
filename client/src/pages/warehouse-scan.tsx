@@ -100,9 +100,22 @@ interface ScanResolvedLocation {
   code: string;
   kind: "bin" | "zone" | "virtual";
 }
+interface ScanResolvedInstance {
+  id: number;
+  assetTag: string | null;
+  serialNumber: string | null;
+  condition: string;
+  itemId: number;
+  itemSku: string;
+  itemName: string;
+  isLoanable: boolean;
+  locationId: number;
+  locationCode: string;
+}
 type ScanResolution =
   | { kind: "item"; item: ScanResolvedItem; matchedVia: "sku" | "alias"; aliasCode?: string; packQty: number; actions: MovementType[] }
   | { kind: "location"; location: ScanResolvedLocation; actions: MovementType[] }
+  | { kind: "instance"; instance: ScanResolvedInstance; actions: MovementType[] }
   | { kind: "unknown"; rawCode: string };
 
 type ActionKey =
@@ -1420,6 +1433,41 @@ export default function WarehouseScan() {
   const cameraActive = action === null || pickOnPick !== null;
   const { videoRef, status, error, engine, torchSupported, torchOn, toggleTorch } = useCamera(cameraActive, handleDetected);
 
+  // 🔴 When the camera can't start — permission denied, no camera on a desktop,
+  // an HTTP origin — open the keyboard box automatically and let it take focus.
+  //
+  // A USB or Bluetooth barcode scanner is a KEYBOARD: it types the code and
+  // presses Enter into whatever input is focused. With the box shut, a scan
+  // goes nowhere and the station looks broken to someone holding working
+  // hardware. This is the difference between the scanner working and not, so
+  // it must not depend on the operator finding the keyboard icon first.
+  useEffect(() => {
+    if (status === "error") setManualOpen(true);
+  }, [status]);
+
+  /** No usable camera means a hardware scanner (or typing) is the input
+   *  method, so the box stays open and refocused between scans instead of
+   *  closing after each one — otherwise counting a shelf means re-opening it
+   *  for every single item. */
+  const hardwareScannerMode = status === "error";
+  const manualInputRef = useRef<HTMLInputElement>(null);
+
+  const submitManual = useCallback(
+    (raw: string) => {
+      const code = raw.trim();
+      if (!code) return;
+      resolveCode(code);
+      setManualCode("");
+      if (hardwareScannerMode) {
+        // Keep the field alive and focused so the next trigger-pull lands.
+        requestAnimationFrame(() => manualInputRef.current?.focus());
+      } else {
+        setManualOpen(false);
+      }
+    },
+    [resolveCode, hardwareScannerMode],
+  );
+
   const requestScan = useCallback((onPick: (loc: ScanResolvedLocation) => void) => {
     setPickOnPick(() => onPick);
   }, []);
@@ -1447,7 +1495,13 @@ export default function WarehouseScan() {
               <>
                 <AlertTriangle className="w-6 h-6 text-amber-400" />
                 <span>{error || "Camera unavailable"}</span>
-                <span className="text-white/30 text-xs">Use manual entry below instead</span>
+                {/* The manual box is opened automatically the moment the
+                    camera fails (see the effect below) — a USB/Bluetooth
+                    scanner is a keyboard and types into whatever is focused,
+                    so leaving it shut means scanning does nothing at all. */}
+                <span className="text-white/30 text-xs">
+                  Keyboard entry is open below — a USB or Bluetooth scanner works straight into it.
+                </span>
               </>
             ) : (
               <>
@@ -1488,27 +1542,20 @@ export default function WarehouseScan() {
       {manualOpen && !pickOnPick && (
         <div className="p-3 border-t border-white/10 bg-black/90 flex gap-2 flex-shrink-0">
           <input
+            ref={manualInputRef}
             className={inputCls + " flex-1"}
-            placeholder="Type a SKU or bin code..."
+            placeholder={hardwareScannerMode ? "Scan or type a code — stays ready for the next one" : "Type a SKU or bin code..."}
             value={manualCode}
             onKeyDown={(e) => {
               if (e.key === "Enter" && manualCode.trim()) {
-                resolveCode(manualCode.trim());
-                setManualCode("");
-                setManualOpen(false);
+                submitManual(manualCode);
               }
             }}
             onChange={(e) => setManualCode(e.target.value)}
             autoFocus
           />
           <button
-            onClick={() => {
-              if (manualCode.trim()) {
-                resolveCode(manualCode.trim());
-                setManualCode("");
-                setManualOpen(false);
-              }
-            }}
+            onClick={() => submitManual(manualCode)}
             className="px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold"
           >
             Go
@@ -1533,6 +1580,51 @@ export default function WarehouseScan() {
             <Loader2 className="w-5 h-5 animate-spin" />
           </div>
         )}
+
+        {/* D19 — one physical asset. Read-only here on purpose: an asset is
+            moved and retired from the Assets screen, which shows its whole
+            history and asks for a destination. Scanning the tag is how you
+            find out WHICH one you're holding and where it's meant to be. */}
+        {resolved && !action && resolved.resolution.kind === "instance" && (() => {
+          const inst = resolved.resolution.instance;
+          const retired = inst.condition === "decommissioned";
+          return (
+            <div className="p-5 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-white font-bold text-lg truncate">{inst.itemName}</div>
+                  <div className="text-white/40 text-xs truncate">
+                    {inst.assetTag ?? "No asset tag"} · {inst.itemSku}
+                  </div>
+                </div>
+                <button onClick={resetToIdle} className="text-white/30 hover:text-white p-1 shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className={`px-2 py-0.5 rounded ${retired ? "bg-white/5 text-white/40" : "bg-blue-500/10 text-blue-400"}`}>
+                  {inst.condition}
+                </span>
+                <span className="px-2 py-0.5 rounded bg-white/5 text-white/60">at {inst.locationCode}</span>
+                {inst.serialNumber && <span className="text-white/30">serial {inst.serialNumber}</span>}
+              </div>
+
+              {retired && (
+                <div className="text-amber-300/80 text-xs">
+                  This one was retired — it shouldn't be back on the floor.
+                </div>
+              )}
+
+              <a
+                href={`/admin/warehouse/assets?instance=${inst.id}`}
+                className="block w-full py-3 rounded-xl bg-blue-600 text-white text-center text-sm font-semibold"
+              >
+                Open it
+              </a>
+            </div>
+          );
+        })()}
 
         {resolved && !action && resolved.resolution.kind === "unknown" && (
           <div className="p-5 space-y-3">

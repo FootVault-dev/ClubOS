@@ -21,6 +21,7 @@ import {
   type ScanLookupDb,
   type ScanResolvedItem,
   type ScanResolvedLocation,
+  type ScanResolvedInstance,
   type WarehouseDb,
   type NewMovementRow,
 } from "../server/warehouse";
@@ -46,8 +47,9 @@ function makeFakeScanDb(opts: {
   itemsBySku?: Record<string, ScanResolvedItem>;
   aliasesByCode?: Record<string, { item: ScanResolvedItem; packQty: number; aliasCode: string }>;
   locationsByCode?: Record<string, ScanResolvedLocation>;
+  instancesByTag?: Record<string, ScanResolvedInstance>;
 }) {
-  const calls = { findItemBySku: 0, findAliasByCode: 0, findLocationByCode: 0 };
+  const calls = { findItemBySku: 0, findAliasByCode: 0, findLocationByCode: 0, findInstanceByAssetTag: 0 };
   const db: ScanLookupDb = {
     async findItemBySku(sku) {
       calls.findItemBySku++;
@@ -61,6 +63,10 @@ function makeFakeScanDb(opts: {
       calls.findLocationByCode++;
       return opts.locationsByCode?.[code];
     },
+    async findInstanceByAssetTag(tag) {
+      calls.findInstanceByAssetTag++;
+      return opts.instancesByTag?.[tag];
+    },
   };
   return { db, calls };
 }
@@ -68,6 +74,12 @@ function makeFakeScanDb(opts: {
 const shirt: ScanResolvedItem = { id: 1, sku: "MFL-SHIRT-BLU-M", name: "MFL Home Shirt (M)", isLoanable: false };
 const cone: ScanResolvedItem = { id: 2, sku: "CLUB-CONE-ORG-STD", name: "Training cone", isLoanable: true };
 const binA: ScanResolvedLocation = { id: 10, code: "A-01-2", kind: "bin" };
+const press: ScanResolvedInstance = {
+  id: 55, assetTag: "UP-PRESS-A3-001", serialNumber: "STX-99120-AA", condition: "working",
+  itemId: 3, itemSku: "UP-PRESS-A3", itemName: "Heat press A3", isLoanable: false,
+  locationId: 10, locationCode: "A-01-2",
+};
+const retiredPress: ScanResolvedInstance = { ...press, id: 56, assetTag: "UP-PRESS-A3-000", condition: "decommissioned" };
 const receiving: ScanResolvedLocation = { id: 11, code: "RECEIVING", kind: "zone" };
 
 // ── LOC:-prefixed codes ────────────────────────────────────────────────────
@@ -112,6 +124,68 @@ await ok(
     assert.equal(calls.findAliasByCode, 0, "must NOT check the alias table either");
   },
 );
+
+// ── Asset tags (D19) ───────────────────────────────────────────────────────
+
+await ok("an AST:-prefixed code resolves to ONE physical asset", async () => {
+  const { db } = makeFakeScanDb({ instancesByTag: { "UP-PRESS-A3-001": press } });
+  const result = await resolveScanCode(db, "AST:UP-PRESS-A3-001");
+  assert.equal(result.kind, "instance");
+  if (result.kind === "instance") {
+    assert.equal(result.instance.id, 55);
+    assert.equal(result.instance.locationCode, "A-01-2");
+    assert.deepEqual(result.actions, ["transfer", "decommission"]);
+  }
+});
+
+await ok("AST: prefix is case-insensitive and the tag normalised", async () => {
+  const { db } = makeFakeScanDb({ instancesByTag: { "UP-PRESS-A3-001": press } });
+  const result = await resolveScanCode(db, "ast:up-press-a3-001");
+  assert.equal(result.kind, "instance");
+});
+
+await ok("a retired asset resolves but offers NO actions", async () => {
+  const { db } = makeFakeScanDb({ instancesByTag: { "UP-PRESS-A3-000": retiredPress } });
+  const result = await resolveScanCode(db, "AST:UP-PRESS-A3-000");
+  assert.equal(result.kind, "instance");
+  // Scanning it must still tell you what you are holding — it just must not
+  // let a retired press quietly walk back onto the floor.
+  if (result.kind === "instance") assert.deepEqual(result.actions, []);
+});
+
+await ok(
+  "an unmatched AST: code is unknown and NEVER falls through to item/alias lookups",
+  async () => {
+    const { db, calls } = makeFakeScanDb({
+      itemsBySku: { X: shirt },
+      aliasesByCode: { "AST:X": { item: shirt, packQty: 1, aliasCode: "AST:X" } },
+      instancesByTag: {},
+    });
+    const result = await resolveScanCode(db, "AST:X");
+    assert.equal(result.kind, "unknown");
+    assert.equal(calls.findInstanceByAssetTag, 1);
+    assert.equal(calls.findItemBySku, 0, "a code that announced itself as an asset must not match an item");
+    assert.equal(calls.findAliasByCode, 0);
+  },
+);
+
+await ok("a BARE asset tag resolves, but only after SKU and alias have missed", async () => {
+  const { db, calls } = makeFakeScanDb({ instancesByTag: { "UP-PRESS-A3-001": press } });
+  const result = await resolveScanCode(db, "UP-PRESS-A3-001");
+  assert.equal(result.kind, "instance");
+  assert.equal(calls.findItemBySku, 1, "our own SKU scheme is still checked first");
+  assert.equal(calls.findAliasByCode, 1);
+});
+
+await ok("an item SKU wins over an asset tag with the same string", async () => {
+  const clash: ScanResolvedItem = { id: 9, sku: "UP-PRESS-A3-001", name: "Clashing item", isLoanable: false };
+  const { db } = makeFakeScanDb({
+    itemsBySku: { "UP-PRESS-A3-001": clash },
+    instancesByTag: { "UP-PRESS-A3-001": press },
+  });
+  const result = await resolveScanCode(db, "UP-PRESS-A3-001");
+  assert.equal(result.kind, "item", "our own item scheme takes priority on a tie");
+});
 
 // ── Item resolution via SKU ────────────────────────────────────────────────
 
