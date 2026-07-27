@@ -37,6 +37,12 @@ export const userOrganizations = pgTable("user_organizations", {
   // [] = no tabs (effectively no access in workspace).
   // ["calendar", "projects"] = whitelist of tab slugs (see shared/tabs.ts).
   tabs: jsonb("tabs").$type<string[] | null>(),
+  // Hiring tab brand whitelist. The Hiring tab is one tab for every brand, so
+  // holding it used to mean seeing every brand's applicants. null = all brands
+  // (what every membership predating this column means — never narrow silently);
+  // ["mfl","cic"] = only those; [] = none, so the tab opens empty rather than
+  // full. Enforced server-side in server/hiring-routes.ts, not in the client.
+  hiringBrands: jsonb("hiring_brands").$type<string[] | null>(),
 });
 
 export const users = pgTable("users", {

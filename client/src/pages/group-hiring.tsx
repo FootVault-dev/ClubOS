@@ -186,10 +186,14 @@ export default function GroupHiring() {
   const [jobDialogOpen, setJobDialogOpen] = useState(false);
   const [editingJob, setEditingJob] = useState<HiringJob | undefined>(undefined);
 
-  const { data: jobsData, isLoading: jobsLoading } = useQuery<{ jobs: HiringJob[] }>({
+  const { data: jobsData, isLoading: jobsLoading } = useQuery<{ jobs: HiringJob[]; allowedBrands: string[] | null }>({
     queryKey: ["/api/admin/hiring/jobs"],
   });
   const jobs = jobsData?.jobs ?? [];
+  // null = every brand. A scoped viewer (e.g. the person who runs Mini Football
+  // and the CIC) only ever sees, edits and posts under their own brands — the
+  // server enforces it; this just keeps the UI from offering what it would reject.
+  const allowedBrands = jobsData?.allowedBrands ?? null;
   const selectedJob = selectedJobId != null ? jobs.find((j) => j.id === selectedJobId) : undefined;
 
   const invalidateJobs = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/hiring/jobs"] });
@@ -247,6 +251,7 @@ export default function GroupHiring() {
           onOpenChange={setJobDialogOpen}
           job={editingJob}
           saving={createJobMut.isPending || updateJobMut.isPending}
+          allowedBrands={allowedBrands}
           onSubmit={(body) => {
             if (editingJob) updateJobMut.mutate({ id: editingJob.id, ...body });
             else createJobMut.mutate(body);
@@ -308,6 +313,7 @@ export default function GroupHiring() {
         onOpenChange={setJobDialogOpen}
         job={editingJob}
         saving={createJobMut.isPending || updateJobMut.isPending}
+        allowedBrands={allowedBrands}
         onSubmit={(body) => {
           if (editingJob) updateJobMut.mutate({ id: editingJob.id, ...body });
           else createJobMut.mutate(body);
@@ -383,12 +389,13 @@ function JobCard({ job, onOpen, onEdit, onDelete, onStatusChange }: {
 }
 
 // ═══ JOB CREATE/EDIT DIALOG ═══════════════════════════════════════════════════
-function JobDialogRoot({ open, onOpenChange, job, saving, onSubmit }: {
+function JobDialogRoot({ open, onOpenChange, job, saving, onSubmit, allowedBrands }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   job: HiringJob | undefined;
   saving: boolean;
   onSubmit: (body: Record<string, unknown>) => void;
+  allowedBrands: string[] | null;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -397,6 +404,7 @@ function JobDialogRoot({ open, onOpenChange, job, saving, onSubmit }: {
           key={job?.id ?? "new"}
           job={job}
           saving={saving}
+          allowedBrands={allowedBrands}
           onCancel={() => onOpenChange(false)}
           onSubmit={onSubmit}
         />
@@ -405,15 +413,19 @@ function JobDialogRoot({ open, onOpenChange, job, saving, onSubmit }: {
   );
 }
 
-function JobForm({ job, saving, onCancel, onSubmit }: {
+function JobForm({ job, saving, onCancel, onSubmit, allowedBrands }: {
   job: HiringJob | undefined;
   saving: boolean;
   onCancel: () => void;
   onSubmit: (body: Record<string, unknown>) => void;
+  allowedBrands: string[] | null;
 }) {
   const isEdit = !!job;
   const [title, setTitle] = useState(job?.title ?? "");
-  const [brand, setBrand] = useState(job?.brand ?? "");
+  // A scoped user gets a picker of their own brands, pre-filled when there is
+  // only one — typing "cufc" into a free-text box only to be refused on save is
+  // a worse way to learn the rule.
+  const [brand, setBrand] = useState(job?.brand ?? (allowedBrands?.length === 1 ? allowedBrands[0] : ""));
   const [slug, setSlug] = useState(job?.slug ?? "");
   const [slugTouched, setSlugTouched] = useState(isEdit);
   const [tagline, setTagline] = useState(job?.tagline ?? "");
@@ -477,14 +489,33 @@ function JobForm({ job, saving, onCancel, onSubmit }: {
         <div className="grid grid-cols-2 gap-2.5">
           <div>
             <label className="text-[11px] text-white/40 mb-1 block">Brand *</label>
-            <input
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-              placeholder="cufc, mfl, siu, cic…"
-              disabled={isEdit}
-              data-testid="input-job-brand"
-              className={inputCls}
-            />
+            {allowedBrands ? (
+              <select
+                value={brand}
+                onChange={(e) => setBrand(e.target.value)}
+                disabled={isEdit}
+                data-testid="input-job-brand"
+                /* inputCls, not selectCls: this sits beside the full-width slug
+                   field, and selectCls is the small inline status pill. */
+                className={inputCls}
+              >
+                <option value="">Choose…</option>
+                {/* An existing job's brand stays listed even if it sits outside
+                    the current scope, so an edit dialog can never blank it. */}
+                {Array.from(new Set([...allowedBrands, ...(job?.brand ? [job.brand] : [])])).map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={brand}
+                onChange={(e) => setBrand(e.target.value)}
+                placeholder="cufc, mfl, siu, cic…"
+                disabled={isEdit}
+                data-testid="input-job-brand"
+                className={inputCls}
+              />
+            )}
           </div>
           <div>
             <label className="text-[11px] text-white/40 mb-1 block">URL slug *</label>

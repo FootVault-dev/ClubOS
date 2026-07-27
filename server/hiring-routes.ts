@@ -22,7 +22,8 @@ import type { Express, Request, Response } from "express";
 import multer from "multer";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { requireAuth, requireTab } from "./auth";
+import { requireAuth, requireTab, requireSuperAdmin } from "./auth";
+import { storage } from "./storage";
 import { clientIp } from "./api-security";
 import { organizations, hiringJobs, hiringApplications, users as usersTable } from "@shared/schema";
 import {
@@ -142,6 +143,57 @@ async function workspaceOrg(req: Request): Promise<{ id: number; slug: string } 
   if (!slug) return null;
   const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug));
   return org ? { id: org.id, slug: org.slug } : null;
+}
+
+/**
+ * Which brands this caller may see in this workspace. `null` means all of them.
+ *
+ * The distinction that carries the security here is between `null` and `[]`.
+ * `null` is the state every membership was in before brand scoping existed and
+ * has to keep meaning "everything", or this feature would quietly lock the
+ * whole club out of its own Hiring tab. `[]` is a real, deliberate answer —
+ * see nothing — and must never be collapsed into `null`.
+ *
+ * Anything it cannot positively establish (no session, no user, no workspace
+ * header, no membership) returns `[]`, not `null`: an unanswerable question
+ * about access is a no. requireTab has already rejected those cases before we
+ * get here; this is the second lock on the same door.
+ */
+async function allowedBrands(req: Request): Promise<string[] | null> {
+  const userId = req.session.userId;
+  if (!userId) return [];
+  const user = await storage.getUser(userId);
+  if (!user) return [];
+  if (user.role === "super_admin") return null;
+
+  const slug = String(req.headers["x-workspace-slug"] || "").trim();
+  if (!slug) return [];
+  const memberships = await storage.getUserOrganizations(userId);
+  const membership = memberships.find((m) => m.slug === slug);
+  if (!membership) return [];
+
+  const scope = membership.userHiringBrands;
+  if (scope == null) return null;
+  return scope.map((b) => String(b).trim().toLowerCase()).filter(Boolean);
+}
+
+/** Is `brand` inside this scope? `null` scope = every brand. */
+const brandAllowed = (scope: string[] | null, brand: string | null | undefined): boolean =>
+  scope === null || (!!brand && scope.includes(String(brand).toLowerCase()));
+
+/**
+ * The brand of the job an application belongs to, inside this org. Null when
+ * the application does not exist or belongs to another workspace — callers
+ * treat both the same way, so a stranger's application id and an out-of-scope
+ * one are indistinguishable from outside.
+ */
+async function applicationBrand(id: number, orgId: number): Promise<string | null> {
+  const [row] = await db
+    .select({ brand: hiringJobs.brand })
+    .from(hiringApplications)
+    .innerJoin(hiringJobs, eq(hiringApplications.jobId, hiringJobs.id))
+    .where(and(eq(hiringApplications.id, id), eq(hiringApplications.organizationId, orgId)));
+  return row?.brand ?? null;
 }
 
 const jobIsOpen = (job: { status: string; closesAt: Date | null }) =>
@@ -357,8 +409,16 @@ export function registerHiringRoutes(app: Express) {
     try {
       const org = await workspaceOrg(req);
       if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
+      const brands = await allowedBrands(req);
+
+      // A scope of [] is a legitimate answer — no brands — and `inArray` with an
+      // empty list is not valid SQL. Answer it here rather than build a query.
+      if (brands && brands.length === 0) return res.json({ jobs: [], allowedBrands: brands });
+
       const jobs = await db.select().from(hiringJobs)
-        .where(eq(hiringJobs.organizationId, org.id))
+        .where(brands
+          ? and(eq(hiringJobs.organizationId, org.id), inArray(hiringJobs.brand, brands))
+          : eq(hiringJobs.organizationId, org.id))
         .orderBy(desc(hiringJobs.createdAt));
 
       // Application counts per job, in one query rather than N.
@@ -379,9 +439,26 @@ export function registerHiringRoutes(app: Express) {
             hiredCount: mine.filter((a) => a.status === "hired").length,
           };
         }),
+        // So the New-job form can offer only the brands this person may post
+        // under. The server re-checks on write — this is for the UI, not the lock.
+        allowedBrands: brands,
       });
     } catch (e: any) {
       console.error("[hiring] admin jobs failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Every brand key that actually has a posting, anywhere. Feeds the brand-scope
+  // picker on the Team page so it offers real keys rather than a hardcoded
+  // registry that could drift from what jobs are really tagged with. Super-admin
+  // only, because Team is.
+  app.get("/api/admin/hiring/brands", requireAuth, requireSuperAdmin, async (_req, res) => {
+    try {
+      const rows = await db.selectDistinct({ brand: hiringJobs.brand }).from(hiringJobs);
+      res.json({ brands: rows.map((r) => r.brand).filter(Boolean).sort() });
+    } catch (e: any) {
+      console.error("[hiring] brands failed:", e);
       res.status(500).json({ message: e.message });
     }
   });
@@ -396,6 +473,11 @@ export function registerHiringRoutes(app: Express) {
       if (!title) return res.status(400).json({ message: "A job title is required" });
       if (!brand) return res.status(400).json({ message: "A brand is required" });
       if (!slug) return res.status(400).json({ message: "A url slug is required" });
+
+      const brands = await allowedBrands(req);
+      if (!brandAllowed(brands, brand)) {
+        return res.status(403).json({ message: `You can't post jobs under the "${brand}" brand.` });
+      }
 
       const [created] = await db.insert(hiringJobs).values({
         organizationId: org.id,
@@ -426,6 +508,18 @@ export function registerHiringRoutes(app: Express) {
       const org = await workspaceOrg(req);
       const id = parseInt(String(req.params.id), 10);
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
+
+      // Out-of-scope reads as "not found", the same as another workspace's job:
+      // a 403 would confirm the posting exists. `brand` is not patchable, so
+      // checking the stored row is the whole check.
+      const brands = await allowedBrands(req);
+      if (brands) {
+        const [existing] = await db.select({ brand: hiringJobs.brand }).from(hiringJobs)
+          .where(and(eq(hiringJobs.id, id), eq(hiringJobs.organizationId, org.id)));
+        if (!existing || !brandAllowed(brands, existing.brand)) {
+          return res.status(404).json({ message: "Job not found" });
+        }
+      }
 
       const patch: Record<string, any> = { updatedAt: new Date() };
       if (req.body.title !== undefined) {
@@ -467,6 +561,15 @@ export function registerHiringRoutes(app: Express) {
       const id = parseInt(String(req.params.id), 10);
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
 
+      const brands = await allowedBrands(req);
+      if (brands) {
+        const [existing] = await db.select({ brand: hiringJobs.brand }).from(hiringJobs)
+          .where(and(eq(hiringJobs.id, id), eq(hiringJobs.organizationId, org.id)));
+        if (!existing || !brandAllowed(brands, existing.brand)) {
+          return res.status(404).json({ message: "Job not found" });
+        }
+      }
+
       // Deleting a job cascades its applications. Refuse if anyone applied —
       // close it instead. Losing a real person's application to a stray click
       // is not a recoverable mistake.
@@ -491,10 +594,18 @@ export function registerHiringRoutes(app: Express) {
       const org = await workspaceOrg(req);
       if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
       const jobId = parseInt(String(req.query.jobId ?? ""), 10);
+      const brands = await allowedBrands(req);
+      if (brands && brands.length === 0) return res.json({ applications: [] });
 
-      const where = Number.isFinite(jobId)
-        ? and(eq(hiringApplications.organizationId, org.id), eq(hiringApplications.jobId, jobId))
-        : eq(hiringApplications.organizationId, org.id);
+      // The brand lives on the job, and the query already inner-joins to it, so
+      // the scope filter costs nothing extra. Without it a scoped user could
+      // read every applicant's name, email, phone and answers by simply asking
+      // for the unfiltered list — the job filter above is a convenience, not a
+      // boundary.
+      const clauses = [eq(hiringApplications.organizationId, org.id)];
+      if (Number.isFinite(jobId)) clauses.push(eq(hiringApplications.jobId, jobId));
+      if (brands) clauses.push(inArray(hiringJobs.brand, brands));
+      const where = and(...clauses);
 
       const rows = await db
         .select({
@@ -536,6 +647,11 @@ export function registerHiringRoutes(app: Express) {
       const id = parseInt(String(req.params.id), 10);
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
 
+      const brands = await allowedBrands(req);
+      if (brands && !brandAllowed(brands, await applicationBrand(id, org.id))) {
+        return res.status(404).json({ message: "Application not found" });
+      }
+
       const patch: Record<string, any> = { updatedAt: new Date() };
       if (req.body.status !== undefined) {
         if (!isApplicationStatus(req.body.status)) {
@@ -570,6 +686,12 @@ export function registerHiringRoutes(app: Express) {
       const org = await workspaceOrg(req);
       const id = parseInt(String(req.params.id), 10);
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
+
+      const brands = await allowedBrands(req);
+      if (brands && !brandAllowed(brands, await applicationBrand(id, org.id))) {
+        return res.status(404).json({ message: "Application not found" });
+      }
+
       const [deleted] = await db.delete(hiringApplications)
         .where(and(eq(hiringApplications.id, id), eq(hiringApplications.organizationId, org.id))).returning();
       if (!deleted) return res.status(404).json({ message: "Application not found" });
@@ -593,6 +715,14 @@ export function registerHiringRoutes(app: Express) {
       const org = await workspaceOrg(req);
       const id = parseInt(String(req.params.id), 10);
       if (!org || !Number.isFinite(id)) return res.status(400).json({ message: "Bad request" });
+
+      // Checked before the signed URL is minted, not after: this endpoint hands
+      // out a link that works for an hour with no further auth, so a brand check
+      // that ran late would be no check at all.
+      const brands = await allowedBrands(req);
+      if (brands && !brandAllowed(brands, await applicationBrand(id, org.id))) {
+        return res.status(404).json({ message: "Application not found" });
+      }
 
       const [row] = await db.select().from(hiringApplications)
         .where(and(eq(hiringApplications.id, id), eq(hiringApplications.organizationId, org.id)));
