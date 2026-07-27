@@ -12,6 +12,7 @@ import {
   Search, Plus, X, Tag, MapPin, History, CheckSquare, Square, Printer, Trash2, Loader2,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { BarcodeEditor, BarcodeDraftEditor, type DraftBarcode } from "@/components/warehouse-barcodes";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -219,13 +220,38 @@ function ItemForm({
 function CreateItemModal({ open, onClose, locations }: { open: boolean; onClose: () => void; locations: WhLocation[] }) {
   const { toast } = useToast();
   const [form, setForm] = useState<ItemFormValue>(EMPTY_FORM);
+  const [barcodes, setBarcodes] = useState<DraftBarcode[]>([]);
 
   const create = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/admin/warehouse/items", formToPayload(form))).json(),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const item = await (await apiRequest("POST", "/api/admin/warehouse/items", formToPayload(form))).json();
+      // Barcodes are linked AFTER the item exists — they need its id. A
+      // barcode that fails (usually because it already points at another
+      // item) must not lose the item that was just created, so each is
+      // reported and the rest still go through.
+      const rejected: string[] = [];
+      for (const b of barcodes) {
+        try {
+          await apiRequest("POST", `/api/admin/warehouse/items/${item.id}/aliases`, b);
+        } catch {
+          rejected.push(b.code);
+        }
+      }
+      return { item, rejected };
+    },
+    onSuccess: ({ rejected }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/warehouse/items"] });
-      toast({ title: "Item created" });
+      toast(
+        rejected.length
+          ? {
+              title: "Item created, some barcodes weren't linked",
+              description: `${rejected.join(", ")} — already linked to another item. Add them from the item once that's sorted.`,
+              variant: "destructive",
+            }
+          : { title: barcodes.length ? `Item created with ${barcodes.length} barcode(s)` : "Item created" },
+      );
       setForm(EMPTY_FORM);
+      setBarcodes([]);
       onClose();
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
@@ -241,6 +267,9 @@ function CreateItemModal({ open, onClose, locations }: { open: boolean; onClose:
           <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-4 h-4" /></button>
         </div>
         <ItemForm value={form} onChange={setForm} locations={locations} />
+        <div className="mt-4 pt-4 border-t border-white/[0.06]">
+          <BarcodeDraftEditor value={barcodes} onChange={setBarcodes} />
+        </div>
         <div className="flex justify-end gap-2 mt-4">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={() => create.mutate()} disabled={create.isPending || !form.sku || !form.name} className="bg-blue-600 hover:bg-blue-700">
@@ -380,18 +409,7 @@ function ItemDetailModal({
                     <h4 className="text-xs uppercase tracking-wider text-white/40 mb-2 flex items-center gap-1.5">
                       <Tag className="w-3.5 h-3.5" /> Barcode aliases
                     </h4>
-                    {item.aliases.length === 0 ? (
-                      <div className="text-sm text-white/30 py-4 text-center rounded-lg bg-white/[0.02] border border-white/5">No aliases scanned in yet.</div>
-                    ) : (
-                      <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                        {item.aliases.map((a) => (
-                          <div key={a.id} className="flex items-center justify-between p-2 rounded-lg bg-white/[0.02] border border-white/5 text-sm">
-                            <span className="text-white/70 font-mono truncate">{a.code}</span>
-                            <span className="text-white/50">× {qty(a.packQty)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <BarcodeEditor itemId={item.id} />
                   </div>
                 </div>
 

@@ -85,6 +85,9 @@ import {
 import {
   enqueueSale, flushSales, mintSaleKey, pendingSales, removeSale, type PendingSale,
 } from "@/lib/warehouse-offline-queue";
+import {
+  feedWedgeKey, shouldIgnoreWedgeTarget, EMPTY_WEDGE, type WedgeState,
+} from "@/lib/wedge-scanner";
 
 // ── Types (mirror server/warehouse.ts's ScanResolution — client can't import
 // server/* code, so the JSON shape is redeclared here) ──────────────────────
@@ -1445,6 +1448,38 @@ export default function WarehouseScan() {
     if (status === "error") setManualOpen(true);
   }, [status]);
 
+  // 🔴 USB / Bluetooth barcode scanner support (the desk workflow).
+  //
+  // These are keyboards — they type the code and press Enter into whatever has
+  // focus. Auto-opening the manual box on camera failure covers a laptop with
+  // no camera, but NOT a laptop whose webcam works and is pointed at the
+  // ceiling: there the camera runs happily, the box stays shut, and the
+  // trigger does nothing. So the page also listens at the document level and
+  // tells a scanner from a person by TIMING (client/src/lib/wedge-scanner.ts).
+  //
+  // It stands down entirely while any input has focus, so typing a quantity or
+  // a note is never hijacked — in that case the field receives the scan
+  // directly, which is what we want anyway.
+  const wedgeRef = useRef<WedgeState>(EMPTY_WEDGE);
+  const [wedgeArmed, setWedgeArmed] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (shouldIgnoreWedgeTarget(e.target)) return;
+      const result = feedWedgeKey(wedgeRef.current, { key: e.key, at: e.timeStamp || Date.now() });
+      wedgeRef.current = result.state;
+      if (result.kind === "scan") {
+        e.preventDefault();
+        setWedgeArmed(true);
+        // Route it exactly like a camera detection, so a hardware scan and a
+        // camera scan behave identically everywhere downstream.
+        handleDetected(result.code);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleDetected]);
+
   /** No usable camera means a hardware scanner (or typing) is the input
    *  method, so the box stays open and refocused between scans instead of
    *  closing after each one — otherwise counting a shelf means re-opening it
@@ -1536,6 +1571,16 @@ export default function WarehouseScan() {
 
         {engine === "wasm" && status === "running" && (
           <div className="absolute bottom-3 left-3 text-[10px] text-white/30 uppercase tracking-wider">WASM scanner</div>
+        )}
+
+        {/* Proof the USB/Bluetooth scanner is being heard. Without this, a
+            hardware scan that resolves instantly is indistinguishable from
+            the page ignoring you — and the first thing anyone does with a new
+            scanner is check whether it's working at all. */}
+        {wedgeArmed && (
+          <div className="absolute bottom-3 right-3 text-[10px] text-emerald-400/70 uppercase tracking-wider flex items-center gap-1">
+            <ScanLine className="w-3 h-3" /> USB scanner connected
+          </div>
         )}
       </div>
 
