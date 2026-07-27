@@ -126,6 +126,11 @@ const leagueTabs: TabDef[] = [
   { slug: "mfl-referees", title: "Referees", url: "/admin/mfl-referees" },
   { slug: "mfl-game-feed", title: "Game Feed", url: "/admin/mfl-game-feed" },
   { slug: "mfl-media", title: "Photos", url: "/admin/mfl-media" },
+  // Recruiting referees sits next to managing them. This tab is a BRAND view:
+  // it shows only jobs advertised under the "mfl" brand, wherever they are
+  // owned (see HIRING_WORKSPACE_BRAND in shared/hiring.ts). The same tab in the
+  // group workspace shows every brand.
+  { slug: "hiring", title: "Hiring", url: "/admin/hiring" },
   { slug: "payments", title: "Payments", url: "/admin/payments" },
   { slug: "discounts", title: "Discounts", url: "/admin/discounts" },
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },
