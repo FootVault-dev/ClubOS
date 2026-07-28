@@ -327,6 +327,10 @@ export const REASON_CODES = [
   "write_off",
   "store_use",
   "event_use",
+  // A physical count putting real numbers against what the shelf actually
+  // holds. Distinct from 'count_variance', which is the audited blind-count
+  // flow's discrepancy — this is somebody walking the racks with a scanner.
+  "stock_take",
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
@@ -337,6 +341,7 @@ export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
   write_off: "Write-off",
   store_use: "Store use",
   event_use: "Event use",
+  stock_take: "Stock take",
 };
 export function isReasonCode(v: unknown): v is ReasonCode {
   return typeof v === "string" && (REASON_CODES as readonly string[]).includes(v);

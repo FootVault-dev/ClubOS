@@ -125,7 +125,7 @@ ok("every movement type has a label", () => {
   for (const t of MOVEMENT_TYPES) assert.ok(MOVEMENT_TYPE_LABELS[t], `missing label for ${t}`);
 });
 
-ok("seven reason codes", () => assert.equal(REASON_CODES.length, 7));
+ok("eight reason codes", () => assert.equal(REASON_CODES.length, 8)); // + stock_take (D27)
 ok("damaged is a reason code", () => assert.equal(isReasonCode("damaged"), true));
 ok("junk reason code rejected", () => assert.equal(isReasonCode("lost_in_space"), false));
 ok("every reason code has a label", () => {

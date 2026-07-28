@@ -23,7 +23,7 @@ import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
 import { storage } from "./storage";
 import { nzTodayIso } from "@shared/academy";
-import { whFieldTemplates, whItemFields, whItemInstances, whItems, whLocations, whMovements, users } from "@shared/schema";
+import { whFieldTemplates, whItemFields, whItemInstances, whItems, whLocations, whMovements, whStock, users } from "@shared/schema";
 import {
   FIELD_TYPES,
   INSTANCE_CONDITIONS,
@@ -48,7 +48,7 @@ import {
 import {
   CORE_FIELDS, CORE_FIELD_BY_KEY, defaultLayout, isCoreFieldKey, resolveLayout, validateLayout,
 } from "@shared/warehouse-form";
-import { runMovementGroup, InsufficientStockError } from "./warehouse";
+import { runMovementGroup, InsufficientStockError, type MovementLeg } from "./warehouse";
 import {
   InstanceError,
   decommissionInstanceTx,
@@ -75,6 +75,13 @@ const clean = (v: unknown): string | undefined => {
   const t = v.trim();
   return t === "" ? undefined : t;
 };
+
+/** RFC 4180 quoting — a product name with a comma or a quote in it must not
+ *  shift every following column in Excel. */
+function csvCell(v: string): string {
+  const s = String(v ?? "");
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
 
 function parseId(raw: unknown): number | null {
   const n = parseInt(String(raw), 10);
@@ -474,6 +481,171 @@ export function registerWarehouseV2Routes(app: Express) {
       res.json(result);
     } catch (e: any) {
       handleError(res, e, "save field values");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Stock take (D27) — walk the racks with a scanner and put real numbers in.
+  //
+  // Deliberately NOT the blind-count flow (wh_counts): that one hides the
+  // expected quantity and requires a second person to approve, which is the
+  // right control for a recurring audit and the wrong one for the very first
+  // count, where on-hand is zero, there is nothing to audit against, and Dima
+  // is on his own in the warehouse.
+  //
+  // What it keeps: every change is still a ledger movement, still named
+  // against the person who did it. Nothing writes quantity directly.
+  //
+  // 🔴 A stock take SETS the quantity, it does not add to it. Counting 10
+  // means "there are 10 on this shelf", so the delta posted is
+  // (counted − what we thought), which is +10 from zero and −2 if we thought
+  // there were 12. Treating it as an add would double the shelf on a recount.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.post("/api/admin/warehouse/stock-take", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const locationId = parseId(b.locationId);
+      if (locationId === null) throw new V2Error("Which location did you count?");
+
+      const [loc] = await db
+        .select({ id: whLocations.id, code: whLocations.code, kind: whLocations.kind })
+        .from(whLocations)
+        .where(eq(whLocations.id, locationId));
+      if (!loc) throw new V2Error("That location does not exist");
+      if (loc.kind === "virtual") throw new V2Error("Pick a real bin or zone — a virtual location holds nothing to count");
+
+      const lines: Array<{ itemId: number; counted: number }> = Array.isArray(b.lines) ? b.lines : [];
+      if (lines.length === 0) throw new V2Error("Nothing counted yet — scan something first");
+
+      // Required, not optional: a phone that loses signal mid-post will retry,
+      // and a stock take posted twice would move the shelf twice.
+      const idempotencyKey = clean(b.idempotencyKey);
+      if (!idempotencyKey) throw new V2Error("idempotencyKey is required for a stock take");
+
+      const itemIds = Array.from(new Set(lines.map((l) => parseId(l.itemId)).filter((n): n is number => n !== null)));
+      if (itemIds.length === 0) throw new V2Error("None of those lines name a real item");
+
+      const items = await db
+        .select({ id: whItems.id, sku: whItems.sku, name: whItems.name, allowNegative: whItems.allowNegative, trackingMode: whItems.trackingMode })
+        .from(whItems)
+        .where(inArray(whItems.id, itemIds));
+      const itemById = new Map(items.map((i) => [i.id, i]));
+
+      // What we currently think is on that shelf — one query, not one per line.
+      const current = await db
+        .select({ itemId: whStock.itemId, onHand: whStock.onHand })
+        .from(whStock)
+        .where(and(eq(whStock.locationId, loc.id), inArray(whStock.itemId, itemIds)));
+      const onHandById = new Map(current.map((r) => [r.itemId, Number(r.onHand)]));
+
+      const legs: MovementLeg[] = [];
+      const summary: Array<{ itemId: number; sku: string; name: string; before: number; counted: number; delta: number }> = [];
+
+      for (const l of lines) {
+        const itemId = parseId(l.itemId);
+        if (itemId === null) continue;
+        const item = itemById.get(itemId);
+        if (!item) throw new V2Error(`Item ${itemId} no longer exists`);
+        if (item.trackingMode === "asset") {
+          throw new V2Error(`${item.sku} is a tracked asset — count those as individual units on the Assets page, not by quantity`);
+        }
+
+        const counted = Number(l.counted);
+        if (!Number.isFinite(counted) || counted < 0) throw new V2Error(`${item.sku}: a counted quantity can't be negative`);
+
+        const before = onHandById.get(itemId) ?? 0;
+        const delta = counted - before;
+        summary.push({ itemId, sku: item.sku, name: item.name, before, counted, delta });
+
+        // A line that matches what we already thought writes nothing — the
+        // ledger records changes, and "still 10" is not one.
+        if (delta === 0) continue;
+        legs.push({
+          itemId,
+          locationId: loc.id,
+          locationCode: loc.code,
+          delta,
+          allowNegative: item.allowNegative,
+        });
+      }
+
+      if (legs.length === 0) {
+        return res.json({
+          movement: null,
+          locationId: loc.id,
+          locationCode: loc.code,
+          lines: summary,
+          unchanged: true,
+          message: "Everything matched what we already had — nothing to change.",
+        });
+      }
+
+      const movement = await runMovementGroup({
+        legs,
+        movementType: "count",
+        reasonCode: "stock_take",
+        // D17 — the person holding the scanner, from the session.
+        operatorUserId: req.session.userId!,
+        idempotencyKey,
+        note: clean(b.note) ?? `Stock take at ${loc.code}`,
+      });
+
+      res.status(movement.alreadyProcessed ? 200 : 201).json({
+        movement,
+        locationId: loc.id,
+        locationCode: loc.code,
+        lines: summary,
+        replayed: movement.alreadyProcessed,
+      });
+    } catch (e: any) {
+      handleError(res, e, "stock take");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CSV export — what's on the shelves right now.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/admin/warehouse/stock.csv", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const locationId = parseId(req.query.locationId);
+
+      const rows = await db
+        .select({
+          sku: whItems.sku,
+          name: whItems.name,
+          kind: whItems.kind,
+          brandOwner: whItems.brandOwner,
+          category: whItems.category,
+          unit: whItems.unit,
+          locationCode: whLocations.code,
+          onHand: whStock.onHand,
+          updatedAt: whStock.updatedAt,
+        })
+        .from(whStock)
+        .innerJoin(whItems, eq(whStock.itemId, whItems.id))
+        .innerJoin(whLocations, eq(whStock.locationId, whLocations.id))
+        .where(locationId !== null ? eq(whStock.locationId, locationId) : undefined)
+        .orderBy(asc(whItems.sku), asc(whLocations.code));
+
+      const header = ["SKU", "Name", "Kind", "Brand", "Category", "Unit", "Location", "On hand", "Last counted"];
+      const body = rows.map((r) => [
+        r.sku, r.name, r.kind, r.brandOwner, r.category ?? "", r.unit, r.locationCode,
+        String(Number(r.onHand)),
+        r.updatedAt ? new Date(r.updatedAt).toISOString().slice(0, 10) : "",
+      ]);
+
+      const csv = [header, ...body].map((cells) => cells.map(csvCell).join(",")).join("\r\n");
+
+      const today = nzTodayIso();
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="warehouse-stock-${today}.csv"`);
+      // A BOM so Excel on Windows opens it as UTF-8 rather than mangling any
+      // accented product name.
+      res.send("﻿" + csv);
+    } catch (e: any) {
+      handleError(res, e, "stock csv");
     }
   });
 
