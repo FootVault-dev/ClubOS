@@ -367,6 +367,22 @@ export default function SportySync() {
         </div>
       )}
 
+      {/* Reference-data banner. Without NZF's real vocabulary the preflight
+          falls back to provisional mapping: it cannot tell that "European"
+          matches TWO of their groups, so players read "ready" who are not.
+          Saying so is cheaper than someone trusting the count. */}
+      {overview?.config.installed && !overview.reference.fetchedAt && (
+        <div className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.06] p-4 mb-5 flex items-start gap-3">
+          <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-[13px] text-amber-200/80 leading-relaxed">
+            NZ Football's reference data hasn't been loaded, so the statuses below are provisional and
+            the "ready" count is optimistic — ethnicity groups and country codes can't be checked
+            against their real list. Hit <span className="text-amber-100/90">Refresh reference data</span> first.
+            (A push refreshes it automatically before sending, so nothing wrong can reach NZF.)
+          </p>
+        </div>
+      )}
+
       {/* Stat chips — filters */}
       {overview && (
         <div className="flex flex-wrap gap-2 mb-4">
