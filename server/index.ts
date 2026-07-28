@@ -99,6 +99,13 @@ app.use(attributionCookieMiddleware);
   const { registerWarehouseRoutes } = await import("./warehouse-routes");
   registerWarehouseRoutes(app);
 
+  // Warehouse v2 (D18–D25): asset instances (the things the club owns
+  // one-by-one), the self-service field-template editor, and the counter
+  // sale. Same requireTab("warehouse") gate; the template editor additionally
+  // requires an admin, since it changes the SHAPE of everyone's data.
+  const { registerWarehouseV2Routes } = await import("./warehouse-v2-routes");
+  registerWarehouseV2Routes(app);
+
   // United Prints workspace — Warehouse channel sync (T12/SPEC §4.3): the
   // public Shopify webhook endpoint (siu/cufc) + the debounced push queue
   // wired into server/warehouse.ts's post-commit hook. Entirely inert

@@ -12,6 +12,10 @@ import {
   Search, Plus, X, Tag, MapPin, History, CheckSquare, Square, Printer, Trash2, Loader2,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { BarcodeEditor, BarcodeDraftEditor, type DraftBarcode } from "@/components/warehouse-barcodes";
+import {
+  TrackingModeChooser, DynamicItemForm, ModeHeader, EMPTY_DRAFT, draftToPayload, type ItemDraft,
+} from "@/components/warehouse-item-form";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -20,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ITEM_KINDS, ITEM_KIND_LABELS, BRAND_OWNERS, BRAND_OWNER_LABELS, UNITS, UNIT_LABELS,
   MOVEMENT_TYPE_LABELS, REASON_CODE_LABELS,
-  type ItemKind, type BrandOwner, type Unit,
+  type ItemKind, type BrandOwner, type Unit, type TrackingMode,
 } from "@shared/warehouse";
 import type { WhItem, WhLocation, WhBarcodeAlias } from "@shared/schema";
 
@@ -218,14 +222,48 @@ function ItemForm({
 
 function CreateItemModal({ open, onClose, locations }: { open: boolean; onClose: () => void; locations: WhLocation[] }) {
   const { toast } = useToast();
-  const [form, setForm] = useState<ItemFormValue>(EMPTY_FORM);
+  // D26 — step 1 picks the tracking mode, step 2 renders the admin's layout.
+  // null means we're still on step 1.
+  const [mode, setMode] = useState<TrackingMode | null>(null);
+  const [form, setForm] = useState<ItemDraft>(EMPTY_DRAFT);
+  const [barcodes, setBarcodes] = useState<DraftBarcode[]>([]);
+  const [custom, setCustom] = useState<Record<string, string | boolean>>({});
+
+  const reset = () => { setMode(null); setForm(EMPTY_DRAFT); setBarcodes([]); setCustom({}); };
 
   const create = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/admin/warehouse/items", formToPayload(form))).json(),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const item = await (await apiRequest("POST", "/api/admin/warehouse/items", draftToPayload(form, mode!))).json();
+
+      // Barcodes are linked AFTER the item exists — they need its id. One that
+      // fails (usually already pointing at another item) must not lose the
+      // item just created, so each is reported and the rest still go through.
+      const rejected: string[] = [];
+      for (const b of barcodes) {
+        try { await apiRequest("POST", `/api/admin/warehouse/items/${item.id}/aliases`, b); }
+        catch { rejected.push(b.code); }
+      }
+
+      // Custom field values, if the category defined any.
+      const filled = Object.fromEntries(Object.entries(custom).filter(([, v]) => v !== "" && v !== undefined));
+      if (Object.keys(filled).length > 0) {
+        try { await apiRequest("PUT", `/api/admin/warehouse/fields/item/${item.id}`, { values: filled }); }
+        catch { /* reported below via the item still being created */ }
+      }
+      return { item, rejected };
+    },
+    onSuccess: ({ rejected }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/warehouse/items"] });
-      toast({ title: "Item created" });
-      setForm(EMPTY_FORM);
+      toast(
+        rejected.length
+          ? {
+              title: "Item created, some barcodes weren't linked",
+              description: `${rejected.join(", ")} — already linked to another item. Add them from the item once that's sorted.`,
+              variant: "destructive",
+            }
+          : { title: barcodes.length ? `Item created with ${barcodes.length} barcode(s)` : "Item created" },
+      );
+      reset();
       onClose();
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
@@ -238,15 +276,36 @@ function CreateItemModal({ open, onClose, locations }: { open: boolean; onClose:
       <div className="relative w-full max-w-xl rounded-2xl border border-white/10 bg-[#02060E] p-6 max-h-[90vh] overflow-auto">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-white">New item</h3>
-          <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-4 h-4" /></button>
+          <button onClick={() => { reset(); onClose(); }} className="text-white/40 hover:text-white"><X className="w-4 h-4" /></button>
         </div>
-        <ItemForm value={form} onChange={setForm} locations={locations} />
-        <div className="flex justify-end gap-2 mt-4">
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => create.mutate()} disabled={create.isPending || !form.sku || !form.name} className="bg-blue-600 hover:bg-blue-700">
-            {create.isPending ? "Creating..." : "Create item"}
-          </Button>
-        </div>
+
+        {mode === null ? (
+          <TrackingModeChooser onPick={setMode} />
+        ) : (
+          <>
+            <ModeHeader mode={mode} onBack={() => setMode(null)} />
+            <DynamicItemForm
+              mode={mode}
+              value={form}
+              onChange={setForm}
+              locations={locations}
+              barcodes={barcodes}
+              onBarcodesChange={setBarcodes}
+              customValues={custom}
+              onCustomChange={setCustom}
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="ghost" onClick={() => { reset(); onClose(); }}>Cancel</Button>
+              <Button
+                onClick={() => create.mutate()}
+                disabled={create.isPending || !form.sku || !form.name}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                {create.isPending ? "Creating..." : "Create item"}
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -380,18 +439,7 @@ function ItemDetailModal({
                     <h4 className="text-xs uppercase tracking-wider text-white/40 mb-2 flex items-center gap-1.5">
                       <Tag className="w-3.5 h-3.5" /> Barcode aliases
                     </h4>
-                    {item.aliases.length === 0 ? (
-                      <div className="text-sm text-white/30 py-4 text-center rounded-lg bg-white/[0.02] border border-white/5">No aliases scanned in yet.</div>
-                    ) : (
-                      <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                        {item.aliases.map((a) => (
-                          <div key={a.id} className="flex items-center justify-between p-2 rounded-lg bg-white/[0.02] border border-white/5 text-sm">
-                            <span className="text-white/70 font-mono truncate">{a.code}</span>
-                            <span className="text-white/50">× {qty(a.packQty)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <BarcodeEditor itemId={item.id} />
                   </div>
                 </div>
 

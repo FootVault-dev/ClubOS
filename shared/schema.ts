@@ -5294,7 +5294,14 @@ export const whLocations = pgTable("wh_locations", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   code: text("code").notNull().unique(),          // e.g. 'A-01-2', 'QUARANTINE', 'SUPPLIER'
   zone: text("zone"),                             // first segment of a bin code, or the named zone itself
-  kind: text("kind").notNull().default("bin"),    // LocationKind: 'bin' | 'zone' | 'virtual'
+  // LocationKind: 'bin' | 'zone' | 'virtual' | 'person' | 'vehicle'. The last
+  // two are D20 — "issued to Riley" and "in the van" are locations, not a
+  // free-text assigned_to field that drifts out of sync with the ledger.
+  kind: text("kind").notNull().default("bin"),
+  // D20 — a bin within a zone, a shelf within a vehicle. SET NULL on delete:
+  // removing a parent orphans its children rather than cascading a delete
+  // through locations that still hold real stock.
+  parentLocationId: integer("parent_location_id").references((): any => whLocations.id, { onDelete: "set null" }),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -5312,7 +5319,14 @@ export const whItems = pgTable("wh_items", {
   sku: text("sku").notNull().unique(),            // BRAND-CAT-STYLE-COLOUR-SIZE (D7) — shared/warehouse.ts isValidSku
   name: text("name").notNull(),
   kind: text("kind").notNull().default("merch"),  // ItemKind: 'merch' | 'material' | 'equipment' | 'event'
+  // D18 — 'stock' (counted in bulk, wh_stock) | 'asset' (owned one-by-one,
+  // wh_item_instances). Fixed at creation and enforced in the PATCH route:
+  // flipping it changes which child table holds the item's physical reality,
+  // so it is a deliberate data migration, never a UI toggle.
+  trackingMode: text("tracking_mode").notNull().default("stock"),
   brandOwner: text("brand_owner").notNull().default("club"), // BrandOwner: 'cufc'|'siu'|'mfl'|'cic'|'up'|'club'
+  // The extensible leaf of the hierarchy — and the key wh_field_templates
+  // hangs custom fields off (D23).
   category: text("category"),
   unit: text("unit").notNull().default("ea"),     // Unit: 'ea' | 'm' | 'roll' | 'box'
   purchaseUnit: text("purchase_unit"),            // Unit the supplier sells in, e.g. 'roll'
@@ -5383,6 +5397,114 @@ export const insertWhShopifyVariantLinkSchema = createInsertSchema(whShopifyVari
 export type InsertWhShopifyVariantLink = z.infer<typeof insertWhShopifyVariantLinkSchema>;
 export type WhShopifyVariantLink = typeof whShopifyVariantLinks.$inferSelect;
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Warehouse v2 (D18–D25, migrations/2026-07-27_warehouse_v2.sql) — asset
+// tracking and self-service custom fields.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// D19 — ONE physical unit of an asset item (a heat press, a desk, a laptop):
+// the things the club owns one-by-one rather than counts in bulk. Its
+// movements ride the SAME wh_movements ledger with instance_id set and a
+// delta of ±1, so the audit trail is never split in two.
+//
+// D20 — there is deliberately no `assigned_to` free-text column. Where a thing
+// is, including "issued to Riley" and "in the van", is `locationId` pointing
+// at a 'person'/'vehicle' location. Lending to an outside party is wh_loans.
+export const whItemInstances = pgTable("wh_item_instances", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  // RESTRICT, never CASCADE — deleting an item definition must not silently
+  // erase the history of the physical objects bought under it.
+  itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  // Our own printed, scannable label. Distinct from serialNumber, which is the
+  // manufacturer's and may be missing, duplicated across brands, or worn off.
+  assetTag: text("asset_tag"),
+  serialNumber: text("serial_number"),
+  locationId: integer("location_id").notNull().references(() => whLocations.id, { onDelete: "restrict" }),
+  // InstanceCondition: 'new' | 'working' | 'damaged' | 'decommissioned'.
+  // 'decommissioned' IS retirement and keeps its whole ledger — retire, never
+  // delete (the Vehicles-tab doctrine). Validated in shared/warehouse.ts.
+  condition: text("condition").notNull().default("working"),
+  purchaseDate: date("purchase_date"),
+  warrantyUntil: date("warranty_until"),
+  costCents: integer("cost_cents"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  assetTagUnq: uniqueIndex("wh_item_instances_asset_tag_unique")
+    .on(t.assetTag)
+    .where(sql`${t.assetTag} IS NOT NULL`),
+  itemSerialUnq: uniqueIndex("wh_item_instances_item_serial_unique")
+    .on(t.itemId, t.serialNumber)
+    .where(sql`${t.serialNumber} IS NOT NULL`),
+}));
+export const insertWhItemInstanceSchema = createInsertSchema(whItemInstances); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhItemInstance = z.infer<typeof insertWhItemInstanceSchema>;
+export type WhItemInstance = typeof whItemInstances.$inferSelect;
+
+// D23 — admin-editable schema-in-data. Adding, reordering or removing a field
+// here changes what renders on the item card, with NO schema migration and no
+// developer. Keyed on wh_items.category (our extensible leaf).
+export const whFieldTemplates = pgTable("wh_field_templates", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  // D26 — null for a CUSTOM field (stored in wh_item_fields, as before); set
+  // to a CoreFieldKey ('sku', 'name', 'barcodes'…) when the row is instead a
+  // placement of a built-in control, whose value goes to its own column.
+  coreField: text("core_field"),
+  // D26 — null shows on both stock and asset forms; 'stock'/'asset' scopes it.
+  trackingMode: text("tracking_mode"),
+  // Nullable since D26: a core-field placement belongs to the whole form, not
+  // to one category. Still required in practice for custom fields.
+  category: text("category"),
+  fieldKey: text("field_key").notNull(),          // slugified from label, stable once created
+  label: text("label").notNull(),
+  fieldType: text("field_type").notNull().default("text"), // FieldType — validated in shared/warehouse.ts
+  options: jsonb("options").$type<string[] | null>(),      // for 'select'
+  required: boolean("required").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  helpText: text("help_text"),
+  // D22 — does this describe the DEFINITION ('item', e.g. "vinyl width") or
+  // one physical unit ('instance', e.g. "WOF expiry")?
+  appliesTo: text("applies_to").notNull().default("item"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  categoryKeyUnq: uniqueIndex("wh_field_templates_category_key_unique")
+    .on(t.category, t.fieldKey)
+    .where(sql`${t.coreField} IS NULL`),
+}));
+export const insertWhFieldTemplateSchema = createInsertSchema(whFieldTemplates); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhFieldTemplate = z.infer<typeof insertWhFieldTemplateSchema>;
+export type WhFieldTemplate = typeof whFieldTemplates.$inferSelect;
+
+// D22/D24 — the values, in TYPED columns so "every WOF expiring this month" is
+// an indexed date comparison in Postgres, not a string sort in JavaScript.
+// Exactly one of itemId/instanceId is set (a DB CHECK in the migration — a
+// structural invariant, unlike the enum-ish columns which are validated
+// app-side).
+export const whItemFields = pgTable("wh_item_fields", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").references(() => whItems.id, { onDelete: "cascade" }),
+  instanceId: integer("instance_id").references(() => whItemInstances.id, { onDelete: "cascade" }),
+  fieldKey: text("field_key").notNull(),
+  valueText: text("value_text"),
+  valueNumber: numeric("value_number", { precision: 14, scale: 4 }),
+  valueDate: date("value_date"),
+  valueBoolean: boolean("value_boolean"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  itemKeyUnq: uniqueIndex("wh_item_fields_item_key_unique")
+    .on(t.itemId, t.fieldKey)
+    .where(sql`${t.itemId} IS NOT NULL`),
+  instanceKeyUnq: uniqueIndex("wh_item_fields_instance_key_unique")
+    .on(t.instanceId, t.fieldKey)
+    .where(sql`${t.instanceId} IS NOT NULL`),
+}));
+export const insertWhItemFieldSchema = createInsertSchema(whItemFields); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhItemField = z.infer<typeof insertWhItemFieldSchema>;
+export type WhItemField = typeof whItemFields.$inferSelect;
+
 // THE LEDGER (D1). Append-only — no UPDATE/DELETE code paths, ever; stock
 // corrections are new adjustment movements. `groupId` links every leg of one
 // multi-leg operation (a transfer is a -row at the source + a +row at the
@@ -5393,6 +5515,11 @@ export const whMovements = pgTable("wh_movements", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   groupId: uuid("group_id").notNull().default(sql`gen_random_uuid()`),
   itemId: integer("item_id").notNull().references(() => whItems.id, { onDelete: "restrict" }),
+  // D19 — set only for an asset item's movement, where delta is always ±1.
+  // ONE ledger for stock and assets: wh_stock.on_hand for an asset item at a
+  // location is therefore just the count of instances standing there, and
+  // every existing stock/dashboard/reconcile query keeps working untouched.
+  instanceId: integer("instance_id").references((): any => whItemInstances.id, { onDelete: "restrict" }),
   locationId: integer("location_id").notNull().references(() => whLocations.id, { onDelete: "restrict" }),
   delta: numeric("delta", { precision: 12, scale: 3 }).notNull(), // signed; CHECK (delta <> 0) in the migration
   movementType: text("movement_type").notNull(),  // MovementType (D15) — validated in shared/warehouse.ts

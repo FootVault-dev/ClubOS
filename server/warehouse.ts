@@ -27,7 +27,7 @@
 // Postgres — exercised for real only after a human runs the migration).
 import { randomUUID } from "crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { whMovements, whReservations, whStock, whItems, whLocations, whBarcodeAliases } from "@shared/schema";
+import { whMovements, whReservations, whStock, whItems, whLocations, whBarcodeAliases, whItemInstances } from "@shared/schema";
 import type { db as realDb } from "./db";
 import {
   isMovementType,
@@ -41,17 +41,26 @@ import {
   stripLocationPrefix,
   scanActionsForItem,
   scanActionsForLocation,
+  scanActionsForInstance,
+  stripInstancePrefix,
+  normaliseAssetTag,
   type MovementType,
   type ReasonCode,
   type RefKind,
   type ReservationStatus,
   type LocationKind,
+  type InstanceCondition,
 } from "@shared/warehouse";
 
 // ── Public shapes ────────────────────────────────────────────────────────────
 
 export interface MovementLeg {
   itemId: number;
+  /** D19 — set for an asset item's leg, where `delta` is always exactly ±1.
+   *  The SAME ledger carries both stock and assets, so wh_stock.on_hand for an
+   *  asset item at a location is just the count of instances standing there
+   *  and no existing query needed changing. Null for ordinary bulk stock. */
+  instanceId?: number | null;
   locationId: number;
   /** The location's own code (e.g. 'A-01-2', 'QUARANTINE') — used ONLY for a
    *  clean "insufficient stock at <LOCATION>" error message. The caller
@@ -134,6 +143,7 @@ export interface WarehouseDb {
 export interface NewMovementRow {
   groupId: string;
   itemId: number;
+  instanceId: number | null;
   locationId: number;
   delta: string; // numeric column — Drizzle maps numeric to string (AGENTS.md)
   movementType: MovementType;
@@ -228,6 +238,14 @@ function assertValidGroup(input: PostMovementGroupInput): void {
     if (leg.reasonCode != null && !isReasonCode(leg.reasonCode)) {
       throw new Error(`postMovementGroup: unknown leg reason code "${leg.reasonCode}"`);
     }
+    // D19 — an instance IS one physical object. A leg claiming to move 3 of a
+    // specific heat press is nonsense, and would silently corrupt wh_stock
+    // (whose on_hand for an asset item is a count of instances).
+    if (leg.instanceId != null && Math.abs(leg.delta) !== 1) {
+      throw new Error(
+        `postMovementGroup: an instance leg must move exactly one unit (instance ${leg.instanceId} got delta ${leg.delta})`,
+      );
+    }
   }
   if (input.movementType === "transfer" && !legsSumToZero(input.legs.map((l) => l.delta))) {
     throw new Error("postMovementGroup: transfer legs must sum to zero");
@@ -274,6 +292,7 @@ export async function postMovementGroup(
   const rows: NewMovementRow[] = input.legs.map((leg, i) => ({
     groupId,
     itemId: leg.itemId,
+    instanceId: leg.instanceId ?? null,
     locationId: leg.locationId,
     delta: String(leg.delta),
     movementType: input.movementType,
@@ -850,6 +869,22 @@ export interface ScanResolvedLocation {
   kind: LocationKind;
 }
 
+/** D19 — ONE physical asset, identified by the label stuck on it. Carries
+ *  enough for the scan station to show what it is and where it currently
+ *  lives without a second round trip. */
+export interface ScanResolvedInstance {
+  id: number;
+  assetTag: string | null;
+  serialNumber: string | null;
+  condition: InstanceCondition;
+  itemId: number;
+  itemSku: string;
+  itemName: string;
+  isLoanable: boolean;
+  locationId: number;
+  locationCode: string;
+}
+
 export type ScanResolution =
   | {
       kind: "item";
@@ -864,12 +899,14 @@ export type ScanResolution =
       actions: MovementType[];
     }
   | { kind: "location"; location: ScanResolvedLocation; actions: MovementType[] }
+  | { kind: "instance"; instance: ScanResolvedInstance; actions: MovementType[] }
   | { kind: "unknown"; rawCode: string };
 
 export interface ScanLookupDb {
   findItemBySku(sku: string): Promise<ScanResolvedItem | undefined>;
   findAliasByCode(code: string): Promise<{ item: ScanResolvedItem; packQty: number; aliasCode: string } | undefined>;
   findLocationByCode(code: string): Promise<ScanResolvedLocation | undefined>;
+  findInstanceByAssetTag(tag: string): Promise<ScanResolvedInstance | undefined>;
 }
 
 /**
@@ -897,6 +934,16 @@ export async function resolveScanCode(db: ScanLookupDb, rawCode: string): Promis
     return { kind: "location", location, actions: scanActionsForLocation(location) };
   }
 
+  // D19 — an `AST:`-prefixed code is ONE physical asset and nothing else. Same
+  // hard stop as `LOC:`: a miss is "unknown" rather than falling through to a
+  // SKU lookup that might match something unrelated and move the wrong thing.
+  const asset = stripInstancePrefix(code);
+  if (asset.isInstanceCode) {
+    const instance = await db.findInstanceByAssetTag(asset.code);
+    if (!instance) return { kind: "unknown", rawCode };
+    return { kind: "instance", instance, actions: scanActionsForInstance(instance) };
+  }
+
   const item = await db.findItemBySku(normaliseSku(code));
   if (item) {
     return { kind: "item", item, matchedVia: "sku", packQty: 1, actions: scanActionsForItem(item) };
@@ -912,6 +959,14 @@ export async function resolveScanCode(db: ScanLookupDb, rawCode: string): Promis
       packQty: alias.packQty,
       actions: scanActionsForItem(alias.item),
     };
+  }
+
+  // A bare (unprefixed) asset tag — someone reading a worn label and typing it
+  // in by hand, or a supplier's own asset sticker registered as the tag.
+  // After the SKU/alias lookups so our own item scheme always wins a tie.
+  const bareInstance = await db.findInstanceByAssetTag(normaliseAssetTag(code));
+  if (bareInstance) {
+    return { kind: "instance", instance: bareInstance, actions: scanActionsForInstance(bareInstance) };
   }
 
   const bareLocation = await db.findLocationByCode(normaliseLocationCode(code));
@@ -968,6 +1023,29 @@ export function scanLookupDbFromDb(database: Pick<typeof realDb, "select">): Sca
         .limit(1);
       const row = rows[0];
       return row ? { id: row.id, code: row.code, kind: row.kind as LocationKind } : undefined;
+    },
+    async findInstanceByAssetTag(tag) {
+      const rows = await database
+        .select({
+          id: whItemInstances.id,
+          assetTag: whItemInstances.assetTag,
+          serialNumber: whItemInstances.serialNumber,
+          condition: whItemInstances.condition,
+          itemId: whItems.id,
+          itemSku: whItems.sku,
+          itemName: whItems.name,
+          isLoanable: whItems.isLoanable,
+          locationId: whLocations.id,
+          locationCode: whLocations.code,
+        })
+        .from(whItemInstances)
+        .innerJoin(whItems, eq(whItemInstances.itemId, whItems.id))
+        .innerJoin(whLocations, eq(whItemInstances.locationId, whLocations.id))
+        .where(eq(whItemInstances.assetTag, tag))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return undefined;
+      return { ...row, condition: row.condition as InstanceCondition };
     },
   };
 }

@@ -29,6 +29,82 @@ export function isItemKind(v: unknown): v is ItemKind {
   return typeof v === "string" && (ITEM_KINDS as readonly string[]).includes(v);
 }
 
+// ── Tracking mode (D18) ──────────────────────────────────────────────────────
+// The only level that changes an item's DATA STRUCTURE rather than just
+// grouping it: 'stock' is counted in bulk and lives in wh_stock; 'asset' is
+// owned one-by-one and lives in wh_item_instances. Fixed at creation — see
+// canChangeTrackingMode() below for why it is not a UI toggle.
+
+export const TRACKING_MODES = ["stock", "asset"] as const;
+export type TrackingMode = (typeof TRACKING_MODES)[number];
+export const TRACKING_MODE_LABELS: Record<TrackingMode, string> = {
+  stock: "Counted stock",
+  asset: "Tracked asset",
+};
+export const TRACKING_MODE_BLURBS: Record<TrackingMode, string> = {
+  stock: "How many do we have — shirts, vinyl, footballs. Counted in bulk per bin.",
+  asset: "Which one is it — heat presses, laptops, desks. Each unit tracked on its own.",
+};
+export function isTrackingMode(v: unknown): v is TrackingMode {
+  return typeof v === "string" && (TRACKING_MODES as readonly string[]).includes(v);
+}
+
+/**
+ * Changing tracking_mode moves an item's physical reality between two
+ * different child tables, so it is only ever safe while the item has NO
+ * history at all. Once anything has been scanned, counted or bought, a change
+ * is a deliberate data migration, not a dropdown — the ledger would otherwise
+ * describe quantities that no longer have anywhere to live.
+ */
+export function canChangeTrackingMode(history: { movementCount: number; instanceCount: number }): boolean {
+  return history.movementCount === 0 && history.instanceCount === 0;
+}
+
+// ── Asset instance condition (D19) ───────────────────────────────────────────
+// 'decommissioned' IS retirement: the instance keeps its whole ledger and stops
+// counting towards "how many do we have". Retire, never delete — the same rule
+// the Vehicles tab runs on, for the same reason (an insurer or the IRD may ask
+// about a thing years after it left the building).
+
+export const INSTANCE_CONDITIONS = ["new", "working", "damaged", "decommissioned"] as const;
+export type InstanceCondition = (typeof INSTANCE_CONDITIONS)[number];
+export const INSTANCE_CONDITION_LABELS: Record<InstanceCondition, string> = {
+  new: "New",
+  working: "Working",
+  damaged: "Damaged",
+  decommissioned: "Decommissioned",
+};
+export function isInstanceCondition(v: unknown): v is InstanceCondition {
+  return typeof v === "string" && (INSTANCE_CONDITIONS as readonly string[]).includes(v);
+}
+
+/** Does this instance still count as something the club has? A decommissioned
+ *  press is history, not inventory. Derived — never a stored `is_active`. */
+export function instanceCountsAsHeld(condition: InstanceCondition): boolean {
+  return condition !== "decommissioned";
+}
+
+/** Warranty status for one instance, as at a caller-supplied NZ `today`
+ *  (bare ISO date strings compared as strings — never through a JS `Date`,
+ *  which reads a day behind in NZ). 'unknown' when no warranty is recorded:
+ *  an unaudited asset must never render as a reassuring green. */
+export type WarrantyStatus = "unknown" | "expired" | "expiring" | "ok";
+export function warrantyStatus(warrantyUntil: string | null | undefined, todayIso: string): WarrantyStatus {
+  if (!warrantyUntil || !isValidDateOnly(warrantyUntil)) return "unknown";
+  if (warrantyUntil < todayIso) return "expired";
+  const soon = addDaysIso(todayIso, 30);
+  return warrantyUntil <= soon ? "expiring" : "ok";
+}
+
+/** Adds whole days to a bare ISO date, staying in string space (UTC arithmetic
+ *  on a date-only value can never drift a timezone, because there is no clock
+ *  in it — the result is re-serialised as a bare date immediately). */
+export function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = Date.UTC(y, m - 1, d) + days * 86_400_000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
 // ── Brand owners ─────────────────────────────────────────────────────────────
 // Identical physical products owned by different brands are different items
 // (D4) — a shared shirt design for MFL and CIC gets two `wh_items` rows keyed
@@ -66,10 +142,29 @@ export function isUnit(v: unknown): v is Unit {
 
 // ── Locations ─────────────────────────────────────────────────────────────────
 
-export const LOCATION_KINDS = ["bin", "zone", "virtual"] as const;
+// D20 — 'person' and 'vehicle' are LOCATIONS, not a free-text "assigned to"
+// field. A thing issued to Riley or sitting in the van is somewhere specific,
+// and the ledger has to be able to say so; two ways of recording where
+// something is guarantees they disagree by Friday.
+export const LOCATION_KINDS = ["bin", "zone", "virtual", "person", "vehicle"] as const;
 export type LocationKind = (typeof LOCATION_KINDS)[number];
+export const LOCATION_KIND_LABELS: Record<LocationKind, string> = {
+  bin: "Bin",
+  zone: "Zone",
+  virtual: "Virtual",
+  person: "Person",
+  vehicle: "Vehicle",
+};
 export function isLocationKind(v: unknown): v is LocationKind {
   return typeof v === "string" && (LOCATION_KINDS as readonly string[]).includes(v);
+}
+
+/** Locations that hold real things but are not part of the warehouse floor.
+ *  Stock here is genuinely ours and genuinely counted — it just isn't on a
+ *  shelf, so it must never be offered for sale. */
+const CUSTODY_KINDS: ReadonlySet<LocationKind> = new Set<LocationKind>(["person", "vehicle"]);
+export function isCustodyLocation(kind: LocationKind): boolean {
+  return CUSTODY_KINDS.has(kind);
 }
 
 /** Named physical zones every warehouse gets (D8). Not exhaustive — a site can
@@ -126,6 +221,10 @@ export function normaliseLocationCode(code: string): string {
  *  — stock parked there isn't shelved anywhere physical. */
 export function deriveLocationZone(code: string, kind: LocationKind): string | null {
   if (kind === "virtual") return null;
+  // D21 — a person or a vehicle is not shelved anywhere either. Deriving a
+  // zone 'PERSON' from PERSON-RILEY would file every staff member's kit under
+  // one imaginary aisle in the warehouse map.
+  if (isCustodyLocation(kind)) return null;
   const first = code.split("-")[0];
   return first || null;
 }
@@ -192,6 +291,13 @@ export const MOVEMENT_TYPES = [
   "return",
   "loan_out",
   "loan_return",
+  // D25 — a sale over the counter in the office/shop. Distinct from 'dispatch',
+  // which fulfils an order that already exists in ClubOS: a counter sale has no
+  // order behind it, the customer is standing there, and the movement IS the
+  // whole record of it.
+  "sale",
+  // D19 — an asset leaves service. Its instance keeps every row it ever wrote.
+  "decommission",
 ] as const;
 export type MovementType = (typeof MOVEMENT_TYPES)[number];
 export const MOVEMENT_TYPE_LABELS: Record<MovementType, string> = {
@@ -206,6 +312,8 @@ export const MOVEMENT_TYPE_LABELS: Record<MovementType, string> = {
   return: "Return",
   loan_out: "Loan out",
   loan_return: "Loan return",
+  sale: "Counter sale",
+  decommission: "Decommission",
 };
 export function isMovementType(v: unknown): v is MovementType {
   return typeof v === "string" && (MOVEMENT_TYPES as readonly string[]).includes(v);
@@ -219,6 +327,10 @@ export const REASON_CODES = [
   "write_off",
   "store_use",
   "event_use",
+  // A physical count putting real numbers against what the shelf actually
+  // holds. Distinct from 'count_variance', which is the audited blind-count
+  // flow's discrepancy — this is somebody walking the racks with a scanner.
+  "stock_take",
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
@@ -229,6 +341,7 @@ export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
   write_off: "Write-off",
   store_use: "Store use",
   event_use: "Event use",
+  stock_take: "Stock take",
 };
 export function isReasonCode(v: unknown): v is ReasonCode {
   return typeof v === "string" && (REASON_CODES as readonly string[]).includes(v);
@@ -260,6 +373,9 @@ export function dispositionForReason(reason: ReasonCode | null | undefined): Dis
  *  available (quarantine, or a virtual location like SUPPLIER/CUSTOMER)? */
 export function isSellableLocation(location: { code: string; kind: LocationKind }): boolean {
   if (location.kind === "virtual") return false;
+  // D21 — a shirt in someone's car boot or issued to a coach is out of the
+  // building. Counting custody stock as available is how a shop oversells.
+  if (isCustodyLocation(location.kind)) return false;
   if (location.code.trim().toUpperCase() === QUARANTINE_ZONE) return false;
   return true;
 }
@@ -754,9 +870,29 @@ export function stripLocationPrefix(code: string): { isLocationCode: boolean; co
  *  grey out whatever it can't yet actually call. Equipment loan actions only
  *  appear when the item itself is loanable (wh_items.is_loanable) — offering
  *  "loan out" on a box of vinyl makes no sense. */
-export function scanActionsForItem(item: { isLoanable: boolean }): MovementType[] {
-  const actions: MovementType[] = ["putaway", "pick", "dispatch", "transfer", "consume"];
+export function scanActionsForItem(item: { isLoanable: boolean; trackingMode?: TrackingMode }): MovementType[] {
+  // An asset is moved as a named object, never as a quantity — its actions
+  // come from scanActionsForInstance once a specific unit is identified.
+  // Scanning the DEFINITION of an asset (rather than one unit's tag) offers
+  // nothing to post; the UI sends the operator to the instance list instead.
+  if (item.trackingMode === "asset") return [];
+  const actions: MovementType[] = ["putaway", "pick", "dispatch", "transfer", "consume", "sale"];
   if (item.isLoanable) actions.push("loan_out", "loan_return");
+  return actions;
+}
+
+/** The action sheet once a scan resolves to ONE physical asset (D19). No
+ *  pick/dispatch/sale: assets are not sold over the counter, they are moved,
+ *  lent, and eventually retired. */
+export function scanActionsForInstance(instance: {
+  condition: InstanceCondition;
+  isLoanable: boolean;
+}): MovementType[] {
+  // A decommissioned unit is history. Offering to move it would let a retired
+  // press quietly reappear on the floor.
+  if (instance.condition === "decommissioned") return [];
+  const actions: MovementType[] = ["transfer", "decommission"];
+  if (instance.isLoanable) actions.push("loan_out", "loan_return");
   return actions;
 }
 
@@ -767,6 +903,11 @@ export function scanActionsForItem(item: { isLoanable: boolean }): MovementType[
  *  one offers nothing. A real bin/zone offers the full set. */
 export function scanActionsForLocation(location: { kind: LocationKind }): MovementType[] {
   if (location.kind === "virtual") return [];
+  // D20 — you cannot "put stock away" into a person or a van; things get
+  // there by being transferred, and go back the same way. Counting what
+  // someone is holding is exactly the audit that makes custody locations
+  // worth having, so it stays.
+  if (isCustodyLocation(location.kind)) return ["transfer", "count"];
   return ["putaway", "transfer", "count"];
 }
 
@@ -866,4 +1007,215 @@ export const SYNC_STORES = ["siu", "cufc", "native"] as const;
 export type SyncStore = (typeof SYNC_STORES)[number];
 export function isSyncStore(v: unknown): v is SyncStore {
   return typeof v === "string" && (SYNC_STORES as readonly string[]).includes(v);
+}
+
+// ── Asset tags (D19) ─────────────────────────────────────────────────────────
+// The label we print and stick on a physical asset. Prefixed for the same
+// reason locations are: a scan must resolve to exactly one KIND of thing, and
+// an unprefixed tag could otherwise collide with a SKU or a supplier EAN.
+
+export const INSTANCE_BARCODE_PREFIX = "AST:";
+
+export function instanceBarcodePayload(assetTag: string): string {
+  return `${INSTANCE_BARCODE_PREFIX}${assetTag}`;
+}
+
+/** Mirrors stripLocationPrefix: an `AST:`-prefixed code is an asset tag and
+ *  nothing else, so a miss is "unknown" rather than falling through to a SKU
+ *  lookup that might match something unrelated. */
+export function stripInstancePrefix(code: string): { isInstanceCode: boolean; code: string } {
+  const trimmed = code.trim();
+  if (trimmed.toUpperCase().startsWith(INSTANCE_BARCODE_PREFIX)) {
+    return { isInstanceCode: true, code: normaliseAssetTag(trimmed.slice(INSTANCE_BARCODE_PREFIX.length)) };
+  }
+  return { isInstanceCode: false, code: trimmed };
+}
+
+/** Uppercased and trimmed — we own this format, so unlike a manufacturer's
+ *  serial it is normalised on the way in and looked up normalised. */
+export function normaliseAssetTag(tag: string): string {
+  return tag.trim().toUpperCase();
+}
+
+/** Suggested tag for a new instance: the item's SKU plus a zero-padded
+ *  sequence, e.g. `UP-PRESS-A3` unit 7 → `UP-PRESS-A3-007`. Only a suggestion
+ *  — an asset already carrying an employer's or supplier's own asset label
+ *  should keep it, so nothing here is enforced. */
+export function suggestAssetTag(sku: string, sequence: number): string {
+  return `${normaliseSku(sku)}-${String(sequence).padStart(3, "0")}`;
+}
+
+// ── Custom fields (D22–D24) ──────────────────────────────────────────────────
+// Admin-editable schema-in-data. Adding, reordering or removing a field on a
+// category changes what renders on the item card with no migration and no
+// developer — which is the whole reason the table exists. The typed columns
+// are what make it more than a notes box: "every WOF expiring this month" has
+// to be an indexed date comparison in Postgres.
+
+export const FIELD_TYPES = ["text", "number", "date", "select", "boolean"] as const;
+export type FieldType = (typeof FIELD_TYPES)[number];
+export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
+  text: "Text",
+  number: "Number",
+  date: "Date",
+  select: "Choose from a list",
+  boolean: "Yes / no",
+};
+export function isFieldType(v: unknown): v is FieldType {
+  return typeof v === "string" && (FIELD_TYPES as readonly string[]).includes(v);
+}
+
+/** D22 — does a field describe the DEFINITION ("vinyl width", true of every
+ *  roll) or ONE physical unit ("WOF expiry", true of one van)? The source
+ *  spec put custom fields on items only, but its own worked example is
+ *  per-instance, so both are supported and the author chooses per field. */
+export const FIELD_APPLIES_TO = ["item", "instance"] as const;
+export type FieldAppliesTo = (typeof FIELD_APPLIES_TO)[number];
+export const FIELD_APPLIES_TO_LABELS: Record<FieldAppliesTo, string> = {
+  item: "The item (every unit of it)",
+  instance: "Each unit on its own",
+};
+export function isFieldAppliesTo(v: unknown): v is FieldAppliesTo {
+  return typeof v === "string" && (FIELD_APPLIES_TO as readonly string[]).includes(v);
+}
+
+/** The typed column a value of this type is written to and read from (D24).
+ *  ONE mapping shared by the server writer, the server reader and the client
+ *  form, so a value can never be written to value_text and then looked for in
+ *  value_date. 'select' stores its chosen option as text. */
+export const FIELD_TYPE_COLUMN: Record<FieldType, "valueText" | "valueNumber" | "valueDate" | "valueBoolean"> = {
+  text: "valueText",
+  number: "valueNumber",
+  date: "valueDate",
+  select: "valueText",
+  boolean: "valueBoolean",
+};
+
+const FIELD_KEY_MAX_LEN = 40;
+
+/** Slugified from the label once, at creation, and then frozen: the key is
+ *  what every stored value is filed under, so renaming a label must never
+ *  orphan the data already sitting behind it. */
+export function slugifyFieldKey(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, FIELD_KEY_MAX_LEN);
+}
+
+export function isValidFieldKey(key: unknown): boolean {
+  if (typeof key !== "string") return false;
+  const k = key.trim();
+  if (!k || k.length > FIELD_KEY_MAX_LEN) return false;
+  return /^[a-z0-9]+(_[a-z0-9]+)*$/.test(k);
+}
+
+export interface FieldTemplateLike {
+  fieldKey: string;
+  label: string;
+  fieldType: FieldType;
+  options?: string[] | null;
+  required: boolean;
+}
+
+/** The four typed slots, exactly one of which a coerced value occupies. */
+export interface TypedFieldValue {
+  valueText: string | null;
+  valueNumber: number | null;
+  valueDate: string | null;
+  valueBoolean: boolean | null;
+}
+
+export const EMPTY_FIELD_VALUE: TypedFieldValue = {
+  valueText: null,
+  valueNumber: null,
+  valueDate: null,
+  valueBoolean: null,
+};
+
+export type FieldCoercion = { ok: true; value: TypedFieldValue } | { ok: false; error: string };
+
+/**
+ * Validates one submitted value against its template and places it in the
+ * right typed column. Blank is blank for every type — a required field
+ * rejects it, an optional one clears the row rather than storing "".
+ *
+ * `select` checks membership against the template's own option list, so a
+ * value removed from the list can no longer be chosen (already-stored values
+ * are left alone — rewriting history to match an edited dropdown would be
+ * worse than showing a stale one).
+ */
+export function coerceFieldValue(template: FieldTemplateLike, raw: unknown): FieldCoercion {
+  const blank = raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
+
+  if (blank) {
+    if (template.required) return { ok: false, error: `${template.label} is required` };
+    return { ok: true, value: { ...EMPTY_FIELD_VALUE } };
+  }
+
+  switch (template.fieldType) {
+    case "text":
+      return { ok: true, value: { ...EMPTY_FIELD_VALUE, valueText: String(raw).trim() } };
+
+    case "number": {
+      const n = typeof raw === "number" ? raw : Number(String(raw).trim());
+      if (!Number.isFinite(n)) return { ok: false, error: `${template.label} must be a number` };
+      return { ok: true, value: { ...EMPTY_FIELD_VALUE, valueNumber: n } };
+    }
+
+    case "date": {
+      const s = String(raw).trim();
+      if (!isValidDateOnly(s)) return { ok: false, error: `${template.label} must be a date (YYYY-MM-DD)` };
+      return { ok: true, value: { ...EMPTY_FIELD_VALUE, valueDate: s } };
+    }
+
+    case "select": {
+      const s = String(raw).trim();
+      const options = template.options ?? [];
+      if (options.length === 0) return { ok: false, error: `${template.label} has no options set up yet` };
+      if (!options.includes(s)) return { ok: false, error: `${template.label} must be one of: ${options.join(", ")}` };
+      return { ok: true, value: { ...EMPTY_FIELD_VALUE, valueText: s } };
+    }
+
+    case "boolean": {
+      if (typeof raw === "boolean") return { ok: true, value: { ...EMPTY_FIELD_VALUE, valueBoolean: raw } };
+      const s = String(raw).trim().toLowerCase();
+      if (["true", "yes", "1"].includes(s)) return { ok: true, value: { ...EMPTY_FIELD_VALUE, valueBoolean: true } };
+      if (["false", "no", "0"].includes(s)) return { ok: true, value: { ...EMPTY_FIELD_VALUE, valueBoolean: false } };
+      return { ok: false, error: `${template.label} must be yes or no` };
+    }
+  }
+}
+
+/** Pulls the populated slot back out for display. Returns null for a value
+ *  that was never set — distinct from `false` on a boolean field, which is a
+ *  real answer somebody gave. */
+export function readFieldValue(fieldType: FieldType, stored: Partial<TypedFieldValue>): string | number | boolean | null {
+  switch (FIELD_TYPE_COLUMN[fieldType]) {
+    case "valueNumber":
+      return stored.valueNumber ?? null;
+    case "valueDate":
+      return stored.valueDate ?? null;
+    case "valueBoolean":
+      return stored.valueBoolean ?? null;
+    default:
+      return stored.valueText ?? null;
+  }
+}
+
+/** Every required field on a template set that has no value yet. Drives the
+ *  item card's "incomplete" badge — an asset nobody has finished describing
+ *  is a known gap, which is more useful than a form that silently passes. */
+export function missingRequiredFields(
+  templates: FieldTemplateLike[],
+  values: Record<string, Partial<TypedFieldValue> | undefined>,
+): string[] {
+  return templates
+    .filter((t) => t.required)
+    .filter((t) => readFieldValue(t.fieldType, values[t.fieldKey] ?? {}) === null)
+    .map((t) => t.label);
 }

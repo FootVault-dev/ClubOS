@@ -78,7 +78,16 @@ import {
   CheckCircle2,
   ScanLine,
   Search,
+  ShoppingCart,
+  CloudOff,
+  RefreshCw,
 } from "lucide-react";
+import {
+  enqueueSale, flushSales, mintSaleKey, pendingSales, removeSale, type PendingSale,
+} from "@/lib/warehouse-offline-queue";
+import {
+  feedWedgeKey, shouldIgnoreWedgeTarget, EMPTY_WEDGE, type WedgeState,
+} from "@/lib/wedge-scanner";
 
 // ── Types (mirror server/warehouse.ts's ScanResolution — client can't import
 // server/* code, so the JSON shape is redeclared here) ──────────────────────
@@ -94,12 +103,27 @@ interface ScanResolvedLocation {
   code: string;
   kind: "bin" | "zone" | "virtual";
 }
+interface ScanResolvedInstance {
+  id: number;
+  assetTag: string | null;
+  serialNumber: string | null;
+  condition: string;
+  itemId: number;
+  itemSku: string;
+  itemName: string;
+  isLoanable: boolean;
+  locationId: number;
+  locationCode: string;
+}
 type ScanResolution =
   | { kind: "item"; item: ScanResolvedItem; matchedVia: "sku" | "alias"; aliasCode?: string; packQty: number; actions: MovementType[] }
   | { kind: "location"; location: ScanResolvedLocation; actions: MovementType[] }
+  | { kind: "instance"; instance: ScanResolvedInstance; actions: MovementType[] }
   | { kind: "unknown"; rawCode: string };
 
-type ActionKey = "receipt" | "putaway" | "transfer" | "pick" | "dispatch" | "consume" | "loan_out" | "loan_return" | "count";
+type ActionKey =
+  | "receipt" | "putaway" | "transfer" | "pick" | "dispatch" | "consume"
+  | "loan_out" | "loan_return" | "count" | "sale";
 
 const ACTION_META: Record<ActionKey, { label: string; icon: any; blurb: string }> = {
   receipt: { label: "Receive", icon: ArrowDownToLine, blurb: "Log stock arriving against a purchase order" },
@@ -111,6 +135,9 @@ const ACTION_META: Record<ActionKey, { label: string; icon: any; blurb: string }
   loan_out: { label: "Loan out", icon: HandCoins, blurb: "Check equipment out to a borrower" },
   loan_return: { label: "Return", icon: Undo2, blurb: "Check equipment back in" },
   count: { label: "Count", icon: Boxes, blurb: "Enter a counted quantity for this bin" },
+  // D25 — someone buys it over the desk. Unlike Dispatch there is no order
+  // behind it: the movement IS the record of the sale.
+  sale: { label: "Sell", icon: ShoppingCart, blurb: "Sell it over the counter — works offline" },
 };
 
 /** Advisory action list for a resolved code — server's scanActionsForItem/
@@ -492,6 +519,184 @@ function LocationPicker({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Counter sale (D25) ───────────────────────────────────────────────────────
+// The one action that must work with no network. The idempotency key is minted
+// BEFORE the request goes out and stored with the queued row, so a sale posted
+// twice — because the response was lost, not because the request failed — is a
+// no-op server-side rather than a second shirt off the shelf.
+
+async function postSale(body: Record<string, unknown>) {
+  const res = await apiRequest("POST", "/api/admin/warehouse/sale", body);
+  let payload: any = {};
+  try {
+    payload = await res.json();
+  } catch {
+    /* a 204/empty body is still a success */
+  }
+  return { ok: res.ok, status: res.status, replayed: payload?.replayed === true, message: payload?.message };
+}
+
+function SaleForm({
+  item,
+  defaultQty,
+  onQueueChange,
+  ...common
+}: FormCommonProps & { item: ScanResolvedItem; defaultQty: number; onQueueChange: () => void }) {
+  const { toast } = useToast();
+  const [location, setLocation] = useState<ScanResolvedLocation | null>(null);
+  const [qty, setQty] = useState(defaultQty);
+  const [error, setError] = useState<Error | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!location) return;
+    setBusy(true);
+    setError(null);
+
+    const idempotencyKey = mintSaleKey(item.id, location.id);
+    const sale = {
+      idempotencyKey,
+      itemId: item.id,
+      itemSku: item.sku,
+      locationId: location.id,
+      locationCode: location.code,
+      qty,
+    };
+
+    // Offline is known up front — don't even try, just bank it. Trying first
+    // would make the operator wait out a timeout with a customer in front of
+    // them, which is the exact thing this feature exists to avoid.
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      enqueueSale(sale);
+      onQueueChange();
+      confirmFeedback("ok");
+      toast({ title: "Sale saved offline", description: `${qty} × ${item.sku} — it'll post when you're back online.` });
+      setBusy(false);
+      common.onDone();
+      return;
+    }
+
+    try {
+      const res = await postSale({ ...sale, itemSku: undefined });
+      if (res.ok) {
+        confirmFeedback("ok");
+        toast({
+          title: res.replayed ? "Already recorded" : "Sale posted",
+          description: `${qty} × ${item.sku} from ${location.code}`,
+        });
+        common.onDone();
+      } else if (res.status >= 500 || res.status === 408 || res.status === 429) {
+        // The server is there but struggling — queue rather than lose it.
+        enqueueSale(sale);
+        onQueueChange();
+        confirmFeedback("ok");
+        toast({ title: "Sale queued", description: "The server was busy — it'll retry automatically." });
+        common.onDone();
+      } else {
+        confirmFeedback("err");
+        setError(new Error(res.message || "That sale was refused."));
+      }
+    } catch (e: any) {
+      // The request never completed. It MIGHT have reached the server, so the
+      // stored key is what makes retrying safe.
+      enqueueSale(sale);
+      onQueueChange();
+      confirmFeedback("ok");
+      toast({ title: "Sale saved offline", description: `${qty} × ${item.sku} — it'll post when the connection returns.` });
+      common.onDone();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FormShell title={`Sell — ${item.sku}`} onBack={common.onCancel}>
+      <Field label="Out of which bin">
+        <LocationPicker
+          value={location}
+          onChange={setLocation}
+          onScanRequest={() => common.requestScan(setLocation)}
+          scanning={common.picking}
+        />
+      </Field>
+      <Field label="Quantity">
+        <NumberField value={qty} onChange={setQty} step="1" />
+      </Field>
+      <SubmitError error={error} />
+      <SubmitButton onClick={submit} disabled={!location || qty <= 0} loading={busy} label="Record sale" />
+    </FormShell>
+  );
+}
+
+/** The pending-sales strip. Shown only when something is actually waiting, so
+ *  it is never chrome the operator learns to ignore. */
+function PendingSalesBar({ rows, onChange }: { rows: PendingSale[]; onChange: () => void }) {
+  const { toast } = useToast();
+  const [flushing, setFlushing] = useState(false);
+
+  const flush = async () => {
+    setFlushing(true);
+    const r = await flushSales(postSale);
+    onChange();
+    setFlushing(false);
+    if (r.posted || r.replayed) {
+      toast({
+        title: `${r.posted + r.replayed} sale(s) synced`,
+        description: r.replayed ? `${r.replayed} had already been recorded.` : undefined,
+      });
+    }
+    if (r.failed) {
+      toast({
+        title: `${r.failed} sale(s) couldn't be posted`,
+        description: "They were refused by the server and have been dropped — re-enter them.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <CloudOff className="w-4 h-4 text-amber-400 shrink-0" />
+          <span className="text-xs text-amber-200/90 truncate">
+            {rows.length} sale{rows.length === 1 ? "" : "s"} waiting to post
+          </span>
+        </div>
+        <button
+          onClick={flush}
+          disabled={flushing}
+          className="px-2.5 py-1.5 rounded-lg text-[11px] text-amber-100 bg-amber-500/15 hover:bg-amber-500/25 flex items-center gap-1.5 shrink-0"
+        >
+          <RefreshCw className={`w-3 h-3 ${flushing ? "animate-spin" : ""}`} /> Send now
+        </button>
+      </div>
+      <div className="space-y-1">
+        {rows.map((r) => (
+          <div key={r.idempotencyKey} className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="text-white/60 truncate">
+              {r.qty} × {r.itemSku} <span className="text-white/30">from {r.locationCode}</span>
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-white/30">{new Date(r.queuedAt).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}</span>
+              {r.attempts > 0 && <span className="text-amber-400/70">{r.attempts} tr{r.attempts === 1 ? "y" : "ies"}</span>}
+              <button
+                onClick={() => { removeSale(r.idempotencyKey); onChange(); }}
+                className="text-white/25 hover:text-red-400"
+                title="Discard this queued sale"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1152,6 +1357,27 @@ export default function WarehouseScan() {
   const [action, setAction] = useState<ActionKey | null>(null);
   const [pickOnPick, setPickOnPick] = useState<((loc: ScanResolvedLocation) => void) | null>(null);
 
+  // Counter sales that couldn't reach the server (D25). Read straight out of
+  // localStorage on mount so a queued sale survives the tab being closed, the
+  // phone locking, or the app being reopened tomorrow.
+  const [queued, setQueued] = useState<PendingSale[]>([]);
+  const refreshQueue = useCallback(() => setQueued(pendingSales()), []);
+
+  useEffect(() => {
+    refreshQueue();
+    // Drain on reconnect. The browser's 'online' event is optimistic (it fires
+    // for any network interface coming up, not for our server being
+    // reachable), which is fine — a flush that fails just re-queues.
+    const onOnline = () => {
+      flushSales(postSale).then(refreshQueue);
+    };
+    window.addEventListener("online", onOnline);
+    // Also try once on mount, in case the connection came back while the tab
+    // was closed and no event ever fired.
+    if (typeof navigator === "undefined" || navigator.onLine !== false) onOnline();
+    return () => window.removeEventListener("online", onOnline);
+  }, [refreshQueue]);
+
   const resolveMutation = useMutation({
     mutationFn: async (code: string) => (await apiRequest("POST", "/api/admin/warehouse/scan", { code })).json() as Promise<ScanResolution>,
   });
@@ -1210,6 +1436,73 @@ export default function WarehouseScan() {
   const cameraActive = action === null || pickOnPick !== null;
   const { videoRef, status, error, engine, torchSupported, torchOn, toggleTorch } = useCamera(cameraActive, handleDetected);
 
+  // 🔴 When the camera can't start — permission denied, no camera on a desktop,
+  // an HTTP origin — open the keyboard box automatically and let it take focus.
+  //
+  // A USB or Bluetooth barcode scanner is a KEYBOARD: it types the code and
+  // presses Enter into whatever input is focused. With the box shut, a scan
+  // goes nowhere and the station looks broken to someone holding working
+  // hardware. This is the difference between the scanner working and not, so
+  // it must not depend on the operator finding the keyboard icon first.
+  useEffect(() => {
+    if (status === "error") setManualOpen(true);
+  }, [status]);
+
+  // 🔴 USB / Bluetooth barcode scanner support (the desk workflow).
+  //
+  // These are keyboards — they type the code and press Enter into whatever has
+  // focus. Auto-opening the manual box on camera failure covers a laptop with
+  // no camera, but NOT a laptop whose webcam works and is pointed at the
+  // ceiling: there the camera runs happily, the box stays shut, and the
+  // trigger does nothing. So the page also listens at the document level and
+  // tells a scanner from a person by TIMING (client/src/lib/wedge-scanner.ts).
+  //
+  // It stands down entirely while any input has focus, so typing a quantity or
+  // a note is never hijacked — in that case the field receives the scan
+  // directly, which is what we want anyway.
+  const wedgeRef = useRef<WedgeState>(EMPTY_WEDGE);
+  const [wedgeArmed, setWedgeArmed] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (shouldIgnoreWedgeTarget(e.target)) return;
+      const result = feedWedgeKey(wedgeRef.current, { key: e.key, at: e.timeStamp || Date.now() });
+      wedgeRef.current = result.state;
+      if (result.kind === "scan") {
+        e.preventDefault();
+        setWedgeArmed(true);
+        // Route it exactly like a camera detection, so a hardware scan and a
+        // camera scan behave identically everywhere downstream.
+        handleDetected(result.code);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleDetected]);
+
+  /** No usable camera means a hardware scanner (or typing) is the input
+   *  method, so the box stays open and refocused between scans instead of
+   *  closing after each one — otherwise counting a shelf means re-opening it
+   *  for every single item. */
+  const hardwareScannerMode = status === "error";
+  const manualInputRef = useRef<HTMLInputElement>(null);
+
+  const submitManual = useCallback(
+    (raw: string) => {
+      const code = raw.trim();
+      if (!code) return;
+      resolveCode(code);
+      setManualCode("");
+      if (hardwareScannerMode) {
+        // Keep the field alive and focused so the next trigger-pull lands.
+        requestAnimationFrame(() => manualInputRef.current?.focus());
+      } else {
+        setManualOpen(false);
+      }
+    },
+    [resolveCode, hardwareScannerMode],
+  );
+
   const requestScan = useCallback((onPick: (loc: ScanResolvedLocation) => void) => {
     setPickOnPick(() => onPick);
   }, []);
@@ -1237,7 +1530,13 @@ export default function WarehouseScan() {
               <>
                 <AlertTriangle className="w-6 h-6 text-amber-400" />
                 <span>{error || "Camera unavailable"}</span>
-                <span className="text-white/30 text-xs">Use manual entry below instead</span>
+                {/* The manual box is opened automatically the moment the
+                    camera fails (see the effect below) — a USB/Bluetooth
+                    scanner is a keyboard and types into whatever is focused,
+                    so leaving it shut means scanning does nothing at all. */}
+                <span className="text-white/30 text-xs">
+                  Keyboard entry is open below — a USB or Bluetooth scanner works straight into it.
+                </span>
               </>
             ) : (
               <>
@@ -1273,32 +1572,35 @@ export default function WarehouseScan() {
         {engine === "wasm" && status === "running" && (
           <div className="absolute bottom-3 left-3 text-[10px] text-white/30 uppercase tracking-wider">WASM scanner</div>
         )}
+
+        {/* Proof the USB/Bluetooth scanner is being heard. Without this, a
+            hardware scan that resolves instantly is indistinguishable from
+            the page ignoring you — and the first thing anyone does with a new
+            scanner is check whether it's working at all. */}
+        {wedgeArmed && (
+          <div className="absolute bottom-3 right-3 text-[10px] text-emerald-400/70 uppercase tracking-wider flex items-center gap-1">
+            <ScanLine className="w-3 h-3" /> USB scanner connected
+          </div>
+        )}
       </div>
 
       {manualOpen && !pickOnPick && (
         <div className="p-3 border-t border-white/10 bg-black/90 flex gap-2 flex-shrink-0">
           <input
+            ref={manualInputRef}
             className={inputCls + " flex-1"}
-            placeholder="Type a SKU or bin code..."
+            placeholder={hardwareScannerMode ? "Scan or type a code — stays ready for the next one" : "Type a SKU or bin code..."}
             value={manualCode}
             onKeyDown={(e) => {
               if (e.key === "Enter" && manualCode.trim()) {
-                resolveCode(manualCode.trim());
-                setManualCode("");
-                setManualOpen(false);
+                submitManual(manualCode);
               }
             }}
             onChange={(e) => setManualCode(e.target.value)}
             autoFocus
           />
           <button
-            onClick={() => {
-              if (manualCode.trim()) {
-                resolveCode(manualCode.trim());
-                setManualCode("");
-                setManualOpen(false);
-              }
-            }}
+            onClick={() => submitManual(manualCode)}
             className="px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold"
           >
             Go
@@ -1307,7 +1609,14 @@ export default function WarehouseScan() {
       )}
 
       {/* Result panel */}
-      <div className="flex-shrink-0 bg-[#101013] border-t border-white/10" style={{ maxHeight: action ? "78vh" : "56vh" }}>
+      <div className="flex-shrink-0 bg-[#101013] border-t border-white/10 overflow-y-auto" style={{ maxHeight: action ? "78vh" : "56vh" }}>
+        {/* Sales that haven't reached the server yet. Only rendered when there
+            actually are some, so it never becomes chrome people stop seeing. */}
+        {queued.length > 0 && !action && (
+          <div className="p-3 pb-0">
+            <PendingSalesBar rows={queued} onChange={refreshQueue} />
+          </div>
+        )}
         {!resolved && !resolveMutation.isPending && (
           <div className="p-6 text-center text-white/30 text-sm">Point the camera at an item or bin label, or use manual entry.</div>
         )}
@@ -1316,6 +1625,51 @@ export default function WarehouseScan() {
             <Loader2 className="w-5 h-5 animate-spin" />
           </div>
         )}
+
+        {/* D19 — one physical asset. Read-only here on purpose: an asset is
+            moved and retired from the Assets screen, which shows its whole
+            history and asks for a destination. Scanning the tag is how you
+            find out WHICH one you're holding and where it's meant to be. */}
+        {resolved && !action && resolved.resolution.kind === "instance" && (() => {
+          const inst = resolved.resolution.instance;
+          const retired = inst.condition === "decommissioned";
+          return (
+            <div className="p-5 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-white font-bold text-lg truncate">{inst.itemName}</div>
+                  <div className="text-white/40 text-xs truncate">
+                    {inst.assetTag ?? "No asset tag"} · {inst.itemSku}
+                  </div>
+                </div>
+                <button onClick={resetToIdle} className="text-white/30 hover:text-white p-1 shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className={`px-2 py-0.5 rounded ${retired ? "bg-white/5 text-white/40" : "bg-blue-500/10 text-blue-400"}`}>
+                  {inst.condition}
+                </span>
+                <span className="px-2 py-0.5 rounded bg-white/5 text-white/60">at {inst.locationCode}</span>
+                {inst.serialNumber && <span className="text-white/30">serial {inst.serialNumber}</span>}
+              </div>
+
+              {retired && (
+                <div className="text-amber-300/80 text-xs">
+                  This one was retired — it shouldn't be back on the floor.
+                </div>
+              )}
+
+              <a
+                href={`/admin/warehouse/assets?instance=${inst.id}`}
+                className="block w-full py-3 rounded-xl bg-blue-600 text-white text-center text-sm font-semibold"
+              >
+                Open it
+              </a>
+            </div>
+          );
+        })()}
 
         {resolved && !action && resolved.resolution.kind === "unknown" && (
           <div className="p-5 space-y-3">
@@ -1402,6 +1756,8 @@ export default function WarehouseScan() {
               return <PutawayTransferForm kind="transfer" item={item} defaultQty={defaultQty} {...commonProps} />;
             case "consume":
               return <ConsumeForm item={item} defaultQty={defaultQty} {...commonProps} />;
+            case "sale":
+              return <SaleForm item={item} defaultQty={defaultQty} onQueueChange={refreshQueue} {...commonProps} />;
             case "pick":
               return <PickDispatchForm restrict="pick" item={item} {...commonProps} />;
             case "dispatch":

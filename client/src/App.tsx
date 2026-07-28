@@ -187,6 +187,9 @@ import WarehouseSync from "@/pages/warehouse-sync";
 import WarehouseLedger from "@/pages/warehouse-ledger";
 import WarehouseScan from "@/pages/warehouse-scan";
 import WarehouseLabels from "@/pages/warehouse-labels";
+import WarehouseAssets from "@/pages/warehouse-assets";
+import WarehouseFieldTemplates from "@/pages/warehouse-field-templates";
+import WarehouseStockTake from "@/pages/warehouse-stock-take";
 import PrintHub from "@/pages/print-hub";
 import PrintConfigure from "@/pages/print-configure";
 import PrintCheckout from "@/pages/print-checkout";
@@ -282,6 +285,9 @@ function AdminRouter() {
         <Route path="/admin/warehouse" component={WarehouseDashboard} />
         <Route path="/admin/warehouse/items" component={WarehouseItems} />
         <Route path="/admin/warehouse/locations" component={WarehouseLocations} />
+        <Route path="/admin/warehouse/assets" component={WarehouseAssets} />
+        <Route path="/admin/warehouse/fields" component={WarehouseFieldTemplates} />
+        <Route path="/admin/warehouse/stock-take" component={WarehouseStockTake} />
         <Route path="/admin/warehouse/pos" component={WarehousePOs} />
         <Route path="/admin/warehouse/requisitions" component={WarehouseRequisitions} />
         <Route path="/admin/warehouse/loans" component={WarehouseLoans} />

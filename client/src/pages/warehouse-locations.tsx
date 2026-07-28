@@ -15,16 +15,16 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { LOCATION_KINDS, type LocationKind } from "@shared/warehouse";
+import { LOCATION_KINDS, LOCATION_KIND_LABELS, type LocationKind } from "@shared/warehouse";
 import type { WhLocation } from "@shared/schema";
 
 const ALL = "__all__";
 
-const KIND_LABEL: Record<LocationKind, string> = {
-  bin: "Bin",
-  zone: "Zone",
-  virtual: "Virtual",
-};
+// Was a second copy of the label map living here. It is now imported from
+// shared/warehouse.ts so adding a location kind can never leave this page
+// rendering a blank chip — which is exactly what tsc caught when 'person' and
+// 'vehicle' arrived (D20).
+const KIND_LABEL: Record<LocationKind, string> = LOCATION_KIND_LABELS;
 
 function toggleId(set: Set<number>, id: number): Set<number> {
   const next = new Set(set);
