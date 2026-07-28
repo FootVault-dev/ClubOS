@@ -343,9 +343,16 @@ async function part2(port: number) {
       await db.delete(schema.contacts).where(inArray(schema.contacts.id, ids));
     }
     if (created.programs.length) await db.delete(schema.programs).where(inArray(schema.programs.id, created.programs));
-    // Never leave MOCK reference data in the real cache.
-    await db.delete(schema.sportyReferenceCache);
-    console.log("[e2e] cleanup complete — test rows and mock reference data removed");
+    // Never leave MOCK reference data in the real cache — but delete ONLY this
+    // run's own environment. The cache is keyed by (kind, environment) now, and
+    // a bare delete wipes the real UAT vocabulary too. That is not cosmetic:
+    // with no reference data the mapper falls back to its provisional path,
+    // stops detecting ambiguous ethnicity groups, and reports players as
+    // "ready" who are not — it read 49/118 instead of the true 8/118.
+    const { sportyEnvironmentFor } = await import("../shared/sporty");
+    const mockEnv = sportyEnvironmentFor(`http://localhost:${port}`);
+    await db.delete(schema.sportyReferenceCache).where(eq(schema.sportyReferenceCache.environment, mockEnv));
+    console.log(`[e2e] cleanup complete — test rows and '${mockEnv}' reference data removed`);
   }
 }
 

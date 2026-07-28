@@ -612,6 +612,14 @@ async function cmdEngine() {
 async function cmdReadiness() {
   const engine = await import("../server/sporty-engine");
   const ORG = 1;
+  // Without NZF's real vocabulary the mapper runs its provisional path, stops
+  // detecting ambiguous ethnicity groups, and reports far more players "ready"
+  // than truly are (it once read 49/118 against a true 8/118). Refuse rather
+  // than print a comfortable lie.
+  const { ref, fetchedAt } = await engine.loadReferenceData();
+  if (!fetchedAt || !ref.ethnicityGroups?.length || !ref.countries?.length) {
+    die("Reference data isn't loaded for this environment — run `sporty-uat.ts reference` first.\n  Readiness computed without it is optimistic and wrong.");
+  }
   const built = await engine.buildCandidates(ORG, { scope: "academy" });
 
   const byStatus: Record<string, number> = {};
