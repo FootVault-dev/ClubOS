@@ -57,8 +57,11 @@ async function main() {
             c.nationality AS legacy_nationality,
             c.country_of_birth AS legacy_country_of_birth,
             c.address     AS legacy_address,
-            c.identity_captured_source
+            c.identity_captured_source,
+            c.identity_deferred_at, c.identity_deferred_reason,
+            (u.first_name || ' ' || u.last_name) AS deferred_by
        FROM contacts c
+       LEFT JOIN users u ON u.id = c.identity_deferred_by_user_id
       WHERE c.type = 'player'
         ${orgFilter ? `AND EXISTS (
               SELECT 1 FROM registrations r
@@ -73,6 +76,7 @@ async function main() {
   // backfill can chase with a partial answer already on file, versus those we
   // have to ask from scratch.
   let legacyOnly = 0;
+  const deferred: any[] = [];
   const incomplete: any[] = [];
 
   for (const r of rows) {
@@ -95,11 +99,22 @@ async function main() {
     counts.address += gap.address ? 1 : 0;
     const hasLegacy = !!(r.legacy_ethnicity || r.legacy_nationality || r.legacy_country_of_birth || r.legacy_address);
     if (hasLegacy) legacyOnly++;
+    if (r.identity_deferred_at) {
+      deferred.push({
+        name: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim(),
+        when: String(r.identity_deferred_at).slice(0, 10),
+        reason: r.identity_deferred_reason ?? "",
+        by: r.deferred_by ?? "",
+      });
+    }
     incomplete.push({
       id: r.id,
       name: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim(),
       dob: r.date_of_birth ? String(r.date_of_birth).slice(0, 10) : "",
       missing: missing.join("|"),
+      deferredAt: r.identity_deferred_at ? String(r.identity_deferred_at).slice(0, 10) : "",
+      deferredReason: r.identity_deferred_reason ?? "",
+      deferredBy: r.deferred_by ?? "",
       legacyEthnicity: r.legacy_ethnicity ?? "",
       legacyNationality: r.legacy_nationality ?? "",
       legacyCountryOfBirth: r.legacy_country_of_birth ?? "",
@@ -116,6 +131,17 @@ async function main() {
   console.log(`  missing nationality           ${counts.nationality}`);
   console.log(`  missing ethnic group          ${counts.ethnicity}`);
   console.log(`  missing/partial address       ${counts.address}`);
+  // The follow-up list: people a staff member promised to come back to. These
+  // are qualitatively different from the rest — somebody made a commitment.
+  if (deferred.length) {
+    console.log(`\n  ── FOLLOW-UP LIST (${deferred.length}) — staff deferred these at the counter ──`);
+    for (const d of deferred.slice(0, 40)) {
+      console.log(`     ${d.when}  ${d.name.padEnd(26)} ${d.reason}${d.by ? `  (${d.by})` : ""}`);
+    }
+    if (deferred.length > 40) console.log(`     …and ${deferred.length - 40} more (use --csv for the lot)`);
+  } else {
+    console.log(`\n  Follow-up list: empty — nobody has been deferred at the counter.`);
+  }
   console.log(`\n  of the incomplete, ${legacyOnly} have legacy free-text values on file.`);
   console.log(`  Those are a starting point for a conversation, NOT an answer —`);
   console.log(`  "European" is ambiguous to NZF and a one-line address has no region.`);

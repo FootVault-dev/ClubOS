@@ -340,3 +340,38 @@ export function isNzfIdentityComplete(contact: Parameters<typeof nzfIdentityGap>
   const g = nzfIdentityGap(contact);
   return !g.countryOfBirth && !g.nationality && !g.ethnicity && !g.address;
 }
+
+// ── Deferral at the counter ─────────────────────────────────────────────────
+// Office staff may skip the NZF fields so a parent is never blocked from
+// paying — but only deliberately, with a reason, and the child then appears on
+// the follow-up list. The reasons are the ones that actually come up at a
+// counter; "Other" carries free text rather than forcing a wrong choice.
+
+export const IDENTITY_DEFER_REASONS = [
+  "Parent didn't know the answer",
+  "Parent didn't have their address handy",
+  "Registering on someone else's behalf",
+  "Language barrier — needs a follow-up call",
+  "Queue / no time at the counter",
+  "Other",
+] as const;
+export type IdentityDeferReason = (typeof IDENTITY_DEFER_REASONS)[number];
+
+export function isIdentityDeferReason(v: unknown): v is IdentityDeferReason {
+  return typeof v === "string" && (IDENTITY_DEFER_REASONS as readonly string[]).includes(v);
+}
+
+/** A deferral must say WHY. An unexplained skip is the accidental gap this
+ *  whole mechanism exists to replace, so a blank reason is refused — and
+ *  "Other" must carry its own words rather than standing in for a shrug. */
+export function validateIdentityDeferral(
+  reason: unknown,
+  note: unknown,
+): { ok: true; reason: string } | { ok: false; error: string } {
+  const r = typeof reason === "string" ? reason.trim() : "";
+  const n = typeof note === "string" ? note.trim() : "";
+  if (!r) return { ok: false, error: "Choose why the NZ Football details are being skipped." };
+  if (!isIdentityDeferReason(r)) return { ok: false, error: "That isn't one of the skip reasons." };
+  if (r === "Other" && !n) return { ok: false, error: "Add a short note explaining the skip." };
+  return { ok: true, reason: r === "Other" ? `Other — ${n}` : n ? `${r} — ${n}` : r };
+}

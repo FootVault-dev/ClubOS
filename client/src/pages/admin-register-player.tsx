@@ -13,9 +13,13 @@ import { GENDERS } from "@shared/academy";
 import { NZF_COUNTRIES, NZF_ETHNICITY_GROUPS } from "@shared/nzf-vocabulary";
 import {
   NzfIdentityFields,
+  NzfAddressFields,
   EMPTY_NZF_IDENTITY,
+  EMPTY_NZF_ADDRESS,
   type NzfIdentityValue,
+  type NzfAddressValue,
 } from "@/components/nzf-identity-fields";
+import { NZ_REGIONS, IDENTITY_DEFER_REASONS } from "@shared/nzf-identity";
 import {
   X, ChevronRight, ChevronLeft, User, Baby, Calendar, CheckCircle,
   Plus, Trash2, Loader2, Building2, CreditCard, Banknote, AlertTriangle, Lock,
@@ -159,6 +163,13 @@ export function RegisterPlayerModal({
   // parent at the counter with a queue behind them should not be blocked, and a
   // recorded gap is honest where a guessed ethnicity is not.
   const [identity, setIdentity] = useState<NzfIdentityValue>(EMPTY_NZF_IDENTITY);
+  const [nzfAddress, setNzfAddress] = useState<NzfAddressValue>({ ...EMPTY_NZF_ADDRESS, country: "NZL" });
+  // The documented skip. Required by default; deferring is deliberate, needs a
+  // reason, and puts the child on the follow-up list — so a gap is a decision
+  // someone made rather than something that quietly happened.
+  const [deferIdentity, setDeferIdentity] = useState(false);
+  const [deferReason, setDeferReason] = useState("");
+  const [deferNote, setDeferNote] = useState("");
   const [allergies, setAllergies] = useState("");
   const [medicalNotes, setMedicalNotes] = useState("");
   const [relationship, setRelationship] = useState("parent");
@@ -299,6 +310,14 @@ export function RegisterPlayerModal({
             ethnicitySelectionIds: identity.ethnicityGroupId ? identity.ethnicitySelectionIds : undefined,
             ethnicity2GroupId: identity.ethnicity2GroupId ?? undefined,
             ethnicity2SelectionIds: identity.ethnicity2GroupId ? identity.ethnicity2SelectionIds : undefined,
+            addressParts: deferIdentity ? undefined : {
+              street: nzfAddress.street.trim(), suburb: nzfAddress.suburb.trim(),
+              city: nzfAddress.city.trim(), region: nzfAddress.region.trim(),
+              postcode: nzfAddress.postcode.trim(), country: nzfAddress.country,
+            },
+            deferIdentity: deferIdentity || undefined,
+            deferReason: deferIdentity ? deferReason : undefined,
+            deferNote: deferIdentity ? deferNote.trim() || undefined : undefined,
             allergies, medicalNotes,
           },
           emergency: { name: emergencyContact, phone: emergencyPhone },
@@ -372,7 +391,8 @@ export function RegisterPlayerModal({
     setItems([]);
     setOptionId(null); setPlan("term");
     setPlayerFirst(""); setPlayerLast(""); setPlayerDob(""); setPlayerGender(""); setPlayerSchool("");
-    setIdentity(EMPTY_NZF_IDENTITY);
+    setIdentity(EMPTY_NZF_IDENTITY); setNzfAddress({ ...EMPTY_NZF_ADDRESS, country: "NZL" });
+    setDeferIdentity(false); setDeferReason(""); setDeferNote("");
     setAllergies(""); setMedicalNotes(""); setRelationship("parent");
     setPolicyAccepted(false); setAckAgeWarning(false);
     setIsPaid(true); setMethod("eftpos"); setAmountDollars(""); setAmountTouched(false);
@@ -400,6 +420,24 @@ export function RegisterPlayerModal({
 
   const stepName = STEPS[step];
 
+  // NZ Football data is required to move on — unless it's been deliberately
+  // deferred with a reason. The server enforces the same rule; this only stops
+  // staff walking into a rejection at the end of the flow.
+  const nzfGroup = NZF_ETHNICITY_GROUPS.find((g) => g.id === identity.ethnicityGroupId);
+  const nzfIdentityOk =
+    !!identity.countryOfBirthCode &&
+    !!identity.nationalityCode &&
+    !!nzfGroup &&
+    (nzfGroup.maxSelections === 0
+      ? identity.ethnicitySelectionIds.length === 0
+      : identity.ethnicitySelectionIds.length >= nzfGroup.minSelections &&
+        identity.ethnicitySelectionIds.length <= nzfGroup.maxSelections);
+  const nzfAddressOk =
+    !!nzfAddress.street.trim() && !!nzfAddress.suburb.trim() && !!nzfAddress.city.trim() &&
+    !!nzfAddress.region.trim() && !!nzfAddress.postcode.trim() && !!nzfAddress.country;
+  const deferralOk = !!deferReason && (deferReason !== "Other" || !!deferNote.trim());
+  const nzfStepOk = deferIdentity ? deferralOk : (nzfIdentityOk && nzfAddressOk);
+
   const canNextStep = () => {
     if (stepName === STEP_ONE) {
       if (!selectedProgramId) return false;
@@ -407,8 +445,9 @@ export function RegisterPlayerModal({
       return true;
     }
     if (stepName === "Family") {
-      return !!(parentFirst.trim() && parentLast.trim() && parentEmail.trim().includes("@") &&
+      const basics = !!(parentFirst.trim() && parentLast.trim() && parentEmail.trim().includes("@") &&
         parentPhone.trim() && playerFirst.trim() && playerLast.trim() && /^\d{4}-\d{2}-\d{2}$/.test(playerDob));
+      return basics && nzfStepOk;
     }
     if (stepName === "Parent") return !!(parentFirst.trim() && parentLast.trim() && parentPhone.trim());
     if (stepName === "Children") return validChildren.length > 0;
@@ -684,16 +723,69 @@ export function RegisterPlayerModal({
                   <span className="text-[12.5px] font-semibold text-white/85">New Zealand Football details</span>
                 </div>
                 <p className="text-[11px] text-white/50 mb-3 leading-snug">
-                  Required for the annual NZF audit. You can save without them and add them later on the player's record —
-                  they'll be flagged as missing rather than guessed.
+                  New Zealand Football needs all of these to register the player. Ask the parent now if you can —
+                  if they can't answer, tick the skip below and we'll follow up. Never guess an answer.
                 </p>
-                <NzfIdentityFields
-                  value={identity}
-                  onChange={setIdentity}
-                  countries={NZF_COUNTRIES as any}
-                  groups={NZF_ETHNICITY_GROUPS as any}
-                  theme={NZF_THEME}
-                />
+
+                {!deferIdentity && (
+                  <div className="space-y-4">
+                    <NzfIdentityFields
+                      value={identity}
+                      onChange={setIdentity}
+                      countries={NZF_COUNTRIES as any}
+                      groups={NZF_ETHNICITY_GROUPS as any}
+                      theme={NZF_THEME}
+                    />
+                    <NzfAddressFields
+                      value={nzfAddress}
+                      onChange={setNzfAddress}
+                      countries={NZF_COUNTRIES as any}
+                      regions={NZ_REGIONS}
+                      theme={NZF_THEME}
+                    />
+                  </div>
+                )}
+
+                <label className="mt-4 flex items-start gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={deferIdentity}
+                    onChange={(e) => setDeferIdentity(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 flex-shrink-0 rounded"
+                    data-testid="checkbox-defer-nzf"
+                  />
+                  <span className="text-[12px] text-white/75 leading-snug">
+                    The parent can't give these right now — skip and follow up.
+                    <span className="block text-white/45">Payment still goes through. The player goes on the NZF follow-up list.</span>
+                  </span>
+                </label>
+
+                {deferIdentity && (
+                  <div className="mt-3 space-y-3 rounded-md p-3" style={{ background: "rgba(255,193,7,0.06)", border: "1px solid rgba(255,193,7,0.25)" }}>
+                    <Field label="Why" required>
+                      <select
+                        value={deferReason}
+                        onChange={(e) => setDeferReason(e.target.value)}
+                        className={`w-full h-10 rounded-md px-3 text-sm ${FIELD} border`}
+                        data-testid="select-defer-reason"
+                      >
+                        <option value="">Choose a reason…</option>
+                        {IDENTITY_DEFER_REASONS.map((r) => (
+                          <option key={r} value={r} className="bg-[#02060E]">{r}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={deferReason === "Other" ? "Note (required)" : "Note (optional)"}>
+                      <Input
+                        value={deferNote}
+                        onChange={(e) => setDeferNote(e.target.value)}
+                        placeholder="Anything that helps whoever follows up"
+                        className={FIELD}
+                        data-testid="input-defer-note"
+                      />
+                    </Field>
+                  </div>
+                )}
               </div>
             </div>
           )}

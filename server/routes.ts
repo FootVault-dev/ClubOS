@@ -80,6 +80,7 @@ import {
   validateNzfIdentity,
   validateNzfAddress,
   nzfIdentityGap,
+  validateIdentityDeferral,
 } from "@shared/nzf-identity";
 import { isOfficePaymentMethod } from "@shared/payments";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
@@ -4597,12 +4598,53 @@ export async function registerRoutes(
         };
         setIf("gender", optional(playerIn.gender));
         setIf("school", optional(playerIn.school));
-        // NZF identity, structured. Optional at the counter — a queue is not a
-        // reason to invent a child's ethnicity — but anything staff DO enter is
-        // validated against NZ Football's own vocabulary, so a walk-up
-        // registration is exactly as registerable as an online one.
+        // NZF identity, structured and REQUIRED — unless staff deliberately
+        // defer it. A parent at the counter must never be blocked from paying,
+        // and some genuinely cannot answer on the spot; but a skip is now an
+        // attributed decision with a reason that puts the child on the
+        // follow-up list, rather than a silent gap. Never guess an answer.
+        if (body.deferIdentity === true) {
+          const d = validateIdentityDeferral(body.deferReason, body.deferNote);
+          if (!d.ok) return res.status(400).json({ message: d.error });
+          playerFields.identityDeferredAt = new Date();
+          playerFields.identityDeferredReason = d.reason;
+          playerFields.identityDeferredByUserId = (req as any).user?.id ?? null;
+        } else {
+          const parsedId = validateNzfIdentity({
+            countryOfBirthCode: playerIn.countryOfBirthCode,
+            nationalityCode: playerIn.nationalityCode,
+            ethnicityGroupId: playerIn.ethnicityGroupId,
+            ethnicitySelectionIds: playerIn.ethnicitySelectionIds,
+            ethnicity2GroupId: playerIn.ethnicity2GroupId,
+            ethnicity2SelectionIds: playerIn.ethnicity2SelectionIds,
+          });
+          const parsedAddr = validateNzfAddress(playerIn.addressParts ?? {});
+          if (!parsedId.ok || !parsedAddr.ok) {
+            const errs = [...(parsedId.ok ? [] : parsedId.errors), ...(parsedAddr.ok ? [] : parsedAddr.errors)];
+            return res.status(400).json({
+              message: errs[0],
+              errors: errs,
+              code: "nzf_incomplete",
+              hint: "Ask the parent, or tick the skip and give a reason — never guess.",
+            });
+          }
+          const a = parsedAddr.value;
+          playerFields.address = a.oneLine;
+          playerFields.addressStreet = a.street;
+          playerFields.addressSuburb = a.suburb;
+          playerFields.addressCity = a.city;
+          playerFields.addressRegion = a.region;
+          playerFields.addressPostcode = a.postcode;
+          playerFields.addressCountry = a.countryCode;
+          // Re-entering the details clears any earlier deferral — the promise
+          // to follow up has been kept, so the child leaves the follow-up list.
+          playerFields.identityDeferredAt = null;
+          playerFields.identityDeferredReason = null;
+          playerFields.identityDeferredByUserId = null;
+        }
         const anyIdentity =
-          playerIn.countryOfBirthCode || playerIn.nationalityCode || playerIn.ethnicityGroupId != null;
+          body.deferIdentity !== true &&
+          (playerIn.countryOfBirthCode || playerIn.nationalityCode || playerIn.ethnicityGroupId != null);
         if (anyIdentity) {
           const parsed = validateNzfIdentity({
             countryOfBirthCode: playerIn.countryOfBirthCode,

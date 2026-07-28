@@ -133,6 +133,13 @@ export const contacts = pgTable("contacts", {
   ethnicity2SelectionIds: integer("ethnicity2_selection_ids").array(),
   identityCapturedAt: timestamp("identity_captured_at", { withTimezone: true }),
   identityCapturedSource: text("identity_captured_source"), // 'form' | 'staff' | 'import'
+  // A documented skip at the counter. The NZF fields are required by default;
+  // staff may defer them so a parent is never blocked from paying, but the
+  // deferral is attributed and lands the child on a follow-up list. A gap is
+  // then a decision someone made, not an accident.
+  identityDeferredAt: timestamp("identity_deferred_at", { withTimezone: true }),
+  identityDeferredReason: text("identity_deferred_reason"),
+  identityDeferredByUserId: integer("identity_deferred_by_user_id").references(() => users.id, { onDelete: "restrict" }),
   // ── Structured address ─────────────────────────────────────────────────────
   // `address` above stays untouched (every existing read path depends on it).
   // Sporty requires six SEPARATE fields and — contradicting its own swagger,

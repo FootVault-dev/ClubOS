@@ -18,6 +18,8 @@ import {
   validateNzfAddress,
   nzfIdentityGap,
   isNzfIdentityComplete,
+  validateIdentityDeferral,
+  IDENTITY_DEFER_REASONS,
 } from "../shared/nzf-identity";
 import { resolveStoredEthnicity, structuredAddressOf, buildRegisterPerson } from "../shared/sporty";
 
@@ -310,6 +312,37 @@ check("a partial structured address falls through to the parser",
   check("missing only the region is still incomplete",
     !isNzfIdentityComplete({ ...done, addressRegion: null }));
 }
+
+// ── The documented skip at the counter ──────────────────────────────────────
+// A parent must never be blocked from paying, but a skip has to be a decision
+// someone made — not the silent gap it replaces.
+{
+  const r = validateIdentityDeferral("", "");
+  check("a skip with no reason is refused", !r.ok);
+}
+{
+  const r = validateIdentityDeferral("Made this up", "");
+  check("a reason that isn't on the list is refused", !r.ok);
+}
+{
+  const r = validateIdentityDeferral("Other", "");
+  check("'Other' with no note is refused — it must carry its own words", !r.ok);
+}
+{
+  const r = validateIdentityDeferral("Other", "Dad is coming back Friday with the passport");
+  check("'Other' with a note is accepted", r.ok);
+  if (r.ok) check("the note is carried into the stored reason", r.reason.includes("Friday"), r.reason);
+}
+{
+  const r = validateIdentityDeferral("Parent didn't know the answer", "");
+  check("a listed reason with no note is accepted", r.ok);
+  if (r.ok) eq("the reason is stored verbatim", r.reason, "Parent didn't know the answer");
+}
+{
+  const r = validateIdentityDeferral("Queue / no time at the counter", "busy Saturday");
+  check("a listed reason keeps its note too", r.ok && r.reason.includes("busy Saturday"));
+}
+check("every listed reason validates", IDENTITY_DEFER_REASONS.filter((x) => x !== "Other").every((x) => validateIdentityDeferral(x, "").ok));
 
 check("NZ_REGIONS covers all 15 regions plus none invented", NZ_REGIONS.length === 15, `got ${NZ_REGIONS.length}`);
 
