@@ -49,7 +49,7 @@ async function main() {
   }
 
   const { rows } = await pool.query(
-    `SELECT c.id, c.first_name, c.last_name, c.date_of_birth, c.organization_id,
+    `SELECT c.id, c.first_name, c.last_name, c.date_of_birth,
             c.nationality_code, c.country_of_birth_code, c.ethnicity_group_id,
             c.address_street, c.address_suburb, c.address_city,
             c.address_region, c.address_postcode, c.address_country,
@@ -60,7 +60,10 @@ async function main() {
             c.identity_captured_source
        FROM contacts c
       WHERE c.type = 'player'
-        ${orgFilter ? "AND c.organization_id = $1" : ""}
+        ${orgFilter ? `AND EXISTS (
+              SELECT 1 FROM registrations r
+               JOIN programs p ON p.id = r.program_id
+              WHERE r.contact_id = c.id AND p.organization_id = $1)` : ""}
       ORDER BY c.last_name, c.first_name`,
     orgFilter ? [Number(orgFilter)] : [],
   );
@@ -96,7 +99,6 @@ async function main() {
       id: r.id,
       name: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim(),
       dob: r.date_of_birth ? String(r.date_of_birth).slice(0, 10) : "",
-      org: r.organization_id,
       missing: missing.join("|"),
       legacyEthnicity: r.legacy_ethnicity ?? "",
       legacyNationality: r.legacy_nationality ?? "",
