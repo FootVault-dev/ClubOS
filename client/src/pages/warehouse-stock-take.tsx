@@ -161,7 +161,9 @@ export default function WarehouseStockTake() {
   const [locationId, setLocationId] = useState(draft.current?.locationId ?? "");
   const [lines, setLines] = useState<CountLine[]>(draft.current?.lines ?? []);
   const [manual, setManual] = useState("");
-  const [lastScan, setLastScan] = useState<{ sku: string; label: string; counted: number } | null>(null);
+  const [lastScan, setLastScan] = useState<
+    { sku: string; label: string; counted: number; sub?: string; isNew?: boolean } | null
+  >(null);
   const [posted, setPosted] = useState<any | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
@@ -233,9 +235,17 @@ export default function WarehouseStockTake() {
       const item = r.item;
       // A case barcode counts as its pack quantity, not one (D5).
       const add = r.packQty && r.packQty > 1 ? r.packQty : 1;
-      const known = lines.some((l) => l.itemId === item.id);
-      addLine({ itemId: item.id, sku: item.sku, name: item.name, counted: add }, !known);
-      setLastScan({ sku: item.sku, label: item.name, counted: add });
+      const existing = lines.find((l) => l.itemId === item.id);
+      addLine({ itemId: item.id, sku: item.sku, name: item.name, counted: add }, !existing);
+      // The panel shows the RUNNING total for that variant, not the increment —
+      // "that's the ninth one" is the thing worth reading back on a shelf.
+      setLastScan({
+        sku: item.sku,
+        label: item.name,
+        counted: (existing?.counted ?? 0) + add,
+        isNew: !existing,
+        sub: existing ? variantLabel(existing) : item.sku,
+      });
       if (navigator.vibrate) navigator.vibrate(15);
     } catch {
       toast({ title: "Couldn't look that code up", description: trimmed, variant: "destructive" });
@@ -340,8 +350,18 @@ export default function WarehouseStockTake() {
   }
 
   // ── Counting screen ────────────────────────────────────────────────────────
+  // Laid out to match the prototype this was ported from: a scan panel that
+  // dominates the screen, three running counters, a toolbar, and a table whose
+  // COLUMN HEADINGS are visible before anything is counted — so the screen tells
+  // you what it is going to collect, instead of being an empty box.
+  const emptyStats = [
+    { n: groupLines(lines).length, l: "Models" },
+    { n: lines.length, l: "Variants" },
+    { n: total, l: "Units counted" },
+  ];
+
   return (
-    <div className="p-4 sm:p-6 max-w-2xl space-y-4">
+    <div className="p-4 sm:p-6 max-w-5xl space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white">Stock take</h1>
@@ -349,32 +369,26 @@ export default function WarehouseStockTake() {
             Scan what's there — the count builds itself. Scan the same thing twice and it reads 2.
           </p>
         </div>
-        <a
-          href="/api/admin/warehouse/stock.csv"
-          className="px-3 py-2 rounded-lg text-xs text-white/70 bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] flex items-center gap-1.5"
-        >
-          <Download className="w-3.5 h-3.5" /> Export CSV
-        </a>
+        <div className="space-y-1 min-w-[220px]">
+          <label className="text-xs text-white/50 flex items-center gap-1"><MapPin className="w-3 h-3" /> Which location are you counting?</label>
+          <Select value={locationId} onValueChange={setLocationId}>
+            <SelectTrigger><SelectValue placeholder="Pick a location" /></SelectTrigger>
+            <SelectContent className="max-w-[calc(100vw-2rem)]">
+              {countable.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabel(l)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {countable.length === 0 && (
+            <p className="text-[11px] text-amber-400/70">
+              No locations set up yet — add them under Warehouse → Locations first.
+            </p>
+          )}
+        </div>
       </div>
 
-      <div className="space-y-1">
-        <label className="text-xs text-white/50 flex items-center gap-1"><MapPin className="w-3 h-3" /> Which location are you counting?</label>
-        <Select value={locationId} onValueChange={setLocationId}>
-          <SelectTrigger><SelectValue placeholder="Pick a location" /></SelectTrigger>
-          <SelectContent className="max-w-[calc(100vw-2rem)]">
-            {countable.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabel(l)}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        {countable.length === 0 && (
-          <p className="text-[11px] text-amber-400/70">
-            No locations set up yet — add them under Warehouse → Locations first.
-          </p>
-        )}
-      </div>
-
-      <div className="rounded-xl border border-blue-500/20 bg-blue-500/[0.04] p-3 space-y-2">
-        <div className="flex items-center gap-2 text-xs text-blue-200/80">
-          <ScanLine className="w-4 h-4" /> Pull the scanner trigger, or type a code and press Enter
+      {/* The scan panel — the one thing the operator looks at all day. */}
+      <div className="rounded-2xl border border-white/10 bg-[#0d1424] p-5 space-y-3 shadow-[0_8px_28px_-16px_rgba(0,0,0,0.9)]">
+        <div className="text-[11px] uppercase tracking-[0.14em] font-semibold text-blue-200/60 flex items-center gap-2">
+          <ScanLine className="w-3.5 h-3.5" /> Scan variant barcode
         </div>
         <div className="flex gap-2">
           <Input
@@ -390,167 +404,173 @@ export default function WarehouseStockTake() {
                 focusScanner();
               }
             }}
-            placeholder="Scan or type a barcode / SKU"
-            className="font-mono scroll-mb-24"
+            placeholder="Cursor is here — just scan..."
+            className="font-mono !text-lg h-14 bg-black/40 border-white/10 tracking-wide scroll-mb-24"
           />
           <Button
             onClick={() => { if (manual.trim()) { addScan(manual); setManual(""); focusScanner(); } }}
             disabled={!manual.trim()}
+            className="h-14 px-5"
           >
             Add
           </Button>
         </div>
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          {lastScan
-            ? <div className="text-[11px] text-emerald-400/80 truncate">Last: {lastScan.label} <span className="text-white/30 font-mono">{lastScan.sku}</span></div>
-            : <span />}
-          <button
-            onClick={() => setRegister({ barcode: "" })}
-            className="text-[11px] text-blue-200/80 hover:text-blue-100 flex items-center gap-1 shrink-0"
-          >
-            <PackagePlus className="w-3.5 h-3.5" /> Add something with no barcode
-          </button>
+
+        {/* The confirmation line: the new quantity, big, then what it was. */}
+        <div className={`flex items-center gap-3 min-h-[52px] transition-opacity ${lastScan ? "opacity-100" : "opacity-40"}`}>
+          <div className={`min-w-[54px] text-center rounded-lg px-3 py-1 text-2xl font-bold tabular-nums ${
+            lastScan?.isNew ? "text-emerald-400 bg-emerald-400/10" : "text-amber-300 bg-amber-300/10"
+          }`}>
+            {lastScan ? lastScan.counted : "–"}
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white/90 truncate">{lastScan ? lastScan.label : "Waiting for a scan"}</div>
+            <div className="text-[11px] text-white/40 font-mono truncate">{lastScan?.sub ?? ""}</div>
+          </div>
         </div>
       </div>
 
-      {lines.length > 0 && (
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { n: groupLines(lines).length, l: "Models" },
-            { n: lines.length, l: "Variants" },
-            { n: total, l: "Units counted" },
-          ].map((s) => (
-            <div key={s.l} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
-              <div className="text-xl font-bold text-white tabular-nums">{s.n}</div>
-              <div className="text-[10px] uppercase tracking-wide text-white/35 mt-0.5">{s.l}</div>
-            </div>
-          ))}
+      {/* Running totals — always on, so zero is a state you can see. */}
+      <div className="grid grid-cols-3 gap-2">
+        {emptyStats.map((s) => (
+          <div key={s.l} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+            <div className="text-2xl font-bold text-white tabular-nums">{s.n}</div>
+            <div className="text-[10px] uppercase tracking-wide text-white/35 mt-0.5">{s.l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-2 flex-wrap items-center">
+        <div className="relative flex-1 min-w-[180px]">
+          <Search className="w-3.5 h-3.5 text-white/25 absolute left-3 top-1/2 -translate-y-1/2" />
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Search by vendor, title, SKU, colour, size..."
+            className="pl-9 scroll-mb-24"
+          />
         </div>
-      )}
+        <Button variant="outline" onClick={() => setRegister({ barcode: "" })} className="gap-1.5">
+          <PackagePlus className="w-4 h-4" /> New item
+        </Button>
+        <a
+          href="/api/admin/warehouse/stock.csv"
+          className="px-3 py-2 rounded-lg text-sm text-white/70 bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] flex items-center gap-1.5"
+        >
+          <Download className="w-4 h-4" /> Export CSV
+        </a>
+        {lines.length > 0 && (
+          <Button variant="ghost" onClick={() => { setLines([]); saveDraft("", []); }}>Clear</Button>
+        )}
+      </div>
 
-      {lines.length === 0 ? (
-        <div className="text-center py-10 border border-dashed border-white/10 rounded-xl">
-          <PackageCheck className="w-8 h-8 text-white/15 mx-auto mb-3" />
-          <p className="text-sm text-white/50">Nothing counted yet.</p>
-          <p className="text-xs text-white/30 mt-1">Scan the first thing at this location.</p>
-        </div>
-      ) : (
-        <>
-          {lines.length > 4 && (
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-white/25 absolute left-3 top-1/2 -translate-y-1/2" />
-              <Input
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter this count — vendor, model, colour, size, SKU"
-                className="pl-9 scroll-mb-24"
-              />
+      {/* The tally. Column headings show before anything is counted. */}
+      <div className="rounded-xl border border-white/[0.06] overflow-hidden">
+        <div className="overflow-x-auto">
+          <div className="min-w-[720px]">
+            <div className="grid grid-cols-[28px_1.1fr_1.6fr_1fr_90px_90px] gap-2 px-3 py-2 bg-white/[0.04] border-b border-white/[0.06] text-[10px] uppercase tracking-wide text-white/40 font-bold">
+              <span />
+              <span>Vendor</span>
+              <span>Title</span>
+              <span>Vendor model</span>
+              <span className="text-right">Variants</span>
+              <span className="text-right">Total qty</span>
             </div>
-          )}
 
-          <div className="rounded-xl border border-white/[0.06] overflow-hidden">
-            <div className="px-3 py-2 border-b border-white/[0.06] flex items-center justify-between text-xs">
-              <span className="text-white/50">{groups.length} model(s), {visibleLines.length} variant(s)</span>
-              <span className="text-white/70">{visibleLines.reduce((n, l) => n + l.counted, 0)} counted</span>
-            </div>
-
-            {groups.map((g) => {
-              // A single unattributed line is its own group — render it flat
-              // rather than as a heading with one child of the same name.
-              const flat = g.lines.length === 1 && g.key.startsWith("item:");
+            {groups.length === 0 ? (
+              <div className="text-center py-12">
+                <PackageCheck className="w-8 h-8 text-white/15 mx-auto mb-3" />
+                <p className="text-sm text-white/50">
+                  {lines.length === 0 ? "Nothing counted yet." : "Nothing matches that search."}
+                </p>
+                <p className="text-xs text-white/30 mt-1">
+                  {lines.length === 0 ? "Scan the first thing at this location." : "Clear the search to see the whole count."}
+                </p>
+              </div>
+            ) : groups.map((g) => {
               const open = !collapsed.has(g.key);
               return (
                 <div key={g.key} className="border-b border-white/[0.04] last:border-b-0">
-                  {!flat && (
-                    <button
-                      onClick={() => setCollapsed((prev) => {
-                        const next = new Set(prev);
-                        next.has(g.key) ? next.delete(g.key) : next.add(g.key);
-                        return next;
-                      })}
-                      className="w-full px-3 py-2 flex items-center gap-2 text-left hover:bg-white/[0.02]"
-                    >
-                      <ChevronRight className={`w-3.5 h-3.5 text-white/30 transition-transform ${open ? "rotate-90" : ""}`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-white/85 truncate">
-                          {g.vendor && <span className="font-semibold">{g.vendor} </span>}
-                          {g.title}
-                        </div>
-                        <div className="text-[11px] text-white/30 font-mono truncate">
-                          {g.model ?? "—"} · {g.lines.length} variant(s)
-                        </div>
-                      </div>
-                      <div className="text-sm font-bold text-white tabular-nums shrink-0">{g.total}</div>
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setCollapsed((prev) => {
+                      const next = new Set(prev);
+                      next.has(g.key) ? next.delete(g.key) : next.add(g.key);
+                      return next;
+                    })}
+                    className="w-full grid grid-cols-[28px_1.1fr_1.6fr_1fr_90px_90px] gap-2 px-3 py-2.5 items-center text-left hover:bg-white/[0.02]"
+                  >
+                    <ChevronRight className={`w-3.5 h-3.5 text-white/30 transition-transform ${open ? "rotate-90" : ""}`} />
+                    <span className="text-sm font-semibold text-white truncate">{g.vendor ?? "—"}</span>
+                    <span className="text-sm text-white/80 truncate">{g.title}</span>
+                    <span className="text-xs text-white/45 font-mono truncate">{g.model ?? "—"}</span>
+                    <span className="text-xs text-white/40 text-right tabular-nums">{g.lines.length}</span>
+                    <span className="text-base font-bold text-white text-right tabular-nums">{g.total}</span>
+                  </button>
 
-                  {(open || flat) && g.lines.map((l) => (
-                    <div
-                      key={l.itemId}
-                      className={`px-3 py-2 flex items-center gap-2 ${flat ? "" : "pl-8 bg-white/[0.015] border-t border-white/[0.03]"}`}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-white/85 truncate">{flat ? l.name : variantLabel(l)}</div>
-                        <div className="text-[11px] text-white/30 font-mono truncate">{l.sku}</div>
+                  {open && (
+                    <div className="bg-white/[0.015] border-t border-white/[0.03] px-3 pb-2 pt-1">
+                      <div className="grid grid-cols-[1.2fr_70px_70px_1.4fr_150px_40px] gap-2 px-2 py-1.5 text-[10px] uppercase tracking-wide text-white/30 font-bold">
+                        <span>Colour</span><span>Asian</span><span>EU</span><span>Our SKU</span>
+                        <span className="text-center">Qty</span><span />
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => setQty(l.itemId, l.counted - 1)}
-                          className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-white/60"
-                          aria-label="One less"
-                        >
-                          <Minus className="w-3.5 h-3.5" />
-                        </button>
-                        <Input
-                          type="number"
-                          value={l.counted}
-                          onChange={(e) => setQty(l.itemId, Number(e.target.value))}
-                          className="w-16 text-center scroll-mb-24"
-                        />
-                        <button
-                          onClick={() => setQty(l.itemId, l.counted + 1)}
-                          className="w-9 h-9 flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-white/60"
-                          aria-label="One more"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => setLines((p) => p.filter((x) => x.itemId !== l.itemId))}
-                          className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-red-500/10 text-white/25 hover:text-red-400"
-                          aria-label="Remove from this count"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      {g.lines.map((l) => (
+                        <div key={l.itemId} className="grid grid-cols-[1.2fr_70px_70px_1.4fr_150px_40px] gap-2 px-2 py-1.5 items-center rounded-lg hover:bg-white/[0.03]">
+                          <span className="text-sm text-white/80 truncate">{l.colour ?? l.name}</span>
+                          <span className="text-sm text-white/60 truncate">{l.sizeAsian ?? "—"}</span>
+                          <span className="text-sm text-white/60 truncate">{l.sizeEU ?? "—"}</span>
+                          <span className="text-[11px] text-white/35 font-mono truncate">{l.sku}</span>
+                          <div className="flex items-center gap-1 justify-center">
+                            <button
+                              onClick={() => setQty(l.itemId, l.counted - 1)}
+                              className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-white/60"
+                              aria-label="One less"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <Input
+                              type="number"
+                              value={l.counted}
+                              onChange={(e) => setQty(l.itemId, Number(e.target.value))}
+                              className="w-14 h-8 text-center px-1 scroll-mb-24"
+                            />
+                            <button
+                              onClick={() => setQty(l.itemId, l.counted + 1)}
+                              className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-white/60"
+                              aria-label="One more"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => setLines((p) => p.filter((x) => x.itemId !== l.itemId))}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-500/10 text-white/25 hover:text-red-400"
+                            aria-label="Remove from this count"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               );
             })}
           </div>
-        </>
-      )}
+        </div>
+      </div>
 
       {lines.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 sticky bottom-0 py-3 bg-[#0a0b0d]">
-          <Button
-            onClick={() => post.mutate()}
-            disabled={!locationId || post.isPending}
-            className="gap-1.5"
-          >
+          <Button onClick={() => post.mutate()} disabled={!locationId || post.isPending} className="gap-1.5">
             {post.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageCheck className="w-4 h-4" />}
             Save this count ({total})
           </Button>
-          <Button variant="ghost" onClick={() => { setLines([]); saveDraft("", []); }}>Clear</Button>
           {!locationId && <span className="text-[11px] text-amber-400/70">Pick a location first</span>}
+          <span className="text-[11px] text-white/30 flex items-start gap-1.5 ml-auto max-w-md">
+            <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+            This sets the quantity at that location to what you counted — it doesn't add to what's already recorded.
+          </span>
         </div>
-      )}
-
-      {lines.length > 0 && (
-        <p className="text-[11px] text-white/30 flex items-start gap-1.5">
-          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-          This sets the quantity at that location to what you counted — it doesn't add to what's already recorded.
-        </p>
       )}
 
       {register && (
@@ -559,7 +579,7 @@ export default function WarehouseStockTake() {
           onClose={() => { setRegister(null); focusScanner(); }}
           onRegistered={(line) => {
             addLine({ ...line, counted: 1 }, false);
-            setLastScan({ sku: line.sku, label: line.name, counted: 1 });
+            setLastScan({ sku: line.sku, label: line.name, counted: 1, isNew: true, sub: variantLabel(line) });
             setRegister(null);
             focusScanner();
           }}
