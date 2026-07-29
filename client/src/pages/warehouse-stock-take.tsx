@@ -92,6 +92,32 @@ interface LineGroup {
   total: number;
 }
 
+/**
+ * The heading for a group of variants. Item names carry the whole description —
+ * "KELME Football Shorts Adults Navy L" — so using the first one verbatim would
+ * print the vendor twice next to the vendor chip, and would label a heading
+ * covering Navy L, Navy M and Red L as "Navy L".
+ *
+ * The words every member shares ARE the garment; the words they don't are the
+ * variant. So take the common leading words and drop the vendor off the front.
+ */
+function groupTitle(names: string[], vendor: string | null): string {
+  const split = names.map((n) => n.trim().split(/\s+/));
+  let common: string[] = split[0] ?? [];
+  for (const words of split.slice(1)) {
+    let i = 0;
+    while (i < common.length && i < words.length && common[i].toLowerCase() === words[i].toLowerCase()) i++;
+    common = common.slice(0, i);
+  }
+  // Everything identical (one member, or true duplicates) — keep the whole name.
+  if (!common.length) common = split[0] ?? [];
+  if (vendor) {
+    const v = vendor.trim().toLowerCase().split(/\s+/);
+    if (v.every((w, i) => common[i]?.toLowerCase() === w)) common = common.slice(v.length);
+  }
+  return common.join(" ").trim() || (names[0] ?? "");
+}
+
 function groupLines(lines: CountLine[]): LineGroup[] {
   const out: LineGroup[] = [];
   const byKey = new Map<string, LineGroup>();
@@ -113,6 +139,7 @@ function groupLines(lines: CountLine[]): LineGroup[] {
     g.lines.push(l);
     g.total += l.counted;
   }
+  for (const g of out) g.title = groupTitle(g.lines.map((l) => l.name), g.vendor);
   return out;
 }
 
