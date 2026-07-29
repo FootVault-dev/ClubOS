@@ -532,6 +532,7 @@ function ApiKeysTab() {
 
   const [rotateConfirm, setRotateConfirm] = useState<number | null>(null);
   const [activityKeyId, setActivityKeyId] = useState<number | null>(null);
+  const [editKeyId, setEditKeyId] = useState<number | null>(null);
 
   const revokeMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/api-keys/${id}`),
@@ -659,6 +660,14 @@ function ApiKeysTab() {
                     })()}
                   </div>
                   <button
+                    onClick={() => setEditKeyId(key.id)}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-blue-500/10 transition-colors cursor-pointer"
+                    title="Edit access — change scopes, workspaces or programmes without re-issuing the key"
+                    data-testid={`button-edit-key-${key.id}`}
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-white/20 hover:text-blue-400" />
+                  </button>
+                  <button
                     onClick={() => setActivityKeyId(activityKeyId === key.id ? null : key.id)}
                     className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${activityKeyId === key.id ? "bg-amber-500/15" : "hover:bg-white/5"}`}
                     title="View recent activity"
@@ -713,6 +722,7 @@ function ApiKeysTab() {
                     <button
                       onClick={() => setRevokeConfirm(key.id)}
                       className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-red-500/10 transition-colors cursor-pointer"
+                      title="Revoke this key — takes effect immediately, cannot be undone"
                       data-testid={`button-revoke-${key.id}`}
                     >
                       <Trash2 className="w-3.5 h-3.5 text-white/20 hover:text-red-400" />
@@ -749,11 +759,24 @@ function ApiKeysTab() {
       )}
 
       {showCreateModal && (
-        <CreateApiKeyModal
+        <ApiKeyModal
           onClose={() => setShowCreateModal(false)}
           onCreated={(key) => { setShowCreateModal(false); setNewKeyValue(key); }}
         />
       )}
+      {editKeyId !== null && (() => {
+        // Read the key back out of the live list rather than stashing a copy in
+        // state, so the form always opens on the grant as it stands right now.
+        const target = activeKeys.find(k => k.id === editKeyId);
+        if (!target) return null;
+        return (
+          <ApiKeyModal
+            editKey={target}
+            onClose={() => setEditKeyId(null)}
+            onCreated={() => setEditKeyId(null)}
+          />
+        );
+      })()}
       {newKeyValue && (
         <NewKeyRevealModal keyValue={newKeyValue} onClose={() => setNewKeyValue(null)} />
       )}
@@ -789,14 +812,30 @@ function KeyActivityPanel({ keyId }: { keyId: number }) {
   );
 }
 
-function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCreated: (key: string) => void }) {
+// One modal for both jobs. Editing an existing key must offer exactly the same
+// choices, in the same words, with the same validation as minting a new one —
+// two forms would drift, and the one that drifted would be the one nobody
+// tested. Pass `editKey` to edit in place; omit it to generate a new key.
+function ApiKeyModal({
+  editKey,
+  onClose,
+  onCreated,
+}: {
+  editKey?: ApiKeyData;
+  onClose: () => void;
+  onCreated: (key: string) => void;
+}) {
   const { toast } = useToast();
-  const [name, setName] = useState("");
+  const isEdit = !!editKey;
+  const existingFilter = normalizeProgramFilter(editKey?.programFilter ?? null);
+  const [name, setName] = useState(editKey?.name ?? "");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
-  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
-  const [selectedOrgIds, setSelectedOrgIds] = useState<number[]>([]);
-  const [programTypes, setProgramTypes] = useState("");
-  const [programSlugs, setProgramSlugs] = useState("");
+  const [selectedScopes, setSelectedScopes] = useState<string[]>(editKey?.scopes ?? []);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<number[]>(
+    editKey ? (editKey.allowedOrgIds?.length ? editKey.allowedOrgIds : [editKey.organizationId]) : [],
+  );
+  const [programTypes, setProgramTypes] = useState((existingFilter?.types || []).join(", "));
+  const [programSlugs, setProgramSlugs] = useState((existingFilter?.slugs || []).join(", "));
   const { data: orgs } = useQuery<OrgOption[]>({ queryKey: ["/api/admin/organizations"] });
 
   const splitTokens = (v: string) => v.split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
@@ -818,6 +857,14 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
         allowedOrgIds: selectedOrgIds,
         scopes: selectedScopes,
       };
+      // On edit, programFilter is always sent — including null. Omitting it
+      // would mean "keep the existing fence", so clearing both boxes has to
+      // send an explicit null or the fence could never be lifted from here.
+      if (isEdit) {
+        body.programFilter = draftFilter;
+        const res = await apiRequest("PATCH", `/api/admin/api-keys/${editKey!.id}`, body);
+        return res.json();
+      }
       if (expiresInDays) body.expiresInDays = parseInt(expiresInDays);
       if (draftFilter) body.programFilter = draftFilter;
       const res = await apiRequest("POST", "/api/admin/api-keys", body);
@@ -825,6 +872,16 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/api-keys"] });
+      if (isEdit) {
+        toast({
+          title: data.changed ? "Access updated" : "No change",
+          description: data.changed
+            ? "Same key, new access — it applies on their next request. Nothing to re-send."
+            : "That's already what this key can do.",
+        });
+        onClose();
+        return;
+      }
       toast({ title: "API key created" });
       onCreated(data.key);
     },
@@ -833,9 +890,14 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-[#0a0e1a] border border-amber-500/15 rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid="modal-create-api-key">
+      <div className="bg-[#0a0e1a] border border-amber-500/15 rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()} data-testid={isEdit ? "modal-edit-api-key" : "modal-create-api-key"}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-amber-500/10">
-          <h2 className="text-[15px] font-semibold text-white/80">Generate API Key</h2>
+          <div>
+            <h2 className="text-[15px] font-semibold text-white/80">{isEdit ? "Edit Access" : "Generate API Key"}</h2>
+            {isEdit && (
+              <p className="text-[11px] text-white/30 mt-0.5 font-mono">{editKey!.keyPrefix}</p>
+            )}
+          </div>
           <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/5 transition-colors cursor-pointer">
             <X className="w-4 h-4 text-white/40" />
           </button>
@@ -920,20 +982,24 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
               {describeProgramFilter(normalizeProgramFilter(draftFilter))}
             </p>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[11px] text-amber-300/30 uppercase tracking-wider font-semibold">Expires In (Days)</label>
-            <Input
-              type="number"
-              value={expiresInDays}
-              onChange={e => setExpiresInDays(e.target.value)}
-              placeholder="Leave empty for no expiry"
-              className="premium-input text-white/80 rounded-xl"
-              data-testid="input-api-key-expiry"
-            />
-          </div>
+          {!isEdit && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] text-amber-300/30 uppercase tracking-wider font-semibold">Expires In (Days)</label>
+              <Input
+                type="number"
+                value={expiresInDays}
+                onChange={e => setExpiresInDays(e.target.value)}
+                placeholder="Leave empty for no expiry"
+                className="premium-input text-white/80 rounded-xl"
+                data-testid="input-api-key-expiry"
+              />
+            </div>
+          )}
           <div className="rounded-xl bg-amber-500/5 border border-amber-500/10 p-3">
             <p className="text-[11px] text-amber-400/60">
-              Read-only. Every request this key makes is audit-logged and rate-limited. Sponsorship, budget, inbox, e-sign and payment data are never accessible via API keys.
+              {isEdit
+                ? "The key itself doesn't change — whoever holds it keeps using the same key, and the new access applies on their next request. Nothing for them to re-enter. If instead you think the key has leaked, close this and use Rotate."
+                : "Read-only. Every request this key makes is audit-logged and rate-limited. Sponsorship, budget, inbox, e-sign and payment data are never accessible via API keys."}
             </p>
           </div>
         </div>
@@ -945,9 +1011,11 @@ function CreateApiKeyModal({ onClose, onCreated }: { onClose: () => void; onCrea
             onClick={() => createMutation.mutate()}
             disabled={!name || selectedScopes.length === 0 || selectedOrgIds.length === 0 || createMutation.isPending}
             className="bg-gradient-to-r from-amber-500 to-amber-600 text-black border-0 rounded-xl h-9 text-[13px] font-semibold"
-            data-testid="button-generate-key"
+            data-testid={isEdit ? "button-save-key-access" : "button-generate-key"}
           >
-            {createMutation.isPending ? "Generating..." : "Generate Key"}
+            {createMutation.isPending
+              ? isEdit ? "Saving..." : "Generating..."
+              : isEdit ? "Save Access" : "Generate Key"}
           </Button>
         </div>
       </div>

@@ -17821,10 +17821,17 @@ export async function registerRoutes(
   async function unknownProgramSlugs(filter: ProgramFilter | null, orgIds: number[]): Promise<string[]> {
     const slugs = filter?.slugs || [];
     if (slugs.length === 0 || orgIds.length === 0) return [];
+    // `programs` is imported into this module AS `programsTable` — referencing
+    // the bare name here threw a ReferenceError, which the handler's catch
+    // turned into a 500. It failed closed (no key was ever written with an
+    // unvalidated slug) but it meant this guard, and every slug-based fence set
+    // from the admin UI, never worked at all. Zach's slug fence only exists
+    // because it was applied by script/set-api-key-program-filter.ts, which
+    // imports the table under its own name.
     const rows = await db
-      .select({ slug: programs.slug })
-      .from(programs)
-      .where(inArray(programs.organizationId, orgIds));
+      .select({ slug: programsTable.slug })
+      .from(programsTable)
+      .where(inArray(programsTable.organizationId, orgIds));
     const real = new Set(rows.map((r) => (r.slug || "").toLowerCase()));
     return slugs.filter((s) => !real.has(s));
   }
@@ -17832,9 +17839,9 @@ export async function registerRoutes(
   async function realProgramSlugs(orgIds: number[]): Promise<string[]> {
     if (orgIds.length === 0) return [];
     const rows = await db
-      .select({ slug: programs.slug })
-      .from(programs)
-      .where(inArray(programs.organizationId, orgIds));
+      .select({ slug: programsTable.slug })
+      .from(programsTable)
+      .where(inArray(programsTable.organizationId, orgIds));
     return rows.map((r) => r.slug || "").filter(Boolean).sort();
   }
 
@@ -18048,6 +18055,185 @@ export async function registerRoutes(
         programFilter: created.programFilter,
         oldKeyExpiresAt: graceExpiry,
         message: `Save this key now — it won't be shown again. The old key keeps working until ${graceExpiry.toISOString()}.`,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Edit an existing key's grant IN PLACE — name, scopes, workspaces and the
+  // programme fence — without re-minting it. The key string never changes, so
+  // the holder's .env keeps working and the new grant applies on their very
+  // next request (requireApiKey reads all three axes per request). This is the
+  // route for "someone changed roles"; rotate is for "the key may have leaked".
+  //
+  // Every field is optional and an absent field keeps its current value — but
+  // the RESULTING grant is validated as a whole, never field by field, because
+  // the three axes interact. A programme fence is a silent no-op on league /
+  // tournament / cic7s scopes, and a fence slug only means anything inside the
+  // workspaces the key is bound to. So narrowing workspaces can invalidate a
+  // fence that was correct a moment earlier: we refuse the edit rather than
+  // store a grant whose fence quietly came to mean something else.
+  app.patch("/api/admin/api-keys/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const keyId = parseInt(req.params.id as string);
+      if (isNaN(keyId)) return res.status(400).json({ message: "Invalid key ID" });
+
+      const [key] = await db.select().from(apiKeys).where(eq(apiKeys.id, keyId));
+      if (!key) return res.status(404).json({ message: "Key not found" });
+      // A revoked key's raw string is still sitting in whoever held it, and it
+      // may well have been revoked BECAUSE it leaked. Editing one back into
+      // usefulness is a footgun — generate a fresh key instead.
+      if (!key.active) {
+        return res.status(400).json({
+          message: "This key is revoked. Generate a new key instead — reviving a revoked key would re-enable a credential that may have leaked.",
+        });
+      }
+
+      const body = req.body || {};
+      const has = (field: string) => Object.prototype.hasOwnProperty.call(body, field);
+      const EDITABLE = ["name", "scopes", "allowedOrgIds", "organizationId", "programFilter"];
+      if (!EDITABLE.some(has)) {
+        return res.status(400).json({ message: `Nothing to change — send at least one of: ${EDITABLE.join(", ")}.` });
+      }
+
+      // ---- name -----------------------------------------------------------
+      let nextName = key.name;
+      if (has("name")) {
+        if (typeof body.name !== "string" || !body.name.trim()) {
+          return res.status(400).json({ message: "name cannot be empty" });
+        }
+        nextName = body.name.trim().slice(0, 100);
+      }
+
+      // ---- resulting scopes ------------------------------------------------
+      let nextScopes: string[] = key.scopes || [];
+      if (has("scopes")) {
+        if (!Array.isArray(body.scopes) || body.scopes.length === 0) {
+          return res.status(400).json({
+            message: "scopes must contain at least one scope — to remove all access, revoke the key instead",
+            validScopes: API_SCOPES.map((s) => s.scope),
+          });
+        }
+        const badScopes = body.scopes.filter((s: any) => typeof s !== "string" || !isValidApiScope(s));
+        if (badScopes.length > 0) {
+          return res.status(400).json({
+            message: `Unknown scopes: ${badScopes.join(", ")}`,
+            validScopes: API_SCOPES.map((s) => s.scope),
+          });
+        }
+        nextScopes = Array.from(new Set(body.scopes as string[]));
+      }
+
+      // ---- resulting workspaces -------------------------------------------
+      const currentOrgIds: number[] =
+        key.allowedOrgIds && key.allowedOrgIds.length > 0 ? key.allowedOrgIds : [key.organizationId];
+      let nextOrgIds = currentOrgIds;
+      let nextPrimaryOrgId = key.organizationId;
+      if (has("allowedOrgIds") || has("organizationId")) {
+        const requested: number[] = Array.isArray(body.allowedOrgIds)
+          ? body.allowedOrgIds.map((v: any) => parseInt(v)).filter((v: number) => !isNaN(v))
+          : [];
+        if (has("allowedOrgIds") && requested.length === 0) {
+          return res.status(400).json({
+            message: "allowedOrgIds must name at least one workspace — to remove all access, revoke the key instead",
+          });
+        }
+        nextPrimaryOrgId = parseInt(body.organizationId) || requested[0] || key.organizationId;
+        nextOrgIds = Array.from(new Set(requested.length > 0 ? [nextPrimaryOrgId, ...requested] : [nextPrimaryOrgId]));
+        const existingOrgs = await db
+          .select({ id: organizations.id })
+          .from(organizations)
+          .where(inArray(organizations.id, nextOrgIds));
+        if (existingOrgs.length !== nextOrgIds.length) {
+          return res.status(400).json({ message: "One or more organization IDs do not exist" });
+        }
+      }
+
+      // ---- resulting programme fence --------------------------------------
+      // Absent from the body means keep what is stored — but re-validate it
+      // anyway against the new scopes and workspaces.
+      const rawFilter = has("programFilter") ? body.programFilter : key.programFilter;
+      const nextFilter = normalizeProgramFilter(rawFilter);
+      const filterError = validateProgramFilterInput(rawFilter, nextFilter, nextScopes);
+      if (filterError) return res.status(400).json({ message: filterError });
+
+      const badSlugs = await unknownProgramSlugs(nextFilter, nextOrgIds);
+      if (badSlugs.length > 0) {
+        return res.status(400).json({
+          message: has("programFilter")
+            ? `No programme in these workspaces has the slug(s): ${badSlugs.join(", ")}. Programme TYPES (${PROGRAM_TYPES.join(", ")}) go in types, not slugs.`
+            : `This key's existing programme fence names slug(s) that do not exist in the workspaces you selected: ${badSlugs.join(", ")}. Change the programmes at the same time as the workspaces.`,
+          validSlugs: await realProgramSlugs(nextOrgIds),
+        });
+      }
+
+      // ---- what actually changed (for the audit row) -----------------------
+      const sortedNums = (a: number[]) => [...a].sort((x, y) => x - y);
+      const sameSet = (a: string[], b: string[]) =>
+        a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
+      const beforeFilterDesc = describeProgramFilter(normalizeProgramFilter(key.programFilter));
+      const afterFilterDesc = describeProgramFilter(nextFilter);
+
+      const changes: string[] = [];
+      if (nextName !== key.name) changes.push(`name "${key.name}" → "${nextName}"`);
+      if (!sameSet(nextScopes, key.scopes || [])) {
+        const added = nextScopes.filter((s) => !(key.scopes || []).includes(s));
+        const removed = (key.scopes || []).filter((s) => !nextScopes.includes(s));
+        changes.push(
+          `scopes [${(key.scopes || []).join(", ")}] → [${nextScopes.join(", ")}]` +
+            `${added.length ? ` (+${added.join(", ")})` : ""}${removed.length ? ` (-${removed.join(", ")})` : ""}`,
+        );
+      }
+      if (sortedNums(nextOrgIds).join(",") !== sortedNums(currentOrgIds).join(",")) {
+        changes.push(`workspaces [${sortedNums(currentOrgIds).join(",")}] → [${sortedNums(nextOrgIds).join(",")}]`);
+      }
+      if (afterFilterDesc !== beforeFilterDesc) {
+        changes.push(`programmes ${beforeFilterDesc} → ${afterFilterDesc}`);
+      }
+
+      if (changes.length === 0) {
+        return res.json({
+          id: key.id,
+          name: key.name,
+          scopes: key.scopes,
+          allowedOrgIds: currentOrgIds,
+          programFilter: normalizeProgramFilter(key.programFilter),
+          changed: false,
+          message: "No change — the grant you sent is already what this key has.",
+        });
+      }
+
+      await db
+        .update(apiKeys)
+        .set({
+          name: nextName,
+          scopes: nextScopes,
+          organizationId: nextPrimaryOrgId,
+          allowedOrgIds: nextOrgIds,
+          programFilter: nextFilter,
+        })
+        .where(eq(apiKeys.id, keyId));
+
+      await storage.createAuditLog({
+        userId: (req as any).session.userId,
+        action: "update",
+        entity: "api_key",
+        entityId: keyId,
+        details: `Edited API key "${key.name}" (${key.keyPrefix}) — ${changes.join("; ")}`,
+      });
+
+      res.json({
+        id: keyId,
+        name: nextName,
+        scopes: nextScopes,
+        allowedOrgIds: nextOrgIds,
+        organizationId: nextPrimaryOrgId,
+        programFilter: nextFilter,
+        programFilterDescription: afterFilterDesc,
+        changed: true,
+        changes,
+        message: "Grant updated. The key string is unchanged — it applies on the holder's next request.",
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
