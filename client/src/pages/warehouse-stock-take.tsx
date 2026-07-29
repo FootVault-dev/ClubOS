@@ -361,15 +361,21 @@ export default function WarehouseStockTake() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 max-w-5xl space-y-4">
+    // Full width on purpose: this is a working screen with a table on it, and a
+    // capped column left most of a warehouse laptop empty.
+    //
+    // 🔴 The extra bottom padding is not decoration. The Save bar is sticky, so
+    // without room to scroll past it the last rows of a long count sit
+    // permanently underneath it — on a phone that is the stock you just counted.
+    <div className={`p-4 sm:p-6 w-full space-y-4 ${lines.length > 0 ? "pb-28 sm:pb-24" : ""}`}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-white">Stock take</h1>
           <p className="text-sm text-white/40 mt-0.5">
             Scan what's there — the count builds itself. Scan the same thing twice and it reads 2.
           </p>
         </div>
-        <div className="space-y-1 min-w-[220px]">
+        <div className="space-y-1 w-full sm:w-auto sm:min-w-[240px]">
           <label className="text-xs text-white/50 flex items-center gap-1"><MapPin className="w-3 h-3" /> Which location are you counting?</label>
           <Select value={locationId} onValueChange={setLocationId}>
             <SelectTrigger><SelectValue placeholder="Pick a location" /></SelectTrigger>
@@ -666,9 +672,14 @@ function RegisterItemSheet({
 
   return (
     <ModalPortal>
-      <div className="fixed inset-0 z-50 flex sm:items-center sm:justify-center">
-        <div className="absolute inset-0 bg-black/70" onClick={onClose} />
-        <div className="relative w-full sm:max-w-lg sm:rounded-2xl bg-[#0f1216] border border-white/10 mt-auto sm:mt-0 max-h-[92vh] overflow-y-auto">
+      {/* 🔴 Never items-center a sheet that can outgrow the screen: staff run
+          16:9 Windows laptops at 125% DPI (~620–740px of height), where centring
+          clips the top off unreachably. Overlay scrolls, card is m-auto — it
+          centres when it fits and top-anchors when it doesn't — and the actions
+          are a sticky footer, so Save is always on screen. */}
+      <div className="fixed inset-0 z-50 overflow-y-auto flex p-0 sm:p-4">
+        <div className="fixed inset-0 bg-black/70" onClick={onClose} />
+        <div className="relative w-full sm:max-w-lg sm:rounded-2xl bg-[#0f1216] border border-white/10 mt-auto sm:m-auto">
           <div className="sticky top-0 bg-[#0f1216] border-b border-white/10 px-4 py-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-white">
