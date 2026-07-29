@@ -619,9 +619,48 @@ function ApiKeysTab() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium text-white/75 truncate" data-testid={`text-key-name-${key.id}`}>{key.name}</p>
-                    <p className="text-[11px] text-white/25 font-mono">{key.keyPrefix}</p>
+                    {/* truncate, not just a narrow column: without it a long
+                        prefix overflows a squeezed column and collides with the
+                        usage text beside it instead of clipping. */}
+                    <p className="text-[11px] text-white/25 font-mono truncate">{key.keyPrefix}</p>
+                    {/* Badges live UNDER the name, not beside it. Inline they
+                        took up to 260px of a container capped at 768px, which
+                        left about 100px for the name — every key read "Zac…".
+                        The name is how you tell keys apart; the badges are
+                        detail, and they have more room down here anyway. */}
+                    <div className="hidden md:flex items-center gap-1 flex-wrap mt-1.5">
+                      {key.scopes.map(s => (
+                        <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0.5 border-amber-500/20 text-amber-400/60 bg-amber-500/5">
+                          {s}
+                        </Badge>
+                      ))}
+                      {(() => {
+                        // Render from the NORMALISED filter, never the raw column —
+                        // otherwise a malformed value can show one thing on the badge
+                        // and mean another in the enforcement.
+                        const pf = normalizeProgramFilter(key.programFilter);
+                        if (!pf) return null;
+                        const tokens = [...(pf.types || []), ...(pf.slugs || [])];
+                        return (
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] px-1.5 py-0.5 ${tokens.length
+                              ? "border-emerald-500/25 text-emerald-300/70 bg-emerald-500/5"
+                              : "border-red-500/30 text-red-300/70 bg-red-500/5"}`}
+                            title={describeProgramFilter(pf)}
+                          >
+                            {tokens.length ? tokens.join(" · ") : "reads nothing"}
+                          </Badge>
+                        );
+                      })()}
+                    </div>
                   </div>
-                  <div className="text-right flex-shrink-0">
+                  {/* Usage is secondary — on a phone the row's width belongs to
+                      WHICH KEY THIS IS. It was flex-shrink-0 against a
+                      min-w-0 name, so the name collapsed to nothing at 390px
+                      and no key could be told apart. Counts stay one tap away
+                      in the activity panel. */}
+                  <div className="hidden sm:block text-right flex-shrink-0">
                     <p className="text-[10px] text-white/30">
                       {key.usage7d > 0 ? `${key.usage7d.toLocaleString()} reqs (7d)` : "No requests (7d)"}
                       {key.denied7d > 0 && <span className="text-red-400/60"> · {key.denied7d} denied</span>}
@@ -633,32 +672,9 @@ function ApiKeysTab() {
                       <p className="text-[10px] text-amber-400/40">Expires {new Date(key.expiresAt).toLocaleDateString()}</p>
                     )}
                   </div>
-                  <div className="hidden md:flex items-center gap-1 max-w-[260px] flex-wrap justify-end">
-                    {key.scopes.map(s => (
-                      <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0.5 border-amber-500/20 text-amber-400/60 bg-amber-500/5">
-                        {s}
-                      </Badge>
-                    ))}
-                    {(() => {
-                      // Render from the NORMALISED filter, never the raw column —
-                      // otherwise a malformed value can show one thing on the badge
-                      // and mean another in the enforcement.
-                      const pf = normalizeProgramFilter(key.programFilter);
-                      if (!pf) return null;
-                      const tokens = [...(pf.types || []), ...(pf.slugs || [])];
-                      return (
-                        <Badge
-                          variant="outline"
-                          className={`text-[9px] px-1.5 py-0.5 ${tokens.length
-                            ? "border-emerald-500/25 text-emerald-300/70 bg-emerald-500/5"
-                            : "border-red-500/30 text-red-300/70 bg-red-500/5"}`}
-                          title={describeProgramFilter(pf)}
-                        >
-                          {tokens.length ? tokens.join(" · ") : "reads nothing"}
-                        </Badge>
-                      );
-                    })()}
-                  </div>
+                  {/* One flex child for all four actions, so they cost the row a
+                      single gap instead of four — 48px of a 390px screen. */}
+                  <div className="flex items-center gap-0.5 flex-shrink-0">
                   <button
                     onClick={() => setEditKeyId(key.id)}
                     className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-blue-500/10 transition-colors cursor-pointer"
@@ -728,6 +744,7 @@ function ApiKeysTab() {
                       <Trash2 className="w-3.5 h-3.5 text-white/20 hover:text-red-400" />
                     </button>
                   )}
+                  </div>
                 </div>
                 {activityKeyId === key.id && <KeyActivityPanel keyId={key.id} />}
               </div>
@@ -1147,12 +1164,15 @@ export default function AdminSettings() {
         <p className="text-blue-400/35 text-[13px] mt-1">Club and system configuration</p>
       </div>
 
-      <div className="flex gap-1 bg-white/[0.02] rounded-xl p-1 w-fit animate-fade-in-up" style={{ animationDelay: '50ms', opacity: 0 }}>
+      {/* max-w-full + scroll: with the API Keys tab added there are four tabs,
+          and a w-fit row clipped the last one off the right edge at 390px —
+          the tab you could not reach was the one this page exists for. */}
+      <div className="flex gap-1 bg-white/[0.02] rounded-xl p-1 w-fit max-w-full overflow-x-auto animate-fade-in-up" style={{ animationDelay: '50ms', opacity: 0 }}>
         {tabs.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-medium transition-all cursor-pointer ${
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-medium transition-all cursor-pointer flex-shrink-0 whitespace-nowrap ${
               tab === t.key
                 ? "bg-blue-500/15 text-blue-400 border border-blue-500/25 shadow-[0_0_12px_rgba(3,86,197,0.1)]"
                 : "text-white/35 hover:text-white/50 border border-transparent"
