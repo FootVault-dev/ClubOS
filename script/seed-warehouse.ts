@@ -104,6 +104,21 @@ function buildBaseSku(
   return `${brand}-${fields.productType}-${style}-${fields.colourName}-${fields.size}`;
 }
 
+/** 🔴 The four NAMED_ZONES (RECEIVING/PACK/DISPATCH/QUARANTINE) are NOT seeded
+ *  by default any more. They are a generic 3PL layout, and on 2026-07-29 Daniel
+ *  deliberately removed them from United Sports Centre in favour of the areas
+ *  that actually exist there (Warehouse / Big Shed / Office / Print Shop — see
+ *  script/seed-warehouse-usc-locations.ts). Re-running this seed must not
+ *  resurrect four zones a human chose to delete.
+ *
+ *  Pass --with-generic-zones to create them anyway — the one case that needs it
+ *  is QUARANTINE, which receiving damaged PO stock looks up by that exact code.
+ *
+ *  The VIRTUAL locations are different and always seeded: SUPPLIER / CUSTOMER /
+ *  SCRAP / PRODUCTION are structural (D8), so that every movement can say where
+ *  goods came from or went to. */
+const WITH_GENERIC_ZONES = process.argv.includes("--with-generic-zones");
+
 async function seedLocations() {
   console.log("── Locations ──");
   let created = 0;
@@ -111,8 +126,12 @@ async function seedLocations() {
   for (const code of VIRTUAL_LOCATION_CODES) {
     (await upsertLocation(code, "virtual")) ? created++ : existing++;
   }
-  for (const code of NAMED_ZONES) {
-    (await upsertLocation(code, "zone")) ? created++ : existing++;
+  if (WITH_GENERIC_ZONES) {
+    for (const code of NAMED_ZONES) {
+      (await upsertLocation(code, "zone")) ? created++ : existing++;
+    }
+  } else {
+    console.log(`  · skipping the generic zones (${NAMED_ZONES.join(", ")}) — pass --with-generic-zones to create them`);
   }
   console.log(`${created} to create, ${existing} already present.\n`);
 }
