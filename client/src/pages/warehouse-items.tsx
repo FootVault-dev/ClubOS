@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ITEM_KINDS, ITEM_KIND_LABELS, BRAND_OWNERS, BRAND_OWNER_LABELS, UNITS, UNIT_LABELS, MOVEMENT_TYPE_LABELS, REASON_CODE_LABELS, type ItemKind, type BrandOwner, type Unit, type TrackingMode, locationLabelWithCode } from "@shared/warehouse";
+import { ITEM_KINDS, ITEM_KIND_LABELS, BRAND_OWNERS, BRAND_OWNER_LABELS, UNITS, UNIT_LABELS, MOVEMENT_TYPE_LABELS, REASON_CODE_LABELS, type ItemKind, type BrandOwner, type Unit, type TrackingMode, locationLabel } from "@shared/warehouse";
 import type { WhItem, WhLocation, WhBarcodeAlias } from "@shared/schema";
 
 interface ItemRow extends WhItem {
@@ -147,7 +147,7 @@ function ItemForm({
           <label className="text-[10px] uppercase tracking-wider text-white/40">Kind</label>
           <Select value={value.kind} onValueChange={(v) => onChange({ ...value, kind: v as ItemKind })}>
             <SelectTrigger className="bg-white/[0.02] border-white/10 text-white"><SelectValue /></SelectTrigger>
-            <SelectContent>
+            <SelectContent className="max-w-[calc(100vw-2rem)]">
               {ITEM_KINDS.map((k) => <SelectItem key={k} value={k}>{ITEM_KIND_LABELS[k]}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -182,7 +182,7 @@ function ItemForm({
             <SelectTrigger className="bg-white/[0.02] border-white/10 text-white"><SelectValue placeholder="None" /></SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>None</SelectItem>
-              {locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
+              {locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabel(l)}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

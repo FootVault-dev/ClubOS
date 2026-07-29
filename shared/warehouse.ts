@@ -236,14 +236,6 @@ export function locationLabel(loc: { code: string; name?: string | null }): stri
   return n || loc.code;
 }
 
-/** The same thing where the code itself still matters on screen — a picker in
- *  a warehouse where staff speak in codes. "United Sports Centre Warehouse
- *  (USC-WAREHOUSE)", or just the code when it carries no name. */
-export function locationLabelWithCode(loc: { code: string; name?: string | null }): string {
-  const n = normaliseLocationName(loc.name);
-  return n ? `${n} (${loc.code})` : loc.code;
-}
-
 /** Zone is auto-derived from a location's own code (D8/§4.1's schema comment
  *  "first segment of a bin code, or the named zone itself") — never a second
  *  free-text field a human can let drift out of sync with the code. A bin

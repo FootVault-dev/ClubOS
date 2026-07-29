@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { feedWedgeKey, shouldIgnoreWedgeTarget, EMPTY_WEDGE, type WedgeState } from "@/lib/wedge-scanner";
-import { locationLabelWithCode } from "@shared/warehouse";
+import { locationLabel } from "@shared/warehouse";
 import type { WhLocation } from "@shared/schema";
 
 interface CountLine {
@@ -211,8 +211,8 @@ export default function WarehouseStockTake() {
         <label className="text-xs text-white/50 flex items-center gap-1"><MapPin className="w-3 h-3" /> Which location are you counting?</label>
         <Select value={locationId} onValueChange={setLocationId}>
           <SelectTrigger><SelectValue placeholder="Pick a location" /></SelectTrigger>
-          <SelectContent>
-            {countable.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
+          <SelectContent className="max-w-[calc(100vw-2rem)]">
+            {countable.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabel(l)}</SelectItem>)}
           </SelectContent>
         </Select>
         {countable.length === 0 && (

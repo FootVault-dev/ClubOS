@@ -499,7 +499,10 @@ export function registerWarehouseRoutes(app: Express) {
       const active = parseActiveFilter(req.query.active);
 
       const conditions = [];
-      if (q) conditions.push(ilike(whLocations.code, `%${q}%`));
+      // Search the name as well as the code (D28) — a location a human named
+      // "United Sports Centre Warehouse" must be findable by typing "United",
+      // not only by knowing it is USC-WAREHOUSE.
+      if (q) conditions.push(or(ilike(whLocations.code, `%${q}%`), ilike(whLocations.name, `%${q}%`))!);
       if (kind && isLocationKind(kind)) conditions.push(eq(whLocations.kind, kind));
       if (active !== undefined) conditions.push(eq(whLocations.active, active));
 

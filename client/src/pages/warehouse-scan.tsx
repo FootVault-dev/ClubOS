@@ -44,19 +44,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import {
-  MOVEMENT_TYPE_LABELS,
-  REASON_CODES,
-  REASON_CODE_LABELS,
-  CONDITION_GRADES,
-  CONDITION_GRADE_LABELS,
-  scanQuantityToUnits,
-  type MovementType,
-  type ReasonCode,
-  type ConditionGrade,
-  locationLabel,
-  locationLabelWithCode,
-} from "@shared/warehouse";
+import { MOVEMENT_TYPE_LABELS, REASON_CODES, REASON_CODE_LABELS, CONDITION_GRADES, CONDITION_GRADE_LABELS, scanQuantityToUnits, type MovementType, type ReasonCode, type ConditionGrade, locationLabel } from "@shared/warehouse";
 import type { PrintOrder } from "@shared/schema";
 import {
   Camera,

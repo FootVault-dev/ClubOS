@@ -7,7 +7,7 @@ import {
   LOCATION_KINDS, isLocationKind,
   NAMED_ZONES, VIRTUAL_LOCATION_CODES, QUARANTINE_ZONE,
   isValidLocationCode, normaliseLocationCode,
-  normaliseLocationName, locationLabel, locationLabelWithCode, LOCATION_NAME_MAX,
+  normaliseLocationName, locationLabel, LOCATION_NAME_MAX,
   deriveLocationZone, LOCATION_BARCODE_PREFIX, locationBarcodePayload,
   normaliseSku, isValidSku,
   normaliseAliasCode,
@@ -108,11 +108,6 @@ ok("label falls back to the code — a nameless location must never render blank
   assert.equal(locationLabel({ code: "RECEIVING", name: null }), "RECEIVING");
   assert.equal(locationLabel({ code: "A-01-2" }), "A-01-2");
   assert.equal(locationLabel({ code: "PACK", name: "   " }), "PACK");
-});
-ok("label-with-code keeps the code visible for staff who speak in codes", () => {
-  assert.equal(locationLabelWithCode({ code: "USC-WAREHOUSE", name: "United Sports Centre Warehouse" }),
-    "United Sports Centre Warehouse (USC-WAREHOUSE)");
-  assert.equal(locationLabelWithCode({ code: "DISPATCH", name: null }), "DISPATCH");
 });
 ok("naming a location never changes its derived zone", () =>
   assert.equal(deriveLocationZone("USC-WAREHOUSE", "zone"), "USC"));

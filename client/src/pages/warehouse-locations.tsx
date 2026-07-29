@@ -181,7 +181,7 @@ export default function WarehouseLocations() {
       <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 min-w-[220px]">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-          <Input placeholder="Search code..." value={q} onChange={(e) => setQ(e.target.value)} className="pl-10 bg-white/[0.02] border-white/10 text-white" />
+          <Input placeholder="Search name or code..." value={q} onChange={(e) => setQ(e.target.value)} className="pl-10 bg-white/[0.02] border-white/10 text-white" />
         </div>
         <Select value={kind} onValueChange={setKind}>
           <SelectTrigger className="w-40 bg-white/[0.02] border-white/10 text-white"><SelectValue /></SelectTrigger>
