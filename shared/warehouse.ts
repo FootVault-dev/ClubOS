@@ -292,6 +292,67 @@ export function isValidSku(sku: unknown): boolean {
   return /^[A-Z0-9]+(-[A-Z0-9]+)*$/.test(s);
 }
 
+// D29 — the kit attributes a first count actually collects. Stored as custom
+// fields (D22/D24) on the item rather than as new columns: they describe apparel
+// and mean nothing to a roll of vinyl, and wh_item_fields already gives them
+// typed storage, an index, and the Fields editor for free.
+export const QUICK_ITEM_FIELD_KEYS = ["vendor", "vendor_model", "colour", "size_asian", "size_eu"] as const;
+export type QuickItemFieldKey = (typeof QUICK_ITEM_FIELD_KEYS)[number];
+
+export const QUICK_ITEM_FIELD_LABELS: Record<QuickItemFieldKey, string> = {
+  vendor: "Vendor",
+  vendor_model: "Vendor model",
+  colour: "Colour",
+  size_asian: "Asian size",
+  size_eu: "EU size",
+};
+
+/** The category a quick-registered item lands in, so the Fields editor can hang
+ *  more apparel attributes off it later without touching this code. */
+export const QUICK_ITEM_CATEGORY = "uniform";
+
+/**
+ * D29 — a SKU has to exist before an item can, and the person holding the
+ * scanner in a cold warehouse should not have to invent one that also happens
+ * to satisfy `isValidSku`. Builds BRAND-MODEL-COLOUR-SIZE from whatever was
+ * filled in, in the D7 house style.
+ *
+ * 🔴 The 20-char cap is enforced by shortening the LONGEST segment repeatedly
+ * rather than by slicing the finished string: a blind `.slice(0, 20)` chops the
+ * size off the end, and "the navy shirt" without its size is a different thing
+ * on the shelf. Vendor names are long and the least identifying part, so they
+ * lose characters first by construction.
+ *
+ * Always re-derived server-side. The suggestion is a convenience, never trusted.
+ */
+export function suggestSku(parts: {
+  vendor?: string | null;
+  vendorModel?: string | null;
+  colour?: string | null;
+  size?: string | null;
+}): string {
+  const seg = (v: string | null | undefined) =>
+    (v ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+  let segments = [seg(parts.vendor), seg(parts.vendorModel), seg(parts.colour), seg(parts.size)]
+    .filter((s) => s.length > 0);
+  if (segments.length === 0) return "";
+
+  // Trim the longest segment until the joined SKU fits. Ties go to the earliest
+  // (vendor before model before colour) — least identifying loses first.
+  const joined = () => segments.join("-");
+  let guard = 0;
+  while (joined().length > SKU_MAX_LEN && guard++ < 200) {
+    let longest = 0;
+    for (let i = 1; i < segments.length; i++) {
+      if (segments[i].length > segments[longest].length) longest = i;
+    }
+    if (segments[longest].length <= 1) break;
+    segments[longest] = segments[longest].slice(0, -1);
+  }
+  return normaliseSku(joined());
+}
+
 // ── Barcode aliases ───────────────────────────────────────────────────────────
 
 /** Alias codes (manufacturer EANs etc.) are looked up verbatim — never

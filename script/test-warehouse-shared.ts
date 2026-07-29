@@ -9,7 +9,8 @@ import {
   isValidLocationCode, normaliseLocationCode,
   normaliseLocationName, locationLabel, LOCATION_NAME_MAX,
   deriveLocationZone, LOCATION_BARCODE_PREFIX, locationBarcodePayload,
-  normaliseSku, isValidSku,
+  normaliseSku, isValidSku, suggestSku,
+  QUICK_ITEM_FIELD_KEYS, QUICK_ITEM_CATEGORY,
   normaliseAliasCode,
   MOVEMENT_TYPES, isMovementType, MOVEMENT_TYPE_LABELS,
   REASON_CODES, isReasonCode, REASON_CODE_LABELS,
@@ -700,6 +701,45 @@ ok("native is a sync store but not a Shopify store", () => {
   assert.equal(isShopifyStoreKey("native"), false);
 });
 ok("junk sync store rejected", () => assert.equal(isSyncStore("shopify"), false));
+
+// ── D29 quick-item SKU suggestion ────────────────────────────────────────
+ok("suggests BRAND-MODEL-COLOUR-SIZE", () => {
+  assert.equal(suggestSku({ vendor: "KELME", vendorModel: "K123-45", colour: "Navy", size: "L" }), "KELME-K12345-NAVY-L");
+});
+ok("every suggestion is a valid SKU", () => {
+  const cases = [
+    { vendor: "KELME", vendorModel: "K123-45", colour: "Navy", size: "L" },
+    { vendor: "New Balance", vendorModel: "NB/999 XL", colour: "Sky Blue", size: "XXL" },
+    { vendor: "Healy", colour: "Red" },
+    { vendorModel: "abc-123" },
+    { vendor: "A".repeat(40), vendorModel: "B".repeat(40), colour: "C".repeat(40), size: "D".repeat(40) },
+  ];
+  for (const c of cases) {
+    const sku = suggestSku(c);
+    assert.equal(isValidSku(sku), true, `invalid for ${JSON.stringify(c)}: ${sku}`);
+    assert.ok(sku.length <= 20, `too long: ${sku}`);
+  }
+});
+ok("nothing in, nothing out (never a bare dash)", () => {
+  assert.equal(suggestSku({}), "");
+  assert.equal(suggestSku({ vendor: "  ", colour: "!!" }), "");
+});
+ok("🔴 the size survives the 20-char cap — a shirt without its size is a different thing", () => {
+  const sku = suggestSku({ vendor: "INTERNATIONAL SPORTSWEAR", vendorModel: "MODEL9000", colour: "MIDNIGHT", size: "XL" });
+  assert.ok(sku.length <= 20);
+  assert.ok(sku.endsWith("-XL"), `size lost: ${sku}`);
+});
+ok("the vendor loses characters before the model does", () => {
+  const sku = suggestSku({ vendor: "AAAAAAAAAAAA", vendorModel: "BBBB", colour: "CCCC", size: "D" });
+  assert.ok(sku.endsWith("-BBBB-CCCC-D"), sku);
+});
+ok("skips blank segments rather than doubling a dash", () => {
+  assert.equal(suggestSku({ vendor: "KELME", colour: "", size: "L" }), "KELME-L");
+});
+ok("quick-item field keys are the five apparel attributes", () => {
+  assert.deepEqual([...QUICK_ITEM_FIELD_KEYS], ["vendor", "vendor_model", "colour", "size_asian", "size_eu"]);
+  assert.equal(QUICK_ITEM_CATEGORY, "uniform");
+});
 
 console.log(`\n✅ warehouse (shared): ${passed} assertions passed`);
 if (process.exitCode) console.error("❌ some assertions failed");

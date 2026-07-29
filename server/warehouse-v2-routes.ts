@@ -23,7 +23,7 @@ import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
 import { storage } from "./storage";
 import { nzTodayIso } from "@shared/academy";
-import { whFieldTemplates, whItemFields, whItemInstances, whItems, whLocations, whMovements, whStock, users } from "@shared/schema";
+import { whBarcodeAliases, whFieldTemplates, whItemFields, whItemInstances, whItems, whLocations, whMovements, whStock, users } from "@shared/schema";
 import {
   FIELD_TYPES,
   INSTANCE_CONDITIONS,
@@ -44,6 +44,12 @@ import {
   type FieldType,
   type InstanceCondition,
   type LocationKind,
+  QUICK_ITEM_CATEGORY,
+  QUICK_ITEM_FIELD_KEYS,
+  isValidSku,
+  normaliseAliasCode,
+  normaliseSku,
+  suggestSku,
 } from "@shared/warehouse";
 import {
   CORE_FIELDS, CORE_FIELD_BY_KEY, defaultLayout, isCoreFieldKey, resolveLayout, validateLayout,
@@ -604,6 +610,137 @@ export function registerWarehouseV2Routes(app: Express) {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
+  // D29 — register an item mid-count, without leaving the count.
+  //
+  // The first physical count is the one moment the warehouse is full of stock
+  // that ClubOS has never heard of: a KELME shirt's own EAN means nothing to us
+  // until somebody links it once. Before this, scanning one during a stock take
+  // produced "not recognised" and the scan was simply lost — so the count could
+  // not include the uniform stock, which is most of the room.
+  //
+  // One transaction creates all three things a scannable, countable item needs:
+  // the item, the barcode link, and the apparel attributes. Any one of them
+  // failing rolls back the others — a half-registered item is worse than none,
+  // because the shelf looks done and the barcode still won't resolve.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.post("/api/admin/warehouse/quick-item", requireAuth, requireTab("warehouse"), async (req, res) => {
+    try {
+      const b = req.body || {};
+      const vendor = clean(b.vendor);
+      const vendorModel = clean(b.vendorModel);
+      const colour = clean(b.colour);
+      const sizeAsian = clean(b.sizeAsian);
+      const sizeEU = clean(b.sizeEU);
+      const notes = clean(b.notes);
+      const title = clean(b.title);
+
+      // A name is the one thing the shelf can't be read back without.
+      const name = title
+        ?? [vendor, vendorModel, colour, sizeAsian ?? sizeEU].filter(Boolean).join(" ")
+        ?? "";
+      if (!name.trim()) throw new V2Error("Give it a title, or at least a vendor and model");
+
+      const barcodeRaw = clean(b.barcode);
+      const barcode = barcodeRaw ? normaliseAliasCode(barcodeRaw) : null;
+
+      // 🔴 A barcode already pointing at another item must never be re-pointed
+      // here. Unlike the prototype's in-memory guard this is permanent: every
+      // future scan of that EAN would silently count the wrong shirt.
+      if (barcode) {
+        const [clash] = await db
+          .select({ itemId: whBarcodeAliases.itemId, sku: whItems.sku, name: whItems.name })
+          .from(whBarcodeAliases)
+          .innerJoin(whItems, eq(whItems.id, whBarcodeAliases.itemId))
+          .where(eq(whBarcodeAliases.code, barcode));
+        if (clash) {
+          throw new V2Error(`That barcode is already registered to ${clash.sku} — ${clash.name}. Scan it and it will count.`);
+        }
+        // A code that is already one of our own SKUs would resolve to that item
+        // first (SKU beats alias), so registering it here would be a dead row.
+        const [skuClash] = await db
+          .select({ sku: whItems.sku, name: whItems.name })
+          .from(whItems)
+          .where(eq(whItems.sku, normaliseSku(barcode)));
+        if (skuClash) {
+          throw new V2Error(`That code is already our SKU for ${skuClash.name}. Scan it and it will count.`);
+        }
+      }
+
+      // The client suggests a SKU; the server always re-derives its own and only
+      // accepts an override that is genuinely valid.
+      const requested = clean(b.sku);
+      let sku = requested ? normaliseSku(requested) : suggestSku({ vendor, vendorModel, colour, size: sizeAsian ?? sizeEU });
+      if (!sku) throw new V2Error("Couldn't work out a SKU — type one in");
+      if (!isValidSku(sku)) throw new V2Error("SKU must be uppercase letters/digits/dashes, 20 characters or fewer");
+
+      // Two navy shirts of the same size from the same maker do exist (a restock
+      // with a new EAN). Suffix rather than reject: the person counting cannot
+      // fix a SKU collision from the warehouse floor.
+      const taken = new Set(
+        (await db.select({ sku: whItems.sku }).from(whItems).where(ilike(whItems.sku, `${sku}%`))).map((r) => r.sku),
+      );
+      if (taken.has(sku)) {
+        const base = sku;
+        let n = 2;
+        while (n < 100) {
+          const suffix = `-${n}`;
+          const candidate = `${base.slice(0, 20 - suffix.length).replace(/-+$/, "")}${suffix}`;
+          if (!taken.has(candidate)) { sku = candidate; break; }
+          n++;
+        }
+        if (taken.has(sku)) throw new V2Error("Too many items share that SKU — type a different one");
+      }
+
+      const created = await db.transaction(async (tx) => {
+        const [item] = await tx
+          .insert(whItems)
+          .values({
+            sku,
+            name: name.trim(),
+            kind: "merch",
+            // D18 — counted in bulk. An asset is registered on the Assets page,
+            // and the stock take refuses assets anyway.
+            trackingMode: "stock",
+            brandOwner: clean(b.brandOwner) ?? "club",
+            category: clean(b.category) ?? QUICK_ITEM_CATEGORY,
+            unit: "ea",
+            notes: notes ?? null,
+          })
+          .returning();
+
+        if (barcode) {
+          await tx.insert(whBarcodeAliases).values({
+            code: barcode,
+            itemId: item.id,
+            packQty: "1",
+            note: "Linked during a stock take",
+          });
+        }
+
+        const values: Record<string, string | undefined> = {
+          vendor, vendor_model: vendorModel, colour, size_asian: sizeAsian, size_eu: sizeEU,
+        };
+        const rows = QUICK_ITEM_FIELD_KEYS
+          .filter((k) => (values[k] ?? "").trim().length > 0)
+          .map((k) => ({ itemId: item.id, fieldKey: k, valueText: values[k]!.trim() }));
+        if (rows.length) await tx.insert(whItemFields).values(rows);
+
+        return item;
+      });
+
+      res.status(201).json({
+        item: created,
+        barcode,
+        // Exactly what the counting screen needs to add a line without a re-fetch.
+        line: { itemId: created.id, sku: created.sku, name: created.name, vendor, vendorModel, colour, sizeAsian, sizeEU },
+      });
+    } catch (e: any) {
+      handleError(res, e, "quick item");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
   // CSV export — what's on the shelves right now.
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -619,7 +756,10 @@ export function registerWarehouseV2Routes(app: Express) {
           brandOwner: whItems.brandOwner,
           category: whItems.category,
           unit: whItems.unit,
+          itemId: whItems.id,
           locationCode: whLocations.code,
+          locationName: whLocations.name,
+          notes: whItems.notes,
           onHand: whStock.onHand,
           updatedAt: whStock.updatedAt,
         })
@@ -629,12 +769,39 @@ export function registerWarehouseV2Routes(app: Express) {
         .where(locationId !== null ? eq(whStock.locationId, locationId) : undefined)
         .orderBy(asc(whItems.sku), asc(whLocations.code));
 
-      const header = ["SKU", "Name", "Kind", "Brand", "Category", "Unit", "Location", "On hand", "Last counted"];
-      const body = rows.map((r) => [
-        r.sku, r.name, r.kind, r.brandOwner, r.category ?? "", r.unit, r.locationCode,
-        String(Number(r.onHand)),
-        r.updatedAt ? new Date(r.updatedAt).toISOString().slice(0, 10) : "",
-      ]);
+      // D29 — the apparel attributes live in wh_item_fields, so the export that
+      // a human actually reads has to fetch them. One query for every row on the
+      // sheet, not one per row.
+      const itemIds = Array.from(new Set(rows.map((r) => r.itemId)));
+      const attrs = new Map<number, Record<string, string>>();
+      if (itemIds.length) {
+        const fieldRows = await db
+          .select({ itemId: whItemFields.itemId, fieldKey: whItemFields.fieldKey, valueText: whItemFields.valueText })
+          .from(whItemFields)
+          .where(and(inArray(whItemFields.itemId, itemIds), inArray(whItemFields.fieldKey, [...QUICK_ITEM_FIELD_KEYS])));
+        for (const f of fieldRows) {
+          if (f.itemId === null) continue;
+          const bag = attrs.get(f.itemId) ?? {};
+          bag[f.fieldKey] = f.valueText ?? "";
+          attrs.set(f.itemId, bag);
+        }
+      }
+
+      const header = [
+        "SKU", "Name", "Vendor", "Vendor model", "Colour", "Asian size", "EU size",
+        "Kind", "Brand", "Category", "Unit", "Location", "Location name", "On hand", "Last counted", "Notes",
+      ];
+      const body = rows.map((r) => {
+        const a = attrs.get(r.itemId) ?? {};
+        return [
+          r.sku, r.name,
+          a.vendor ?? "", a.vendor_model ?? "", a.colour ?? "", a.size_asian ?? "", a.size_eu ?? "",
+          r.kind, r.brandOwner, r.category ?? "", r.unit, r.locationCode, r.locationName ?? "",
+          String(Number(r.onHand)),
+          r.updatedAt ? new Date(r.updatedAt).toISOString().slice(0, 10) : "",
+          r.notes ?? "",
+        ];
+      });
 
       const csv = [header, ...body].map((cells) => cells.map(csvCell).join(",")).join("\r\n");
 
