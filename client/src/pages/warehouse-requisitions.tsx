@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { REQUISITION_STATUSES, REQUISITION_STATUS_LABELS, type RequisitionStatus } from "@shared/warehouse";
+import { REQUISITION_STATUSES, REQUISITION_STATUS_LABELS, type RequisitionStatus, locationLabelWithCode } from "@shared/warehouse";
 import type { WhRequisition, WhItem, WhLocation } from "@shared/schema";
 import { nzTodayIso } from "@shared/academy";
 
@@ -267,7 +267,7 @@ function PickLineRow({
             <Select value={locationId} onValueChange={setLocationId}>
               <SelectTrigger className="bg-white/[0.02] border-white/10 text-white text-sm"><SelectValue placeholder="From location" /></SelectTrigger>
               <SelectContent>
-                {realLocations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.code}</SelectItem>)}
+                {realLocations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
               </SelectContent>
             </Select>
             <Input type="number" value={pickQty} onChange={(e) => setPickQty(e.target.value)} className="bg-white/[0.02] border-white/10 text-white text-sm" />

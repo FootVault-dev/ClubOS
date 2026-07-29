@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { LOCATION_KINDS, LOCATION_KIND_LABELS, type LocationKind } from "@shared/warehouse";
+import { LOCATION_KINDS, LOCATION_KIND_LABELS, LOCATION_NAME_MAX, locationLabel, type LocationKind } from "@shared/warehouse";
 import type { WhLocation } from "@shared/schema";
 
 const ALL = "__all__";
@@ -39,12 +39,13 @@ function EditModal({
   const { toast } = useToast();
   const isNew = location === null;
   const [code, setCode] = useState(location?.code ?? "");
+  const [name, setName] = useState(location?.name ?? "");
   const [kind, setKind] = useState<LocationKind>((location?.kind as LocationKind) ?? "bin");
   const [active, setActive] = useState(location?.active ?? true);
 
   const save = useMutation({
     mutationFn: async () => {
-      const payload = { code, kind, active };
+      const payload = { code, name, kind, active };
       if (isNew) return (await apiRequest("POST", "/api/admin/warehouse/locations", payload)).json();
       return (await apiRequest("PATCH", `/api/admin/warehouse/locations/${location!.id}`, payload)).json();
     },
@@ -59,6 +60,7 @@ function EditModal({
       // reset-on-success move as warehouse-items.tsx's CreateItemModal).
       if (isNew) {
         setCode("");
+        setName("");
         setKind("bin");
         setActive(true);
       }
@@ -83,10 +85,23 @@ function EditModal({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-[#02060E] p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-white">{isNew ? "New location" : location!.code}</h3>
+          <h3 className="text-lg font-semibold text-white">{isNew ? "New location" : locationLabel(location!)}</h3>
           <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-4 h-4" /></button>
         </div>
         <div className="space-y-3">
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-white/40">Name</label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={LOCATION_NAME_MAX}
+              placeholder="e.g. United Sports Centre Warehouse"
+              className="bg-white/[0.02] border-white/10 text-white"
+            />
+            <div className="text-[10px] text-white/30 mt-1">
+              Optional — what staff see when they pick this place. Leave it blank and they see the code.
+            </div>
+          </div>
           <div>
             <label className="text-[10px] uppercase tracking-wider text-white/40">Code</label>
             <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. A-01-2, RECEIVING, QUARANTINE" className="bg-white/[0.02] border-white/10 text-white font-mono" />
@@ -111,7 +126,7 @@ function EditModal({
         <div className="flex justify-between items-center mt-5">
           {!isNew ? (
             <button
-              onClick={() => { if (confirm(`Delete ${location!.code}? This can't be undone.`)) remove.mutate(); }}
+              onClick={() => { if (confirm(`Delete ${locationLabel(location!)}? This can't be undone.`)) remove.mutate(); }}
               disabled={remove.isPending}
               className="text-xs text-red-400/70 hover:text-red-400 flex items-center gap-1.5"
             >
@@ -156,7 +171,7 @@ export default function WarehouseLocations() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">Locations</h1>
-          <p className="text-sm text-white/40 mt-0.5">Bins, named zones, and the virtual SUPPLIER/CUSTOMER/SCRAP/PRODUCTION endpoints.</p>
+          <p className="text-sm text-white/40 mt-0.5">Everywhere stock can sit — the warehouse, its zones and bins, plus the virtual SUPPLIER/CUSTOMER/SCRAP/PRODUCTION endpoints.</p>
         </div>
         <Button onClick={() => setCreating(true)} className="bg-blue-600 hover:bg-blue-700 flex items-center gap-1.5">
           <Plus className="w-4 h-4" /> New location
@@ -203,7 +218,7 @@ export default function WarehouseLocations() {
         <div className="rounded-2xl border border-white/5 overflow-hidden">
           <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-4 py-2 bg-white/[0.03] text-[10px] uppercase tracking-wider text-white/40">
             <span></span>
-            <span>Code</span>
+            <span>Location</span>
             <span>Kind</span>
             <span>Zone</span>
             <span></span>
@@ -217,7 +232,12 @@ export default function WarehouseLocations() {
               <span onClick={(e) => e.stopPropagation()}>
                 <Checkbox checked={selected.has(loc.id)} onCheckedChange={() => setSelected((prev) => toggleId(prev, loc.id))} />
               </span>
-              <div className="min-w-0 text-sm text-white font-mono truncate">{loc.code}{!loc.active ? <span className="text-white/30"> · inactive</span> : ""}</div>
+              <div className="min-w-0">
+                <div className="text-sm text-white truncate">
+                  {locationLabel(loc)}{!loc.active ? <span className="text-white/30"> · inactive</span> : ""}
+                </div>
+                {loc.name ? <div className="text-[11px] text-white/30 font-mono truncate">{loc.code}</div> : null}
+              </div>
               <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/[0.04] text-white/50 whitespace-nowrap">
                 {KIND_LABEL[loc.kind as LocationKind] ?? loc.kind}
               </span>

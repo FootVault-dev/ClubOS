@@ -44,7 +44,7 @@ import {
   BRAND_OWNERS, isBrandOwner,
   UNITS, isUnit,
   LOCATION_KINDS, isLocationKind,
-  isValidLocationCode, normaliseLocationCode, deriveLocationZone,
+  isValidLocationCode, normaliseLocationCode, normaliseLocationName, deriveLocationZone,
   isValidSku, normaliseSku,
   normaliseAliasCode,
   locationBarcodePayload,
@@ -547,6 +547,8 @@ export function registerWarehouseRoutes(app: Express) {
         .insert(whLocations)
         .values({
           code,
+          // Display only (D28) — blank collapses to null, never "".
+          name: normaliseLocationName(req.body?.name),
           zone: deriveLocationZone(code, kind),
           kind,
           active: toBool(req.body?.active, true),
@@ -591,6 +593,9 @@ export function registerWarehouseRoutes(app: Express) {
         // out of sync with the code (see shared/warehouse.ts).
         patch.zone = deriveLocationZone(nextCode, nextKind);
       }
+      // Clearing the name is a real edit — the location falls back to showing
+      // its code — so an explicit blank writes null rather than being ignored.
+      if (b.name !== undefined) patch.name = normaliseLocationName(b.name);
       if (b.active !== undefined) patch.active = !!b.active;
 
       const [updated] = await db.update(whLocations).set(patch).where(eq(whLocations.id, id)).returning();

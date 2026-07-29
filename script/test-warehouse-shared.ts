@@ -7,6 +7,7 @@ import {
   LOCATION_KINDS, isLocationKind,
   NAMED_ZONES, VIRTUAL_LOCATION_CODES, QUARANTINE_ZONE,
   isValidLocationCode, normaliseLocationCode,
+  normaliseLocationName, locationLabel, locationLabelWithCode, LOCATION_NAME_MAX,
   deriveLocationZone, LOCATION_BARCODE_PREFIX, locationBarcodePayload,
   normaliseSku, isValidSku,
   normaliseAliasCode,
@@ -81,6 +82,40 @@ ok("deeper bin RECEIVING-01-1-3 valid", () => assert.equal(isValidLocationCode("
 ok("single segment (not a virtual/zone) invalid", () => assert.equal(isValidLocationCode("A"), false));
 ok("too many segments invalid", () => assert.equal(isValidLocationCode("A-01-2-3-4"), false));
 ok("lowercase segment invalid", () => assert.equal(isValidLocationCode("a-01-2"), false));
+
+// ── D28: a location's human name ──────────────────────────────────────────────
+// The name is display only. The code stays the identity — it is what a label
+// encodes, what `LOC:` resolves, and what the ledger and CSV exports print.
+ok("the real first location's code is valid", () => assert.equal(isValidLocationCode("USC-WAREHOUSE"), true));
+ok("a name with spaces is NOT a valid code", () => assert.equal(isValidLocationCode("UNITED SPORTS CENTRE WAREHOUSE"), false));
+
+ok("name trims and collapses whitespace", () =>
+  assert.equal(normaliseLocationName("  United   Sports  Centre Warehouse "), "United Sports Centre Warehouse"));
+ok("name is NOT uppercased — it is prose, not an identifier", () =>
+  assert.equal(normaliseLocationName("United Sports Centre Warehouse"), "United Sports Centre Warehouse"));
+ok("blank name collapses to null, never an empty string", () => {
+  assert.equal(normaliseLocationName(""), null);
+  assert.equal(normaliseLocationName("   "), null);
+  assert.equal(normaliseLocationName(undefined), null);
+  assert.equal(normaliseLocationName(null), null);
+});
+ok("name is capped, not rejected", () =>
+  assert.equal(normaliseLocationName("x".repeat(500))!.length, LOCATION_NAME_MAX));
+
+ok("label shows the name when there is one", () =>
+  assert.equal(locationLabel({ code: "USC-WAREHOUSE", name: "United Sports Centre Warehouse" }), "United Sports Centre Warehouse"));
+ok("label falls back to the code — a nameless location must never render blank", () => {
+  assert.equal(locationLabel({ code: "RECEIVING", name: null }), "RECEIVING");
+  assert.equal(locationLabel({ code: "A-01-2" }), "A-01-2");
+  assert.equal(locationLabel({ code: "PACK", name: "   " }), "PACK");
+});
+ok("label-with-code keeps the code visible for staff who speak in codes", () => {
+  assert.equal(locationLabelWithCode({ code: "USC-WAREHOUSE", name: "United Sports Centre Warehouse" }),
+    "United Sports Centre Warehouse (USC-WAREHOUSE)");
+  assert.equal(locationLabelWithCode({ code: "DISPATCH", name: null }), "DISPATCH");
+});
+ok("naming a location never changes its derived zone", () =>
+  assert.equal(deriveLocationZone("USC-WAREHOUSE", "zone"), "USC"));
 ok("empty string invalid", () => assert.equal(isValidLocationCode(""), false));
 ok("whitespace-only invalid", () => assert.equal(isValidLocationCode("   "), false));
 ok("non-string invalid", () => assert.equal(isValidLocationCode(123), false));

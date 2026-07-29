@@ -1,14 +1,14 @@
 // Stock take (D27) — walk the racks with a scanner and put real numbers in.
 //
-// The job this replaces: counting a shelf by hand, writing it on paper, then
-// typing it into a spreadsheet. Here you pick the shelf, scan, and the tally
+// The job this replaces: counting a location by hand, writing it on paper, then
+// typing it into a spreadsheet. Here you pick the location, scan, and the tally
 // builds itself. Scan the same kit ten times and it reads 10; or scan once and
 // type 10. Then one button writes it all to the warehouse.
 //
-// 🔴 A stock take SETS the quantity — "there are 10 on this shelf" — so the
+// 🔴 A stock take SETS the quantity — "there are 10 at this location" — so the
 // ledger records (counted − what we thought). The screen shows that arithmetic
 // per line rather than hiding it, because a stock take that silently doubled a
-// shelf on a recount would be worse than no stock take.
+// location on a recount would be worse than no stock take.
 //
 // Both input methods work: the phone camera and a USB/Bluetooth scanner
 // (client/src/lib/wedge-scanner.ts — it types and presses Enter, so the page
@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { feedWedgeKey, shouldIgnoreWedgeTarget, EMPTY_WEDGE, type WedgeState } from "@/lib/wedge-scanner";
+import { locationLabelWithCode } from "@shared/warehouse";
 import type { WhLocation } from "@shared/schema";
 
 interface CountLine {
@@ -125,7 +126,7 @@ export default function WarehouseStockTake() {
       (await apiRequest("POST", "/api/admin/warehouse/stock-take", {
         locationId: Number(locationId),
         lines: lines.map((l) => ({ itemId: l.itemId, counted: l.counted })),
-        // Minted once per posted count so a retry can't move the shelf twice.
+        // Minted once per posted count so a retry can't move the location twice.
         idempotencyKey: `stocktake-${locationId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       })).json(),
     onSuccess: (r) => {
@@ -175,7 +176,7 @@ export default function WarehouseStockTake() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => setPosted(null)} className="gap-1.5"><ScanLine className="w-4 h-4" /> Count another shelf</Button>
+          <Button onClick={() => setPosted(null)} className="gap-1.5"><ScanLine className="w-4 h-4" /> Count another location</Button>
           <a
             href="/api/admin/warehouse/stock.csv"
             className="px-3 py-2 rounded-lg text-sm text-white/70 bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] flex items-center gap-1.5"
@@ -195,7 +196,7 @@ export default function WarehouseStockTake() {
         <div>
           <h1 className="text-2xl font-bold text-white">Stock take</h1>
           <p className="text-sm text-white/40 mt-0.5">
-            Scan what's on the shelf — the count builds itself. Scan the same thing twice and it reads 2.
+            Scan what's there — the count builds itself. Scan the same thing twice and it reads 2.
           </p>
         </div>
         <a
@@ -207,16 +208,16 @@ export default function WarehouseStockTake() {
       </div>
 
       <div className="space-y-1">
-        <label className="text-xs text-white/50 flex items-center gap-1"><MapPin className="w-3 h-3" /> Which shelf are you counting?</label>
+        <label className="text-xs text-white/50 flex items-center gap-1"><MapPin className="w-3 h-3" /> Which location are you counting?</label>
         <Select value={locationId} onValueChange={setLocationId}>
-          <SelectTrigger><SelectValue placeholder="Pick a bin or zone" /></SelectTrigger>
+          <SelectTrigger><SelectValue placeholder="Pick a location" /></SelectTrigger>
           <SelectContent>
-            {countable.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.code}</SelectItem>)}
+            {countable.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
           </SelectContent>
         </Select>
         {countable.length === 0 && (
           <p className="text-[11px] text-amber-400/70">
-            No bins set up yet — add them under Warehouse → Locations first.
+            No locations set up yet — add them under Warehouse → Locations first.
           </p>
         )}
       </div>
@@ -235,7 +236,7 @@ export default function WarehouseStockTake() {
               if (e.key === "Enter" && manual.trim()) {
                 addScan(manual);
                 setManual("");
-                // Stay ready for the next one — a shelf is many scans.
+                // Stay ready for the next one — a location is many scans.
                 requestAnimationFrame(() => manualRef.current?.focus());
               }
             }}
@@ -256,7 +257,7 @@ export default function WarehouseStockTake() {
         <div className="text-center py-10 border border-dashed border-white/10 rounded-xl">
           <PackageCheck className="w-8 h-8 text-white/15 mx-auto mb-3" />
           <p className="text-sm text-white/50">Nothing counted yet.</p>
-          <p className="text-xs text-white/30 mt-1">Scan the first thing on the shelf.</p>
+          <p className="text-xs text-white/30 mt-1">Scan the first thing at this location.</p>
         </div>
       ) : (
         <div className="rounded-xl border border-white/[0.06] overflow-hidden">
@@ -312,14 +313,14 @@ export default function WarehouseStockTake() {
             Add {total} to the warehouse
           </Button>
           <Button variant="ghost" onClick={() => { setLines([]); saveDraft("", []); }}>Clear</Button>
-          {!locationId && <span className="text-[11px] text-amber-400/70">Pick a shelf first</span>}
+          {!locationId && <span className="text-[11px] text-amber-400/70">Pick a location first</span>}
         </div>
       )}
 
       {lines.length > 0 && (
         <p className="text-[11px] text-white/30 flex items-start gap-1.5">
           <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-          This sets the quantity on that shelf to what you counted — it doesn't add to what's already recorded.
+          This sets the quantity at that location to what you counted — it doesn't add to what's already recorded.
         </p>
       )}
     </div>

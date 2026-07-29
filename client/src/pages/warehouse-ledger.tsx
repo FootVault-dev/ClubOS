@@ -10,9 +10,7 @@ import { Boxes, Search } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  MOVEMENT_TYPES, MOVEMENT_TYPE_LABELS, REASON_CODES, REASON_CODE_LABELS, REF_KINDS,
-} from "@shared/warehouse";
+import { MOVEMENT_TYPES, MOVEMENT_TYPE_LABELS, REASON_CODES, REASON_CODE_LABELS, REF_KINDS, locationLabelWithCode } from "@shared/warehouse";
 import type { WhLocation } from "@shared/schema";
 
 const ALL = "__all__";
@@ -87,7 +85,7 @@ export default function WarehouseLedger() {
           <SelectTrigger className="w-40 bg-white/[0.02] border-white/10 text-white"><SelectValue placeholder="Location" /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All locations</SelectItem>
-            {locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.code}</SelectItem>)}
+            {locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={movementType} onValueChange={setMovementType}>

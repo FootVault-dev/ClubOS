@@ -33,7 +33,7 @@ import { Search, Printer, Tags, MapPin, CheckSquare, Square, Loader2 } from "luc
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiRequest } from "@/lib/queryClient";
-import { locationBarcodePayload } from "@shared/warehouse";
+import { locationBarcodePayload, locationLabel } from "@shared/warehouse";
 import type { WhItem, WhLocation } from "@shared/schema";
 
 type LabelKind = "item" | "location";
@@ -114,7 +114,7 @@ function LocationLabelCard({ location }: { location: WhLocation }) {
       <QrGlyph value={locationBarcodePayload(location.code)} />
       <div className="wh-label-text">
         <div className="wh-label-primary">{location.code}</div>
-        <div className="wh-label-secondary">{location.zone ?? location.kind}</div>
+        <div className="wh-label-secondary">{location.name ?? location.zone ?? location.kind}</div>
       </div>
     </div>
   );
@@ -350,8 +350,8 @@ export default function WarehouseLabels() {
                         onCheckedChange={() => setSelectedLocationIds((prev) => toggleId(prev, loc.id))}
                       />
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm text-white font-mono truncate">{loc.code}</div>
-                        <div className="text-[11px] text-white/40 truncate">{loc.zone ?? loc.kind}</div>
+                        <div className="text-sm text-white truncate">{locationLabel(loc)}</div>
+                        <div className="text-[11px] text-white/40 font-mono truncate">{loc.name ? loc.code : (loc.zone ?? loc.kind)}</div>
                       </div>
                       <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/[0.04] text-white/50 flex-shrink-0">
                         {loc.kind}

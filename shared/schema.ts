@@ -5300,6 +5300,11 @@ export type MediaAsset = typeof mediaAssets.$inferSelect;
 export const whLocations = pgTable("wh_locations", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   code: text("code").notNull().unique(),          // e.g. 'A-01-2', 'QUARANTINE', 'SUPPLIER'
+  // What a human calls this place — "United Sports Centre Warehouse" for
+  // USC-WAREHOUSE. Nullable: the code is still the identity (it's what a label
+  // encodes and a scanner reads), and every location that pre-dates this column
+  // has no name and must keep showing its code. Never used for lookup.
+  name: text("name"),
   zone: text("zone"),                             // first segment of a bin code, or the named zone itself
   // LocationKind: 'bin' | 'zone' | 'virtual' | 'person' | 'vehicle'. The last
   // two are D20 — "issued to Riley" and "in the van" are locations, not a

@@ -866,6 +866,9 @@ export interface ScanResolvedItem {
 export interface ScanResolvedLocation {
   id: number;
   code: string;
+  /** D28 — the human name, when the location has one. Display only; the scan
+   *  still resolves on `code`, which is what the label encodes. */
+  name: string | null;
   kind: LocationKind;
 }
 
@@ -1017,12 +1020,12 @@ export function scanLookupDbFromDb(database: Pick<typeof realDb, "select">): Sca
     },
     async findLocationByCode(code) {
       const rows = await database
-        .select({ id: whLocations.id, code: whLocations.code, kind: whLocations.kind })
+        .select({ id: whLocations.id, code: whLocations.code, name: whLocations.name, kind: whLocations.kind })
         .from(whLocations)
         .where(eq(whLocations.code, code))
         .limit(1);
       const row = rows[0];
-      return row ? { id: row.id, code: row.code, kind: row.kind as LocationKind } : undefined;
+      return row ? { id: row.id, code: row.code, name: row.name ?? null, kind: row.kind as LocationKind } : undefined;
     },
     async findInstanceByAssetTag(tag) {
       const rows = await database

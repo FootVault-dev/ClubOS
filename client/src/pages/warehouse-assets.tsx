@@ -18,10 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { WarehouseCustomFields, ModalPortal } from "@/components/warehouse-custom-fields";
-import {
-  INSTANCE_CONDITIONS, INSTANCE_CONDITION_LABELS, LOCATION_KIND_LABELS,
-  type InstanceCondition, type LocationKind, type WarrantyStatus,
-} from "@shared/warehouse";
+import { INSTANCE_CONDITIONS, INSTANCE_CONDITION_LABELS, LOCATION_KIND_LABELS, type InstanceCondition, type LocationKind, type WarrantyStatus, locationLabelWithCode } from "@shared/warehouse";
 import type { WhLocation } from "@shared/schema";
 
 const ALL = "__all__";
@@ -193,7 +190,7 @@ function DetailSheet({ instance, onClose }: { instance: Instance; onClose: () =>
                     <SelectContent>
                       {moveTargets.map((l) => (
                         <SelectItem key={l.id} value={String(l.id)}>
-                          {l.code} · {LOCATION_KIND_LABELS[l.kind as LocationKind]}
+                          {locationLabelWithCode(l)} · {LOCATION_KIND_LABELS[l.kind as LocationKind]}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -354,7 +351,7 @@ function AddSheet({ items, onClose }: { items: Overview["items"]; onClose: () =>
                   <SelectContent>
                     {placeable.map((l) => (
                       <SelectItem key={l.id} value={String(l.id)}>
-                        {l.code} · {LOCATION_KIND_LABELS[l.kind as LocationKind]}
+                        {locationLabelWithCode(l)} · {LOCATION_KIND_LABELS[l.kind as LocationKind]}
                       </SelectItem>
                     ))}
                   </SelectContent>

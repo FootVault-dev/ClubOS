@@ -14,10 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  PO_STATUSES, PO_STATUS_LABELS, type PoStatus,
-  receiveDiscrepancyNote, type ReceiveDiscrepancy,
-} from "@shared/warehouse";
+import { PO_STATUSES, PO_STATUS_LABELS, type PoStatus, receiveDiscrepancyNote, type ReceiveDiscrepancy, locationLabelWithCode } from "@shared/warehouse";
 import type { WhPurchaseOrder, WhItem, WhLocation } from "@shared/schema";
 
 const ALL = "__all__";
@@ -275,9 +272,9 @@ function ReceiveForm({ poId, line, locations, onDone }: { poId: number; line: Po
       <div>
         <label className="text-[10px] uppercase tracking-wider text-white/40">Location (for good stock)</label>
         <Select value={locationId} onValueChange={setLocationId}>
-          <SelectTrigger className="bg-white/[0.02] border-white/10 text-white text-sm"><SelectValue placeholder="Choose a bin/zone" /></SelectTrigger>
+          <SelectTrigger className="bg-white/[0.02] border-white/10 text-white text-sm"><SelectValue placeholder="Choose a location" /></SelectTrigger>
           <SelectContent>
-            {realLocations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.code}</SelectItem>)}
+            {realLocations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>

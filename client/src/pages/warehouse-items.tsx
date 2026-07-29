@@ -21,11 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  ITEM_KINDS, ITEM_KIND_LABELS, BRAND_OWNERS, BRAND_OWNER_LABELS, UNITS, UNIT_LABELS,
-  MOVEMENT_TYPE_LABELS, REASON_CODE_LABELS,
-  type ItemKind, type BrandOwner, type Unit, type TrackingMode,
-} from "@shared/warehouse";
+import { ITEM_KINDS, ITEM_KIND_LABELS, BRAND_OWNERS, BRAND_OWNER_LABELS, UNITS, UNIT_LABELS, MOVEMENT_TYPE_LABELS, REASON_CODE_LABELS, type ItemKind, type BrandOwner, type Unit, type TrackingMode, locationLabelWithCode } from "@shared/warehouse";
 import type { WhItem, WhLocation, WhBarcodeAlias } from "@shared/schema";
 
 interface ItemRow extends WhItem {
@@ -186,7 +182,7 @@ function ItemForm({
             <SelectTrigger className="bg-white/[0.02] border-white/10 text-white"><SelectValue placeholder="None" /></SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>None</SelectItem>
-              {locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.code}</SelectItem>)}
+              {locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

@@ -54,6 +54,8 @@ import {
   type MovementType,
   type ReasonCode,
   type ConditionGrade,
+  locationLabel,
+  locationLabelWithCode,
 } from "@shared/warehouse";
 import type { PrintOrder } from "@shared/schema";
 import {
@@ -101,6 +103,7 @@ interface ScanResolvedItem {
 interface ScanResolvedLocation {
   id: number;
   code: string;
+  name: string | null;
   kind: "bin" | "zone" | "virtual";
 }
 interface ScanResolvedInstance {
@@ -502,7 +505,7 @@ function LocationPicker({
             />
           </div>
           <div className="max-h-48 overflow-y-auto space-y-1">
-            {options.length === 0 && <div className="text-white/30 text-sm text-center py-3">No bins found</div>}
+            {options.length === 0 && <div className="text-white/30 text-sm text-center py-3">No locations found</div>}
             {options.map((l) => (
               <button
                 key={l.id}
@@ -511,9 +514,10 @@ function LocationPicker({
                   setOpen(false);
                   setQ("");
                 }}
-                className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/[0.06] text-white text-sm font-mono"
+                className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/[0.06] text-white text-sm"
               >
-                {l.code}
+                <div className={l.name ? "" : "font-mono"}>{locationLabel(l)}</div>
+                {l.name ? <div className="text-[11px] text-white/35 font-mono">{l.code}</div> : null}
               </button>
             ))}
           </div>
@@ -1296,7 +1300,7 @@ function CountForm({ location, ...common }: FormCommonProps & { location: ScanRe
       ).json(),
     onSuccess: () => {
       confirmFeedback("ok");
-      toast({ title: "Count recorded", description: `${linesHere.length} line(s) at ${location.code}` });
+      toast({ title: "Count recorded", description: `${linesHere.length} line(s) at ${locationLabel(location)}` });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/warehouse/counts", selectedCountId] });
       common.onDone();
     },
@@ -1304,7 +1308,7 @@ function CountForm({ location, ...common }: FormCommonProps & { location: ScanRe
   });
 
   return (
-    <FormShell title={`Count — ${location.code}`} onBack={common.onCancel}>
+    <FormShell title={`Count — ${locationLabel(location)}`} onBack={common.onCancel}>
       {selectedCountId === null ? (
         <div className="rounded-xl border border-white/10 divide-y divide-white/5">
           {openCounts.length === 0 && <div className="text-white/30 text-sm text-center py-6">No open count sessions — start one from the Counts admin page</div>}
@@ -1329,7 +1333,7 @@ function CountForm({ location, ...common }: FormCommonProps & { location: ScanRe
               <Loader2 className="w-5 h-5 animate-spin" />
             </div>
           ) : linesHere.length === 0 ? (
-            <div className="text-white/30 text-sm text-center py-6">Nothing left to count at {location.code} in this session</div>
+            <div className="text-white/30 text-sm text-center py-6">Nothing left to count at {locationLabel(location)} in this session</div>
           ) : (
             <>
               {linesHere.map((l: any) => (
@@ -1717,9 +1721,11 @@ export default function WarehouseScan() {
               <div>
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-green-400" />
-                  <span className="text-white font-bold">{resolved.resolution.location.code}</span>
+                  <span className="text-white font-bold">{locationLabel(resolved.resolution.location)}</span>
                 </div>
-                <div className="text-white/40 text-xs mt-0.5 capitalize">{resolved.resolution.location.kind}</div>
+                <div className="text-white/40 text-xs mt-0.5 capitalize">
+                  {resolved.resolution.location.name ? `${resolved.resolution.location.code} · ` : ""}{resolved.resolution.location.kind}
+                </div>
               </div>
               <button onClick={resetToIdle} className="text-white/30 hover:text-white p-1">
                 <X className="w-5 h-5" />

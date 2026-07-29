@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { LOAN_STATUSES, type LoanStatus, CONDITION_GRADES, CONDITION_GRADE_LABELS, type ConditionGrade } from "@shared/warehouse";
+import { LOAN_STATUSES, type LoanStatus, CONDITION_GRADES, CONDITION_GRADE_LABELS, type ConditionGrade, locationLabelWithCode } from "@shared/warehouse";
 import type { WhLoan, WhItem, WhLocation } from "@shared/schema";
 
 const ALL = "__all__";
@@ -262,7 +262,7 @@ function ReturnLineRow({ loanId, line, locations }: { loanId: number; line: Loan
             <Select value={locationId} onValueChange={setLocationId}>
               <SelectTrigger className="bg-white/[0.02] border-white/10 text-white text-sm"><SelectValue placeholder="Returned to" /></SelectTrigger>
               <SelectContent>
-                {realLocations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.code}</SelectItem>)}
+                {realLocations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{locationLabelWithCode(l)}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={conditionGrade} onValueChange={(v) => setConditionGrade(v as ConditionGrade)}>
