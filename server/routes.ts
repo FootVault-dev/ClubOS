@@ -99,6 +99,15 @@ import { CURRENT_LOGO_LICENCE, canonicalConsentText } from "./logo-licence";
 import { buildLogoLicencePdf } from "./logo-licence-pdf";
 import { PDFDocument as PdfLibDocument } from "pdf-lib";
 import { registerShopRoutes, finalizeShopOrderPaid, finalizeShopSharePaid } from "./shop-routes";
+import { registerPayShareRoutes } from "./payshare-routes";
+import {
+  PAYSHARE_SITE_ORIGIN,
+  getBookingByRef,
+  getPayShareClient,
+  isPayShareConfigured,
+  payshareErrorResponse,
+  recordSession as recordPayShareSession,
+} from "./payshare";
 import { registerMediaRoutes } from "./media-routes";
 import { registerMarketingRoutes } from "./marketing/routes";
 
@@ -7204,6 +7213,152 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Venue Split Checkout] Error:", error);
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // ── "Split with PayShare" ───────────────────────────────────────────────
+  // The third payment option, live BESIDE Pay in full and Player Pay. Up to the
+  // reservation this is checkout-split's twin: same quote, same advisory-lock
+  // transaction, same cell-overlap conflict model, slots held 'pending'. It then
+  // hands the group to PayShare instead of running our own hub.
+  //
+  // The reservation is deliberately repeated rather than factored out of
+  // checkout-split: that path is carrying live money today, and a refactor to
+  // save thirty lines is not worth the chance of breaking it. If a third split
+  // option ever appears, extract it then.
+  app.post("/api/payshare/start-split", async (req, res) => {
+    try {
+      const orgId = parseInt(String(req.body?.orgId ?? ""));
+      if (!orgId) return res.status(400).json({ message: "orgId required" });
+      if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ message: "Stripe not configured" });
+      if (!isPayShareConfigured()) {
+        return res.status(400).json({ message: "PayShare isn't available right now." });
+      }
+
+      const vs = await storage.getVenueSettings(orgId);
+      if (!(vs as any)?.payshareEnabled) {
+        return res.status(400).json({ message: "PayShare isn't available for this venue." });
+      }
+
+      const parsed = checkoutSchema.parse(req.body);
+      assertItemsBookable(parsed.items);
+
+      // Release dead Player-Pay holds first so they can't block a live booking.
+      try { await splitPay.sweepExpiredBookingSplits(orgId); } catch (e) { console.error("[PayShare] sweep failed:", e); }
+
+      const quote = await buildQuote(orgId, parsed.items, parsed.discountCode);
+      const groupId = `vbg_${crypto.randomBytes(8).toString("hex")}`;
+
+      const factor = quote.preDiscountCents > 0 ? quote.totalCents / quote.preDiscountCents : 1;
+      const lineCount = quote.lineItems.length;
+      let runningTotal = 0, runningGst = 0;
+      const bookingsToCreate: any[] = quote.lineItems.map((line, idx) => {
+        const isLast = idx === lineCount - 1;
+        const lineTotalCents = isLast ? (quote.totalCents - runningTotal) : Math.round(line.totalCents * factor);
+        runningTotal += lineTotalCents;
+        const lineGstCents = isLast ? (quote.gstCents - runningGst) : Math.round(quote.gstCents * lineTotalCents / (quote.totalCents || 1));
+        runningGst += lineGstCents;
+        return {
+          organizationId: orgId, facilityId: line.facilityId,
+          customerName: parsed.customer.name, customerEmail: parsed.customer.email,
+          customerPhone: parsed.customer.phone || null, customerClub: parsed.customer.club || null,
+          bookingDate: line.date, startTime: line.startTime, endTime: line.endTime,
+          halfFull: line.halfFull, halfPosition: line.halfPosition, addonsJson: line.addons,
+          subtotalCents: lineTotalCents - lineGstCents, gstCents: lineGstCents, totalCents: lineTotalCents,
+          totalAmount: (lineTotalCents / 100).toFixed(2), gstAmount: (lineGstCents / 100).toFixed(2),
+          discountCode: quote.discount?.code || null, discountCents: line.totalCents - lineTotalCents,
+          status: "pending" as const, source: "public" as const, attributionSource: parsed.attributionSource ?? null, bookingGroupId: groupId,
+          notes: parsed.customer.notes || null, waiverAccepted: true, waiverVersion: USC_WAIVER_VERSION, waiverAcceptedAt: new Date(),
+        };
+      });
+
+      const uniqueFacilityIds = Array.from(new Set(parsed.items.map((i) => i.facilityId))).sort((a, b) => a - b);
+      await db.transaction(async (tx) => {
+        for (const fid of uniqueFacilityIds) await tx.execute(sql`SELECT pg_advisory_xact_lock(${fid})`);
+        const datesByFacility = new Map<number, string[]>();
+        for (const it of parsed.items) {
+          if (!datesByFacility.has(it.facilityId)) datesByFacility.set(it.facilityId, []);
+          datesByFacility.get(it.facilityId)!.push(it.date);
+        }
+        for (const [fid, dates] of Array.from(datesByFacility.entries())) {
+          const existing = await tx.select().from(facilityBookings).where(and(
+            eq(facilityBookings.facilityId, fid),
+            inArray(facilityBookings.bookingDate, Array.from(new Set(dates))),
+            inArray(facilityBookings.status, ["pending", "confirmed", "paid"]),
+          ));
+          for (const it of parsed.items) {
+            if (it.facilityId !== fid) continue;
+            const conflict = existing.find((e) => e.bookingDate === it.date && e.startTime < it.endTime && e.endTime > it.startTime && cellsOverlap(e.halfFull, e.halfPosition, it.halfFull, it.halfPosition));
+            if (conflict) {
+              const part = it.halfFull === "half" ? ` ${it.halfPosition} half` : it.halfFull === "quarter" ? ` quarter ${it.halfPosition}` : "";
+              throw new Error(`Slot already booked: ${it.date} ${it.startTime}-${it.endTime}${part}`);
+            }
+          }
+        }
+        return tx.insert(facilityBookings).values(bookingsToCreate).returning();
+      });
+
+      if (quote.discount?.id && quote.discountCents > 0) {
+        try { await storage.incrementDiscountUsage(quote.discount.id, quote.discountCents); } catch (e) { console.error("[PayShare] discount usage:", e); }
+      }
+
+      // Read the amount and the order summary back off the rows we actually
+      // reserved — never off the request body. The browser does not get to say
+      // what a pitch costs.
+      const booking = await getBookingByRef(groupId);
+      if (!booking) throw new Error("Reserved booking group could not be read back");
+
+      const origin = PAYSHARE_SITE_ORIGIN;
+      let session;
+      try {
+        const client = await getPayShareClient();
+        session = await client.createSession({
+          amountMinor: booking.amountMinor,
+          currency: booking.currency,
+          merchantOrderRef: groupId,
+          platformContextId: booking.platformContextId,
+          successReturnUrl: `${origin}/book/success?group=${encodeURIComponent(groupId)}&via=payshare`,
+          cancelReturnUrl: `${origin}/book?cancelled=payshare`,
+          orderSummary: booking.orderSummary,
+          metadata: { bookingGroupId: groupId, organizationId: String(orgId) },
+        }, { idempotencyKey: groupId });
+      } catch (e: any) {
+        // A contract gap is our bug, not an outage — surface it as a 400 with
+        // the gaps so the wizard self-test can name the missing field.
+        const mapped = payshareErrorResponse(e);
+        console.error("[PayShare] createSession failed:", mapped.status, JSON.stringify(mapped.body));
+        // The slots were reserved a moment ago and nobody can pay for them now.
+        try {
+          await db.delete(facilityBookings).where(and(
+            eq(facilityBookings.bookingGroupId, groupId),
+            eq(facilityBookings.status, "pending"),
+          ));
+        } catch (releaseErr) { console.error("[PayShare] failed to release slots:", releaseErr); }
+        return res.status(mapped.status).json(mapped.body);
+      }
+
+      await recordPayShareSession({
+        organizationId: orgId,
+        sessionId: session.sessionId,
+        bookingGroupId: groupId,
+        amountMinor: booking.amountMinor,
+        currency: booking.currency,
+        sessionUrl: session.sessionUrl,
+        merchantOrderRef: groupId,
+        expiresAt: session.expiresAt ? new Date(session.expiresAt) : null,
+      });
+
+      res.json({
+        mode: "payshare",
+        bookingGroupId: groupId,
+        sessionId: session.sessionId,
+        sessionUrl: session.sessionUrl,
+        expiresAt: session.expiresAt ?? null,
+        quote,
+      });
+    } catch (error: any) {
+      console.error("[PayShare start-split] Error:", error);
       res.status(400).json({ message: error.message });
     }
   });
@@ -23967,6 +24122,11 @@ export async function registerRoutes(
   // Shop — native e-commerce module (MFL Store pilot). All routes live in
   // server/shop-routes.ts; the only other touchpoint is the webhook branch above.
   registerShopRoutes(app);
+
+  // PayShare's inbound hooks + the participant pay bridge. Settlement is
+  // injected rather than imported so payshare-routes.ts never has to reach back
+  // into this file (the same no-cycle arrangement split-pay.ts uses).
+  registerPayShareRoutes(app, { confirmBookingGroup: confirmAndEmailVenueBookingGroup });
 
   // CIC Media Library — staff photo/video uploads + public catalog API. All
   // routes live in server/media-routes.ts.

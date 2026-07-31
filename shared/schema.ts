@@ -995,6 +995,10 @@ export const venueSettings = pgTable("venue_settings", {
   successMessage: text("success_message").default("Thanks for your booking! A confirmation has been sent to your email."),
   // Player Pay (split a booking across a group) — kill switch for the venue site.
   splitEnabled: boolean("split_enabled").default(false),
+  // "Split with PayShare" — the third-party group-checkout option, live beside
+  // Player Pay rather than replacing it. Its own switch on purpose: turning
+  // PayShare off must never take our own split down with it, and vice versa.
+  payshareEnabled: boolean("payshare_enabled").default(false),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -1256,6 +1260,75 @@ export const splitMembers = pgTable("split_members", {
   // A member can't join the same split twice with the same email (re-join
   // reactivates a 'removed' row instead of inserting a duplicate).
   uniqueSessionEmail: uniqueIndex("split_members_session_email_unique").on(t.splitSessionId, t.email),
+}));
+
+// ── PayShare — third-party group-checkout orchestration ─────────────────────
+// PayShare runs the group SESSION (invite link, participant progress, completion
+// rules); the money still moves on our own Stripe rails. Deliberately its own
+// tables rather than an extra fundingType on split_sessions: that table already
+// carries live MFL registration money, and coupling a third party's state
+// machine to it would put real registrations behind PayShare's uptime.
+export const payshareSessions = pgTable("payshare_sessions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // PayShare's own session id — the join key on every inbound hook and webhook.
+  sessionId: text("session_id").notNull(),
+  // The facility_bookings group this funds, held 'pending' until completion.
+  bookingGroupId: text("booking_group_id"),
+  // What we told PayShare the group owes. Minor units + an explicit ISO currency:
+  // PayShare requires currency on every session and there is deliberately no
+  // default, so a booking's own currency is always what gets sent.
+  amountMinor: integer("amount_minor").notNull(),
+  currency: text("currency").notNull(),
+  status: text("status").notNull().default("open"), // 'open'|'completed'|'expired'|'cancelled'
+  sessionUrl: text("session_url"),
+  merchantOrderRef: text("merchant_order_ref"),
+  // PayShare's deadline for the group. Our pending-slot hold is pinned to this
+  // so we can never release a pitch while PayShare still has the group live.
+  expiresAt: timestamp("expires_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueSessionId: uniqueIndex("payshare_sessions_session_id_unique").on(t.sessionId),
+}));
+
+export const payshareParticipants = pgTable("payshare_participants", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  payshareSessionId: integer("payshare_session_id").notNull().references(() => payshareSessions.id, { onDelete: "cascade" }),
+  participantId: text("participant_id").notNull(),
+  role: text("role").notNull().default("participant"), // 'host'|'participant'
+  // PayShare tells US each share — we never compute it. Stored so the pay page
+  // charges exactly what PayShare told that person they owe, to the cent.
+  shareAmountMinor: integer("share_amount_minor").notNull(),
+  currency: text("currency").notNull(),
+  status: text("status").notNull().default("pending"), // 'pending'|'authorized'|'captured'|'failed'
+  // Random token in our pay-page URL. Never PayShare's participantId: that is
+  // theirs, shows in their UI, and would make our pay links guessable.
+  payToken: text("pay_token").notNull(),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  // Where PayShare wants the payer sent back to once their share is done.
+  returnUrl: text("return_url"),
+  paidAt: timestamp("paid_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueParticipant: uniqueIndex("payshare_participants_session_participant_unique").on(t.payshareSessionId, t.participantId),
+  uniquePayToken: uniqueIndex("payshare_participants_pay_token_unique").on(t.payToken),
+}));
+
+// Inbound-event dedupe. The SDK offers an in-memory Map/Set for this, which is
+// wrong here: prod runs TWO Fly machines, so in-memory state lets the same
+// replayed webhook confirm one booking twice. The unique index is the real
+// guard, and the stored response is replayed verbatim on a duplicate so a retry
+// can never mint a second payment intent.
+export const payshareEvents = pgTable("payshare_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  eventId: text("event_id").notNull(),
+  kind: text("kind").notNull(), // 'create_payment'|'webhook'
+  sessionId: text("session_id"),
+  responseJson: jsonb("response_json"),
+  receivedAt: timestamp("received_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueEvent: uniqueIndex("payshare_events_event_id_kind_unique").on(t.eventId, t.kind),
 }));
 
 export const leagueGames = pgTable("league_games", {
