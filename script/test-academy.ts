@@ -194,6 +194,80 @@ ok("sessions never exceed the total, however late", () => {
 });
 ok("termProgress rejects a zero session count", () => assert.equal(termProgress(T_START, T_START, T_END, 0), null));
 
+// ── Grace weeks — the real U4–U8 rule (Olga, 2026-08-01) ───────────────────
+// "Weeks 1 to 5 is the full $160. From week 6 it's pro-rated."
+// Technification pro-rates from the start and must be untouched (grace 0).
+const GRACE = 5;
+ok("no grace argument = the old behaviour, exactly", () => {
+  const p = termProgress("2026-08-24", T_START, T_END, 10)!;
+  assert.equal(p.graceWeeks, 0);
+  assert.equal(p.withinGrace, false);
+  assert.equal(p.chargeableSessions, p.sessionsRemaining);
+});
+ok("weeks 1–5 all charge the FULL term", () => {
+  // Day 0 (wk1) … day 34 (wk5). Every one must be full price.
+  for (let d = 0; d <= 34; d++) {
+    const day = new Date(Date.UTC(2026, 6, 20 + d)).toISOString().slice(0, 10);
+    const p = termProgress(day, T_START, T_END, 10, GRACE)!;
+    assert.equal(p.withinGrace, true, `${day} should be inside grace`);
+    assert.equal(p.chargeableSessions, 10, `${day} → ${p.chargeableSessions}`);
+    assert.equal(prorateTermPriceCents(16_000, p.chargeableSessions, p.totalSessions), 16_000, `${day}`);
+  }
+});
+ok("week 6 is the first pro-rated week — $80", () => {
+  const p = termProgress("2026-08-24", T_START, T_END, 10, GRACE)!;  // start + 35 = wk6
+  assert.equal(p.weeksElapsed, 5);
+  assert.equal(p.withinGrace, false);
+  assert.equal(p.chargeableSessions, 5);
+  assert.equal(prorateTermPriceCents(16_000, p.chargeableSessions, p.totalSessions), 8_000);
+});
+ok("week 7 keeps pro-rating — $64", () => {
+  const p = termProgress("2026-08-31", T_START, T_END, 10, GRACE)!;
+  assert.equal(p.chargeableSessions, 4);
+  assert.equal(prorateTermPriceCents(16_000, p.chargeableSessions, p.totalSessions), 6_400);
+});
+ok("grace never hides the true sessions left", () => {
+  // Week 3: full price, but the roll still says 8 sessions remain. The UI keys
+  // its "you only pay for what's left" line off the discount, not off this.
+  const p = termProgress("2026-08-03", T_START, T_END, 10, GRACE)!;
+  assert.equal(p.sessionsRemaining, 8);
+  assert.equal(p.chargeableSessions, 10);
+});
+ok("grace does NOT resurrect a finished term", () => {
+  const p = termProgress("2026-09-26", T_START, T_END, 10, GRACE)!;
+  assert.equal(p.status, "ended");
+  assert.equal(p.chargeableSessions, 0);
+  assert.equal(p.withinGrace, false);
+});
+ok("before the term starts is full price either way", () => {
+  const p = termProgress("2026-07-01", T_START, T_END, 10, GRACE)!;
+  assert.equal(p.chargeableSessions, 10);
+});
+ok("a mistyped grace can never charge more than one term", () => {
+  for (const bad of [99, -4, Number.NaN, 10.9]) {
+    const p = termProgress("2026-09-14", T_START, T_END, 10, bad as number)!;
+    assert.ok(p.graceWeeks >= 0 && p.graceWeeks <= 10, `${bad} → ${p.graceWeeks}`);
+    assert.ok(p.chargeableSessions <= 10, `${bad} → ${p.chargeableSessions}`);
+    assert.ok(
+      prorateTermPriceCents(16_000, p.chargeableSessions, p.totalSessions) <= 16_000,
+      `${bad} overcharged`,
+    );
+  }
+});
+ok("grace 0 leaves Technification pro-rated from day one", () => {
+  const p = termProgress("2026-07-27", T_START, T_END, 10, 0)!;   // week 2
+  assert.equal(p.chargeableSessions, 9);
+  assert.equal(prorateTermPriceCents(15_000, p.chargeableSessions, p.totalSessions), 13_500);
+});
+ok("the whole term is never charged twice over", () => {
+  for (let d = 0; d <= 80; d++) {
+    const day = new Date(Date.UTC(2026, 6, 20 + d)).toISOString().slice(0, 10);
+    const p = termProgress(day, T_START, T_END, 10, GRACE);
+    if (!p) continue;
+    assert.ok(p.chargeableSessions >= 0 && p.chargeableSessions <= 10, `${day} → ${p.chargeableSessions}`);
+  }
+});
+
 // ── prorateTermPriceCents ──────────────────────────────────────────────────
 ok("5 of 10 sessions halves a $160 term", () => {
   assert.equal(prorateTermPriceCents(16_000, 5, 10), 8_000);

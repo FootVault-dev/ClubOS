@@ -1345,7 +1345,13 @@ function ChooseStep({
                         )}
                       </div>
                     )}
-                    {p === "term" && q?.sessionsRemaining != null && q.totalSessions != null && q.sessionsRemaining < q.totalSessions && (
+                    {/* Only claim "you only pay for what's left" when a pro-rata
+                        discount was ACTUALLY applied. Inside a programme's
+                        grace weeks the term has started but the full fee still
+                        stands, and this line would otherwise promise a discount
+                        the checkout is not giving. */}
+                    {p === "term" && q?.sessionsRemaining != null && q.totalSessions != null
+                      && q.sessionsRemaining < q.totalSessions && q.discountCents > 0 && (
                       <div className="mt-1.5 text-[12px] leading-snug" style={{ color: BRAND.goldBright }}>
                         {q.sessionsRemaining} of {q.totalSessions} sessions left — you only pay for what's left
                       </div>

@@ -52,6 +52,11 @@ function OverviewTab({ camp, onUpdate }: { camp: any; onUpdate: (data: any) => v
   const [sessionCount, setSessionCount] = useState<string>(
     camp.sessionCount ? String(camp.sessionCount) : ""
   );
+  // Weeks charged at the full term price before pro-rata starts. 5 for U4–U8
+  // (weeks 1–5 full, pro-rata from week 6); 0 = pro-rate from day one.
+  const [graceWeeks, setGraceWeeks] = useState<string>(
+    String(camp.prorataGraceWeeks ?? 0)
+  );
 
   const { data: termsList } = useQuery<{ id: number; name: string; year: number; termNumber: number; startDate: string; endDate: string }[]>({
     queryKey: ["/api/admin/terms", { orgId: camp.organizationId }],
@@ -77,6 +82,9 @@ function OverviewTab({ camp, onUpdate }: { camp: any; onUpdate: (data: any) => v
       payload.termId = termId ? parseInt(termId) : null;
       payload.termPriceCents = termPrice ? Math.round(parseFloat(termPrice) * 100) : null;
       payload.sessionCount = sessionCount ? parseInt(sessionCount) : null;
+      // Never null — the price path reads it on every quote, and "unset" and
+      // "no grace" are the same thing. A blank box means 0.
+      payload.prorataGraceWeeks = Math.max(0, parseInt(graceWeeks) || 0);
     } else if (initialMode === "term") {
       // Demoting term → holiday: clear the binding so the holiday-camp
       // tabs render correctly.
@@ -198,11 +206,30 @@ function OverviewTab({ camp, onUpdate }: { camp: any; onUpdate: (data: any) => v
               <label className="text-[10px] text-white/40 uppercase">Sessions in term</label>
               <Input type="number" value={sessionCount} onChange={e => setSessionCount(e.target.value)} placeholder="auto" className="premium-input text-white/80 rounded-xl" />
             </div>
-            <div className="sm:col-span-3 space-y-1.5">
+            <div className="sm:col-span-2 space-y-1.5">
               <label className="text-[10px] text-white/40 uppercase">Term price ($NZD, full term)</label>
               <Input type="number" step="0.01" value={termPrice} onChange={e => setTermPrice(e.target.value)} placeholder="e.g. 195.00" className="premium-input text-white/80 rounded-xl" data-testid="input-camp-term-price" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] text-white/40 uppercase">Full-price weeks</label>
+              <Input
+                type="number"
+                min="0"
+                value={graceWeeks}
+                onChange={e => setGraceWeeks(e.target.value)}
+                placeholder="0"
+                className="premium-input text-white/80 rounded-xl"
+                data-testid="input-camp-grace-weeks"
+              />
+            </div>
+            <div className="sm:col-span-3">
               <p className="text-[10px] text-white/30">
-                Pro-rated automatically for parents who sign up after the term has started — same logic as the gymnastics programs.
+                {(() => {
+                  const g = Math.max(0, parseInt(graceWeeks) || 0);
+                  return g > 0
+                    ? `Weeks 1–${g} are charged the full term price. Pro-rata starts in week ${g + 1}, so a parent joining then pays only for the sessions left.`
+                    : "Pro-rated from day one — a parent who joins after the term starts pays only for the sessions left. Set “full-price weeks” to charge the full fee for the first few weeks instead.";
+                })()}
               </p>
             </div>
           </div>

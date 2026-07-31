@@ -80,6 +80,26 @@ export function quoteProgram(
 
   const sessionsRemaining = weeksBetween(today, term.endDate);
   const cappedRemaining = Math.min(sessionsRemaining, totalSessions);
+
+  // Grace weeks — full term price for the first N weeks, pro-rata after.
+  // Same column, same rule as the academy engine (shared/academy.ts), so no
+  // route can quote this programme at a price another route disagrees with.
+  // 0 on every programme that hasn't opted in, i.e. unchanged behaviour.
+  const graceWeeks = Math.max(0, Math.min(totalSessions, Math.floor(Number((program as any).prorataGraceWeeks) || 0)));
+  const msSinceStart = new Date(today + "T00:00:00").getTime() - new Date(term.startDate + "T00:00:00").getTime();
+  const weeksElapsed = Math.max(0, Math.floor(msSinceStart / (1000 * 60 * 60 * 24 * 7)));
+  if (weeksElapsed < graceWeeks) {
+    return {
+      fullPriceCents,
+      payNowCents: fullPriceCents,
+      discountCents: 0,
+      sessionsRemaining: cappedRemaining,
+      totalSessions,
+      reason: `Full term price — pro-rata starts in week ${graceWeeks + 1}`,
+      model: "term_prorated",
+    };
+  }
+
   const ratio = cappedRemaining / totalSessions;
   const payNowCents = Math.round(fullPriceCents * ratio);
   const discountCents = fullPriceCents - payNowCents;

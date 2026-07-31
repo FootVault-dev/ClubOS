@@ -227,7 +227,14 @@ export default function ClassBookingPage() {
     const b = new Date(term.endDate + "T00:00:00").getTime();
     const remaining = Math.max(1, Math.round((b - a) / (1000 * 60 * 60 * 24 * 7)) + 1);
     const capped = Math.min(remaining, sessions);
-    const ratio = capped / sessions;
+    // Grace weeks — full price for the first N weeks of the term, mirroring
+    // the server (server/program-pricing.ts). The server re-prices before any
+    // charge; this only keeps the number on screen from disagreeing with it.
+    const grace = Math.max(0, Math.min(sessions, Math.floor(Number((program as any)?.prorataGraceWeeks) || 0)));
+    const weeksElapsed = Math.max(0, Math.floor(
+      (a - new Date(term.startDate + "T00:00:00").getTime()) / (1000 * 60 * 60 * 24 * 7),
+    ));
+    const ratio = weeksElapsed < grace ? 1 : capped / sessions;
     const payNow = opt.pricingModel === "term_prorated" ? Math.round(opt.fullPriceCents * ratio) : opt.fullPriceCents;
     return { full: opt.fullPriceCents, payNow, discount: opt.fullPriceCents - payNow, weeklyTotal: opt.fullPriceCents, weeklyRemaining: capped };
   };

@@ -164,16 +164,26 @@ export function daysBetween(aIso: string, bIso: string): number | null {
 }
 
 export interface TermProgress {
-  /** Sessions the parent is actually buying. */
+  /** Sessions genuinely left in the term. Always the truth, even when the
+   *  price ignores it because the join falls inside the grace period. */
   sessionsRemaining: number;
   totalSessions: number;
   /** 0 = term hasn't started, so nothing has been missed. */
   weeksElapsed: number;
   status: "before" | "running" | "ended";
+  /** Full-price grace weeks in force for this programme (0 = none). */
+  graceWeeks: number;
+  /** The join still falls inside the grace period → full term price. */
+  withinGrace: boolean;
+  /** Sessions the PRICE is computed from. `totalSessions` inside the grace
+   *  period, `sessionsRemaining` after it. Kept separate from
+   *  `sessionsRemaining` so nothing ever tells a parent they're "only paying
+   *  for what's left" while charging them for the whole term. */
+  chargeableSessions: number;
 }
 
 /**
- * How much of a term is left, in sessions.
+ * How much of a term is left, in sessions — and how much of it is chargeable.
  *
  * Daniel's rule, verbatim: "If they join 5 weeks into the term and it's a
  * 10-week term, then they only pay for the 5 weeks."
@@ -185,30 +195,71 @@ export interface TermProgress {
  * The old `quoteProgram()` counted weeks *to the end date* and added one, which
  * returns 6 in that example — the parent pays for a session that has already
  * happened.
+ *
+ * ── Grace weeks (added 2026-08-01) ─────────────────────────────────────────
+ * Some programmes do not pro-rate from day one. The club's actual U4–U8 rule,
+ * confirmed by Olga: **weeks 1–5 are the full $160; pro-rata starts at week 6.**
+ * Technification pro-rates from the start, and did not change.
+ *
+ * `graceWeeks` is that boundary, counted in whole weeks from the term start:
+ *
+ *   graceWeeks = 5  →  weeks 1,2,3,4,5 full price · week 6 onward pro-rated
+ *   graceWeeks = 0  →  pro-rated from day one (every other programme)
+ *
+ * Week number is `weeksElapsed + 1`, so the grace holds while
+ * `weeksElapsed < graceWeeks`. Clamped to [0, totalSessions] so a mistyped
+ * value can never charge more than one full term.
  */
 export function termProgress(
   todayIso: string,
   termStartIso: string,
   termEndIso: string,
   totalSessions: number,
+  graceWeeks: number = 0,
 ): TermProgress | null {
   if (!Number.isInteger(totalSessions) || totalSessions <= 0) return null;
   const sinceStart = daysBetween(termStartIso, todayIso);
   const untilEnd = daysBetween(todayIso, termEndIso);
   if (sinceStart === null || untilEnd === null) return null;
 
+  // Sanitise rather than trust: null/NaN/negative/absurd all collapse to a
+  // value that cannot overcharge.
+  const grace = Math.max(0, Math.min(totalSessions, Math.floor(Number(graceWeeks) || 0)));
+
   if (sinceStart < 0) {
-    return { sessionsRemaining: totalSessions, totalSessions, weeksElapsed: 0, status: "before" };
+    return {
+      sessionsRemaining: totalSessions,
+      totalSessions,
+      weeksElapsed: 0,
+      status: "before",
+      graceWeeks: grace,
+      withinGrace: grace > 0,
+      chargeableSessions: totalSessions,
+    };
   }
   if (untilEnd < 0) {
-    return { sessionsRemaining: 0, totalSessions, weeksElapsed: totalSessions, status: "ended" };
+    // A finished term is finished. Grace never resurrects it.
+    return {
+      sessionsRemaining: 0,
+      totalSessions,
+      weeksElapsed: totalSessions,
+      status: "ended",
+      graceWeeks: grace,
+      withinGrace: false,
+      chargeableSessions: 0,
+    };
   }
   const weeksElapsed = Math.min(totalSessions, Math.floor(sinceStart / 7));
+  const sessionsRemaining = Math.max(0, totalSessions - weeksElapsed);
+  const withinGrace = weeksElapsed < grace;
   return {
-    sessionsRemaining: Math.max(0, totalSessions - weeksElapsed),
+    sessionsRemaining,
     totalSessions,
     weeksElapsed,
     status: "running",
+    graceWeeks: grace,
+    withinGrace,
+    chargeableSessions: withinGrace ? totalSessions : sessionsRemaining,
   };
 }
 

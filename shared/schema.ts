@@ -240,6 +240,13 @@ export const programs = pgTable("programs", {
   pricingModel: text("pricing_model").default("flat"),
   termPriceCents: integer("term_price_cents"),  // full term price in cents
 
+  // Weeks from the term start during which the FULL term price is charged,
+  // before pro-rata begins. The club's real U4–U8 rule (Olga, 2026-08-01):
+  // weeks 1–5 cost the full $160, pro-rata starts at week 6 → 5.
+  // 0 = pro-rate from day one, which is every other programme and the
+  // behaviour every existing row had before this column existed.
+  prorataGraceWeeks: integer("prorata_grace_weeks").notNull().default(0),
+
   // Weekly recurring pattern for term-mode programs — JSON array of slots:
   //   [{ daysOfWeek: number[], startTime: "HH:MM", endTime: "HH:MM",
   //      capacity: number, name?: string }]

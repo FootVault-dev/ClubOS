@@ -2429,13 +2429,21 @@ export async function registerRoutes(
 
     const totalSessions = program.sessionCount ?? ACADEMY_DEFAULT_SESSIONS;
     const prorated = program.pricingModel === "term_prorated" && term
-      ? academyTermProgress(nzTodayIso(), term.startDate, term.endDate, totalSessions)
+      ? academyTermProgress(
+          nzTodayIso(), term.startDate, term.endDate, totalSessions,
+          // Weeks of full price before pro-rata starts. 5 for U4–U8 (Olga,
+          // 2026-08-01); 0 — pro-rate from day one — for everything else.
+          program.prorataGraceWeeks ?? 0,
+        )
       : null;
 
     if (prorated?.status === "ended") return null;
 
+    // Price off chargeableSessions, NOT sessionsRemaining: inside the grace
+    // period they differ, and sessionsRemaining is the one that must stay
+    // honest for what the parent is told about the sessions themselves.
     const payable = prorated
-      ? academyProrate(termPriceCents, prorated.sessionsRemaining, prorated.totalSessions)
+      ? academyProrate(termPriceCents, prorated.chargeableSessions, prorated.totalSessions)
       : termPriceCents;
 
     return {
@@ -2443,6 +2451,8 @@ export async function registerRoutes(
       sessionsRemaining: prorated?.sessionsRemaining ?? totalSessions,
       totalSessions,
       termStatus: prorated?.status ?? null,
+      withinGrace: prorated?.withinGrace ?? false,
+      graceWeeks: prorated?.graceWeeks ?? 0,
     };
   }
 
@@ -3144,6 +3154,9 @@ export async function registerRoutes(
           startDate: program.startDate,
           endDate: program.endDate,
           sessionCount: program.sessionCount,
+          // The client mirrors the pro-rata maths to price each option live;
+          // without this it would show a discount the server won't honour.
+          prorataGraceWeeks: program.prorataGraceWeeks ?? 0,
         },
         term: term ? { id: term.id, year: term.year, termNumber: term.termNumber, name: term.name, startDate: term.startDate, endDate: term.endDate } : null,
         quote,
