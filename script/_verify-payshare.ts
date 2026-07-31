@@ -47,6 +47,38 @@ check(!amountsReconcile(null, 17020), "REFUSES null");
 check(!amountsReconcile("abc", 17020), "REFUSES junk");
 check(!amountsReconcile("-170.20", 17020), "REFUSES negative");
 
+// The capture model is the single most expensive thing to get wrong here, and
+// it is invisible to a type-checker: charge-on-pay compiles perfectly and takes
+// real money for bookings that never fill. These are source assertions, in the
+// spirit of deploy.sh's client-only regression guard.
+console.log("\n── capture model (authorise → group capture) ───────────────────");
+{
+  const { readFileSync } = await import("fs");
+  const { fileURLToPath } = await import("url");
+  const { dirname, join } = await import("path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const routes = readFileSync(join(here, "..", "server", "payshare-routes.ts"), "utf8");
+
+  check(/capture_method:\s*"manual"/.test(routes), "PaymentIntent uses MANUAL capture (money held, not taken)");
+  check(/requires_capture/.test(routes), "treats requires_capture as an authorised payer");
+  check(/kind:\s*"authorize"/.test(routes), "records kind:authorize on each pay");
+  check(/PAYSHARE_SESSION_CAPTURE_READY/.test(routes), "handles capture-ready");
+  check(/await captureGroup\(/.test(routes), "capture-ready actually captures the group (not a no-op)");
+  check(/kind:\s*"capture"/.test(routes), "records kind:capture at group capture");
+  check(
+    /paymentIntents\.capture\(/.test(routes),
+    "captures the Stripe holds",
+  );
+  // The confirm handler must not report a capture — that would tell PayShare the
+  // money is banked while it is still only held, and group capture would never
+  // be requested.
+  const confirmBlock = routes.slice(routes.indexOf("/confirm\""), routes.indexOf("/confirm\"") + 2200);
+  check(
+    confirmBlock.includes('kind: "authorize"') && !confirmBlock.includes('kind: "capture"'),
+    "the per-payer confirm records authorize ONLY, never capture",
+  );
+}
+
 console.log("\n── error mapping ──────────────────────────────────────────────");
 const gapErr = payshareErrorResponse(
   Object.assign(new Error("Missing required fields"), {

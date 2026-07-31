@@ -53,6 +53,87 @@ export function amountsReconcile(theirs: string | null | undefined, oursMinor: n
   return Number.isFinite(major) && major === oursMinor; // major units
 }
 
+/**
+ * Group capture — the step PayShare asks for once every share is authorised.
+ *
+ * Each participant's PaymentIntent has been sitting at `requires_capture` (money
+ * held, not taken). Here we capture every hold and report each one back as
+ * `capture`. Only after this does PayShare send the completion webhook that
+ * actually marks the booking paid.
+ *
+ * Deliberately resilient rather than transactional: one card failing to capture
+ * must not abandon the other five holds. A partial capture is a money state that
+ * needs a human, so it is logged loudly rather than silently retried forever.
+ */
+async function captureGroup(sessionId: string): Promise<void> {
+  const session = await getSessionByPayShareId(sessionId);
+  if (!session) {
+    console.error(`[PayShare] capture-ready for unknown session ${sessionId}`);
+    return;
+  }
+
+  const parts = await db
+    .select()
+    .from(payshareParticipants)
+    .where(eq(payshareParticipants.payshareSessionId, session.id));
+  const holds = parts.filter(p => p.stripePaymentIntentId && p.status !== "captured");
+
+  if (holds.length === 0) {
+    // Soft-return, never throw. The wizard self-test fires capture-ready with
+    // no Stripe objects behind it at all, and a throw there fails an otherwise
+    // green run.
+    console.log(`[PayShare] capture-ready ${sessionId} — no holds to capture (self-test, or already captured)`);
+    return;
+  }
+
+  const { stripe } = await import("./stripe");
+  const client = await getPayShareClient();
+  let captured = 0;
+  const failed: string[] = [];
+
+  for (const p of holds) {
+    try {
+      let intent = await stripe.paymentIntents.retrieve(p.stripePaymentIntentId!);
+      // Idempotent: a redelivered capture-ready must not re-capture.
+      if (intent.status === "requires_capture") {
+        intent = await stripe.paymentIntents.capture(p.stripePaymentIntentId!);
+      }
+      if (intent.status !== "succeeded") {
+        failed.push(`${p.participantId}(${intent.status})`);
+        continue;
+      }
+
+      await client.recordPayment({
+        sessionId: session.sessionId,
+        participantId: p.participantId,
+        kind: "capture",
+        amountMinor: String(p.shareAmountMinor),
+        currency: String(p.currency),
+        externalProvider: "stripe",
+        externalPaymentReference: intent.id,
+        occurredAt: new Date().toISOString(),
+      });
+
+      await db
+        .update(payshareParticipants)
+        .set({ status: "captured" })
+        .where(eq(payshareParticipants.id, p.id));
+      captured++;
+    } catch (e: any) {
+      failed.push(`${p.participantId}(${e?.message || "error"})`);
+    }
+  }
+
+  if (failed.length > 0) {
+    console.error(
+      `[PayShare] capture-ready ${sessionId}: captured ${captured}/${holds.length} — FAILED: ${failed.join(", ")}. ` +
+        `Booking group ${session.bookingGroupId} is part-captured and needs a human.`,
+    );
+  } else {
+    console.log(`[PayShare] capture-ready ${sessionId}: captured ${captured}/${holds.length} hold(s)`);
+  }
+}
+
 export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
   // ── 1. create-payment (signed, inbound) ───────────────────────────────────
   // PayShare calls this each time someone joins the group. We answer with a URL
@@ -125,12 +206,11 @@ export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
         handler: async (event) => {
           const type = String((event as any).eventType || "");
 
-          // Capture-ready: our PaymentIntents capture on confirmation, so there
-          // is never an authorised-but-uncaptured charge to sweep. Soft-return
-          // rather than throw — the wizard self-test fires this with no Stripe
-          // objects at all, and a throw there fails an otherwise-green run.
+          // Every share is authorised — capture the held funds together. This
+          // is the step that actually takes the money, and it happens once the
+          // whole group is in, never per payer.
           if (type === "PAYSHARE_SESSION_CAPTURE_READY") {
-            console.log("[PayShare] capture-ready — nothing to capture (intents capture on confirm)");
+            await captureGroup(String((event as any).sessionId || ""));
             return;
           }
 
@@ -240,6 +320,13 @@ export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
         amount: participant.shareAmountMinor,
         currency: String(participant.currency || "NZD").toLowerCase(),
         description: `PayShare share — United Sports Centre booking`,
+        // 🔴 MANUAL capture — the heart of the PayShare model. Each person
+        // AUTHORISES their share and the money is only held; every hold is
+        // captured together once PayShare says the whole group is in. Automatic
+        // capture would charge the first payer for a booking that may never
+        // fill, leaving us owing refunds — which is the exact problem the
+        // product exists to avoid.
+        capture_method: "manual",
         // Card + wallets only. `allow_redirects: "never"` blocks BNPL methods,
         // which matters twice over here: the club's surcharge doctrine, and the
         // fact that a redirect to Klarna would strand the payer outside the
@@ -277,31 +364,36 @@ export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
 
       const { stripe } = await import("./stripe");
       const intent = await stripe.paymentIntents.retrieve(participant.stripePaymentIntentId);
-      if (intent.status !== "succeeded") {
+
+      // 🔴 A manual-capture intent sits at `requires_capture` once the card is
+      // authorised — that IS success at this stage, and the money is held, not
+      // taken. `succeeded` only appears later, after the group capture. Testing
+      // for `succeeded` here would reject every payer.
+      const authorised = intent.status === "requires_capture" || intent.status === "succeeded";
+      if (!authorised) {
         return res.status(400).json({ message: "That payment hasn't completed yet." });
       }
 
-      if (participant.status !== "captured") {
+      if (participant.status === "pending") {
         const client = await getPayShareClient();
-        const common = {
+        // `authorize` ONLY. Reporting a capture here would tell PayShare the
+        // money is banked when it is still just a hold, and the group-capture
+        // step would then never be asked for.
+        await client.recordPayment({
           sessionId: session.sessionId,
           participantId: participant.participantId,
+          kind: "authorize",
           amountMinor: String(participant.shareAmountMinor),
           currency: String(participant.currency),
           externalProvider: "stripe",
-          // Stable per phase, as the contract requires — the intent id is the
-          // same object for both, and PayShare dedupes on it.
+          // Stable per phase, as the contract requires.
           externalPaymentReference: intent.id,
           occurredAt: new Date().toISOString(),
-        };
-        // Our intents authorise and capture in one step, so both phases are
-        // reported against the same charge.
-        await client.recordPayment({ ...common, kind: "authorize" });
-        await client.recordPayment({ ...common, kind: "capture" });
+        });
 
         await db
           .update(payshareParticipants)
-          .set({ status: "captured", paidAt: new Date() })
+          .set({ status: "authorized", paidAt: new Date() })
           .where(eq(payshareParticipants.id, participant.id));
       }
 

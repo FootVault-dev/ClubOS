@@ -124,7 +124,7 @@ function PayForm({
       </button>
 
       <div className="flex items-center justify-center gap-5 text-[12px]" style={{ color: T.dim }}>
-        <span className="flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" /> Your share only</span>
+        <span className="flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" /> Held, not charged yet</span>
         <span className="flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Stripe secure</span>
       </div>
     </form>
@@ -151,7 +151,10 @@ export default function VenuePaySharePage() {
     enabled: !!token,
   });
 
-  const alreadyPaid = paid || view?.status === "captured";
+  // "Done" for this payer means their card is AUTHORISED — the money is held.
+  // It is captured later, with the whole group, so `authorized` counts as done
+  // here and `captured` only shows up afterwards.
+  const alreadyPaid = paid || view?.status === "authorized" || view?.status === "captured";
   const sessionDead = view?.sessionStatus === "expired" || view?.sessionStatus === "cancelled";
 
   // Fetch the PaymentIntent once the share is loaded and actually payable.
@@ -224,11 +227,12 @@ export default function VenuePaySharePage() {
           United Sports Centre
         </div>
         <h1 className="text-[26px] sm:text-[30px] font-bold tracking-tight leading-tight">
-          {alreadyPaid ? "Your share is paid" : sessionDead ? "This booking has closed" : "Pay your share"}
+          {alreadyPaid ? "Your share is confirmed" : sessionDead ? "This booking has closed" : "Pay your share"}
         </h1>
         {!alreadyPaid && !sessionDead && (
           <p className="text-sm mt-2 leading-relaxed" style={{ color: T.muted }}>
-            You're paying your part of a group booking. Everyone pays their own share.
+            You're paying your part of a group booking. We hold your share now and only charge it once
+            everyone has paid.
           </p>
         )}
       </div>
@@ -261,8 +265,9 @@ export default function VenuePaySharePage() {
             <div className="min-w-0">
               <div className="font-semibold text-[15px] mb-1">That's your part done</div>
               <p className="text-sm leading-relaxed" style={{ color: T.muted }}>
-                The booking is confirmed once everyone in your group has paid. You'll be taken back to your
-                group to see how it's tracking.
+                Your share is held on your card, not charged yet — that happens once everyone in your group
+                has paid. If the group doesn't fill, the hold is released. You'll be taken back to your group
+                to see how it's tracking.
               </p>
             </div>
           </div>

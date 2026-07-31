@@ -1708,7 +1708,8 @@ function DetailsStep({
               <div className="text-sm font-semibold">You'll set the group up on PayShare</div>
               <div className="text-[12px] text-white/50 mt-1 leading-relaxed">
                 We'll hold your slot, then hand you over to PayShare to invite everyone. Each person pays their
-                own share back here on our checkout. The booking is confirmed once the group has finished.
+                own share back here on our checkout — held on their card, and only charged once the whole group
+                is in. If the group doesn't fill, the holds are released.
               </div>
             </div>
           )}
