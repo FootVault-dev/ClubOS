@@ -396,21 +396,24 @@ export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
   // which checks the route exists at all. It is GET because a browser lands on
   // it, and it never marks a booking paid — only the completion webhook does.
   app.get("/api/payshare/stripe-success", async (req, res) => {
+    // Whatever happens, a browser is standing here — so every path ends in a
+    // redirect back to PayShare, never a JSON body. PayShare's own probe checks
+    // exactly that (a 302 to PAYSHARE_APP_URL), because a bridge that renders
+    // JSON is a bridge that has stranded a payer.
+    const fallback = payshareEnv()?.appUrl ?? PAYSHARE_SITE_ORIGIN;
     try {
       const token = String(req.query.token ?? "").trim();
-      if (!token) {
-        // Bare probe, or a payer who arrived with nothing to identify them.
-        return res.status(200).json({ ok: true, bridge: "payshare-stripe-success" });
-      }
+      if (!token) return res.redirect(302, fallback);
+
       const r = await recordAuthorisedShare(token);
       if (!r.ok) {
-        return res.status(200).json({ ok: false, message: r.message });
+        console.warn(`[PayShare] stripe-success for ${token}: ${r.message}`);
+        return res.redirect(302, fallback);
       }
-      if (r.returnUrl) return res.redirect(302, r.returnUrl);
-      return res.redirect(302, `${PAYSHARE_SITE_ORIGIN}/book/payshare/pay/${encodeURIComponent(token)}`);
+      return res.redirect(302, r.returnUrl || fallback);
     } catch (e: any) {
       console.error("[PayShare] stripe-success failed:", e);
-      res.status(500).json({ ok: false, message: e.message });
+      return res.redirect(302, fallback);
     }
   });
 }
