@@ -90,6 +90,87 @@ export async function getPayShareClient() {
   return clientCache;
 }
 
+// ── createSession (deliberately not via the SDK) ────────────────────────────
+// The SDK's createSession throws `new Error(json.error?.message)` and drops the
+// rest of the body on the floor — no `code`, no `details.gaps`. The integration
+// contract requires us to answer a CONTRACT_VIOLATION with those gaps, and a
+// paused integration must not read as an outage, so both need the real body.
+// Everything else (signature verification, the hook handlers, recordPayment)
+// still goes through the SDK, which handles those well.
+
+export type PayShareApiFailure = Error & {
+  status: number;
+  code: string | null;
+  gaps: unknown;
+  requestId: string | null;
+};
+
+export type CreateSessionInput = {
+  amountMinor: string;
+  currency: string;
+  merchantOrderRef?: string;
+  platformContextId?: string | null;
+  successReturnUrl?: string;
+  cancelReturnUrl?: string;
+  hostEmail?: string | null;
+  metadata?: Record<string, unknown>;
+  orderSummary?: Record<string, unknown>;
+};
+
+export async function createPayShareSession(
+  input: CreateSessionInput,
+  opts: { idempotencyKey: string },
+): Promise<{ sessionId: string; sessionUrl: string; hostToken?: string; expiresAt?: string }> {
+  const env = payshareEnv();
+  if (!env) throw new Error("PayShare is not configured");
+
+  const url = `${env.apiBase}/api/v1/payments/sessions${env.liveMode ? "?mode=live" : ""}`;
+  const body: Record<string, unknown> = {
+    integrationId: env.integrationId,
+    amountMinor: Number.parseInt(input.amountMinor, 10),
+    // Required on every session, uppercase ISO. There is no default anywhere in
+    // this file on purpose.
+    currency: input.currency.toUpperCase(),
+  };
+  if (input.merchantOrderRef) body.merchantOrderRef = input.merchantOrderRef;
+  if (input.platformContextId) body.platformContextId = input.platformContextId;
+  if (input.successReturnUrl) body.successReturnUrl = input.successReturnUrl;
+  if (input.cancelReturnUrl) body.cancelReturnUrl = input.cancelReturnUrl;
+  if (input.hostEmail) body.hostEmail = input.hostEmail;
+  if (input.metadata) body.metadata = input.metadata;
+  if (input.orderSummary) body.orderSummary = input.orderSummary;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-PayShare-API-Key": env.apiKey,
+      "X-PayShare-Contract": PAYSHARE_CONTRACT,
+      "Idempotency-Key": opts.idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok || !json?.success || !json?.sessionId || !json?.sessionUrl) {
+    const err = new Error(
+      json?.error?.message || `PayShare create session failed (${res.status})`,
+    ) as PayShareApiFailure;
+    err.status = res.status;
+    err.code = json?.error?.code ?? null;
+    err.gaps = json?.error?.details?.gaps;
+    err.requestId = json?.requestId ?? null;
+    throw err;
+  }
+
+  return {
+    sessionId: json.sessionId,
+    sessionUrl: json.sessionUrl,
+    ...(json.hostToken ? { hostToken: json.hostToken } : {}),
+    ...(json.expiresAt ? { expiresAt: json.expiresAt } : {}),
+  };
+}
+
 // ── error mapping ───────────────────────────────────────────────────────────
 // PayShare answers a malformed createSession with CONTRACT_VIOLATION and a list
 // of missing fields. That is our bug, not an outage: it must surface as a 400
@@ -103,12 +184,27 @@ export type PayShareErrorResponse = {
 
 export function payshareErrorResponse(e: any): PayShareErrorResponse {
   const code: string | undefined = e?.code ?? e?.body?.error?.code ?? e?.error?.code;
-  const gaps = e?.details?.gaps ?? e?.body?.error?.details?.gaps ?? e?.error?.details?.gaps;
+  const gaps = e?.gaps ?? e?.details?.gaps ?? e?.body?.error?.details?.gaps ?? e?.error?.details?.gaps;
   const message: string = e?.body?.error?.message ?? e?.message ?? "PayShare request failed";
 
+  // A contract gap is OUR bug — a field we failed to send. It must come back as
+  // a 400 carrying the gaps so the self-test can name the missing field. A 500
+  // here would read as "PayShare is down" and send someone debugging the wrong
+  // end of the integration.
   if (code === "CONTRACT_VIOLATION" || gaps !== undefined) {
     return { status: 400, body: { error: { code: "CONTRACT_VIOLATION", message, details: { gaps: gaps ?? [] } } } };
   }
+
+  // Rollout is Paused (or the integration is otherwise switched off at their
+  // end). Nothing is broken and nothing is missing — the option is simply not
+  // open yet, so it must not read as a fault on either side.
+  if (code === "INTEGRATION_PAUSED") {
+    return {
+      status: 503,
+      body: { error: { code, message: "PayShare isn't accepting new groups right now." } },
+    };
+  }
+
   // Any other 4xx from PayShare is still our request's fault, not a server fault.
   const upstream = Number(e?.status ?? e?.statusCode);
   if (Number.isFinite(upstream) && upstream >= 400 && upstream < 500) {
@@ -288,6 +384,54 @@ export async function rememberEvent(
 
 export function newPayToken(): string {
   return randomBytes(24).toString("hex");
+}
+
+// ── expiry sweep ────────────────────────────────────────────────────────────
+// Player Pay holds a slot for 48h and releases it itself. A PayShare hold is
+// not ours to time: PayShare decides when a group is dead, so its expiresAt is
+// authoritative and we only fall back when it gives us none. Releasing a pitch
+// while PayShare still has the group live would sell the same slot twice.
+
+const FALLBACK_HOLD_MS = 48 * 60 * 60 * 1000;
+
+export async function sweepExpiredPayShareSessions(orgId: number): Promise<number> {
+  const now = Date.now();
+  const open = await db
+    .select()
+    .from(payshareSessions)
+    .where(and(eq(payshareSessions.organizationId, orgId), eq(payshareSessions.status, "open")));
+
+  let released = 0;
+  for (const s of open) {
+    const deadline = s.expiresAt ? new Date(s.expiresAt).getTime() : new Date(s.createdAt).getTime() + FALLBACK_HOLD_MS;
+    if (deadline > now) continue;
+
+    // Did anyone already pay? Then this is not a clean expiry. Deleting the
+    // booking would leave real people charged for a pitch they no longer have,
+    // so the hold stays and a human decides: refund them, or confirm it anyway.
+    const paid = await db
+      .select()
+      .from(payshareParticipants)
+      .where(and(eq(payshareParticipants.payshareSessionId, s.id), eq(payshareParticipants.status, "captured")));
+    if (paid.length > 0) {
+      await db.update(payshareSessions).set({ status: "expired" }).where(eq(payshareSessions.id, s.id));
+      console.error(
+        `[PayShare] session ${s.sessionId} expired with ${paid.length} share(s) ALREADY PAID — booking group ` +
+          `${s.bookingGroupId} left held for a human to resolve (refund or confirm).`,
+      );
+      continue;
+    }
+
+    if (s.bookingGroupId) {
+      await db
+        .delete(facilityBookings)
+        .where(and(eq(facilityBookings.bookingGroupId, s.bookingGroupId), eq(facilityBookings.status, "pending")));
+    }
+    await db.update(payshareSessions).set({ status: "expired" }).where(eq(payshareSessions.id, s.id));
+    released++;
+  }
+  if (released > 0) console.log(`[PayShare] released ${released} expired hold(s) for org ${orgId}`);
+  return released;
 }
 
 // ── session + participant persistence ───────────────────────────────────────

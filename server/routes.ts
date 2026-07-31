@@ -102,11 +102,12 @@ import { registerShopRoutes, finalizeShopOrderPaid, finalizeShopSharePaid } from
 import { registerPayShareRoutes } from "./payshare-routes";
 import {
   PAYSHARE_SITE_ORIGIN,
+  createPayShareSession,
   getBookingByRef,
-  getPayShareClient,
   isPayShareConfigured,
   payshareErrorResponse,
   recordSession as recordPayShareSession,
+  sweepExpiredPayShareSessions,
 } from "./payshare";
 import { registerMediaRoutes } from "./media-routes";
 import { registerMarketingRoutes } from "./marketing/routes";
@@ -6795,6 +6796,8 @@ export async function registerRoutes(
       }
       // Release any expired Player Pay holds so freed slots show as available.
       try { await splitPay.sweepExpiredBookingSplits(orgId); } catch (e) { console.error("[Venue avail] sweep failed:", e); }
+      // Same for dead PayShare groups — but only past PayShare's own deadline.
+      try { await sweepExpiredPayShareSessions(orgId); } catch (e) { console.error("[Venue avail] payshare sweep failed:", e); }
       const bookings = await storage.getFacilityBookingsForDates(facilityId, dates);
       res.json(bookings.map(b => ({
         date: b.bookingDate,
@@ -7244,8 +7247,9 @@ export async function registerRoutes(
       const parsed = checkoutSchema.parse(req.body);
       assertItemsBookable(parsed.items);
 
-      // Release dead Player-Pay holds first so they can't block a live booking.
-      try { await splitPay.sweepExpiredBookingSplits(orgId); } catch (e) { console.error("[PayShare] sweep failed:", e); }
+      // Release dead holds of BOTH kinds first so neither blocks a live booking.
+      try { await splitPay.sweepExpiredBookingSplits(orgId); } catch (e) { console.error("[PayShare] split sweep failed:", e); }
+      try { await sweepExpiredPayShareSessions(orgId); } catch (e) { console.error("[PayShare] sweep failed:", e); }
 
       const quote = await buildQuote(orgId, parsed.items, parsed.discountCode);
       const groupId = `vbg_${crypto.randomBytes(8).toString("hex")}`;
@@ -7312,12 +7316,13 @@ export async function registerRoutes(
       const origin = PAYSHARE_SITE_ORIGIN;
       let session;
       try {
-        const client = await getPayShareClient();
-        session = await client.createSession({
+        session = await createPayShareSession({
           amountMinor: booking.amountMinor,
           currency: booking.currency,
           merchantOrderRef: groupId,
           platformContextId: booking.platformContextId,
+          // Checkout knows who is booking, so PayShare can address the organiser.
+          hostEmail: booking.customerEmail,
           successReturnUrl: `${origin}/book/success?group=${encodeURIComponent(groupId)}&via=payshare`,
           cancelReturnUrl: `${origin}/book?cancelled=payshare`,
           orderSummary: booking.orderSummary,

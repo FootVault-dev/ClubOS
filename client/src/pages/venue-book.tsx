@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Calendar as CalendarIcon, Clock, MapPin, Plus, Trash2, ArrowLeft, ArrowRight,
   CheckCircle2, Lightbulb, Users, ShoppingCart, Loader2, Lock, X,
-  ChevronLeft, ChevronRight, Shield, Minus, ScrollText,
+  ChevronLeft, ChevronRight, Shield, Minus, ScrollText, Share2,
 } from "lucide-react";
 import { FacilityCarousel } from "@/components/FacilityCarousel";
 import { cellsOverlap, QUARTER_POSITIONS, type FieldSize } from "@shared/field-cells";
@@ -426,8 +426,9 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
   const [checkout, setCheckout] = useState<{ clientSecret: string; bookingGroupId: string; quote: Quote } | null>(null);
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkoutErr, setCheckoutErr] = useState<string | null>(null);
-  // Player Pay: split the booking across a group (each pays their own share).
-  const [payMode, setPayMode] = useState<"full" | "split">("full");
+  // Two ways to split: Player Pay (ours — a squad size up front, our own hub)
+  // and PayShare (theirs — they run the invites and decide the shares).
+  const [payMode, setPayMode] = useState<"full" | "split" | "payshare">("full");
   const [splitCount, setSplitCount] = useState(4);
   const [, setNavLocation] = useLocation();
 
@@ -450,6 +451,22 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
         halfPosition: c.halfPosition,
         addons: c.addons,
       }));
+
+      // PayShare: reserve the slots, open a PayShare session, hand the organiser
+      // over to PayShare's own hub. A full page load, not a client route — the
+      // session lives on their domain.
+      if (payMode === "payshare" && !isSubscription) {
+        const r = await fetch(`/api/payshare/start-split`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orgId: organization.id, customer, items, discountCode: discountCode.trim() || undefined, waiverAccepted: waiverAgreed, attributionSource }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error?.message || data.message || "Couldn't start PayShare");
+        if (!data.sessionUrl) throw new Error("PayShare didn't return a session link");
+        window.location.href = data.sessionUrl;
+        return;
+      }
 
       // Player Pay: reserve the slots, create a split, and hand off to the hub.
       if (payMode === "split" && !isSubscription) {
@@ -548,6 +565,7 @@ function BookingFlow({ resolved }: { resolved: ResolveResp }) {
               loading={checkingOut}
               error={checkoutErr}
               allowSplit={!cart.some(c => c.paymentMode === "weekly") && !!(settings as any).splitEnabled}
+              allowPayShare={!cart.some(c => c.paymentMode === "weekly") && !!(settings as any).payshareEnabled}
               payMode={payMode}
               setPayMode={setPayMode}
               splitCount={splitCount}
@@ -1563,7 +1581,7 @@ function ReviewStep({
 // ============ STEP 3 — Details ============
 function DetailsStep({
   customer, setCustomer, waiverAgreed, setWaiverAgreed, brand, onBack, onSubmit, loading, error,
-  allowSplit, payMode, setPayMode, splitCount, setSplitCount, totalCents,
+  allowSplit, allowPayShare, payMode, setPayMode, splitCount, setSplitCount, totalCents,
 }: {
   customer: { name: string; email: string; phone: string; club: string; notes: string };
   setCustomer: (c: { name: string; email: string; phone: string; club: string; notes: string }) => void;
@@ -1575,8 +1593,9 @@ function DetailsStep({
   loading: boolean;
   error: string | null;
   allowSplit: boolean;
-  payMode: "full" | "split";
-  setPayMode: (m: "full" | "split") => void;
+  allowPayShare: boolean;
+  payMode: "full" | "split" | "payshare";
+  setPayMode: (m: "full" | "split" | "payshare") => void;
   splitCount: number;
   setSplitCount: (n: number) => void;
   totalCents: number;
@@ -1650,8 +1669,10 @@ function DetailsStep({
         </label>
       </div>
 
-      {/* Payment method — pay in full now, or split across the group (Player Pay) */}
-      {allowSplit && (
+      {/* Payment method — pay in full, or split it. Two split options can be on
+          at once (Player Pay is ours, PayShare is theirs), each behind its own
+          venue switch, so either can be turned off without touching the other. */}
+      {(allowSplit || allowPayShare) && (
         <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 mb-5">
           <div className="text-sm font-semibold mb-3">How would you like to pay?</div>
           <div className="grid gap-3">
@@ -1662,6 +1683,7 @@ function DetailsStep({
               <div className="font-semibold text-sm">Pay in full</div>
               <div className="text-[12px] text-white/50 mt-0.5">One payment of {money(totalCents)} now.</div>
             </button>
+            {allowSplit && (
             <button type="button" onClick={() => setPayMode("split")}
               className="rounded-xl px-4 py-3 text-left transition-all border"
               style={{ background: payMode === "split" ? `${brand}1f` : "rgba(255,255,255,0.02)", borderColor: payMode === "split" ? brand : "rgba(255,255,255,0.10)" }}
@@ -1669,7 +1691,27 @@ function DetailsStep({
               <div className="font-semibold text-sm flex items-center gap-2"><Users className="w-4 h-4" style={{ color: brand }} /> Player Pay — split across your group</div>
               <div className="text-[12px] text-white/50 mt-0.5">Everyone pays their own share on their own card. The booking holds until your group has paid.</div>
             </button>
+            )}
+            {allowPayShare && (
+            <button type="button" onClick={() => setPayMode("payshare")}
+              className="rounded-xl px-4 py-3 text-left transition-all border"
+              style={{ background: payMode === "payshare" ? `${brand}1f` : "rgba(255,255,255,0.02)", borderColor: payMode === "payshare" ? brand : "rgba(255,255,255,0.10)" }}
+              data-testid="venue-pay-payshare">
+              <div className="font-semibold text-sm flex items-center gap-2"><Share2 className="w-4 h-4" style={{ color: brand }} /> Split with PayShare</div>
+              <div className="text-[12px] text-white/50 mt-0.5">Send one link to your group. PayShare works out the shares and tracks who's paid.</div>
+            </button>
+            )}
           </div>
+
+          {payMode === "payshare" && (
+            <div className="mt-3 rounded-xl p-4" style={{ background: `${brand}12`, border: `1px solid ${brand}3a` }}>
+              <div className="text-sm font-semibold">You'll set the group up on PayShare</div>
+              <div className="text-[12px] text-white/50 mt-1 leading-relaxed">
+                We'll hold your slot, then hand you over to PayShare to invite everyone. Each person pays their
+                own share back here on our checkout. The booking is confirmed once the group has finished.
+              </div>
+            </div>
+          )}
 
           {payMode === "split" && (
             <div className="mt-3 rounded-xl p-4" style={{ background: `${brand}12`, border: `1px solid ${brand}3a` }}>
