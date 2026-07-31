@@ -77,6 +77,14 @@ Migration: `migrations/2026-07-27_sporty_environment.sql` (applied + verified).
 
 ### Data readiness (the real blocker, not the code)
 
+**2026-07-31 re-run: 16 of 126 ready** (110 needs_data). Blockers: 69 ambiguous
+ethnicity group · 29 ethnicity selection required · 27 address incomplete · 26 no
+address · 15 nationality · 3 country of birth · 1 ambiguous selection. Read it
+against the 27 July baseline below: registrants rose by 10 and ready rose by 8,
+while **every legacy blocker count stood still**. That is the structured-identity
+form working exactly as designed — it fixes the NEXT registration and never the
+last one. The 110 are a backfill campaign, not a code problem.
+
 `readiness` on 2026-07-27: **8 of 116** confirmed academy registrants would push
 cleanly. Blockers: 68 bare "European" ethnicity · 29 need a specific ethnicity
 selection · 53 address problems (26 no address, 27 incomplete) · 14 nationality
@@ -143,11 +151,24 @@ min-selection rules. Keep using it — tests must never depend on their UAT bein
 
 ## Go-live checklist (after deeds signed)
 
-- [ ] `SPORTY_BASE_URL=https://www.sporty.co.nz` + live keys in prod Fly secrets
-- [ ] Deploy per D16 doctrine: re-read memory `reference_clubos_prod_state`, union-merge
-      whatever prod runs into `feat/sporty-sync`, deploy from a clean detached
-      worktree, probe `/api/admin/sporty/overview` → 401
-- [ ] Migration already applied (2026-07-21) — verify: `SELECT to_regclass('sporty_sync_state')`
+🟢 **No deploy is required — verified 2026-07-31.** The post-UAT-fix code is ALREADY on
+prod. Proof: the public vocabulary endpoint
+`/api/public/academy/programmes/u4-u8` serves 247 countries / their 7 ethnicity groups /
+15 regions with **Samoa = `SAM`, Tonga `TGA`, Germany `GER`, South Africa `RSA`** — FIFA/IOC
+codes that only exist in the generated vocabulary shipped with the 27 July fixes. Confirmed
+structurally too: `8c31eeb` (structured identity, deployed v373) is a **descendant of
+`15a4576`** (the UAT fixes), so exact-match reference lookup, environment namespacing,
+region derivation and the FIFA-code path are all live. `/api/admin/sporty/overview` → 401.
+**Going live is a credentials change, not a release** — which also means it does NOT drag
+any other branch's in-flight work onto prod.
+
+- [ ] `SPORTY_BASE_URL=https://www.sporty.co.nz` + live keys as prod **Fly secrets**
+      (nothing can send today: prod holds no `SPORTY_*` secrets at all)
+- [ ] Re-probe `/api/admin/sporty/overview` → 401 after the secrets restart
+- [ ] Migration already applied (2026-07-21 + 2026-07-27 environment) — verify:
+      `SELECT to_regclass('sporty_sync_state')`
+- [ ] 🔴 Confirm the environment resolves to `prod` for the live host BEFORE the first push —
+      a UAT SportyId reaching the real register is the one unrecoverable failure here
 - [ ] First live push: ONE player, verify with NZF, then the season
 - [ ] Consider `SPORTY_AUTOSYNC=1` once a full manual season-push has been verified
 - [ ] Tab stays super-admin-only until Daniel opens it (delete "sporty" from
