@@ -69,14 +69,21 @@ console.log("\n── capture model (authorise → group capture) ────�
     /paymentIntents\.capture\(/.test(routes),
     "captures the Stripe holds",
   );
-  // The confirm handler must not report a capture — that would tell PayShare the
+  // The per-payer path must not report a capture — that would tell PayShare the
   // money is banked while it is still only held, and group capture would never
-  // be requested.
-  const confirmBlock = routes.slice(routes.indexOf("/confirm\""), routes.indexOf("/confirm\"") + 2200);
+  // be requested. Anchored on the function itself rather than a byte window, so
+  // a refactor moves the check instead of silently emptying it.
+  const perPayerStart = routes.indexOf("async function recordAuthorisedShare");
+  check(perPayerStart > -1, "recordAuthorisedShare (the per-payer path) exists");
+  const perPayer = perPayerStart > -1 ? routes.slice(perPayerStart) : "";
   check(
-    confirmBlock.includes('kind: "authorize"') && !confirmBlock.includes('kind: "capture"'),
-    "the per-payer confirm records authorize ONLY, never capture",
+    perPayer.includes('kind: "authorize"') && !perPayer.includes('kind: "capture"'),
+    "the per-payer path records authorize ONLY, never capture",
   );
+  // …and the group path is the only place a capture is reported.
+  const groupStart = routes.indexOf("async function captureGroup");
+  const groupBlock = groupStart > -1 ? routes.slice(groupStart, routes.indexOf("export function registerPayShareRoutes")) : "";
+  check(groupBlock.includes('kind: "capture"'), "captureGroup is the only place capture is recorded");
 }
 
 console.log("\n── error mapping ──────────────────────────────────────────────");

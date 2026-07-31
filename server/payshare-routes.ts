@@ -27,6 +27,7 @@ import {
   getPayShareClient,
   getSessionByPayShareId,
   payshareEnv,
+  recordSession,
   rememberEvent,
   upsertParticipant,
 } from "./payshare";
@@ -146,7 +147,7 @@ export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
     if (!env) return res.status(503).json({ error: { code: "INTERNAL_ERROR", message: "PayShare is not configured" } });
 
     try {
-      const { handleCreatePaymentRequest, platformHookError } = await import("@payshare/platform-sdk");
+      const { handleCreatePaymentRequest } = await import("@payshare/platform-sdk");
       const rawBody = (req.rawBody as Buffer | undefined)?.toString("utf8") ?? JSON.stringify(req.body ?? {});
 
       const result = await handleCreatePaymentRequest({
@@ -154,10 +155,32 @@ export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
         headers: { get: (name: string) => req.header(name) ?? null },
         signingSecret: env.createPaymentSigningSecret,
         handler: async (input) => {
-          const session = await getSessionByPayShareId(input.sessionId);
+          // 🔴 An unknown session must still answer 2xx with a redirectUrl —
+          // the contract reserves 401 for a bad signature alone, and the wizard
+          // self-test signs a create-payment for a session we never started.
+          // So adopt it, with NO bookingGroupId: a completion for an orphan
+          // confirms nothing, because the webhook needs a group to confirm.
+          // The signature is already verified by this point, so only PayShare
+          // can reach here.
+          let session = await getSessionByPayShareId(input.sessionId);
           if (!session) {
-            const e = platformHookError("BOOKING_NOT_FOUND", "Unknown PayShare session", 404);
-            throw Object.assign(new Error(e.json.error.message), { payshareHook: e });
+            console.log(`[PayShare] adopting unknown session ${input.sessionId} (ref ${input.merchantOrderRef ?? "—"})`);
+            try {
+              session = await recordSession({
+                organizationId: 4, // United Sports Centre
+                sessionId: input.sessionId,
+                bookingGroupId: null,
+                amountMinor: input.shareAmountMinor,
+                currency: input.currency,
+                sessionUrl: null,
+                merchantOrderRef: input.merchantOrderRef,
+                expiresAt: null,
+              });
+            } catch {
+              // Lost the race with a concurrent hook — re-read theirs.
+              session = await getSessionByPayShareId(input.sessionId);
+            }
+            if (!session) throw new Error("Could not open a PayShare session record");
           }
 
           const participant = await upsertParticipant({
@@ -357,50 +380,91 @@ export function registerPayShareRoutes(app: Express, deps: PayShareRouteDeps) {
   // booking — only the completion webhook does that.
   app.post("/api/payshare/pay/:token/confirm", async (req, res) => {
     try {
-      const found = await getParticipantByToken(req.params.token);
-      if (!found) return res.status(404).json({ message: "This payment link isn't valid." });
-      const { participant, session } = found;
-      if (!participant.stripePaymentIntentId) return res.status(400).json({ message: "No payment to confirm." });
-
-      const { stripe } = await import("./stripe");
-      const intent = await stripe.paymentIntents.retrieve(participant.stripePaymentIntentId);
-
-      // 🔴 A manual-capture intent sits at `requires_capture` once the card is
-      // authorised — that IS success at this stage, and the money is held, not
-      // taken. `succeeded` only appears later, after the group capture. Testing
-      // for `succeeded` here would reject every payer.
-      const authorised = intent.status === "requires_capture" || intent.status === "succeeded";
-      if (!authorised) {
-        return res.status(400).json({ message: "That payment hasn't completed yet." });
-      }
-
-      if (participant.status === "pending") {
-        const client = await getPayShareClient();
-        // `authorize` ONLY. Reporting a capture here would tell PayShare the
-        // money is banked when it is still just a hold, and the group-capture
-        // step would then never be asked for.
-        await client.recordPayment({
-          sessionId: session.sessionId,
-          participantId: participant.participantId,
-          kind: "authorize",
-          amountMinor: String(participant.shareAmountMinor),
-          currency: String(participant.currency),
-          externalProvider: "stripe",
-          // Stable per phase, as the contract requires.
-          externalPaymentReference: intent.id,
-          occurredAt: new Date().toISOString(),
-        });
-
-        await db
-          .update(payshareParticipants)
-          .set({ status: "authorized", paidAt: new Date() })
-          .where(eq(payshareParticipants.id, participant.id));
-      }
-
-      res.json({ ok: true, returnUrl: participant.returnUrl || null });
+      const r = await recordAuthorisedShare(req.params.token);
+      if (!r.ok) return res.status(r.status).json({ message: r.message });
+      res.json({ ok: true, returnUrl: r.returnUrl });
     } catch (e: any) {
       console.error("[PayShare] confirm failed:", e);
       res.status(500).json({ message: e.message });
     }
   });
+
+  // The PSP success bridge, at the conventional path PayShare probes for.
+  // Our own pay page normally reports the authorisation over fetch and never
+  // leaves the tab, so this exists for two other reasons: a redirect-style
+  // return (a 3DS hop that lands the payer back here), and the wizard self-test,
+  // which checks the route exists at all. It is GET because a browser lands on
+  // it, and it never marks a booking paid — only the completion webhook does.
+  app.get("/api/payshare/stripe-success", async (req, res) => {
+    try {
+      const token = String(req.query.token ?? "").trim();
+      if (!token) {
+        // Bare probe, or a payer who arrived with nothing to identify them.
+        return res.status(200).json({ ok: true, bridge: "payshare-stripe-success" });
+      }
+      const r = await recordAuthorisedShare(token);
+      if (!r.ok) {
+        return res.status(200).json({ ok: false, message: r.message });
+      }
+      if (r.returnUrl) return res.redirect(302, r.returnUrl);
+      return res.redirect(302, `${PAYSHARE_SITE_ORIGIN}/book/payshare/pay/${encodeURIComponent(token)}`);
+    } catch (e: any) {
+      console.error("[PayShare] stripe-success failed:", e);
+      res.status(500).json({ ok: false, message: e.message });
+    }
+  });
+}
+
+/**
+ * One payer's share has been authorised on our Stripe — tell PayShare.
+ *
+ * Shared by the pay page's confirm call and the redirect-style success bridge
+ * so the two can never drift on the thing that matters: `authorize` is recorded,
+ * never `capture`. Reporting a capture here would tell PayShare the money is
+ * banked while it is still only a hold, and the group-capture step would then
+ * never be asked for.
+ */
+async function recordAuthorisedShare(
+  token: string,
+): Promise<{ ok: boolean; status: number; message?: string; returnUrl: string | null }> {
+  const found = await getParticipantByToken(token);
+  if (!found) return { ok: false, status: 404, message: "This payment link isn't valid.", returnUrl: null };
+  const { participant, session } = found;
+  if (!participant.stripePaymentIntentId) {
+    return { ok: false, status: 400, message: "No payment to confirm.", returnUrl: null };
+  }
+
+  const { stripe } = await import("./stripe");
+  const intent = await stripe.paymentIntents.retrieve(participant.stripePaymentIntentId);
+
+  // 🔴 A manual-capture intent sits at `requires_capture` once the card is
+  // authorised — that IS success at this stage, and the money is held, not
+  // taken. `succeeded` only appears later, after the group capture. Testing for
+  // `succeeded` here would reject every payer.
+  const authorised = intent.status === "requires_capture" || intent.status === "succeeded";
+  if (!authorised) {
+    return { ok: false, status: 400, message: "That payment hasn't completed yet.", returnUrl: null };
+  }
+
+  if (participant.status === "pending") {
+    const client = await getPayShareClient();
+    await client.recordPayment({
+      sessionId: session.sessionId,
+      participantId: participant.participantId,
+      kind: "authorize",
+      amountMinor: String(participant.shareAmountMinor),
+      currency: String(participant.currency),
+      externalProvider: "stripe",
+      // Stable per phase, as the contract requires.
+      externalPaymentReference: intent.id,
+      occurredAt: new Date().toISOString(),
+    });
+
+    await db
+      .update(payshareParticipants)
+      .set({ status: "authorized", paidAt: new Date() })
+      .where(eq(payshareParticipants.id, participant.id));
+  }
+
+  return { ok: true, status: 200, returnUrl: participant.returnUrl || null };
 }

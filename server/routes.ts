@@ -107,6 +107,7 @@ import {
   isPayShareConfigured,
   payshareErrorResponse,
   recordSession as recordPayShareSession,
+  resolveWizardProbeBooking,
   sweepExpiredPayShareSessions,
 } from "./payshare";
 import { registerMediaRoutes } from "./media-routes";
@@ -7232,6 +7233,57 @@ export async function registerRoutes(
   // option ever appears, extract it then.
   app.post("/api/payshare/start-split", async (req, res) => {
     try {
+      // ── the wizard self-test ──────────────────────────────────────────────
+      // PayShare probes this route with ref "payshare-wizard-probe" before any
+      // real booking exists, and expects a session URL back. It has no cart, so
+      // it must NOT go through the venue flag, the quote or the slot
+      // reservation — it deliberately reserves nothing and books nothing.
+      const probeRef = String(req.body?.ref ?? req.body?.bookingId ?? req.body?.merchantOrderRef ?? "");
+      const probeBooking = resolveWizardProbeBooking(probeRef);
+      if (probeBooking) {
+        if (!isPayShareConfigured()) {
+          return res.status(400).json({ message: "PayShare isn't configured." });
+        }
+        try {
+          const probeSession = await createPayShareSession({
+            amountMinor: probeBooking.amountMinor,
+            currency: probeBooking.currency,
+            merchantOrderRef: probeBooking.bookingId,
+            platformContextId: probeBooking.platformContextId,
+            successReturnUrl: `${PAYSHARE_SITE_ORIGIN}/book/success?via=payshare`,
+            cancelReturnUrl: `${PAYSHARE_SITE_ORIGIN}/book?cancelled=payshare`,
+            orderSummary: probeBooking.orderSummary,
+            metadata: { wizardProbe: "1" },
+          }, { idempotencyKey: `probe-${probeRef}-${Date.now()}` });
+
+          // Recorded with NO bookingGroupId, so a completion for it can never
+          // confirm a real booking — the webhook needs a group to confirm.
+          await recordPayShareSession({
+            organizationId: probeBooking.organizationId,
+            sessionId: probeSession.sessionId,
+            bookingGroupId: null,
+            amountMinor: probeBooking.amountMinor,
+            currency: probeBooking.currency,
+            sessionUrl: probeSession.sessionUrl,
+            merchantOrderRef: probeBooking.bookingId,
+            expiresAt: probeSession.expiresAt ? new Date(probeSession.expiresAt) : null,
+          }).catch(() => {});
+
+          return res.json({
+            mode: "payshare",
+            probe: true,
+            sessionId: probeSession.sessionId,
+            sessionUrl: probeSession.sessionUrl,
+          });
+        } catch (e: any) {
+          // A readable PayShare error is an acceptable self-test answer; a 500
+          // is not, because it hides which end is at fault.
+          const mapped = payshareErrorResponse(e);
+          console.error("[PayShare probe] createSession:", mapped.status, JSON.stringify(mapped.body));
+          return res.status(mapped.status).json(mapped.body);
+        }
+      }
+
       const orgId = parseInt(String(req.body?.orgId ?? ""));
       if (!orgId) return res.status(400).json({ message: "orgId required" });
       if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ message: "Stripe not configured" });
