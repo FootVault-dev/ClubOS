@@ -17,7 +17,7 @@ import AdminCampDetail from "@/pages/admin-camp-detail";
 import AdminSessionRoll from "@/pages/admin-session-roll";
 import AdminRegistrations from "@/pages/admin-registrations";
 import AdminContacts from "@/pages/admin-contacts";
-import AdminContactDetail from "@/pages/admin-contact-detail";
+import AdminPersonDetail from "@/pages/admin-person-detail";
 import AdminMailer from "@/pages/admin-mailer";
 import CufcMailer from "@/pages/cufc-mailer";
 import Predictor from "@/pages/predictor";
@@ -548,8 +548,19 @@ function AdminRouter() {
       <Route path="/admin/terms" component={GymnasticsTerms} />
       <Route path="/admin/registrations" component={AdminRegistrations} />
       <Route path="/admin/contacts" component={AdminContacts} />
-      <Route path="/admin/contacts/parent/:id" component={AdminContactDetail} />
-      <Route path="/admin/contacts/player/:id" component={AdminContactDetail} />
+      {/* One person page for both people tables, keyed `contact-{id}` /
+          `child-{id}`. The two legacy URLs below redirect into it so existing
+          bookmarks and links in old emails keep working. `parent/:id` always
+          meant a `contacts` row (it served children too); `player/:id` only
+          ever resolved a `children` row — it 404'd on every academy child,
+          which is the bug this replaces. */}
+      <Route path="/admin/people/:key" component={AdminPersonDetail} />
+      <Route path="/admin/contacts/parent/:id">
+        {(params: any) => <Redirect to={`/admin/people/contact-${params.id}`} />}
+      </Route>
+      <Route path="/admin/contacts/player/:id">
+        {(params: any) => <Redirect to={`/admin/people/child-${params.id}`} />}
+      </Route>
       <Route path="/admin/mailer" component={AdminMailer} />
       <Route path="/admin/cufc-mailer" component={CufcMailer} />
       <Route path="/admin/predictor" component={Predictor} />

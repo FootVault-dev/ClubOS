@@ -39,7 +39,12 @@ const TYPE_META: Record<string, TypeMeta> = {
   program:          { label: "Programs / camps",     icon: Calendar,       ws: null,                  url: r => programDetailPath({ id: Number(r.id), type: r.meta }, r.orgSlug) },
   discount:         { label: "Discounts",            icon: Tag,            ws: null,                  url: r => `/admin/discounts/${r.id}` },
   billboard_deal:   { label: "Billboard deals",      icon: Building2,      ws: "united-sports-group", url: () => `/admin/sponsorship` },
-  contact:          { label: "Contacts",             icon: Users,          ws: "christchurch-united", url: r => `/admin/contacts/${r.meta === "player" ? "player" : "parent"}/${r.id}` },
+  // Every contact — player or guardian — is a `contacts` row, so the key is
+  // always contact-{id}. Routing a player here to /admin/contacts/player/{id}
+  // sent a contacts id to an endpoint that reads the `children` table, so
+  // clicking an academy child in search returned "Player not found".
+  contact:          { label: "Contacts",             icon: Users,          ws: "christchurch-united", url: r => `/admin/people/contact-${r.id}` },
+  camp_child:       { label: "Camp children",        icon: Users,          ws: "christchurch-united", url: r => `/admin/people/child-${r.id}` },
   registration:     { label: "Registrations",        icon: ClipboardCheck, ws: "christchurch-united", url: () => `/admin/registrations` },
 };
 

@@ -112,6 +112,7 @@ import {
 } from "./payshare";
 import { registerMediaRoutes } from "./media-routes";
 import { registerMarketingRoutes } from "./marketing/routes";
+import { registerFamilyRoutes } from "./family-routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -5928,6 +5929,11 @@ export async function registerRoutes(
     { type: "billboard_deal", table: "billboard_deals", labelSql: "customer_name", sublabelSql: "contact_name", orgCol: "organization_id", cols: ["customer_name","contact_name","contact_email"] },
     // Org-less shared pools — leadership only.
     { type: "contact", table: "contacts", labelSql: "(first_name||' '||last_name)", sublabelSql: "COALESCE(email, phone, team_name)", metaSql: "type", orgCol: null, cols: ["first_name","last_name","email","phone","team_name"], leadershipOnly: true },
+    // Holiday-camp children live in their own table and were not searchable at
+    // all — for anyone, including super admins. A parent ringing about their
+    // child's camp booking could not be answered from the search bar. Sublabel
+    // resolves the parent so the result answers "whose child?" on sight.
+    { type: "camp_child", table: "children", labelSql: "(first_name||' '||last_name)", sublabelSql: "COALESCE((SELECT g.first_name||' '||g.last_name FROM contacts g WHERE g.id = children.parent_id), 'No parent linked')", orgCol: null, cols: ["first_name","last_name"], leadershipOnly: true },
     { type: "registration", table: "registrations", labelSql: "COALESCE(team_name, 'Order #'||order_number)", sublabelSql: "COALESCE(source, referral_source)", orgCol: null, cols: ["order_number","team_name","notes"], leadershipOnly: true },
   ];
 
@@ -24204,6 +24210,11 @@ export async function registerRoutes(
   // Marketing Suite ("MarketingOS", Phase B) — mounts the Resend webhook + public
   // unsub/preference pages + the auth-gated admin API. One integration point.
   registerMarketingRoutes(app);
+
+  // Families — parents and children resolved from all three link mechanisms.
+  // Every screen that shows a family goes through resolveFamily() in there, so
+  // two pages can never disagree about whose child someone is.
+  registerFamilyRoutes(app);
 
   return httpServer;
 }
