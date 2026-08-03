@@ -138,14 +138,14 @@ async function main() {
       const prog = await client.query(
         `INSERT INTO programs (
              organization_id, name, slug, type, schedule_type, term_id, season_year,
-             age_min, age_max, capacity, is_active, registration_open,
+             age_min, age_max, capacity, is_active, registration_open, term_price_cents,
              pricing_model, prorata_grace_weeks, academy_section,
              location, start_date, end_date, session_count,
              hero_headline, hero_subheadline, description_short, description_long,
              what_to_bring, contact_email, primary_cta, faq_json
            ) VALUES (
              $1,$2,$3,'academy','term',$4,$5,
-             $6,$6,$7,true,true,
+             $6,$6,$7,true,true,$20,
              'term_prorated',0,'additional',
              $8,$9,$10,$11,
              $12,$13,$14,$15,
@@ -160,6 +160,10 @@ async function main() {
              capacity = EXCLUDED.capacity,
              is_active = EXCLUDED.is_active,
              registration_open = EXCLUDED.registration_open,
+             -- The live u4-u8 programme sets this and the class-book page
+             -- headlines it. Leave it null and the page reads "$0.00" until
+             -- the parent picks an option.
+             term_price_cents = EXCLUDED.term_price_cents,
              pricing_model = EXCLUDED.pricing_model,
              prorata_grace_weeks = EXCLUDED.prorata_grace_weeks,
              location = EXCLUDED.location,
@@ -185,6 +189,7 @@ async function main() {
           "info@minifootball.co.nz",
           "Sign up",
           JSON.stringify(FAQ),
+          PRICE_CENTS,
         ],
       );
       const programId = prog.rows[0].id as number;
@@ -192,7 +197,10 @@ async function main() {
 
       // ── The one priced option ─────────────────────────────────────────────
       // No natural unique key on program_options, so match on (program, name).
-      const optName = `U${g.age} — ${schedule}`;
+      // The programme name already says "— U9" and scheduleText already says
+      // the time, so an option named "U9 — Wednesdays 4:00pm–5:00pm" printed the
+      // same string three times down the checkout summary.
+      const optName = `Term 4 — ${SESSIONS} weeks`;
       const existing = await client.query(
         `SELECT id FROM program_options WHERE program_id = $1 AND name = $2`,
         [programId, optName],
