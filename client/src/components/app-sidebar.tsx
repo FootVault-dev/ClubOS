@@ -94,6 +94,10 @@ const feedbackSecondary = { tab: "feedback", title: "Feedback", url: "/admin/fee
 // Universal "Chat" tab — the in-house Slack (staff channels + DMs). Same
 // universal pattern as Feedback: every workspace, requireAuth-gated.
 const chatSecondary = { tab: "chat", title: "Chat", url: "/admin/chat", icon: MessagesSquare };
+// Universal "Task Tracker" tab — the organisation-wide project & task system.
+// Same universal pattern again: one shared dataset, every workspace, gated
+// server-side by requireAuth rather than a per-workspace tab grant.
+const taskTrackerSecondary = { tab: "task-tracker", title: "Task Tracker", url: "/admin/task-tracker", icon: ListChecks };
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -601,7 +605,7 @@ export function AppSidebar() {
   const mainNav = allMainNav.filter(navFilter);
   // Chat + Feedback are universal — always shown (no tab-whitelist filtering),
   // for every staff member in every workspace. Chat sits first.
-  const secondaryNav = [...allSecondaryNav.filter(navFilter), chatSecondary, feedbackSecondary];
+  const secondaryNav = [...allSecondaryNav.filter(navFilter), taskTrackerSecondary, chatSecondary, feedbackSecondary];
 
   // Resolved once across BOTH groups so a Navigation item and a System item
   // can never both look active on the same page.
