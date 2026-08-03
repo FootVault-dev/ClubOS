@@ -112,6 +112,7 @@ if [ -n "$_LIVE_JS_PATH" ]; then
   printf '%s\n' \
     "division-badge-|client/src/pages/mfl-landing-page.tsx|MFL league night badge" \
     "Task Tracker|client/src/components/app-sidebar.tsx|Task Tracker universal tab" \
+    "First name can't be blank|client/src/components/profile-dialog.tsx|Staff profile name + photo" \
   | while IFS='|' read -r _marker _file _label; do
       [ -z "$_marker" ] && continue
       if printf '%s' "$_LIVE_JS" | grep -q -- "$_marker"; then
