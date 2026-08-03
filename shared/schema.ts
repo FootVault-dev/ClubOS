@@ -59,6 +59,12 @@ export const users = pgTable("users", {
   // sign-in with the `sub` claim from the verified identity token. Stable
   // across email changes and "Hide My Email" relay swaps.
   appleId: text("apple_id").unique(),
+  // Staff profile picture. An object-storage path we issued (`/objects/...`),
+  // never an arbitrary URL — see the PATCH /api/auth/me guard. Nullable with
+  // NO default on purpose: "this person hasn't set a photo" is a fact about
+  // them, and a placeholder written into the column would be indistinguishable
+  // from a real choice. The UI falls back to initials.
+  avatarUrl: text("avatar_url"),
   role: roleEnum("role").notNull().default("coach"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),

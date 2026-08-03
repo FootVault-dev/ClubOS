@@ -95,7 +95,8 @@ const feedbackSecondary = { tab: "feedback", title: "Feedback", url: "/admin/fee
 // universal pattern as Feedback: every workspace, requireAuth-gated.
 const chatSecondary = { tab: "chat", title: "Chat", url: "/admin/chat", icon: MessagesSquare };
 import { useTheme } from "@/lib/theme-provider";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ProfileDialog } from "@/components/profile-dialog";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -575,7 +576,13 @@ export function AppSidebar() {
   const location = from ?? rawLocation;
   const { currentOrg, cicView } = useWorkspace();
   const { resolved: themeResolved, toggle: toggleTheme } = useTheme();
-  const { data: user } = useQuery<{ firstName: string; lastName: string; role: string }>({ queryKey: ["/api/auth/me"] });
+  // avatarUrl is OPTIONAL on this type on purpose — a ClubOS server that
+  // predates the avatar column omits the key entirely, and the footer must
+  // still render initials rather than break.
+  const { data: user } = useQuery<{ firstName: string; lastName: string; role: string; avatarUrl?: string | null }>({
+    queryKey: ["/api/auth/me"],
+  });
+  const [profileOpen, setProfileOpen] = useState(false);
 
   const isVenue = isVenueWorkspace(currentOrg?.slug);
   const isLeague = isLeagueWorkspace(currentOrg?.slug);
@@ -731,17 +738,31 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="p-3 border-t border-blue-500/[0.08]">
         <div className="flex items-center gap-3 px-1">
-          <Avatar className="h-8 w-8">
-            <AvatarFallback className="bg-gradient-to-br from-blue-500 to-blue-700 text-white text-[11px] font-semibold shadow-lg shadow-blue-500/20">
-              {user ? `${user.firstName[0]}${user.lastName[0]}` : "?"}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex flex-col min-w-0 flex-1">
-            <span className="text-[13px] font-medium text-white/75 truncate" data-testid="text-user-name">
-              {user ? `${user.firstName} ${user.lastName}` : "..."}
-            </span>
-            <span className="text-[10px] text-blue-400/30 capitalize">{user?.role?.replace(/_/g, " ") || ""}</span>
-          </div>
+          {/* Avatar + name open "Your profile". One target, not two: a separate
+              settings cog next to a name people already click is redundant. */}
+          <button
+            type="button"
+            onClick={() => setProfileOpen(true)}
+            className="flex items-center gap-3 min-w-0 flex-1 text-left rounded-lg hover:bg-white/[0.04] transition-colors cursor-pointer py-0.5"
+            title="Your profile"
+            data-testid="button-open-profile"
+          >
+            <Avatar className="h-8 w-8">
+              {user?.avatarUrl ? <AvatarImage src={user.avatarUrl} alt="" /> : null}
+              <AvatarFallback className="bg-gradient-to-br from-blue-500 to-blue-700 text-white text-[11px] font-semibold shadow-lg shadow-blue-500/20">
+                {/* Optional-chained: a first/last name can be an empty string on
+                    a half-provisioned account, and `""[0]` is undefined — which
+                    used to render "undefined" into the circle. */}
+                {user ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}` || "?" : "?"}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="text-[13px] font-medium text-white/75 truncate" data-testid="text-user-name">
+                {user ? `${user.firstName} ${user.lastName}` : "..."}
+              </span>
+              <span className="text-[10px] text-blue-400/30 capitalize">{user?.role?.replace(/_/g, " ") || ""}</span>
+            </div>
+          </button>
           <button
             onClick={toggleTheme}
             className="w-7 h-7 rounded-lg bg-white/[0.03] border border-white/[0.06] flex items-center justify-center hover:bg-blue-500/10 hover:border-blue-500/20 transition-all cursor-pointer"
@@ -765,6 +786,7 @@ export function AppSidebar() {
           </button>
         </div>
       </SidebarFooter>
+      <ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
     </Sidebar>
   );
 }

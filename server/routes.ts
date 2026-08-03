@@ -635,18 +635,40 @@ export async function registerRoutes(
     const user = await storage.getUser(req.session.userId);
     if (!user) return res.status(401).json({ message: "Not authenticated" });
     const orgs = await storage.getUserOrganizations(req.session.userId);
-    res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizations: orgs });
+    res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, avatarUrl: user.avatarUrl ?? null, role: user.role, organizations: orgs });
   });
 
   app.patch("/api/auth/me", requireAuth, async (req, res) => {
     try {
       const updates: any = {};
-      if (req.body.firstName !== undefined) updates.firstName = req.body.firstName;
-      if (req.body.lastName !== undefined) updates.lastName = req.body.lastName;
+      // Names are trimmed and capped. A blank first name is REFUSED rather than
+      // written: every roster, roll and staff list renders `firstName[0]`, so a
+      // nameless row crashes screens far away from this one.
+      if (req.body.firstName !== undefined) {
+        const v = String(req.body.firstName).trim().slice(0, 100);
+        if (!v) return res.status(400).json({ message: "First name can't be blank" });
+        updates.firstName = v;
+      }
+      if (req.body.lastName !== undefined) updates.lastName = String(req.body.lastName).trim().slice(0, 100);
+      // 🔴 avatarUrl must be a path WE issued via POST /api/admin/uploads/image.
+      // Accepting an arbitrary absolute URL would turn every staff list, roll
+      // and squad page into a tracking pixel for whoever owns that host — it
+      // would phone home with each viewer's IP on every render. `/objects/` is
+      // the only shape the object-storage ACL route will serve, so anything
+      // else is refused outright rather than stored and silently broken.
+      if (req.body.avatarUrl === null || req.body.avatarUrl === "") {
+        updates.avatarUrl = null;
+      } else if (req.body.avatarUrl !== undefined) {
+        const url = String(req.body.avatarUrl);
+        if (!url.startsWith("/objects/")) {
+          return res.status(400).json({ message: "Bad image reference" });
+        }
+        updates.avatarUrl = url;
+      }
       if (Object.keys(updates).length === 0) return res.status(400).json({ message: "No fields to update" });
       const updated = await storage.updateUser(req.session.userId!, updates);
       if (!updated) return res.status(404).json({ message: "User not found" });
-      res.json({ id: updated.id, email: updated.email, firstName: updated.firstName, lastName: updated.lastName, role: updated.role });
+      res.json({ id: updated.id, email: updated.email, firstName: updated.firstName, lastName: updated.lastName, avatarUrl: updated.avatarUrl ?? null, role: updated.role });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
