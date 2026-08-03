@@ -1837,6 +1837,25 @@ export async function registerRoutes(
       if (!program || !program.isActive) return res.status(404).json({ message: "Program not found" });
       if (program.scheduleType !== "term") return res.status(400).json({ message: "This program isn't a class" });
 
+      // ── Two gates this endpoint has never had ────────────────────────────
+      // `isActive` is PUBLIC VISIBILITY; `registrationOpen` is "you may buy a
+      // place". Only the newer /api/public/academy/register checked the second
+      // one, so until now this route would happily sell an invite-only
+      // programme: on 2026-08-03 `pre-academy-u9-u12` ($405) and
+      // `academy-u13-u17` ($805) were both closed to the public by Daniel's
+      // 21 Jul invite-only decision and both were still payable here.
+      if (!program.registrationOpen) {
+        return res.status(409).json({ code: "not_open", message: "Registrations for this programme aren't open." });
+      }
+      // Capacity. A no-op wherever `capacity` is null (every pre-existing
+      // programme), but the MFL youth leagues are capped by how many kids fit
+      // on the pitch at once — overselling means refunding a child who has
+      // already been told they have a place.
+      const spotsLeft = await academySpotsRemaining(program);
+      if (typeof spotsLeft === "number" && spotsLeft <= 0) {
+        return res.status(409).json({ code: "full", full: true, message: "This programme is full." });
+      }
+
       let term = null;
       if (program.termId) {
         const { db } = await import("./db");

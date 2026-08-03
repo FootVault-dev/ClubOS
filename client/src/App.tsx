@@ -462,6 +462,16 @@ function AdminRouter() {
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />
+        {/* Individual-signup youth leagues (Ballers, Term 4 2026). These run on
+            the academy engine — one child, one term, one price — not on the
+            league engine, whose unit of sale is a captain buying a team. The
+            MFL workspace has its own Switch, so these routes have to be listed
+            here as well as in the general block or the tabs 404. */}
+        <Route path="/admin/academy" component={AdminAcademy} />
+        <Route path="/admin/academy/:id/edit-page" component={AdminEditPage} />
+        <Route path="/admin/academy/:id/session/:dateId/:sessionType" component={AdminSessionRoll} />
+        <Route path="/admin/academy/:id" component={AdminCampDetail} />
+        <Route path="/admin/registrations" component={AdminRegistrations} />
         <Route path="/admin/mfl-referees" component={MflReferees} />
         <Route path="/admin/mfl-game-feed" component={MflGameFeedPage} />
         <Route path="/admin/mfl-score/:id" component={MflScoreGame} />
