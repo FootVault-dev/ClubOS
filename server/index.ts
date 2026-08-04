@@ -91,6 +91,12 @@ app.use(attributionCookieMiddleware);
   const { registerFeedbackRoutes } = await import("./feedback-routes");
   registerFeedbackRoutes(app);
 
+  // Task Tracker — the organisation-wide project & task system. Universal tab
+  // in every workspace (same pattern as Chat and Feedback), so it is gated by
+  // requireAuth only and its tables are deliberately not org-scoped.
+  const { registerTaskTrackerRoutes } = await import("./task-tracker-routes");
+  registerTaskTrackerRoutes(app);
+
   // United Prints workspace — Warehouse Management System. Dark-launched
   // (requireTab("warehouse") — super_admin only until T17 wires "warehouse"
   // into shared/tabs.ts). This registers items/locations/barcode-alias CRUD +

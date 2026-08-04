@@ -200,6 +200,7 @@ import PrintUpload from "@/pages/print-upload";
 import ClubDossier from "@/pages/club-dossier";
 import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
+import TaskTracker from "@/pages/task-tracker";
 import StaffChat from "@/pages/staff-chat";
 import MarketingHome from "@/pages/marketing/Home";
 import MarketingCampaignWizard from "@/pages/marketing/CampaignWizard";
@@ -247,6 +248,9 @@ function AdminRouter() {
   // Staff Chat (the in-house Slack) is universal for the same reason — one
   // staff-wide chat, reachable from every workspace's System section.
   if (location.startsWith("/admin/chat")) return <StaffChat />;
+  // Task Tracker — one organisation-wide project/task system, deliberately
+  // not workspace-scoped, so it is reachable from every workspace too.
+  if (location.startsWith("/admin/task-tracker")) return <TaskTracker />;
   const isVenue = currentOrg?.slug === "united-sports-centre";
   const isLeague = currentOrg?.slug === "mini-football-leagues";
   const isTournament = currentOrg?.slug === "christchurch-international-cup";
@@ -459,6 +463,16 @@ function AdminRouter() {
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
         <Route path="/admin/teams" component={LeagueTeams} />
+        {/* Individual-signup youth leagues (Ballers, Term 4 2026). These run on
+            the academy engine — one child, one term, one price — not on the
+            league engine, whose unit of sale is a captain buying a team. The
+            MFL workspace has its own Switch, so these routes have to be listed
+            here as well as in the general block or the tabs 404. */}
+        <Route path="/admin/academy" component={AdminAcademy} />
+        <Route path="/admin/academy/:id/edit-page" component={AdminEditPage} />
+        <Route path="/admin/academy/:id/session/:dateId/:sessionType" component={AdminSessionRoll} />
+        <Route path="/admin/academy/:id" component={AdminCampDetail} />
+        <Route path="/admin/registrations" component={AdminRegistrations} />
         <Route path="/admin/mfl-referees" component={MflReferees} />
         <Route path="/admin/mfl-game-feed" component={MflGameFeedPage} />
         <Route path="/admin/mfl-score/:id" component={MflScoreGame} />

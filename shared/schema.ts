@@ -59,6 +59,12 @@ export const users = pgTable("users", {
   // sign-in with the `sub` claim from the verified identity token. Stable
   // across email changes and "Hide My Email" relay swaps.
   appleId: text("apple_id").unique(),
+  // Staff profile picture. An object-storage path we issued (`/objects/...`),
+  // never an arbitrary URL — see the PATCH /api/auth/me guard. Nullable with
+  // NO default on purpose: "this person hasn't set a photo" is a fact about
+  // them, and a placeholder written into the column would be indistinguishable
+  // from a real choice. The UI falls back to initials.
+  avatarUrl: text("avatar_url"),
   role: roleEnum("role").notNull().default("coach"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -7523,3 +7529,165 @@ export type MktProfile = typeof mktProfiles.$inferSelect;
 export type InsertMktProfile = typeof mktProfiles.$inferInsert;
 export type MktConsent = typeof mktConsent.$inferSelect;
 export type MktSuppression = typeof mktSuppressions.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK TRACKER (`tt_*`) — the organisation-wide project & task system.
+//
+// 🔴 DELIBERATELY NOT ORG-SCOPED, unlike every other planning table here. This
+// is ONE shared dataset for the whole organisation, reached from every
+// workspace's sidebar (the Chat / Feedback universal pattern). Brand is a TAG
+// (`brands text[]`), never a container — so a Marketing task for MFL appears in
+// both the Marketing filter and the MFL filter without being duplicated.
+//
+// Logic lives in shared/task-tracker.ts. Status columns carry a machine-readable
+// `kind` (todo|active|blocked|done); overdue, progress and staleness are all
+// DERIVED on read, never stored. See migrations/2026-08-03_task_tracker.sql.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ttAreas = pgTable("tt_areas", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  key: text("key").notNull(),
+  label: text("label").notNull(),
+  color: text("color").notNull().default("#6366f1"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const ttProjectStatuses = pgTable("tt_project_statuses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  label: text("label").notNull(),
+  kind: text("kind").notNull().default("todo"), // todo|active|blocked|done
+  color: text("color").notNull().default("#64748b"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const ttTaskStatuses = pgTable("tt_task_statuses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  label: text("label").notNull(),
+  kind: text("kind").notNull().default("todo"), // todo|active|blocked|done
+  color: text("color").notNull().default("#64748b"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const ttProjects = pgTable("tt_projects", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  emoji: text("emoji"),
+  description: text("description"),
+  kind: text("kind").notNull().default("project"), // project|goal
+  statusId: integer("status_id").notNull().references(() => ttProjectStatuses.id, { onDelete: "restrict" }),
+  // A project may ladder up to a goal row in this same table. Present in the
+  // schema from day one because it is cheap now and expensive to retrofit.
+  parentGoalId: integer("parent_goal_id"),
+  ownerId: integer("owner_id").references(() => users.id, { onDelete: "set null" }),
+  areas: text("areas").array().notNull().default(sql`'{}'::text[]`),
+  brands: text("brands").array().notNull().default(sql`'{}'::text[]`),
+  startDate: date("start_date"),
+  targetDate: date("target_date"),
+  targetNote: text("target_note"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  statusIdx: index("tt_projects_status_idx").on(t.statusId),
+  ownerIdx: index("tt_projects_owner_idx").on(t.ownerId),
+}));
+
+export const ttTasks = pgTable("tt_tasks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  // SET NULL, never CASCADE — deleting a project must not destroy the record
+  // of work people did. The task lands in the "No project" bucket.
+  projectId: integer("project_id").references(() => ttProjects.id, { onDelete: "set null" }),
+  statusId: integer("status_id").notNull().references(() => ttTaskStatuses.id, { onDelete: "restrict" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  priority: text("priority").notNull().default("medium"), // low|medium|high|urgent
+  ownerId: integer("owner_id").references(() => users.id, { onDelete: "set null" }),
+  startDate: date("start_date"),
+  dueDate: date("due_date"),
+  tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+  sortOrder: integer("sort_order").notNull().default(0),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).defaultNow().notNull(),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index("tt_tasks_project_idx").on(t.projectId),
+  statusIdx: index("tt_tasks_status_idx").on(t.statusId),
+  ownerIdx: index("tt_tasks_owner_idx").on(t.ownerId),
+}));
+
+export const ttTaskAssignees = pgTable("tt_task_assignees", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  taskId: integer("task_id").notNull().references(() => ttTasks.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  uq: unique("tt_task_assignees_uq").on(t.taskId, t.userId),
+  userIdx: index("tt_task_assignees_user_idx").on(t.userId),
+}));
+
+export const ttChecklistItems = pgTable("tt_checklist_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  taskId: integer("task_id").notNull().references(() => ttTasks.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  done: boolean("done").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  taskIdx: index("tt_checklist_task_idx").on(t.taskId),
+}));
+
+export const ttComments = pgTable("tt_comments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  taskId: integer("task_id").notNull().references(() => ttTasks.id, { onDelete: "cascade" }),
+  authorId: integer("author_id").references(() => users.id, { onDelete: "set null" }),
+  authorName: text("author_name"), // denormalised snapshot (recordedBy doctrine)
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  taskIdx: index("tt_comments_task_idx").on(t.taskId),
+}));
+
+export type TtArea = typeof ttAreas.$inferSelect;
+export type TtProjectStatus = typeof ttProjectStatuses.$inferSelect;
+export type TtTaskStatus = typeof ttTaskStatuses.$inferSelect;
+export type TtProject = typeof ttProjects.$inferSelect;
+export type TtTask = typeof ttTasks.$inferSelect;
+export type TtTaskAssignee = typeof ttTaskAssignees.$inferSelect;
+export type TtChecklistItem = typeof ttChecklistItems.$inferSelect;
+export type TtComment = typeof ttComments.$inferSelect;
+
+// Task Tracker pages — the navigable hierarchy (brand → area → page → …).
+// The first two levels are NOT rows: brands come from TT_BRANDS and areas from
+// tt_areas, both of which already tag every project. See
+// migrations/2026-08-04_task_tracker_pages.sql.
+export const ttPages = pgTable("tt_pages", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  brand: text("brand").notNull(),
+  areaKey: text("area_key"),
+  // RESTRICT, never CASCADE — deleting a page must not take a tree of notes.
+  parentId: integer("parent_id"),
+  title: text("title").notNull(),
+  emoji: text("emoji"),
+  description: text("description"),
+  viewType: text("view_type").notNull().default("doc"), // doc|projects|tasks|board|list
+  body: text("body"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  brandAreaIdx: index("tt_pages_brand_area_idx").on(t.brand, t.areaKey),
+  parentIdx: index("tt_pages_parent_idx").on(t.parentId),
+}));
+
+export type TtPage = typeof ttPages.$inferSelect;
