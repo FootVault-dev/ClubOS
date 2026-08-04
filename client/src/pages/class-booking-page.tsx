@@ -411,7 +411,9 @@ export default function ClassBookingPage() {
                 {prefill && (
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                     Signed in as <strong>{prefill.parent.email}</strong> — we've filled in your details.{" "}
-                    <a href="/account" className="underline">Your account</a>
+                    {/* Absolute: the portal lives on cufc.co.nz, this checkout on
+                        join.cufc.co.nz. A relative href would 404 here. */}
+                    <a href="https://cufc.co.nz/account" className="underline">Your account</a>
                   </div>
                 )}
 

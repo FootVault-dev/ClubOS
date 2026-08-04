@@ -109,22 +109,44 @@ function readCookie(req: Request, name: string): string | null {
 
 const isProd = () => process.env.NODE_ENV === "production";
 
-function setSessionCookie(res: Response, token: string, maxAgeMs: number) {
+// The session has to work on TWO hosts: cufc.co.nz, where the portal page is
+// served (so a family never leaves the club's own domain to see their
+// children), and join.cufc.co.nz, where the checkout reads it to pre-fill.
+// A host-only cookie would cover one and not the other, so it is scoped to the
+// shared registrable parent.
+//
+// 🔴 Deliberately NOT a `__Host-` cookie: that prefix forbids a Domain
+// attribute, which is exactly the thing making this work across both hosts.
+// The trade is real and accepted — every other subdomain of cufc.co.nz can now
+// see this cookie, so nothing untrusted may ever be hosted under it.
+//
+// Omitted outside production: on localhost a Domain of .cufc.co.nz is rejected
+// outright and the browser silently drops the cookie.
+const PARENT_COOKIE_DOMAIN = ".cufc.co.nz";
+
+function cookieBits(value: string, maxAgeSeconds: number): string {
   const bits = [
-    `${PARENT_COOKIE}=${encodeURIComponent(token)}`,
+    `${PARENT_COOKIE}=${value}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Lax",           // survives the top-level hop from cufc.co.nz
-    `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
+    "SameSite=Lax",           // survives a top-level hop between the two hosts
+    `Max-Age=${maxAgeSeconds}`,
   ];
-  if (isProd()) bits.push("Secure");
-  res.append("Set-Cookie", bits.join("; "));
+  if (isProd()) {
+    bits.push("Secure");
+    bits.push(`Domain=${PARENT_COOKIE_DOMAIN}`);
+  }
+  return bits.join("; ");
+}
+
+function setSessionCookie(res: Response, token: string, maxAgeMs: number) {
+  res.append("Set-Cookie", cookieBits(encodeURIComponent(token), Math.floor(maxAgeMs / 1000)));
 }
 
 function clearSessionCookie(res: Response) {
-  const bits = [`${PARENT_COOKIE}=`, "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"];
-  if (isProd()) bits.push("Secure");
-  res.append("Set-Cookie", bits.join("; "));
+  // Must carry the SAME Domain and Path, or the browser treats it as a
+  // different cookie and the original survives the sign-out.
+  res.append("Set-Cookie", cookieBits("", 0));
 }
 
 // ── Guardian resolution ──────────────────────────────────────────────────────
@@ -331,6 +353,12 @@ function childMatchesKey(child: FamilyChild, key: string): boolean {
 
 export function registerParentRoutes(app: Express) {
   const BASE = "/api/public/parent";
+
+  // The portal briefly lived here before moving onto the club's own domain.
+  // Without this, /account falls through to the one-segment /:slug route and a
+  // parent gets "Camp not found" — which is exactly what it did. Server-side
+  // so it works with no JS, and 301 because the move is permanent.
+  app.get("/account", (_req, res) => res.redirect(301, "https://cufc.co.nz/account"));
 
   // ── Request a code ─────────────────────────────────────────────────────────
   // 🔴 Always answers the same way, whether or not the address is known. The
