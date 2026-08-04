@@ -43,6 +43,22 @@ export type StatusKind = (typeof STATUS_KINDS)[number];
 export const PROJECT_KINDS = ["project", "goal"] as const;
 export type ProjectKind = (typeof PROJECT_KINDS)[number];
 
+/**
+ * How a page renders. Chosen per page, the way a Notion page can be a document
+ * or a database view.
+ *   doc      — written notes (markdown)
+ *   projects — the projects tagged to this brand + area, as a table
+ *   tasks    — those projects' tasks, as a list
+ *   board    — the same tasks, as a kanban by status
+ *   list     — nothing but the pages nested inside this one
+ */
+export const PAGE_VIEW_TYPES = ["doc", "projects", "tasks", "board", "list"] as const;
+export type PageViewType = (typeof PAGE_VIEW_TYPES)[number];
+
+export function isPageViewType(v: unknown): v is PageViewType {
+  return typeof v === "string" && (PAGE_VIEW_TYPES as readonly string[]).includes(v);
+}
+
 /** Brand keys — who the work SERVES. Matches the ClubOS workspace slugs. */
 export const TT_BRANDS = [
   { key: "cufc", label: "Christchurch United" },
@@ -55,7 +71,10 @@ export const TT_BRANDS = [
   { key: "usg", label: "United Sports Group" },
 ] as const;
 
-export const TT_BRAND_KEYS = TT_BRANDS.map((b) => b.key);
+// Annotated as string[] rather than the inferred literal union: these are
+// checked against values arriving off the wire, and a literal-union type makes
+// every `.includes(userInput)` a compile error at the call site.
+export const TT_BRAND_KEYS: string[] = TT_BRANDS.map((b) => b.key);
 
 /**
  * Map a ClubOS workspace slug to its brand key, so the tab opens pre-filtered

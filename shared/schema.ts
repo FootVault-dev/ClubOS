@@ -7664,3 +7664,30 @@ export type TtTask = typeof ttTasks.$inferSelect;
 export type TtTaskAssignee = typeof ttTaskAssignees.$inferSelect;
 export type TtChecklistItem = typeof ttChecklistItems.$inferSelect;
 export type TtComment = typeof ttComments.$inferSelect;
+
+// Task Tracker pages — the navigable hierarchy (brand → area → page → …).
+// The first two levels are NOT rows: brands come from TT_BRANDS and areas from
+// tt_areas, both of which already tag every project. See
+// migrations/2026-08-04_task_tracker_pages.sql.
+export const ttPages = pgTable("tt_pages", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  brand: text("brand").notNull(),
+  areaKey: text("area_key"),
+  // RESTRICT, never CASCADE — deleting a page must not take a tree of notes.
+  parentId: integer("parent_id"),
+  title: text("title").notNull(),
+  emoji: text("emoji"),
+  description: text("description"),
+  viewType: text("view_type").notNull().default("doc"), // doc|projects|tasks|board|list
+  body: text("body"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  brandAreaIdx: index("tt_pages_brand_area_idx").on(t.brand, t.areaKey),
+  parentIdx: index("tt_pages_parent_idx").on(t.parentId),
+}));
+
+export type TtPage = typeof ttPages.$inferSelect;

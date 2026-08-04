@@ -31,10 +31,12 @@ import {
   ttTaskAssignees,
   ttChecklistItems,
   ttComments,
+  ttPages,
   users as usersTable,
 } from "@shared/schema";
 import {
   nzToday,
+  isPageViewType,
   cleanText,
   cleanDate,
   cleanKeyList,
@@ -622,6 +624,136 @@ export function registerTaskTrackerRoutes(app: Express) {
   app.delete(`${BASE}/checklist/:itemId`, requireAuth, async (req, res) => {
     try {
       await db.delete(ttChecklistItems).where(eq(ttChecklistItems.id, Number(req.params.itemId)));
+      res.json({ deleted: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ── Pages — the navigable hierarchy ───────────────────────────────────────
+  //
+  // brand → area → page → nested pages. The first two levels are NOT rows:
+  // brands come from TT_BRANDS and areas from tt_areas, both of which already
+  // tag every project. Materialising them here would create a second source of
+  // truth for "what areas exist" and the two would drift on the first rename.
+  //
+  // The whole tree is returned in ONE query and assembled client-side. This is
+  // a navigation structure — tens of rows, not thousands — so paginating it
+  // would cost a round trip per expand for no benefit.
+  app.get(`${BASE}/pages`, requireAuth, async (_req, res) => {
+    try {
+      const rows = await db
+        .select()
+        .from(ttPages)
+        .where(eq(ttPages.archived, false))
+        .orderBy(ttPages.sortOrder, ttPages.id);
+      res.json({ pages: rows });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post(`${BASE}/pages`, requireAuth, async (req, res) => {
+    try {
+      const actor = await actorFor(req);
+      if (!actor.isManager) return res.status(403).json({ message: "Only managers can add pages" });
+
+      const title = cleanText(req.body?.title);
+      if (!title) return res.status(400).json({ message: "A title is required" });
+      const brand = cleanText(req.body?.brand);
+      if (!brand || !TT_BRAND_KEYS.includes(brand)) {
+        return res.status(400).json({ message: "A valid brand is required" });
+      }
+
+      const [created] = await db
+        .insert(ttPages)
+        .values({
+          brand,
+          areaKey: cleanText(req.body?.areaKey),
+          parentId: Number.isInteger(Number(req.body?.parentId)) ? Number(req.body.parentId) : null,
+          title,
+          emoji: cleanText(req.body?.emoji),
+          description: cleanText(req.body?.description),
+          viewType: isPageViewType(req.body?.viewType) ? req.body.viewType : "doc",
+          body: typeof req.body?.body === "string" ? req.body.body : null,
+          sortOrder: Number(req.body?.sortOrder) || 0,
+          createdBy: actor.userId,
+        })
+        .returning();
+      res.status(201).json(created);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  /**
+   * Editing a page splits two ways on purpose. Anyone may write the BODY —
+   * that is the collaborative part, the notes people keep. Only a manager may
+   * change the SHAPE (title, icon, layout, where it sits), because the shape is
+   * what stops the tree sprawling into the mess this replaces.
+   */
+  app.patch(`${BASE}/pages/:id`, requireAuth, async (req, res) => {
+    try {
+      const actor = await actorFor(req);
+      const id = Number(req.params.id);
+      const b = req.body ?? {};
+      const patch: Record<string, unknown> = { updatedAt: new Date() };
+
+      if ("body" in b) patch.body = typeof b.body === "string" ? b.body : null;
+
+      const structural = ["title", "emoji", "description", "viewType", "areaKey", "parentId", "brand", "sortOrder", "archived"]
+        .filter((k) => k in b);
+      if (structural.length > 0) {
+        if (!actor.isManager) {
+          return res.status(403).json({ message: "Only managers can change a page's title, layout or where it sits" });
+        }
+        if ("title" in b) {
+          const title = cleanText(b.title);
+          if (!title) return res.status(400).json({ message: "A title is required" });
+          patch.title = title;
+        }
+        if ("emoji" in b) patch.emoji = cleanText(b.emoji);
+        if ("description" in b) patch.description = cleanText(b.description);
+        if ("viewType" in b && isPageViewType(b.viewType)) patch.viewType = b.viewType;
+        if ("areaKey" in b) patch.areaKey = cleanText(b.areaKey);
+        if ("parentId" in b) patch.parentId = Number.isInteger(Number(b.parentId)) ? Number(b.parentId) : null;
+        if ("brand" in b && TT_BRAND_KEYS.includes(String(b.brand))) patch.brand = String(b.brand);
+        if ("sortOrder" in b && Number.isInteger(Number(b.sortOrder))) patch.sortOrder = Number(b.sortOrder);
+        if ("archived" in b) patch.archived = !!b.archived;
+      }
+
+      const [updated] = await db.update(ttPages).set(patch).where(eq(ttPages.id, id)).returning();
+      if (!updated) return res.status(404).json({ message: "Page not found" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  /**
+   * Delete a page — but ARCHIVE it if anything is nested inside. Losing a tree
+   * of somebody's written notes to one click is not recoverable, and the FK is
+   * RESTRICT precisely so a mistake here fails loudly rather than cascading.
+   */
+  app.delete(`${BASE}/pages/:id`, requireAuth, async (req, res) => {
+    try {
+      const actor = await actorFor(req);
+      if (!actor.isManager) return res.status(403).json({ message: "Only managers can delete pages" });
+      const id = Number(req.params.id);
+
+      const [{ count }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(ttPages)
+        .where(and(eq(ttPages.parentId, id), eq(ttPages.archived, false)));
+
+      if (count > 0) {
+        const [archived] = await db
+          .update(ttPages).set({ archived: true, updatedAt: new Date() })
+          .where(eq(ttPages.id, id)).returning();
+        if (!archived) return res.status(404).json({ message: "Page not found" });
+        return res.json({ archived: true, childCount: count });
+      }
+      await db.delete(ttPages).where(eq(ttPages.id, id));
       res.json({ deleted: true });
     } catch (error: any) {
       res.status(500).json({ message: error.message });

@@ -138,6 +138,21 @@ export const BRAND_SHORT: Record<string, string> = {
   usg: "Group",
 };
 
+/**
+ * Short code for a brand badge. Explicit, not sliced from the label — slicing
+ * gave "GROU" and "PRIN", which look like typos rather than abbreviations.
+ */
+export const BRAND_BADGE: Record<string, string> = {
+  cufc: "CUFC",
+  siu: "SIU",
+  mfl: "MFL",
+  cic: "CIC",
+  usc: "USC",
+  cugc: "GYM",
+  prints: "PRINT",
+  usg: "USG",
+};
+
 export function initials(name: string | null | undefined): string {
   if (!name) return "?";
   const parts = name.trim().split(/\s+/);

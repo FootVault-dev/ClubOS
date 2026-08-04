@@ -31,18 +31,25 @@ import {
 import {
   MyWorkView, ThisWeekView, ProjectsView, TasksView, TeamView, Avatar,
 } from "./task-tracker-views";
+import {
+  BrandsScreen, BrandScreen, AreaScreen, PageScreen, PageModal,
+  navToHash, hashToNav, type Nav, type TtPageRow,
+} from "./task-tracker-explorer";
 
 type View = "mywork" | "week" | "projects" | "tasks" | "team";
 
+// Projects leads, and is where the tab opens: it is the way IN to everything
+// else — brands → departments → pages. The flat lists come after.
 const VIEWS: Array<{ key: View; label: string; icon: any }> = [
+  { key: "projects", label: "Projects", icon: FolderKanban },
   { key: "mywork", label: "My Work", icon: UserCircle2 },
   { key: "week", label: "This Week", icon: CalendarRange },
-  { key: "projects", label: "Projects", icon: FolderKanban },
   { key: "tasks", label: "Tasks", icon: ListTodo },
   { key: "team", label: "Team", icon: Users },
 ];
 
 const QK = {
+  pages: ["/api/admin/task-tracker/pages"],
   bootstrap: ["/api/admin/task-tracker/bootstrap"],
   projects: ["/api/admin/task-tracker/projects"],
   tasks: ["/api/admin/task-tracker/tasks"],
@@ -51,13 +58,29 @@ const QK = {
 export default function TaskTracker() {
   const { toast } = useToast();
 
+  // The hash carries either a plain view key (#mywork) or a position in the
+  // Projects hierarchy (#projects/cufc/marketing, #page/12), so any screen in
+  // the tree can be linked to and survives a refresh.
+  const initialNav = hashToNav(window.location.hash);
   const [view, setViewState] = useState<View>(() => {
+    if (initialNav) return "projects";
     const h = window.location.hash.replace("#", "") as View;
-    return VIEWS.some((v) => v.key === h) ? h : "mywork";
+    return VIEWS.some((v) => v.key === h) ? h : "projects";
   });
+  const [nav, setNavState] = useState<Nav>(initialNav ?? { level: "brands" });
+
   const setView = (v: View) => {
     setViewState(v);
-    window.history.replaceState(null, "", `#${v}`);
+    if (v === "projects") {
+      setNavState({ level: "brands" });
+      window.history.replaceState(null, "", "#projects");
+    } else {
+      window.history.replaceState(null, "", `#${v}`);
+    }
+  };
+  const setNav = (n: Nav) => {
+    setNavState(n);
+    window.history.replaceState(null, "", `#${navToHash(n)}`);
   };
 
   // Filters — saved lenses over the one dataset.
@@ -68,6 +91,9 @@ export default function TaskTracker() {
 
   const [taskModal, setTaskModal] = useState<{ task?: TtTaskRow; projectId?: number | null } | null>(null);
   const [projectModal, setProjectModal] = useState<{ project?: TtProjectRow } | null>(null);
+  const [pageModal, setPageModal] = useState<
+    { page?: TtPageRow; defaults?: { brand: string; areaKey: string | null; parentId?: number } } | null
+  >(null);
 
   const { data: boot, isLoading: bootLoading } = useQuery<TtBootstrap>({ queryKey: QK.bootstrap });
   const { data: projectsData } = useQuery<{ today: string; projects: TtProjectRow[] }>({ queryKey: QK.projects });
@@ -75,6 +101,7 @@ export default function TaskTracker() {
     queryKey: QK.tasks,
     refetchInterval: 60_000,
   });
+  const { data: pagesData } = useQuery<{ pages: TtPageRow[] }>({ queryKey: QK.pages });
 
   // Open pre-filtered to the brand whose workspace you are standing in. A
   // default, not a cage — the picker still reaches everything.
@@ -85,6 +112,7 @@ export default function TaskTracker() {
   const today = tasksData?.today ?? boot?.today ?? "";
   const allProjects = projectsData?.projects ?? [];
   const allTasks = tasksData?.tasks ?? [];
+  const pages = pagesData?.pages ?? [];
   const staff = boot?.staff ?? [];
   const areas = boot?.areas ?? [];
 
@@ -178,7 +206,8 @@ export default function TaskTracker() {
         ))}
       </div>
 
-      {/* ── Filters ────────────────────────────────────────────────────── */}
+      {/* ── Filters — flat views only ─────────────────────────────────── */}
+      {view !== "projects" && (
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="relative w-full sm:flex-1 sm:w-auto sm:min-w-[160px]">
           <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-white/25" />
@@ -218,6 +247,7 @@ export default function TaskTracker() {
           </button>
         )}
       </div>
+      )}
 
       {/* ── The view ───────────────────────────────────────────────────── */}
       {view === "mywork" && (
@@ -232,12 +262,73 @@ export default function TaskTracker() {
           onOpen={(t) => setTaskModal({ task: t })}
         />
       )}
-      {view === "projects" && (
-        <ProjectsView
-          projects={filteredProjects} statuses={boot.projectStatuses} areas={areas} today={today}
-          onOpen={(p) => setProjectModal({ project: p })}
-        />
-      )}
+      {view === "projects" && (() => {
+        const openProject = (p: TtProjectRow) => setProjectModal({ project: p });
+        const openTask = (t: TtTaskRow) => setTaskModal({ task: t });
+        const addPage = (brandKey: string, areaKey: string | null, parentId?: number) =>
+          setPageModal({ defaults: { brand: brandKey, areaKey, parentId } });
+
+        if (nav.level === "brands") {
+          return (
+            <BrandsScreen
+              boot={boot} projects={allProjects} tasks={allTasks} pages={pages} today={today}
+              onOpen={(b) => setNav({ level: "brand", brand: b })}
+            />
+          );
+        }
+        if (nav.level === "brand") {
+          return (
+            <BrandScreen
+              brand={nav.brand} boot={boot} projects={allProjects} tasks={allTasks} pages={pages} today={today}
+              onBack={() => setNav({ level: "brands" })}
+              onOpenArea={(a) => setNav({ level: "area", brand: nav.brand, area: a })}
+              onOpenPage={(id) => setNav({ level: "page", pageId: id })}
+              onAddPage={addPage}
+            />
+          );
+        }
+        if (nav.level === "area") {
+          const area = areas.find((a) => a.key === nav.area);
+          if (!area) return <p className="text-[13px] text-white/40">That department no longer exists.</p>;
+          return (
+            <AreaScreen
+              brand={nav.brand} area={area} boot={boot}
+              projects={allProjects} tasks={allTasks} pages={pages} today={today}
+              onBack={() => setNav({ level: "brands" })}
+              onBackBrand={() => setNav({ level: "brand", brand: nav.brand })}
+              onOpenPage={(id) => setNav({ level: "page", pageId: id })}
+              onAddPage={addPage}
+              onOpenProject={openProject}
+              onOpenTask={openTask}
+            />
+          );
+        }
+        const page = pages.find((p) => p.id === nav.pageId);
+        if (!page) {
+          return (
+            <div className="text-center py-12">
+              <p className="text-[13px] text-white/40 mb-3">That page has been deleted or archived.</p>
+              <Button onClick={() => setNav({ level: "brands" })} className="h-8 text-[12px]">Back to Projects</Button>
+            </div>
+          );
+        }
+        return (
+          <PageScreen
+            page={page} boot={boot} pages={pages}
+            projects={allProjects} tasks={allTasks} today={today}
+            onBack={() => setNav({ level: "brands" })}
+            onBackBrand={() => setNav({ level: "brand", brand: page.brand })}
+            onBackArea={() => page.areaKey
+              ? setNav({ level: "area", brand: page.brand, area: page.areaKey })
+              : setNav({ level: "brand", brand: page.brand })}
+            onOpenPage={(id) => setNav({ level: "page", pageId: id })}
+            onAddPage={addPage}
+            onOpenProject={openProject}
+            onOpenTask={openTask}
+            onEdit={() => setPageModal({ page })}
+          />
+        );
+      })()}
       {view === "tasks" && (
         <TasksView
           tasks={filteredTasks} projects={filteredProjects} today={today}
@@ -259,6 +350,19 @@ export default function TaskTracker() {
           initial={taskModal.task}
           defaultProjectId={taskModal.projectId}
           onClose={() => setTaskModal(null)}
+          toast={toast}
+        />
+      )}
+      {pageModal && (
+        <PageModal
+          boot={boot}
+          initial={pageModal.page}
+          defaults={pageModal.defaults}
+          onClose={() => setPageModal(null)}
+          onSaved={(p, deleted) => {
+            if (deleted) setNav({ level: "brand", brand: p.brand });
+            else if (!pageModal.page) setNav({ level: "page", pageId: p.id });
+          }}
           toast={toast}
         />
       )}
