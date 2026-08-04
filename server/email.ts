@@ -507,6 +507,36 @@ export async function sendCufcOpenTrainingConfirmed(params: {
 }
 
 /**
+ * Parent account sign-in code.
+ *
+ * Deliberately plain: one number, big enough to read on a phone in a car park,
+ * and no link. A magic link in a forwarded email is a live session; a 6-digit
+ * code paired with the address that asked for it is not. Sent only to an
+ * address the club already holds as a guardian.
+ */
+export async function sendCufcParentLoginCode(params: {
+  to: string; firstName: string | null; code: string; minutes: number;
+}): Promise<boolean> {
+  const greeting = params.firstName ? `Kia ora ${esc(params.firstName)},` : "Kia ora,";
+  const html = cufcShellWrap("Your sign-in code", `
+    <p style="margin:0 0 14px;">${greeting}</p>
+    <p style="margin:0 0 18px;">Here's your code to sign in to your Christchurch United account.</p>
+    <p style="margin:0 0 18px;text-align:center;">
+      <span style="display:inline-block;background:#030711;border:1px solid #1d2a55;border-radius:14px;padding:16px 26px;color:#ffffff;font-size:34px;font-weight:800;letter-spacing:9px;font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;">${esc(params.code)}</span>
+    </p>
+    <p style="margin:0 0 14px;">It expires in ${params.minutes} minutes and can only be used once.</p>
+    <p style="margin:0;color:#7d8ba8;">If you didn't ask to sign in, you can ignore this email — nobody can get into your account without this code.</p>
+  `);
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: "academy@cufc.co.nz",
+    subject: `${params.code} is your Christchurch United sign-in code`,
+    html,
+  });
+}
+
+/**
  * CUFC broadcast / newsletter — wraps the composer's rich HTML in the navy
  * Christchurch United shell with the subject as the heading and a
  * per-recipient signed unsubscribe link. Sent one-per-recipient (the mailer

@@ -40,6 +40,13 @@ interface QuoteResponse {
   quote: { fullPriceCents: number; payNowCents: number; discountCents: number; sessionsRemaining: number; totalSessions: number; reason: string };
 }
 
+/** GET /api/public/parent/prefill, when a family is signed in. */
+interface ParentPrefill {
+  signedIn: true;
+  parent: { firstName: string; lastName: string; email: string; phone: string | null };
+  children: { key: string; firstName: string; lastName: string; dateOfBirth: string | null; ageGrade: number | null }[];
+}
+
 interface IntentResponse {
   registrationId: number;
   clientSecret: string;
@@ -150,6 +157,44 @@ export default function ClassBookingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Signed-in family pre-fill ──────────────────────────────────────────────
+  // The point of the parent account: a returning family types nothing they have
+  // already told us. The endpoint answers 200 with signedIn:false for a
+  // visitor, so this call is unconditional and a failure never blocks the sale.
+  // `childKey` is a CLAIM — the server re-proves the child belongs to the
+  // signed-in family before reusing them, and falls back to creating one.
+  const [prefill, setPrefill] = useState<ParentPrefill | null>(null);
+  const [childKey, setChildKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/public/parent/prefill", { credentials: "include" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!live || !d?.signedIn) return;
+        setPrefill(d);
+        setParentFirst((v) => v || d.parent?.firstName || "");
+        setParentLast((v) => v || d.parent?.lastName || "");
+        setParentEmail((v) => v || d.parent?.email || "");
+        setParentPhone((v) => v || d.parent?.phone || "");
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+
+  /** Pick a child we already hold, or clear back to typing a new one. */
+  const chooseChild = (key: string | null) => {
+    setChildKey(key);
+    const kid = prefill?.children.find((c) => c.key === key);
+    if (kid) {
+      setChildFirst(kid.firstName);
+      setChildLast(kid.lastName);
+      setChildDob(kid.dateOfBirth || "");
+    } else {
+      setChildFirst(""); setChildLast(""); setChildDob("");
+    }
+  };
+
   // If only one option exists, auto-select it and skip the picker
   useEffect(() => {
     if (optionsData && optionsData.options.length === 1 && !selectedOption) {
@@ -183,6 +228,9 @@ export default function ClassBookingPage() {
           paymentMode,
           parent: { firstName: parentFirst, lastName: parentLast, email: parentEmail, phone: parentPhone },
           child: { firstName: childFirst, lastName: childLast, dateOfBirth: childDob || null },
+          // Only sent when a signed-in parent picked a child we already hold.
+          // The server proves ownership before trusting it.
+          childKey,
           notes,
           utm,
         }),
@@ -360,6 +408,13 @@ export default function ClassBookingPage() {
                   </div>
                 )}
 
+                {prefill && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                    Signed in as <strong>{prefill.parent.email}</strong> — we've filled in your details.{" "}
+                    <a href="/account" className="underline">Your account</a>
+                  </div>
+                )}
+
                 <div>
                   <h2 className="text-sm font-bold text-zinc-700 uppercase tracking-wider mb-3">Parent / guardian</h2>
                   <div className="grid grid-cols-2 gap-3">
@@ -372,10 +427,45 @@ export default function ClassBookingPage() {
 
                 <div>
                   <h2 className="text-sm font-bold text-zinc-700 uppercase tracking-wider mb-3">Your child</h2>
+
+                  {/* A returning family picks a child we already hold, instead of
+                      retyping them into a second record. Registering the same
+                      child twice by hand is why 207 children are duplicated. */}
+                  {prefill && prefill.children.length > 0 && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {prefill.children.map((c) => (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => chooseChild(childKey === c.key ? null : c.key)}
+                          className={`rounded-full border px-3.5 py-2 text-sm font-semibold transition ${
+                            childKey === c.key
+                              ? "border-blue-500 bg-blue-50 text-blue-900"
+                              : "border-zinc-200 text-zinc-700 hover:border-zinc-400"
+                          }`}
+                        >
+                          {c.firstName} {c.lastName}
+                          {c.ageGrade ? <span className="ml-1.5 font-normal text-zinc-500">U{c.ageGrade}</span> : null}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => chooseChild(null)}
+                        className={`rounded-full border px-3.5 py-2 text-sm font-semibold transition ${
+                          childKey === null
+                            ? "border-blue-500 bg-blue-50 text-blue-900"
+                            : "border-zinc-200 text-zinc-700 hover:border-zinc-400"
+                        }`}
+                      >
+                        + Another child
+                      </button>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-3">
-                    <Input value={childFirst} onChange={e => setChildFirst(e.target.value)} placeholder="First name" />
-                    <Input value={childLast} onChange={e => setChildLast(e.target.value)} placeholder="Last name" />
-                    <DatePickerInput value={childDob} onChange={e => setChildDob(e.target.value)} className="col-span-2" />
+                    <Input value={childFirst} onChange={e => { setChildFirst(e.target.value); setChildKey(null); }} placeholder="First name" />
+                    <Input value={childLast} onChange={e => { setChildLast(e.target.value); setChildKey(null); }} placeholder="Last name" />
+                    <DatePickerInput value={childDob} onChange={e => { setChildDob(e.target.value); setChildKey(null); }} className="col-span-2" />
                   </div>
                 </div>
 

@@ -44,8 +44,29 @@ function isPublicDarkSurface(): boolean {
   );
 }
 
+// The mirror image, and the more damaging one. The public camp/academy
+// checkout pages are hardcoded LIGHT (bg-white cards, zinc text) and carry no
+// `dark:` variants at all — but the shadcn form controls inside them are
+// themed from CSS variables. So a parent whose phone is in dark mode got a
+// white page with BLACK input boxes, and a date-of-birth field that was
+// effectively invisible. Verified live on join.cufc.co.nz/u4-u8/class-book
+// (2026-08-04) — the club's only open academy checkout, and the busiest
+// holiday-camp flow, both entered in the dark.
+//
+// Only the unambiguous checkout suffixes are listed. A bare one-segment match
+// would swallow /skills, /league, /membership and /account — pages that are
+// deliberately dark — and flip them white.
+function isPublicLightSurface(): boolean {
+  if (typeof window === "undefined") return false;
+  const path = window.location.pathname;
+  // The venue booking flow at /book and /book/* is the DARK surface above and
+  // is matched there first; these are the two-segment /{slug}/… camp routes.
+  return /^\/[^/]+\/(class-book|book|checkout|success|cancel)$/.test(path);
+}
+
 function resolveMode(mode: ThemeMode): "light" | "dark" {
   if (isPublicDarkSurface()) return "dark";
+  if (isPublicLightSurface()) return "light";
   if (mode === "system") {
     if (typeof window === "undefined") return "dark";
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";

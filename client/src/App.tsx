@@ -26,6 +26,7 @@ import AdminSettings from "@/pages/admin-settings";
 import AdminEditPage from "@/pages/admin-edit-page";
 import CampPage from "@/pages/camp-page";
 import MembershipPage from "@/pages/membership-page";
+import ParentAccountPage from "@/pages/parent-account-page";
 import TermsPage from "@/pages/terms";
 import PrivacyPage from "@/pages/privacy";
 import BookingPage from "@/pages/booking-page";
@@ -788,6 +789,10 @@ function App() {
             <Route path="/league/:slug" component={MflLandingPage} />
             <Route path="/league" component={MflLandingPage} />
             <Route path="/membership" component={MembershipPage} />
+            {/* Parent accounts (join.cufc.co.nz/account) — a family's own view
+                of their children, fees and details. Literal route, so it must
+                precede the 1-segment /:slug or "account" is read as a camp. */}
+            <Route path="/account" component={ParentAccountPage} />
             {/* CUFC Academy registration (join.cufc.co.nz/academy/:slug) — must
                 precede /:slug/book so "academy" isn't swallowed as a venue slug. */}
             <Route path="/academy/:slug" component={AcademyRegisterPage} />

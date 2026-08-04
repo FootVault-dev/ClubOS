@@ -113,6 +113,7 @@ import {
 import { registerMediaRoutes } from "./media-routes";
 import { registerMarketingRoutes } from "./marketing/routes";
 import { registerFamilyRoutes } from "./family-routes";
+import { registerParentRoutes, resolveOwnedChildContactId } from "./parent-routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -1802,6 +1803,7 @@ export async function registerRoutes(
         paymentMode,  // 'upfront' | 'weekly'
         parent: { firstName, lastName, email, phone },
         child: { firstName: childFirst, lastName: childLast, dateOfBirth },
+        childKey,
         notes,
         utm,
       } = req.body || {};
@@ -1870,19 +1872,36 @@ export async function registerRoutes(
           newsletterConsent: true,
         } as any);
       }
-      const child = await storage.createContact({
-        type: "player",
-        firstName: childFirst,
-        lastName: childLast,
-        dateOfBirth: dateOfBirth || null,
-      } as any);
-      // Link guardian → child
+
+      // A signed-in parent may have picked a child we already hold. The key is
+      // a CLAIM from the browser, so resolveOwnedChildContactId re-proves the
+      // child really belongs to that parent's family (via the parent session
+      // cookie) and returns null for anything it cannot prove — in which case
+      // we create a child exactly as before. An unprovable claim must never
+      // widen access, and must never break the sale either.
+      //
+      // Until this existed, the line below ran unconditionally, so every term a
+      // family re-enrolled minted a NEW player contact. That is why 207
+      // children are stored more than once, each with a fragment of their
+      // history hanging off it.
+      const existingChildId = await resolveOwnedChildContactId(req, childKey);
+      let child = existingChildId ? await storage.getContact(existingChildId) : null;
+      if (!child) {
+        child = await storage.createContact({
+          type: "player",
+          firstName: childFirst,
+          lastName: childLast,
+          dateOfBirth: dateOfBirth || null,
+        } as any);
+      }
+      // Link guardian → child. Idempotent: the pair is unique in the DB, and a
+      // returning family already has this edge.
       await storage.createRelationship({
         guardianId: guardian.id,
         playerId: child.id,
         relationship: "parent",
         isPrimaryContact: true,
-      } as any);
+      } as any).catch(() => {});
 
       // Pay-mode-specific Stripe setup
       const { stripe } = await import("./stripe");
@@ -24215,6 +24234,12 @@ export async function registerRoutes(
   // Every screen that shows a family goes through resolveFamily() in there, so
   // two pages can never disagree about whose child someone is.
   registerFamilyRoutes(app);
+
+  // Parent accounts — the family's own view of that same data, on
+  // join.cufc.co.nz/account. A parent credential, never a staff session: it
+  // reuses resolveFamily() for membership so the office and the family can
+  // never disagree about whose child someone is.
+  registerParentRoutes(app);
 
   return httpServer;
 }
