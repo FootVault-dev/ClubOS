@@ -220,9 +220,12 @@ export default function NotificationSettings() {
             const label = EVENT_LABELS[event];
             const key = EVENT_PREF_KEY[event];
             return (
+              // Stacks below ~640px: side-by-side leaves the label about 150px
+              // wide on a phone, which wrapped "When someone messages you
+              // one-to-one." onto three lines next to a half-empty select.
               <div
                 key={event}
-                className="flex items-center justify-between gap-3 py-2.5 border-b border-white/[0.04] last:border-b-0"
+                className="flex flex-col items-stretch gap-2 py-2.5 border-b border-white/[0.04] last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
               >
                 <div className="flex items-start gap-2.5 min-w-0 flex-1">
                   <span className="text-white/30 mt-0.5 shrink-0"><Icon className="w-4 h-4" /></span>
@@ -232,8 +235,11 @@ export default function NotificationSettings() {
                   </div>
                 </div>
                 <Select value={prefs[key]} onValueChange={(v) => set(key, v as DeliveryMode)}>
+                  {/* Stacked, the select is indented to line up under the label
+                      TEXT rather than the icon: w-4 (1rem) + gap-2.5 (0.625rem).
+                      Taller trigger on mobile — 32px is under the tap-target floor. */}
                   <SelectTrigger
-                    className="w-[150px] shrink-0 bg-white/[0.03] border-white/10 text-white/80 text-xs h-8"
+                    className="shrink-0 bg-white/[0.03] border-white/10 text-white/80 text-xs h-9 ml-[1.625rem] w-[calc(100%-1.625rem)] sm:h-8 sm:ml-0 sm:w-[150px]"
                     data-testid={`select-${event}`}
                   >
                     <SelectValue />
