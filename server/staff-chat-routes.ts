@@ -195,6 +195,8 @@ async function channelSummaryFor(userId: number) {
         isPrivate: r.channel.isPrivate,
         isDefault: r.channel.isDefault,
         postPolicy: r.channel.postPolicy,
+        iconEmoji: r.channel.iconEmoji,
+        iconUrl: r.channel.iconUrl,
         archived: r.channel.archivedAt != null,
         lastMessageAt: r.channel.lastMessageAt,
         createdAt: r.channel.createdAt,
@@ -744,6 +746,42 @@ export function registerStaffChatRoutes(app: Express) {
       }
       if (req.body.postPolicy !== undefined && STAFF_POST_POLICIES.includes(req.body.postPolicy))
         patch.postPolicy = req.body.postPolicy;
+
+      // ── Channel icon: an emoji OR an image, never both. ───────────────────
+      // Setting either clears the other, so "which one wins" is decided here
+      // once instead of separately by the web and the phone.
+      if (req.body.iconEmoji !== undefined) {
+        const raw = typeof req.body.iconEmoji === "string" ? req.body.iconEmoji.trim() : "";
+        if (!raw) {
+          patch.iconEmoji = null;
+        } else {
+          // Deliberately loose. Emoji are ZWJ sequences, skin-tone modifiers
+          // and regional-indicator pairs — any regex tight enough to be
+          // "correct" rejects something real. This only catches someone
+          // typing a word into the field.
+          if (raw.length > 16 || /[A-Za-z0-9]/.test(raw)) {
+            return res.status(400).json({ message: "That doesn't look like an emoji" });
+          }
+          patch.iconEmoji = raw;
+          patch.iconUrl = null;
+        }
+      }
+      if (req.body.iconUrl !== undefined) {
+        const raw = typeof req.body.iconUrl === "string" ? req.body.iconUrl.trim() : "";
+        if (!raw) {
+          patch.iconUrl = null;
+        } else {
+          // Only our own object storage. An arbitrary URL here would let a
+          // channel icon beacon every staff member's IP to a third party
+          // every time the sidebar renders.
+          if (!raw.startsWith("/objects/")) {
+            return res.status(400).json({ message: "Upload the image first" });
+          }
+          patch.iconUrl = raw;
+          patch.iconEmoji = null;
+        }
+      }
+
       if (req.body.archived === true) patch.archivedAt = new Date();
       if (req.body.archived === false) patch.archivedAt = null;
       if (Object.keys(patch).length === 0) return res.status(400).json({ message: "Nothing to change" });

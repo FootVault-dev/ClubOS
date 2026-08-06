@@ -6872,6 +6872,11 @@ export const staffChannels = pgTable(
     isDefault: boolean("is_default").notNull().default(false),
     // 'anyone' | 'leadership' — announcements channels are leadership-post-only.
     postPolicy: text("post_policy").notNull().default("anyone"),
+    // The channel's mark. ALTERNATIVES, never both — setting one clears the
+    // other in the API, so no client has to decide which wins. Neither set
+    // falls back to the initial-letter mark the clients already draw.
+    iconEmoji: text("icon_emoji"),
+    iconUrl: text("icon_url"),
     // DMs only: sorted participant ids "4:17:23". Same people → same DM
     // (partial unique index in the migration).
     dmKey: text("dm_key"),
