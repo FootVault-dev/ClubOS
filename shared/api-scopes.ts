@@ -71,6 +71,13 @@ export const API_SCOPES: ApiScopeDef[] = [
     description: "NZF-compliance registration export (identity, guardian, registration + paid status). Never medical or payment data.",
     personal: true,
   },
+  {
+    scope: "squads:read",
+    label: "Squads",
+    description:
+      "The club's own teams and who is in them — squad name, age grade, season, and each player's name, number and position. Never DOB, contact details, medical notes or assessments.",
+    personal: true,
+  },
 ];
 
 export const VALID_API_SCOPES = new Set(API_SCOPES.map((s) => s.scope));

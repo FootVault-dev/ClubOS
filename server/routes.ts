@@ -19414,6 +19414,68 @@ export async function registerRoutes(
   // paid/outstanding flag. Deliberately excluded: medical data (allergies,
   // epi-pen, notes), school details, Stripe/payment identifiers, marketing
   // attribution. Defaults to academy programmes (the NZF-registrable cohort).
+  // The club's own teams and who is in them, for the coaching platform's roll.
+  //
+  // 🔴 Roster fields ONLY — name, squad number, position. A squad member is a
+  // `contacts` row that also carries date of birth, guardian contact details,
+  // NZF identity answers and medical notes; none of that is a coach's roll and
+  // none of it leaves through this endpoint. `squads:read` is deliberately
+  // narrower than `sporty:read` for exactly that reason.
+  //
+  // Players only: a squad's coaches are staff, and who coaches what is managed
+  // in the coaching platform itself rather than mirrored from here.
+  // Departed members (left_at in the past) are excluded — the roll is who is in
+  // the squad now, while the row itself is kept for the NZF audit trail.
+  app.get("/api/v1/squads", requireApiKey, requireScope("squads:read"), async (req: Request, res: Response) => {
+    try {
+      const orgId = (req as any).apiKeyOrg;
+      const season = parseInt(req.query.season as string) || new Date().getFullYear();
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT s.id, s.name, s.age_grade, s.season_year, s.band, s.competition, s.display_order,
+               m.contact_id, m.squad_number, m.position,
+               c.first_name, c.last_name
+        FROM club_squads s
+        LEFT JOIN club_squad_members m
+          ON m.squad_id = s.id
+         AND m.role = 'player'
+         AND (m.left_at IS NULL OR m.left_at > CURRENT_DATE)
+        LEFT JOIN contacts c ON c.id = m.contact_id
+        WHERE s.organization_id = ${orgId}
+          AND s.season_year = ${season}
+          AND s.is_active = true
+        ORDER BY s.display_order, s.name, c.last_name, c.first_name
+      `));
+
+      const bySquad = new Map<number, any>();
+      for (const r of rows as any[]) {
+        if (!bySquad.has(r.id)) {
+          bySquad.set(r.id, {
+            id: r.id,
+            name: r.name,
+            ageGrade: r.age_grade,
+            seasonYear: r.season_year,
+            band: r.band,
+            competition: r.competition,
+            players: [],
+          });
+        }
+        if (r.contact_id) {
+          bySquad.get(r.id).players.push({
+            contactId: r.contact_id,
+            name: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim(),
+            squadNumber: r.squad_number,
+            position: r.position,
+          });
+        }
+      }
+
+      res.json({ season, squads: Array.from(bySquad.values()) });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get("/api/v1/sporty/registrations", requireApiKey, requireScope("sporty:read"), async (req: Request, res: Response) => {
     try {
       const orgs = await apiKeyOrgsOfType(req, "camps");
