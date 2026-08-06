@@ -1481,6 +1481,106 @@ export async function sendStaffChatNotification(params: {
   });
 }
 
+/** Daily / weekly digest — the opt-in "here's what you missed" summary.
+ *  Sent by server/digest-cron.ts at the hour each person chose (NZ), at most
+ *  once per NZ calendar day. Never sent when there is nothing to report — an
+ *  empty digest teaches people to filter us. Org-agnostic system mail, so it
+ *  sends from cufc.co.nz per shared/org-domains doctrine. */
+export async function sendDigestEmail(params: {
+  to: string;
+  recipientName: string;
+  kind: "daily" | "weekly";
+  content: {
+    channels: { name: string; unread: number; mentions: number }[];
+    totalUnread: number;
+    totalMentions: number;
+    overdueTasks: { title: string; dueDate: string | null; project: string | null }[];
+    dueSoonTasks: { title: string; dueDate: string | null; project: string | null }[];
+  };
+  appUrl: string;
+}): Promise<boolean> {
+  const accent = "#c9a43e";
+  const esc = (s: string) => (s || "").replace(/</g, "&lt;");
+  const c = params.content;
+  const period = params.kind === "daily" ? "today" : "this week";
+
+  const section = (title: string, inner: string) =>
+    inner
+      ? `<p style="color:${accent};margin:22px 0 10px;font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;">${title}</p>${inner}`
+      : "";
+
+  const chatRows = c.channels
+    .slice(0, 12)
+    .map((ch) => {
+      // A mention is the thing they actually need to see, so it leads the line
+      // and unread volume is the supporting detail — not the other way round.
+      const bits = [
+        ch.mentions > 0
+          ? `<span style="color:${accent};font-weight:700;">${ch.mentions} mention${ch.mentions === 1 ? "" : "s"}</span>`
+          : "",
+        ch.unread > 0 ? `${ch.unread} unread` : "",
+      ].filter(Boolean);
+      return `<tr><td style="padding:7px 0;color:#e6e6e6;font-size:14px;">${esc(ch.name)}</td>
+        <td style="padding:7px 0;color:#9aa0a6;font-size:13px;text-align:right;">${bits.join(" · ")}</td></tr>`;
+    })
+    .join("");
+
+  const taskRow = (t: { title: string; dueDate: string | null; project: string | null }, overdue: boolean) =>
+    `<tr><td style="padding:7px 0;color:#e6e6e6;font-size:14px;">${esc(t.title)}${
+      t.project ? `<span style="color:#5a5a5a;font-size:12px;"> · ${esc(t.project)}</span>` : ""
+    }</td><td style="padding:7px 0;font-size:13px;text-align:right;color:${overdue ? "#ef6461" : "#9aa0a6"};">${
+      t.dueDate ? esc(nzDisplayDate(t.dueDate)) : ""
+    }</td></tr>`;
+
+  const overdueRows = c.overdueTasks.slice(0, 12).map((t) => taskRow(t, true)).join("");
+  const dueSoonRows = c.dueSoonTasks.slice(0, 12).map((t) => taskRow(t, false)).join("");
+
+  const headline =
+    c.totalMentions > 0
+      ? `You were mentioned ${c.totalMentions} time${c.totalMentions === 1 ? "" : "s"}`
+      : c.overdueTasks.length > 0
+        ? `${c.overdueTasks.length} task${c.overdueTasks.length === 1 ? " is" : "s are"} overdue`
+        : `What you missed ${period}`;
+
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0b0b08;padding:36px 16px;">
+    <div style="max-width:560px;margin:0 auto;">
+      <div style="text-align:center;padding:4px 0 22px;">
+        <p style="color:${accent};margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">United Sports Group · ClubOS</p>
+        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.2px;">${esc(headline)}</h1>
+      </div>
+      <div style="background:#141511;border:1px solid #2c2d23;border-radius:18px;padding:24px;">
+        <p style="color:#e6e6e6;font-size:14px;line-height:1.6;margin:0;">Hi ${esc(params.recipientName.split(" ")[0])}, here's your ${params.kind} summary.</p>
+        ${section("Chat", chatRows ? `<table style="width:100%;border-collapse:collapse;">${chatRows}</table>` : "")}
+        ${section("Overdue", overdueRows ? `<table style="width:100%;border-collapse:collapse;">${overdueRows}</table>` : "")}
+        ${section("Coming up", dueSoonRows ? `<table style="width:100%;border-collapse:collapse;">${dueSoonRows}</table>` : "")}
+        <div style="text-align:center;margin:26px 0 4px;"><a href="${params.appUrl}/admin/chat" style="display:inline-block;background:${accent};color:#0b0b08;font-weight:700;font-size:14px;text-decoration:none;padding:11px 22px;border-radius:10px;">Open ClubOS</a></div>
+      </div>
+      <p style="text-align:center;color:#5a5a5a;font-size:11px;line-height:1.7;margin:20px 0 0;">You're getting this because you switched on the ${params.kind} digest.<br/><a href="${params.appUrl}/admin/notification-settings" style="color:#8a8a8a;">Change or turn off your notification settings</a></p>
+    </div>
+  </div>`;
+
+  return sendEmail({
+    to: params.to,
+    from: "ClubOS <noreply@cufc.co.nz>",
+    subject: params.kind === "daily" ? "Your ClubOS daily summary" : "Your ClubOS week ahead",
+    html,
+  });
+}
+
+/** Render a bare YYYY-MM-DD as "Fri 8 Aug" WITHOUT constructing a Date from it —
+ *  `new Date("2026-08-08")` is midnight UTC, which is the previous day in NZ and
+ *  has already printed the wrong date on a live invoice once. */
+function nzDisplayDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  const [, y, mo, d] = m;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${parseInt(d, 10)} ${months[parseInt(mo, 10) - 1]}${
+    parseInt(y, 10) !== new Date().getFullYear() ? ` ${y}` : ""
+  }`;
+}
+
 /** Club logo licence — a participating club's rep signed the CIC logo agreement
  *  (cicyouth.com/club-logo-agreement). Emails info@cicyouth.com the proof record. */
 export async function sendClubLogoConsentNotification(params: {

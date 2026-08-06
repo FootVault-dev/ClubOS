@@ -321,6 +321,72 @@ export function truncateForPush(body: string, max = 178): string {
   return flat.slice(0, max - 1).trimEnd() + "…";
 }
 
+// ── The chat delivery ladder ─────────────────────────────────────────────────
+// Pure, and deliberately here rather than beside the database: this is the
+// logic that decides who gets buzzed, so it must be testable without a DB
+// connection. Same reasoning as shared/staff-chat.ts.
+
+export interface ChatRecipient {
+  userId: number;
+  /** Explicitly @mentioned in this message. */
+  mentioned: boolean;
+  /** Their notify level for this channel: 'all' | 'mentions' | 'muted'. */
+  notifyLevel: string;
+  /** Away = no chat heartbeat for 5 minutes. */
+  away: boolean;
+  /** An escalation email already went to this channel inside the debounce. */
+  emailDebounced: boolean;
+  email: string | null;
+}
+
+export interface ChatDeliveryPlan {
+  userId: number;
+  push: boolean;
+  email: boolean;
+  event: NotificationEvent;
+}
+
+/**
+ * Who gets a push and who gets an email, for one message.
+ *
+ * The ladder:
+ *   · a MENTION or a DM reaches you wherever you are
+ *   · ordinary channel traffic reaches you only if you set that channel to 'all'
+ *   · a mention cuts through a MUTED channel — muting a room is not the same as
+ *     telling a colleague you don't want to be asked a direct question
+ *   · PUSH goes out immediately; EMAIL is the away-escalation only, so somebody
+ *     with the app open gets one buzz, not a buzz and an inbox item
+ */
+export function planChatDelivery(
+  recipients: ChatRecipient[],
+  prefs: Map<number, NotificationPreferences>,
+  isDm: boolean,
+  now: Date,
+  opts: { urgent?: boolean } = {},
+): ChatDeliveryPlan[] {
+  const plans: ChatDeliveryPlan[] = [];
+  for (const r of recipients) {
+    const level = r.notifyLevel;
+    const wants = r.mentioned || (isDm && level !== "muted") || (!isDm && level === "all");
+    if (!wants) continue;
+
+    const event: NotificationEvent = isDm
+      ? "chat_dm"
+      : r.mentioned
+        ? "chat_mention"
+        : "chat_channel";
+
+    const p = prefs.get(r.userId) ?? DEFAULT_PREFERENCES;
+    const decision = decideDelivery(p, event, now, opts);
+    if (!decision.push && !decision.email) continue;
+
+    const email = decision.email && r.away && !r.emailDebounced && !!r.email;
+    if (!decision.push && !email) continue;
+    plans.push({ userId: r.userId, push: decision.push, email, event });
+  }
+  return plans;
+}
+
 // ── Android notification channels ────────────────────────────────────────────
 // Android routes every notification through a channel, and the channel — not
 // the payload — owns the sound, the vibration and whether it appears as a

@@ -134,6 +134,12 @@ app.use(attributionCookieMiddleware);
   const { registerNotificationRoutes } = await import("./notification-routes");
   registerNotificationRoutes(app);
 
+  // Opt-in daily / weekly digests. 15-minute sweep, idempotent on the NZ
+  // calendar day — see server/digest-cron.ts. Nobody receives anything unless
+  // they switched it on themselves, so this is inert until someone opts in.
+  const { startDigestCron } = await import("./digest-cron");
+  startDigestCron();
+
   // Hiring — job postings + applications. Admin side is gated by
   // requireTab("hiring") to the USG workspace; the public apply endpoints are
   // CORS-allow-listed to our own brand sites and carry no session.

@@ -308,71 +308,10 @@ export async function sendPushToUsers(items: UserPush[]): Promise<{ sent: number
   return { sent, failed };
 }
 
-// ── The chat delivery decision, per recipient ────────────────────────────────
-
-export interface ChatRecipient {
-  userId: number;
-  /** Explicitly @mentioned in this message. */
-  mentioned: boolean;
-  /** Their notify level for this channel: 'all' | 'mentions' | 'muted'. */
-  notifyLevel: string;
-  /** Away = no chat heartbeat for 5 minutes. */
-  away: boolean;
-  /** True when an escalation email was already sent for this channel recently. */
-  emailDebounced: boolean;
-  email: string | null;
-}
-
-export interface ChatDeliveryPlan {
-  userId: number;
-  push: boolean;
-  email: boolean;
-  event: NotificationEvent;
-}
-
-/**
- * Work out, for one message, who gets a push and who gets an email.
- *
- * The ladder (unchanged from the original chat design, now per-person):
- *   · a MENTION or a DM reaches you wherever you are
- *   · ordinary channel traffic reaches you only if you set that channel to 'all'
- *   · a mention cuts through a MUTED channel — muting a room is not the same as
- *     telling a colleague you don't want to be asked a direct question
- *   · PUSH goes out immediately; EMAIL is the away-escalation only, so somebody
- *     with the app open gets one buzz, not a buzz and an inbox item
- */
-export function planChatDelivery(
-  recipients: ChatRecipient[],
-  prefs: Map<number, NotificationPreferences>,
-  isDm: boolean,
-  now: Date,
-  opts: { urgent?: boolean } = {},
-): ChatDeliveryPlan[] {
-  const plans: ChatDeliveryPlan[] = [];
-  for (const r of recipients) {
-    const level = r.notifyLevel;
-    const wants = r.mentioned || (isDm && level !== "muted") || (!isDm && level === "all");
-    if (!wants) continue;
-
-    const event: NotificationEvent = isDm
-      ? "chat_dm"
-      : r.mentioned
-        ? "chat_mention"
-        : "chat_channel";
-
-    const p = prefs.get(r.userId) ?? DEFAULT_PREFERENCES;
-    const decision = decideDelivery(p, event, now, opts);
-    if (!decision.push && !decision.email) continue;
-
-    // Email is the AWAY escalation — someone actively looking at the app has
-    // already seen it. And never twice for the same room inside the debounce.
-    const email = decision.email && r.away && !r.emailDebounced && !!r.email;
-
-    if (!decision.push && !email) continue;
-    plans.push({ userId: r.userId, push: decision.push, email, event });
-  }
-  return plans;
-}
+// `planChatDelivery` (the ladder) lives in shared/notifications.ts so it can be
+// tested without a database connection — re-exported here so callers have one
+// import for everything notification-shaped.
+export { planChatDelivery, type ChatRecipient, type ChatDeliveryPlan } from "@shared/notifications";
 
 /** Build the Expo payload for one chat recipient. */
 export function chatPayloadFor(opts: {
