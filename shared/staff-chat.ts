@@ -158,6 +158,12 @@ const FILE_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
   "video/webm",
+  // Shared contacts (the WhatsApp "share a contact" flow). Both spellings exist
+  // in the wild: text/vcard is the RFC 6350 registration, text/x-vcard is what
+  // older exporters and some Android pickers still emit. Reject one and a
+  // contact silently fails to send on half the phones.
+  "text/vcard",
+  "text/x-vcard",
 ]);
 
 export function classifyUpload(contentType: string): "image" | "voice" | "file" | null {
@@ -183,6 +189,7 @@ export function extensionFor(contentType: string): string {
     "application/vnd.ms-powerpoint": "ppt",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
     "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm",
+    "text/vcard": "vcf", "text/x-vcard": "vcf",
   };
   return map[ct] ?? "bin";
 }
