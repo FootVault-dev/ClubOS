@@ -48,11 +48,17 @@ import {
   excerpt,
   isAway,
   emailDebounced,
-  isQuietHoursNZ,
   classifyUpload,
   extensionFor,
 } from "@shared/staff-chat";
 import { sendStaffChatNotification } from "./email";
+import {
+  getPreferencesBulk,
+  planChatDelivery,
+  badgeCountsFor,
+  sendPushToUsers,
+  chatPayloadFor,
+} from "./notifications";
 
 const CHAT_APP_URL = (process.env.APP_URL || "https://app.usg.co.nz").replace(/\/+$/, "");
 
@@ -207,12 +213,23 @@ async function channelSummaryFor(userId: number) {
     });
 }
 
-// ── Away-email escalation ────────────────────────────────────────────────────
+// ── Escalation: push + away-email ────────────────────────────────────────────
 // Fire-and-forget after a send. Recipients: explicitly mentioned members +
 // everyone in a DM + members who opted a channel to 'all'. Mentions cut through
 // a muted channel (a personal ping is personal); plain 'all' traffic doesn't.
-// Only AWAY people are emailed, never during NZ quiet hours, one email per
-// channel per 15 min. In-app badges carry everything else.
+//
+// The ladder, now that phones are in play:
+//   PUSH  — immediate, to everyone whose preferences allow it. This is the
+//           primary channel; it is what makes the app usable as staff comms.
+//   EMAIL — the AWAY escalation only (no chat heartbeat for 5 min), one per
+//           channel per 15 min. Somebody with the app open gets a single buzz,
+//           never a buzz AND an inbox item.
+//
+// 🔴 Quiet hours are now PER PERSON (server default 20:00–08:00 NZ, the club-
+// wide rule this used to hard-code for everybody). The early global return is
+// gone deliberately — decideDelivery() applies each recipient's own window, so
+// a night-shift staffer can opt in without lifting the curfew for the club.
+// In-app badges are never suppressed by any of this.
 async function escalateMessage(opts: {
   channel: typeof staffChannels.$inferSelect;
   messageId: number;
@@ -220,10 +237,16 @@ async function escalateMessage(opts: {
   authorName: string;
   body: string;
   mentionedUserIds: Set<number>;
+  /**
+   * Leadership "must-see" message. The ONLY thing that overrides quiet hours —
+   * and it still cannot override someone setting an event to 'none', because an
+   * explicit "never tell me about this" is a decision, not a preference to
+   * route around.
+   */
+  requiresAck?: boolean;
 }): Promise<void> {
   try {
     const now = new Date();
-    if (isQuietHoursNZ(now)) return;
 
     const members = await db
       .select({ member: staffChannelMembers, user: usersTable, presence: staffChatPresence })
@@ -235,26 +258,73 @@ async function escalateMessage(opts: {
     const isDm = opts.channel.kind === "dm";
     const context = isDm ? `a direct message` : `#${opts.channel.name}`;
 
-    for (const row of members) {
-      const { member, user, presence } = row;
-      if (user.id === opts.authorId || !user.active || !user.email) continue;
+    // Candidates: everyone in the room except the author and inactive accounts.
+    // A member with no email address can still receive PUSH — the old code
+    // skipped them entirely because email was the only channel that existed.
+    const candidates = members.filter(
+      (r) => r.user.id !== opts.authorId && r.user.active,
+    );
+    if (!candidates.length) return;
 
-      const level = member.notifyLevel as StaffNotifyLevel;
-      const personallyMentioned = opts.mentionedUserIds.has(user.id);
-      const shouldNotify =
-        personallyMentioned || (isDm && level !== "muted") || (!isDm && level === "all");
-      if (!shouldNotify) continue;
+    const prefs = await getPreferencesBulk(candidates.map((r) => r.user.id));
+    const plans = planChatDelivery(
+      candidates.map((r) => ({
+        userId: r.user.id,
+        mentioned: opts.mentionedUserIds.has(r.user.id),
+        notifyLevel: r.member.notifyLevel as StaffNotifyLevel,
+        away: isAway(r.presence?.lastSeenAt ?? null, now),
+        emailDebounced: emailDebounced(r.member.lastEmailedAt, now),
+        email: r.user.email ?? null,
+      })),
+      prefs,
+      isDm,
+      now,
+      { urgent: opts.requiresAck },
+    );
+    if (!plans.length) return;
 
-      if (!isAway(presence?.lastSeenAt ?? null, now)) continue; // they'll see the badge
-      if (emailDebounced(member.lastEmailedAt, now)) continue;
+    const byId = new Map(candidates.map((r) => [r.user.id, r]));
 
+    // ── Push ────────────────────────────────────────────────────────────────
+    // Badges are fetched for all push recipients in one query, then each person
+    // gets THEIR OWN number — one shared count would show everybody the same
+    // meaningless figure.
+    const pushIds = plans.filter((p) => p.push).map((p) => p.userId);
+    if (pushIds.length) {
+      const badges = await badgeCountsFor(pushIds);
+      await sendPushToUsers(
+        pushIds.map((userId) => ({
+          userId,
+          payload: chatPayloadFor({
+            senderName: opts.authorName,
+            channelKind: isDm ? "dm" : "channel",
+            channelName: opts.channel.name,
+            channelId: opts.channel.id,
+            messageId: opts.messageId,
+            body: opts.body,
+            mentioned: opts.mentionedUserIds.has(userId),
+            showPreview: prefs.get(userId)?.showPreview ?? true,
+            // The message being delivered is not in the badge query's result
+            // yet only if the read pointer moved between the two — counting it
+            // explicitly would double it. Trust the query.
+            badge: badges.get(userId) ?? 0,
+          }),
+        })),
+      );
+    }
+
+    // ── Away email ──────────────────────────────────────────────────────────
+    for (const plan of plans) {
+      if (!plan.email) continue;
+      const row = byId.get(plan.userId);
+      if (!row?.user.email) continue;
       const sent = await sendStaffChatNotification({
-        to: user.email,
-        recipientName: user.firstName || fullName(user),
+        to: row.user.email,
+        recipientName: row.user.firstName || fullName(row.user),
         senderName: opts.authorName,
         context,
         messageExcerpt: excerpt(opts.body, 200),
-        mentioned: personallyMentioned && !isDm,
+        mentioned: opts.mentionedUserIds.has(plan.userId) && !isDm,
         chatUrl: `${CHAT_APP_URL}/admin/chat?c=${opts.channel.id}`,
       }).catch((e) => {
         console.error("[staff-chat] escalation email failed:", e);
@@ -264,7 +334,7 @@ async function escalateMessage(opts: {
         await db
           .update(staffChannelMembers)
           .set({ lastEmailedAt: now })
-          .where(eq(staffChannelMembers.id, member.id));
+          .where(eq(staffChannelMembers.id, row.member.id));
       }
     }
   } catch (e) {
@@ -587,6 +657,7 @@ export function registerStaffChatRoutes(app: Express) {
             authorName,
             body: body || (attachments[0]?.kind === "voice" ? "🎤 Voice note" : `📎 ${attachments[0]?.name ?? "Attachment"}`),
             mentionedUserIds: mentioned,
+            requiresAck,
           }),
         );
       }

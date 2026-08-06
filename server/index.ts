@@ -127,6 +127,13 @@ app.use(attributionCookieMiddleware);
   const { registerStaffChatRoutes } = await import("./staff-chat-routes");
   registerStaffChatRoutes(app);
 
+  // Notification preferences + staff push-device registration. Universal
+  // (requireAuth only) because settings belong to a PERSON, not a workspace —
+  // they must answer identically on web and phone, in any workspace.
+  // See migrations/2026-08-07_notifications.sql + shared/notifications.ts.
+  const { registerNotificationRoutes } = await import("./notification-routes");
+  registerNotificationRoutes(app);
+
   // Hiring — job postings + applications. Admin side is gated by
   // requireTab("hiring") to the USG workspace; the public apply endpoints are
   // CORS-allow-listed to our own brand sites and carry no session.
