@@ -106,8 +106,12 @@ async function main() {
     checks.push(["hour CHECK rejects 99", hourCheckBites, "constraint did not fire"]);
 
     // And a valid row must insert cleanly, with the right defaults applied.
+    // Inside its own SAVEPOINT so the probe row is discarded even on --commit:
+    // a verification artifact must never survive into real data. (It did once —
+    // a defaults row for user 1 had to be deleted by hand afterwards.)
     const [u] = (await tx.execute(sql`SELECT id FROM users ORDER BY id LIMIT 1`) as any).rows;
     if (u) {
+      await tx.execute(sql`SAVEPOINT probe_defaults`);
       await tx.execute(sql`INSERT INTO notification_preferences (user_id) VALUES (${u.id})
                            ON CONFLICT (user_id) DO NOTHING`);
       const [row] = (await tx.execute(sql`
@@ -121,6 +125,7 @@ async function main() {
         row?.push_enabled === true && row?.email_enabled === true && row?.show_preview === true &&
         row?.daily_digest === false && Number(row?.weekly_digest_day) === 1,
         JSON.stringify(row)]);
+      await tx.execute(sql`ROLLBACK TO SAVEPOINT probe_defaults`);
     }
 
     // RLS on (scripts/security/rls_guard.mjs would fail the build otherwise).
