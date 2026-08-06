@@ -14,6 +14,10 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+// The server's own limit, not a copy of the number — the composer below still
+// hardcodes 25MB, and a divergence there means the UI accepts a file the API
+// then rejects.
+import { UPLOAD_MAX_BYTES } from "@shared/staff-chat";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -31,6 +35,8 @@ interface Person { id: number; name: string; firstName: string; lastName: string
 interface ChannelSummary {
   id: number; kind: "channel" | "dm"; name: string | null; topic: string | null;
   isPrivate: boolean; isDefault: boolean; postPolicy: "anyone" | "leadership";
+  /** Alternatives, never both — the server clears one when the other is set. */
+  iconEmoji?: string | null; iconUrl?: string | null;
   archived: boolean; lastMessageAt: string | null; joined: boolean;
   notifyLevel: "all" | "mentions" | "muted" | null; unread: number; mentions: number;
   members?: { userId: number; name: string }[];
@@ -88,6 +94,11 @@ const dmName = (c: ChannelSummary, me: number) => {
   return others.length ? others.map((m) => m.name).join(", ") : "Just you";
 };
 const channelLabel = (c: ChannelSummary, me: number) => (c.kind === "dm" ? dmName(c, me) : c.name ?? "channel");
+
+// A short, club-shaped shortlist rather than a full emoji keyboard: the web
+// dialog is a settings form, and the phone (which has a real picker) is where
+// people will actually choose. Covers the rooms this club actually runs.
+const CHANNEL_ICON_EMOJIS = ["⚽", "📣", "🏆", "🧾", "🛠️", "📅", "🚐", "🏟️", "📸", "💬", "🔒", "🎉"];
 
 // Render body text: linkify URLs + highlight mentions (names of mentioned
 // members + @channel tokens). React escapes everything else for us.
@@ -370,7 +381,7 @@ function SectionLabel({ children, className = "" }: { children: React.ReactNode;
   );
 }
 
-function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number; active: boolean; onClick: () => void }) {
+export function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number; active: boolean; onClick: () => void }) {
   const label = channelLabel(c, me);
   const important = c.kind === "dm" ? c.unread : c.mentions;
   const hasUnread = c.unread > 0;
@@ -388,6 +399,14 @@ function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number;
         >
           {initials(label)}
         </div>
+      ) : /* A channel's own mark wins over the type icon — that is the whole
+             point of setting one. The Hash/Lock/Megaphone fallbacks below still
+             carry "what KIND of room is this", so a channel with an icon shows
+             its private/announcement status via the badge next to the name. */
+        c.iconUrl ? (
+        <img src={c.iconUrl} alt="" className="w-6 h-6 rounded-lg object-cover shrink-0" />
+      ) : c.iconEmoji ? (
+        <span className="w-6 h-6 flex items-center justify-center text-[15px] leading-none shrink-0">{c.iconEmoji}</span>
       ) : c.postPolicy === "leadership" ? (
         <Megaphone className={`w-4 h-4 shrink-0 ${hasUnread ? "text-white/80" : "text-white/30"}`} />
       ) : c.isPrivate ? (
@@ -1301,7 +1320,7 @@ function Composer(props: {
 
   const addFiles = async (files: FileList | File[]) => {
     for (const f of Array.from(files)) {
-      if (f.size > 25 * 1024 * 1024) {
+      if (f.size > UPLOAD_MAX_BYTES) {
         toast({ title: "Too big", description: `${f.name} is over 25MB`, variant: "destructive" });
         continue;
       }
@@ -1775,21 +1794,54 @@ function MembersDialog(props: {
   );
 }
 
-function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; channel: ChannelSummary; onBack: () => void }) {
+export function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; channel: ChannelSummary; onBack: () => void }) {
   const { open, onClose, channel, onBack } = props;
   const { toast } = useToast();
   const [name, setName] = useState(channel.name ?? "");
   const [topic, setTopic] = useState(channel.topic ?? "");
   const [announceOnly, setAnnounceOnly] = useState(channel.postPolicy === "leadership");
   const [busy, setBusy] = useState(false);
+  // An emoji OR an image, mirroring the server: picking one clears the other,
+  // so the dialog can never send a combination the API would have to arbitrate.
+  const [iconEmoji, setIconEmoji] = useState<string | null>(channel.iconEmoji ?? null);
+  const [iconUrl, setIconUrl] = useState<string | null>(channel.iconUrl ?? null);
+  const [iconBusy, setIconBusy] = useState(false);
+  const iconFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setName(channel.name ?? "");
       setTopic(channel.topic ?? "");
       setAnnounceOnly(channel.postPolicy === "leadership");
+      setIconEmoji(channel.iconEmoji ?? null);
+      setIconUrl(channel.iconUrl ?? null);
     }
   }, [open, channel]);
+
+  const uploadIcon = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Pick an image", description: "PNG, JPG or WebP.", variant: "destructive" });
+      return;
+    }
+    if (file.size > UPLOAD_MAX_BYTES) {
+      toast({ title: "That image is too big", description: `Limit is ${fmtBytes(UPLOAD_MAX_BYTES)}.`, variant: "destructive" });
+      return;
+    }
+    setIconBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/admin/chat/upload", { method: "POST", body: fd, credentials: "include" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Upload failed");
+      const a = await res.json();
+      setIconUrl(a.url);
+      setIconEmoji(null);
+    } catch (e: any) {
+      toast({ title: "Couldn't upload", description: e.message, variant: "destructive" });
+    } finally {
+      setIconBusy(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -1798,6 +1850,11 @@ function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; chan
         name,
         topic,
         postPolicy: announceOnly ? "leadership" : "anyone",
+        // Send both keys so clearing an icon actually clears it — omitting a
+        // key means "leave alone" on the server, which would make the Remove
+        // button silently do nothing.
+        iconEmoji: iconEmoji ?? "",
+        iconUrl: iconUrl ?? "",
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/admin/chat/sync"] });
       queryClient.invalidateQueries({ queryKey: [`/api/admin/chat/channels/${channel.id}/messages`] });
@@ -1828,6 +1885,66 @@ function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; chan
           <h2 className="text-[15px] font-bold">Channel settings</h2>
         </div>
         <div className="p-4 space-y-3">
+          {/* ── Channel icon ───────────────────────────────────────────────── */}
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center shrink-0 overflow-hidden">
+              {iconBusy ? (
+                <Loader2 className="w-4 h-4 animate-spin text-white/40" />
+              ) : iconUrl ? (
+                <img src={iconUrl} alt="" className="w-full h-full object-cover" />
+              ) : iconEmoji ? (
+                <span className="text-[26px] leading-none">{iconEmoji}</span>
+              ) : (
+                <Hash className="w-5 h-5 text-white/25" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-semibold text-white/70">Channel icon</div>
+              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                {CHANNEL_ICON_EMOJIS.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    onClick={() => { setIconEmoji(e); setIconUrl(null); }}
+                    className={`w-7 h-7 rounded-lg text-[15px] leading-none flex items-center justify-center transition-colors ${
+                      iconEmoji === e ? "bg-white/[0.16] ring-1 ring-white/30" : "hover:bg-white/[0.08]"
+                    }`}
+                  >
+                    {e}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => iconFileRef.current?.click()}
+                  className="h-7 px-2 rounded-lg text-[11px] font-semibold border border-white/10 hover:border-white/25 transition-colors"
+                >
+                  Upload
+                </button>
+                {(iconEmoji || iconUrl) && (
+                  <button
+                    type="button"
+                    onClick={() => { setIconEmoji(null); setIconUrl(null); }}
+                    className="h-7 px-2 rounded-lg text-[11px] font-semibold text-white/45 hover:text-white/80 transition-colors"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                ref={iconFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadIcon(f);
+                  // Reset so re-picking the SAME file still fires onChange.
+                  e.target.value = "";
+                }}
+              />
+            </div>
+          </div>
+
           <div className="relative">
             <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
             <input value={name} onChange={(e) => setName(e.target.value)}
