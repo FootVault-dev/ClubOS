@@ -1049,12 +1049,147 @@ function AckRoster({ messageId }: { messageId: number }) {
   );
 }
 
-function AttachmentView({ a }: { a: Attachment }) {
+/** True for anything the browser can render in place rather than download. */
+function isPreviewable(a: Attachment): boolean {
+  const ct = (a.contentType || "").toLowerCase();
+  return ct === "application/pdf" || ct.startsWith("image/") || ct.startsWith("video/");
+}
+
+function isVCard(a: Attachment): boolean {
+  const ct = (a.contentType || "").toLowerCase();
+  return ct === "text/vcard" || ct === "text/x-vcard" || /\.vcf$/i.test(a.name || "");
+}
+
+/**
+ * Read the handful of fields worth showing off a vCard. Deliberately a light
+ * regex read, not a parser: a contact card needs a name and a number, and a
+ * malformed card must degrade to a plain file rather than throw inside a
+ * message list.
+ */
+function readVCard(text: string): { name: string; phone?: string; email?: string; org?: string } {
+  const pick = (re: RegExp) => text.match(re)?.[1]?.trim().replace(/\\,/g, ",") || undefined;
+  return {
+    name: pick(/^FN:(.+)$/mi) || "Contact",
+    phone: pick(/^TEL[^:]*:(.+)$/mi),
+    email: pick(/^EMAIL[^:]*:(.+)$/mi),
+    org: pick(/^ORG:(.+)$/mi),
+  };
+}
+
+/**
+ * In-app preview, the way Slack does it: a file opens OVER the conversation and
+ * you close it back to where you were. Opening a new tab (what this used to do)
+ * loses your place and, on a phone browser, effectively leaves the app.
+ * Download stays one click away for anything you actually want to keep.
+ */
+function AttachmentLightbox({ a, onClose }: { a: Attachment; onClose: () => void }) {
+  const ct = (a.contentType || "").toLowerCase();
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-5xl w-[calc(100vw-2rem)] p-0 gap-0 bg-[#0e1116] border-white/10">
+        {/* pr-12 keeps the Download button clear of the Dialog's own absolutely
+            positioned close X (top-4 right-4) — without it the two overlap on a
+            phone and the X lands on top of "Download". */}
+        <div className="flex items-center gap-3 px-4 py-3 pr-12 border-b border-white/[0.07] min-w-0">
+          <FileText className="w-4 h-4 text-white/40 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold truncate">{a.name}</div>
+            <div className="text-[11px] text-white/35">{fmtBytes(a.size)}</div>
+          </div>
+          <a
+            href={a.url}
+            download={a.name}
+            aria-label={`Download ${a.name}`}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1.5 text-[12px] font-semibold transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {/* Label hidden on the narrowest screens — the icon plus the aria
+                label carries it, and a wrapped two-line header looks broken. */}
+            <span className="hidden sm:inline">Download</span>
+          </a>
+        </div>
+        {/* Fixed viewport height so a tall PDF scrolls INSIDE the dialog rather
+            than growing it past the bottom of the screen. */}
+        <div className="bg-black/40 flex items-center justify-center" style={{ height: "min(78vh, 900px)" }}>
+          {ct.startsWith("image/") ? (
+            <img src={a.url} alt={a.name} className="max-w-full max-h-full object-contain" />
+          ) : ct.startsWith("video/") ? (
+            <video src={a.url} controls autoPlay className="max-w-full max-h-full" />
+          ) : (
+            <iframe src={a.url} title={a.name} className="w-full h-full bg-white" />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ContactCard({ a }: { a: Attachment }) {
+  const [card, setCard] = useState<{ name: string; phone?: string; email?: string; org?: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(a.url)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => !cancelled && setCard(readVCard(t)))
+      // A contact we can't read is still a file worth offering — never a crash.
+      .catch(() => !cancelled && setCard(null));
+    return () => { cancelled = true; };
+  }, [a.url]);
+
+  if (!card) {
+    return (
+      <a href={a.url} download={a.name} className="mt-1.5 inline-flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5">
+        <UserPlus className="w-5 h-5 text-white/40 shrink-0" />
+        <span className="block text-[13px] font-semibold truncate">{a.name}</span>
+      </a>
+    );
+  }
+  return (
+    <div className="mt-1.5 max-w-[340px] rounded-2xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-[13px] font-bold"
+             style={{ background: "rgba(201,164,62,0.15)", color: GOLD }}>
+          {card.name.slice(0, 1).toUpperCase()}
+        </div>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold truncate">{card.name}</div>
+          {card.org ? <div className="text-[11px] text-white/35 truncate">{card.org}</div> : null}
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {card.phone ? (
+          <a href={`tel:${card.phone.replace(/\s+/g, "")}`} className="rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1 text-[12px] font-semibold transition-colors">
+            {card.phone}
+          </a>
+        ) : null}
+        {card.email ? (
+          <a href={`mailto:${card.email}`} className="rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1 text-[12px] font-semibold transition-colors truncate max-w-[200px]">
+            {card.email}
+          </a>
+        ) : null}
+        <a href={a.url} download={a.name} className="rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1 text-[12px] font-semibold transition-colors">
+          Save
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// Exported so preview/chat-attach-main.tsx can render it against fixtures — the
+// lightbox is user-facing and must be eyeballed at phone + desktop sizes.
+export function AttachmentView({ a }: { a: Attachment }) {
+  const [open, setOpen] = useState(false);
+
+  if (isVCard(a)) return <ContactCard a={a} />;
+
   if (a.kind === "image") {
     return (
-      <a href={a.url} target="_blank" rel="noopener noreferrer" className="block mt-1.5 max-w-[320px]">
-        <img src={a.url} alt={a.name} loading="lazy" className="rounded-xl max-h-64 border border-white/[0.07]" />
-      </a>
+      <>
+        <button type="button" onClick={() => setOpen(true)} className="block mt-1.5 max-w-[320px] cursor-zoom-in">
+          <img src={a.url} alt={a.name} loading="lazy" className="rounded-xl max-h-64 border border-white/[0.07]" />
+        </button>
+        {open && <AttachmentLightbox a={a} onClose={() => setOpen(false)} />}
+      </>
     );
   }
   if (a.kind === "voice") {
@@ -1068,14 +1203,34 @@ function AttachmentView({ a }: { a: Attachment }) {
       </div>
     );
   }
+  // A video sent as a plain file still deserves a player, and a PDF should open
+  // over the conversation. Anything the browser cannot render stays a download.
+  if (isPreviewable(a)) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="mt-1.5 inline-flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.07] px-3 py-2.5 transition-colors max-w-full text-left"
+        >
+          <FileText className="w-5 h-5 text-white/40 shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-[13px] font-semibold truncate">{a.name}</span>
+            <span className="block text-[11px] text-white/35">{fmtBytes(a.size)} · tap to open</span>
+          </span>
+        </button>
+        {open && <AttachmentLightbox a={a} onClose={() => setOpen(false)} />}
+      </>
+    );
+  }
+
   return (
     <a
       href={a.url}
-      target="_blank"
-      rel="noopener noreferrer"
+      download={a.name}
       className="mt-1.5 inline-flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.07] px-3 py-2.5 transition-colors max-w-full"
     >
-      <FileText className="w-4.5 h-4.5 w-5 h-5 text-white/40 shrink-0" />
+      <FileText className="w-5 h-5 text-white/40 shrink-0" />
       <span className="min-w-0">
         <span className="block text-[13px] font-semibold truncate">{a.name}</span>
         <span className="block text-[11px] text-white/35">{fmtBytes(a.size)}</span>
