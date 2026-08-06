@@ -201,6 +201,7 @@ import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
 import TaskTracker from "@/pages/task-tracker";
 import StaffChat from "@/pages/staff-chat";
+import NotificationSettings from "@/pages/notification-settings";
 import MarketingHome from "@/pages/marketing/Home";
 import MarketingCampaignWizard from "@/pages/marketing/CampaignWizard";
 import MarketingCampaignDetail from "@/pages/marketing/CampaignDetail";
@@ -247,6 +248,9 @@ function AdminRouter() {
   // Staff Chat (the in-house Slack) is universal for the same reason — one
   // staff-wide chat, reachable from every workspace's System section.
   if (location.startsWith("/admin/chat")) return <StaffChat />;
+  // Notification settings belong to the PERSON, not the workspace — same
+  // universal pattern again, gated server-side by requireAuth only.
+  if (location.startsWith("/admin/notification-settings")) return <NotificationSettings />;
   // Task Tracker — one organisation-wide project/task system, deliberately
   // not workspace-scoped, so it is reachable from every workspace too.
   if (location.startsWith("/admin/task-tracker")) return <TaskTracker />;
