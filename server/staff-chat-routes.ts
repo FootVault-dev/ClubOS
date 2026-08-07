@@ -440,6 +440,11 @@ export function registerStaffChatRoutes(app: Express) {
           lastName: usersTable.lastName,
           email: usersTable.email,
           role: usersTable.role,
+          // Staff profile photos have existed since v389 but the chat
+          // directory never selected them, so every face in chat — the
+          // mention autocomplete, the who-reacted sheet — fell back to
+          // initials while the photo sat in the same table.
+          avatarUrl: usersTable.avatarUrl,
         })
         .from(usersTable)
         .where(eq(usersTable.active, true))
