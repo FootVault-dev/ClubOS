@@ -931,23 +931,31 @@ export function registerStaffChatRoutes(app: Express) {
 
   // ── Delete (soft): author, or leadership moderating. Body is blanked so the
   //    content is really gone; the stub keeps history honest. ─────────────────
-  app.delete("/api/admin/chat/messages/:id", requireAuth, async (req, res) => {
-    try {
-      const userId = req.session.userId!;
-      const id = parseInt(String(req.params.id), 10);
-      const [msg] = await db.select().from(staffMessages).where(eq(staffMessages.id, id));
-      if (!msg || msg.deletedAt) return res.status(404).json({ message: "Message not found" });
-      if (msg.authorId !== userId && !(await isLeadershipUser(userId)))
-        return res.status(403).json({ message: "You can only delete your own messages" });
-      await db
-        .update(staffMessages)
-        .set({ deletedAt: new Date(), body: "", attachments: null })
-        .where(eq(staffMessages.id, id));
-      await db.delete(staffMessageMentions).where(eq(staffMessageMentions.messageId, id)); // no ghost badges
-      res.json({ ok: true });
-    } catch (e: any) {
-      res.status(500).json({ message: e.message });
-    }
+  // ── Deleting is OFF. Permanently. ─────────────────────────────────────────
+  // Daniel's call, 2026-08-07, after Dima demonstrated the problem by deleting
+  // one of Travis's messages from the web client with no confirmation: staff
+  // chat is the club's record, and nobody edits history out of it. This is
+  // deliberately STRICTER than WhatsApp (which allows delete-for-everyone
+  // within an hour) — the point is a complete, trustworthy backup.
+  //
+  // 🔴 The route STAYS and answers 403 rather than being removed. Builds 16 and
+  // 17 are already on staff phones WITH a delete button; a 404 there reads as
+  // "something broke", while this tells them the truth. The button is gone from
+  // both clients going forward.
+  //
+  // The old body was: soft-delete (deletedAt) + blank the body + null the
+  // attachments + drop the mention rows. Note it destroyed the message TEXT and
+  // the attachment REFERENCE, though never the underlying file in object
+  // storage — which is how Travis's picture was recoverable afterwards.
+  //
+  // ⚠️ There is no admin override, by design. If something genuinely has to go
+  // (a safeguarding incident, something unlawful), that is a deliberate,
+  // logged, human decision at the database — not a button anyone can press.
+  app.delete("/api/admin/chat/messages/:id", requireAuth, async (_req, res) => {
+    return res.status(403).json({
+      message:
+        "Messages can't be deleted — staff chat is the club's record. Ask a manager if something needs removing.",
+    });
   });
 
   // ── Toggle an emoji reaction. ──────────────────────────────────────────────

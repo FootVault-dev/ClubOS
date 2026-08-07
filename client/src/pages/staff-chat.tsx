@@ -26,7 +26,7 @@ import {
 import {
   Hash, Lock, Megaphone, Plus, Search, Send, Paperclip, Mic, Square, X,
   ChevronLeft, ChevronDown, ChevronRight, Users, Bell, BellOff, Volume2,
-  MoreHorizontal, Pencil, Trash2, SmilePlus, CheckCheck, Check, ArchiveX,
+  MoreHorizontal, Pencil, SmilePlus, CheckCheck, Check, ArchiveX,
   MessagesSquare, LogOut, FileText, Download, ShieldCheck, Loader2, UserPlus,
 } from "lucide-react";
 
@@ -848,10 +848,6 @@ function MessageRow(props: {
     await apiRequest("POST", `/api/admin/chat/messages/${msg.id}/reactions`, { emoji });
     refresh();
   };
-  const remove = async () => {
-    await apiRequest("DELETE", `/api/admin/chat/messages/${msg.id}`);
-    refresh();
-  };
   const saveEdit = async () => {
     try {
       await apiRequest("PATCH", `/api/admin/chat/messages/${msg.id}`, { body: editText });
@@ -1025,11 +1021,9 @@ function MessageRow(props: {
               <Pencil className="w-3.5 h-3.5" />
             </button>
           )}
-          {(mine || isLeadership) && (
-            <button onClick={remove} className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-red-400 hover:bg-white/[0.07]" title="Delete">
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
+          {/* No delete button, deliberately (Daniel, 2026-08-07). Staff chat is
+              the club's record and nobody edits history out of it. The server
+              refuses the DELETE too — this isn't just a hidden control. */}
         </div>
       )}
     </div>
