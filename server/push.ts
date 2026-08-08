@@ -21,8 +21,24 @@ export function isExpoPushToken(t: unknown): t is string {
 
 export interface PushPayload {
   title: string;
+  /** iOS second line, under the title. Android folds it into the body area. */
+  subtitle?: string;
   body: string;
   data?: Record<string, unknown>;
+  /** "default" plays the OS notification sound; null delivers silently. */
+  sound?: "default" | null;
+  /** iOS app-icon badge. Send the recipient's TOTAL unread, not an increment. */
+  badge?: number;
+  /**
+   * Android channel id. The CHANNEL — not this payload — owns the sound,
+   * vibration and whether a heads-up banner appears, and it must already exist
+   * on the device (the app creates them at startup). Naming one that does not
+   * exist delivers silently with no error anywhere.
+   */
+  channelId?: string;
+  /** iOS: notifications sharing a threadId stack together in the shade. */
+  threadId?: string;
+  priority?: "default" | "normal" | "high";
 }
 
 type PushTicket = { status: "ok" | "error"; id?: string; message?: string; details?: { error?: string } };
@@ -30,7 +46,10 @@ type PushTicket = { status: "ok" | "error"; id?: string; message?: string; detai
 const pushSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Send one batch (≤100 messages). Returns one ticket per message, index-aligned.
-async function sendExpoPushBatch(messages: Array<{ to: string } & PushPayload>): Promise<PushTicket[]> {
+// NOTE the spread order: defaults FIRST so a caller can override sound/priority.
+// It used to be `{ ...m, sound, priority }`, which silently ignored anything a
+// caller set. CIC broadcasts pass neither, so their behaviour is unchanged.
+export async function sendExpoPushBatch(messages: Array<{ to: string } & PushPayload>): Promise<PushTicket[]> {
   const res = await fetch(EXPO_PUSH_URL, {
     method: "POST",
     headers: {
@@ -38,7 +57,7 @@ async function sendExpoPushBatch(messages: Array<{ to: string } & PushPayload>):
       Accept: "application/json",
       ...(process.env.EXPO_ACCESS_TOKEN ? { Authorization: `Bearer ${process.env.EXPO_ACCESS_TOKEN}` } : {}),
     },
-    body: JSON.stringify(messages.map((m) => ({ ...m, sound: "default", priority: "high" }))),
+    body: JSON.stringify(messages.map((m) => ({ sound: "default" as const, priority: "high" as const, ...m }))),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -51,7 +70,7 @@ async function sendExpoPushBatch(messages: Array<{ to: string } & PushPayload>):
   return json.data;
 }
 
-async function disableTokens(tokenIds: number[]): Promise<void> {
+export async function disableTokens(tokenIds: number[]): Promise<void> {
   if (!tokenIds.length) return;
   await db.update(devicePushTokens)
     .set({ disabled: true, updatedAt: new Date() })

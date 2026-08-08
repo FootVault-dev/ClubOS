@@ -48,11 +48,17 @@ import {
   excerpt,
   isAway,
   emailDebounced,
-  isQuietHoursNZ,
   classifyUpload,
   extensionFor,
 } from "@shared/staff-chat";
 import { sendStaffChatNotification } from "./email";
+import {
+  getPreferencesBulk,
+  planChatDelivery,
+  badgeCountsFor,
+  sendPushToUsers,
+  chatPayloadFor,
+} from "./notifications";
 
 const CHAT_APP_URL = (process.env.APP_URL || "https://app.usg.co.nz").replace(/\/+$/, "");
 
@@ -189,6 +195,8 @@ async function channelSummaryFor(userId: number) {
         isPrivate: r.channel.isPrivate,
         isDefault: r.channel.isDefault,
         postPolicy: r.channel.postPolicy,
+        iconEmoji: r.channel.iconEmoji,
+        iconUrl: r.channel.iconUrl,
         archived: r.channel.archivedAt != null,
         lastMessageAt: r.channel.lastMessageAt,
         createdAt: r.channel.createdAt,
@@ -207,12 +215,23 @@ async function channelSummaryFor(userId: number) {
     });
 }
 
-// ── Away-email escalation ────────────────────────────────────────────────────
+// ── Escalation: push + away-email ────────────────────────────────────────────
 // Fire-and-forget after a send. Recipients: explicitly mentioned members +
 // everyone in a DM + members who opted a channel to 'all'. Mentions cut through
 // a muted channel (a personal ping is personal); plain 'all' traffic doesn't.
-// Only AWAY people are emailed, never during NZ quiet hours, one email per
-// channel per 15 min. In-app badges carry everything else.
+//
+// The ladder, now that phones are in play:
+//   PUSH  — immediate, to everyone whose preferences allow it. This is the
+//           primary channel; it is what makes the app usable as staff comms.
+//   EMAIL — the AWAY escalation only (no chat heartbeat for 5 min), one per
+//           channel per 15 min. Somebody with the app open gets a single buzz,
+//           never a buzz AND an inbox item.
+//
+// 🔴 Quiet hours are now PER PERSON (server default 20:00–08:00 NZ, the club-
+// wide rule this used to hard-code for everybody). The early global return is
+// gone deliberately — decideDelivery() applies each recipient's own window, so
+// a night-shift staffer can opt in without lifting the curfew for the club.
+// In-app badges are never suppressed by any of this.
 async function escalateMessage(opts: {
   channel: typeof staffChannels.$inferSelect;
   messageId: number;
@@ -220,10 +239,16 @@ async function escalateMessage(opts: {
   authorName: string;
   body: string;
   mentionedUserIds: Set<number>;
+  /**
+   * Leadership "must-see" message. The ONLY thing that overrides quiet hours —
+   * and it still cannot override someone setting an event to 'none', because an
+   * explicit "never tell me about this" is a decision, not a preference to
+   * route around.
+   */
+  requiresAck?: boolean;
 }): Promise<void> {
   try {
     const now = new Date();
-    if (isQuietHoursNZ(now)) return;
 
     const members = await db
       .select({ member: staffChannelMembers, user: usersTable, presence: staffChatPresence })
@@ -235,26 +260,73 @@ async function escalateMessage(opts: {
     const isDm = opts.channel.kind === "dm";
     const context = isDm ? `a direct message` : `#${opts.channel.name}`;
 
-    for (const row of members) {
-      const { member, user, presence } = row;
-      if (user.id === opts.authorId || !user.active || !user.email) continue;
+    // Candidates: everyone in the room except the author and inactive accounts.
+    // A member with no email address can still receive PUSH — the old code
+    // skipped them entirely because email was the only channel that existed.
+    const candidates = members.filter(
+      (r) => r.user.id !== opts.authorId && r.user.active,
+    );
+    if (!candidates.length) return;
 
-      const level = member.notifyLevel as StaffNotifyLevel;
-      const personallyMentioned = opts.mentionedUserIds.has(user.id);
-      const shouldNotify =
-        personallyMentioned || (isDm && level !== "muted") || (!isDm && level === "all");
-      if (!shouldNotify) continue;
+    const prefs = await getPreferencesBulk(candidates.map((r) => r.user.id));
+    const plans = planChatDelivery(
+      candidates.map((r) => ({
+        userId: r.user.id,
+        mentioned: opts.mentionedUserIds.has(r.user.id),
+        notifyLevel: r.member.notifyLevel as StaffNotifyLevel,
+        away: isAway(r.presence?.lastSeenAt ?? null, now),
+        emailDebounced: emailDebounced(r.member.lastEmailedAt, now),
+        email: r.user.email ?? null,
+      })),
+      prefs,
+      isDm,
+      now,
+      { urgent: opts.requiresAck },
+    );
+    if (!plans.length) return;
 
-      if (!isAway(presence?.lastSeenAt ?? null, now)) continue; // they'll see the badge
-      if (emailDebounced(member.lastEmailedAt, now)) continue;
+    const byId = new Map(candidates.map((r) => [r.user.id, r]));
 
+    // ── Push ────────────────────────────────────────────────────────────────
+    // Badges are fetched for all push recipients in one query, then each person
+    // gets THEIR OWN number — one shared count would show everybody the same
+    // meaningless figure.
+    const pushIds = plans.filter((p) => p.push).map((p) => p.userId);
+    if (pushIds.length) {
+      const badges = await badgeCountsFor(pushIds);
+      await sendPushToUsers(
+        pushIds.map((userId) => ({
+          userId,
+          payload: chatPayloadFor({
+            senderName: opts.authorName,
+            channelKind: isDm ? "dm" : "channel",
+            channelName: opts.channel.name,
+            channelId: opts.channel.id,
+            messageId: opts.messageId,
+            body: opts.body,
+            mentioned: opts.mentionedUserIds.has(userId),
+            showPreview: prefs.get(userId)?.showPreview ?? true,
+            // The message being delivered is not in the badge query's result
+            // yet only if the read pointer moved between the two — counting it
+            // explicitly would double it. Trust the query.
+            badge: badges.get(userId) ?? 0,
+          }),
+        })),
+      );
+    }
+
+    // ── Away email ──────────────────────────────────────────────────────────
+    for (const plan of plans) {
+      if (!plan.email) continue;
+      const row = byId.get(plan.userId);
+      if (!row?.user.email) continue;
       const sent = await sendStaffChatNotification({
-        to: user.email,
-        recipientName: user.firstName || fullName(user),
+        to: row.user.email,
+        recipientName: row.user.firstName || fullName(row.user),
         senderName: opts.authorName,
         context,
         messageExcerpt: excerpt(opts.body, 200),
-        mentioned: personallyMentioned && !isDm,
+        mentioned: opts.mentionedUserIds.has(plan.userId) && !isDm,
         chatUrl: `${CHAT_APP_URL}/admin/chat?c=${opts.channel.id}`,
       }).catch((e) => {
         console.error("[staff-chat] escalation email failed:", e);
@@ -264,7 +336,7 @@ async function escalateMessage(opts: {
         await db
           .update(staffChannelMembers)
           .set({ lastEmailedAt: now })
-          .where(eq(staffChannelMembers.id, member.id));
+          .where(eq(staffChannelMembers.id, row.member.id));
       }
     }
   } catch (e) {
@@ -368,6 +440,11 @@ export function registerStaffChatRoutes(app: Express) {
           lastName: usersTable.lastName,
           email: usersTable.email,
           role: usersTable.role,
+          // Staff profile photos have existed since v389 but the chat
+          // directory never selected them, so every face in chat — the
+          // mention autocomplete, the who-reacted sheet — fell back to
+          // initials while the photo sat in the same table.
+          avatarUrl: usersTable.avatarUrl,
         })
         .from(usersTable)
         .where(eq(usersTable.active, true))
@@ -587,6 +664,7 @@ export function registerStaffChatRoutes(app: Express) {
             authorName,
             body: body || (attachments[0]?.kind === "voice" ? "🎤 Voice note" : `📎 ${attachments[0]?.name ?? "Attachment"}`),
             mentionedUserIds: mentioned,
+            requiresAck,
           }),
         );
       }
@@ -673,6 +751,42 @@ export function registerStaffChatRoutes(app: Express) {
       }
       if (req.body.postPolicy !== undefined && STAFF_POST_POLICIES.includes(req.body.postPolicy))
         patch.postPolicy = req.body.postPolicy;
+
+      // ── Channel icon: an emoji OR an image, never both. ───────────────────
+      // Setting either clears the other, so "which one wins" is decided here
+      // once instead of separately by the web and the phone.
+      if (req.body.iconEmoji !== undefined) {
+        const raw = typeof req.body.iconEmoji === "string" ? req.body.iconEmoji.trim() : "";
+        if (!raw) {
+          patch.iconEmoji = null;
+        } else {
+          // Deliberately loose. Emoji are ZWJ sequences, skin-tone modifiers
+          // and regional-indicator pairs — any regex tight enough to be
+          // "correct" rejects something real. This only catches someone
+          // typing a word into the field.
+          if (raw.length > 16 || /[A-Za-z0-9]/.test(raw)) {
+            return res.status(400).json({ message: "That doesn't look like an emoji" });
+          }
+          patch.iconEmoji = raw;
+          patch.iconUrl = null;
+        }
+      }
+      if (req.body.iconUrl !== undefined) {
+        const raw = typeof req.body.iconUrl === "string" ? req.body.iconUrl.trim() : "";
+        if (!raw) {
+          patch.iconUrl = null;
+        } else {
+          // Only our own object storage. An arbitrary URL here would let a
+          // channel icon beacon every staff member's IP to a third party
+          // every time the sidebar renders.
+          if (!raw.startsWith("/objects/")) {
+            return res.status(400).json({ message: "Upload the image first" });
+          }
+          patch.iconUrl = raw;
+          patch.iconEmoji = null;
+        }
+      }
+
       if (req.body.archived === true) patch.archivedAt = new Date();
       if (req.body.archived === false) patch.archivedAt = null;
       if (Object.keys(patch).length === 0) return res.status(400).json({ message: "Nothing to change" });
@@ -817,23 +931,31 @@ export function registerStaffChatRoutes(app: Express) {
 
   // ── Delete (soft): author, or leadership moderating. Body is blanked so the
   //    content is really gone; the stub keeps history honest. ─────────────────
-  app.delete("/api/admin/chat/messages/:id", requireAuth, async (req, res) => {
-    try {
-      const userId = req.session.userId!;
-      const id = parseInt(String(req.params.id), 10);
-      const [msg] = await db.select().from(staffMessages).where(eq(staffMessages.id, id));
-      if (!msg || msg.deletedAt) return res.status(404).json({ message: "Message not found" });
-      if (msg.authorId !== userId && !(await isLeadershipUser(userId)))
-        return res.status(403).json({ message: "You can only delete your own messages" });
-      await db
-        .update(staffMessages)
-        .set({ deletedAt: new Date(), body: "", attachments: null })
-        .where(eq(staffMessages.id, id));
-      await db.delete(staffMessageMentions).where(eq(staffMessageMentions.messageId, id)); // no ghost badges
-      res.json({ ok: true });
-    } catch (e: any) {
-      res.status(500).json({ message: e.message });
-    }
+  // ── Deleting is OFF. Permanently. ─────────────────────────────────────────
+  // Daniel's call, 2026-08-07, after Dima demonstrated the problem by deleting
+  // one of Travis's messages from the web client with no confirmation: staff
+  // chat is the club's record, and nobody edits history out of it. This is
+  // deliberately STRICTER than WhatsApp (which allows delete-for-everyone
+  // within an hour) — the point is a complete, trustworthy backup.
+  //
+  // 🔴 The route STAYS and answers 403 rather than being removed. Builds 16 and
+  // 17 are already on staff phones WITH a delete button; a 404 there reads as
+  // "something broke", while this tells them the truth. The button is gone from
+  // both clients going forward.
+  //
+  // The old body was: soft-delete (deletedAt) + blank the body + null the
+  // attachments + drop the mention rows. Note it destroyed the message TEXT and
+  // the attachment REFERENCE, though never the underlying file in object
+  // storage — which is how Travis's picture was recoverable afterwards.
+  //
+  // ⚠️ There is no admin override, by design. If something genuinely has to go
+  // (a safeguarding incident, something unlawful), that is a deliberate,
+  // logged, human decision at the database — not a button anyone can press.
+  app.delete("/api/admin/chat/messages/:id", requireAuth, async (_req, res) => {
+    return res.status(403).json({
+      message:
+        "Messages can't be deleted — staff chat is the club's record. Ask a manager if something needs removing.",
+    });
   });
 
   // ── Toggle an emoji reaction. ──────────────────────────────────────────────

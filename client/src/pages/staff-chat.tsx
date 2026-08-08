@@ -14,6 +14,10 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+// The server's own limit, not a copy of the number — the composer below still
+// hardcodes 25MB, and a divergence there means the UI accepts a file the API
+// then rejects.
+import { UPLOAD_MAX_BYTES } from "@shared/staff-chat";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -22,7 +26,7 @@ import {
 import {
   Hash, Lock, Megaphone, Plus, Search, Send, Paperclip, Mic, Square, X,
   ChevronLeft, ChevronDown, ChevronRight, Users, Bell, BellOff, Volume2,
-  MoreHorizontal, Pencil, Trash2, SmilePlus, CheckCheck, Check, ArchiveX,
+  MoreHorizontal, Pencil, SmilePlus, CheckCheck, Check, ArchiveX,
   MessagesSquare, LogOut, FileText, Download, ShieldCheck, Loader2, UserPlus,
 } from "lucide-react";
 
@@ -31,6 +35,8 @@ interface Person { id: number; name: string; firstName: string; lastName: string
 interface ChannelSummary {
   id: number; kind: "channel" | "dm"; name: string | null; topic: string | null;
   isPrivate: boolean; isDefault: boolean; postPolicy: "anyone" | "leadership";
+  /** Alternatives, never both — the server clears one when the other is set. */
+  iconEmoji?: string | null; iconUrl?: string | null;
   archived: boolean; lastMessageAt: string | null; joined: boolean;
   notifyLevel: "all" | "mentions" | "muted" | null; unread: number; mentions: number;
   members?: { userId: number; name: string }[];
@@ -88,6 +94,11 @@ const dmName = (c: ChannelSummary, me: number) => {
   return others.length ? others.map((m) => m.name).join(", ") : "Just you";
 };
 const channelLabel = (c: ChannelSummary, me: number) => (c.kind === "dm" ? dmName(c, me) : c.name ?? "channel");
+
+// A short, club-shaped shortlist rather than a full emoji keyboard: the web
+// dialog is a settings form, and the phone (which has a real picker) is where
+// people will actually choose. Covers the rooms this club actually runs.
+const CHANNEL_ICON_EMOJIS = ["⚽", "📣", "🏆", "🧾", "🛠️", "📅", "🚐", "🏟️", "📸", "💬", "🔒", "🎉"];
 
 // Render body text: linkify URLs + highlight mentions (names of mentioned
 // members + @channel tokens). React escapes everything else for us.
@@ -370,7 +381,7 @@ function SectionLabel({ children, className = "" }: { children: React.ReactNode;
   );
 }
 
-function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number; active: boolean; onClick: () => void }) {
+export function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number; active: boolean; onClick: () => void }) {
   const label = channelLabel(c, me);
   const important = c.kind === "dm" ? c.unread : c.mentions;
   const hasUnread = c.unread > 0;
@@ -388,6 +399,14 @@ function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number;
         >
           {initials(label)}
         </div>
+      ) : /* A channel's own mark wins over the type icon — that is the whole
+             point of setting one. The Hash/Lock/Megaphone fallbacks below still
+             carry "what KIND of room is this", so a channel with an icon shows
+             its private/announcement status via the badge next to the name. */
+        c.iconUrl ? (
+        <img src={c.iconUrl} alt="" className="w-6 h-6 rounded-lg object-cover shrink-0" />
+      ) : c.iconEmoji ? (
+        <span className="w-6 h-6 flex items-center justify-center text-[15px] leading-none shrink-0">{c.iconEmoji}</span>
       ) : c.postPolicy === "leadership" ? (
         <Megaphone className={`w-4 h-4 shrink-0 ${hasUnread ? "text-white/80" : "text-white/30"}`} />
       ) : c.isPrivate ? (
@@ -829,10 +848,6 @@ function MessageRow(props: {
     await apiRequest("POST", `/api/admin/chat/messages/${msg.id}/reactions`, { emoji });
     refresh();
   };
-  const remove = async () => {
-    await apiRequest("DELETE", `/api/admin/chat/messages/${msg.id}`);
-    refresh();
-  };
   const saveEdit = async () => {
     try {
       await apiRequest("PATCH", `/api/admin/chat/messages/${msg.id}`, { body: editText });
@@ -1006,11 +1021,9 @@ function MessageRow(props: {
               <Pencil className="w-3.5 h-3.5" />
             </button>
           )}
-          {(mine || isLeadership) && (
-            <button onClick={remove} className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-red-400 hover:bg-white/[0.07]" title="Delete">
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
+          {/* No delete button, deliberately (Daniel, 2026-08-07). Staff chat is
+              the club's record and nobody edits history out of it. The server
+              refuses the DELETE too — this isn't just a hidden control. */}
         </div>
       )}
     </div>
@@ -1049,12 +1062,147 @@ function AckRoster({ messageId }: { messageId: number }) {
   );
 }
 
-function AttachmentView({ a }: { a: Attachment }) {
+/** True for anything the browser can render in place rather than download. */
+function isPreviewable(a: Attachment): boolean {
+  const ct = (a.contentType || "").toLowerCase();
+  return ct === "application/pdf" || ct.startsWith("image/") || ct.startsWith("video/");
+}
+
+function isVCard(a: Attachment): boolean {
+  const ct = (a.contentType || "").toLowerCase();
+  return ct === "text/vcard" || ct === "text/x-vcard" || /\.vcf$/i.test(a.name || "");
+}
+
+/**
+ * Read the handful of fields worth showing off a vCard. Deliberately a light
+ * regex read, not a parser: a contact card needs a name and a number, and a
+ * malformed card must degrade to a plain file rather than throw inside a
+ * message list.
+ */
+function readVCard(text: string): { name: string; phone?: string; email?: string; org?: string } {
+  const pick = (re: RegExp) => text.match(re)?.[1]?.trim().replace(/\\,/g, ",") || undefined;
+  return {
+    name: pick(/^FN:(.+)$/mi) || "Contact",
+    phone: pick(/^TEL[^:]*:(.+)$/mi),
+    email: pick(/^EMAIL[^:]*:(.+)$/mi),
+    org: pick(/^ORG:(.+)$/mi),
+  };
+}
+
+/**
+ * In-app preview, the way Slack does it: a file opens OVER the conversation and
+ * you close it back to where you were. Opening a new tab (what this used to do)
+ * loses your place and, on a phone browser, effectively leaves the app.
+ * Download stays one click away for anything you actually want to keep.
+ */
+function AttachmentLightbox({ a, onClose }: { a: Attachment; onClose: () => void }) {
+  const ct = (a.contentType || "").toLowerCase();
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-5xl w-[calc(100vw-2rem)] p-0 gap-0 bg-[#0e1116] border-white/10">
+        {/* pr-12 keeps the Download button clear of the Dialog's own absolutely
+            positioned close X (top-4 right-4) — without it the two overlap on a
+            phone and the X lands on top of "Download". */}
+        <div className="flex items-center gap-3 px-4 py-3 pr-12 border-b border-white/[0.07] min-w-0">
+          <FileText className="w-4 h-4 text-white/40 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold truncate">{a.name}</div>
+            <div className="text-[11px] text-white/35">{fmtBytes(a.size)}</div>
+          </div>
+          <a
+            href={a.url}
+            download={a.name}
+            aria-label={`Download ${a.name}`}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1.5 text-[12px] font-semibold transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {/* Label hidden on the narrowest screens — the icon plus the aria
+                label carries it, and a wrapped two-line header looks broken. */}
+            <span className="hidden sm:inline">Download</span>
+          </a>
+        </div>
+        {/* Fixed viewport height so a tall PDF scrolls INSIDE the dialog rather
+            than growing it past the bottom of the screen. */}
+        <div className="bg-black/40 flex items-center justify-center" style={{ height: "min(78vh, 900px)" }}>
+          {ct.startsWith("image/") ? (
+            <img src={a.url} alt={a.name} className="max-w-full max-h-full object-contain" />
+          ) : ct.startsWith("video/") ? (
+            <video src={a.url} controls autoPlay className="max-w-full max-h-full" />
+          ) : (
+            <iframe src={a.url} title={a.name} className="w-full h-full bg-white" />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ContactCard({ a }: { a: Attachment }) {
+  const [card, setCard] = useState<{ name: string; phone?: string; email?: string; org?: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(a.url)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => !cancelled && setCard(readVCard(t)))
+      // A contact we can't read is still a file worth offering — never a crash.
+      .catch(() => !cancelled && setCard(null));
+    return () => { cancelled = true; };
+  }, [a.url]);
+
+  if (!card) {
+    return (
+      <a href={a.url} download={a.name} className="mt-1.5 inline-flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5">
+        <UserPlus className="w-5 h-5 text-white/40 shrink-0" />
+        <span className="block text-[13px] font-semibold truncate">{a.name}</span>
+      </a>
+    );
+  }
+  return (
+    <div className="mt-1.5 max-w-[340px] rounded-2xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-[13px] font-bold"
+             style={{ background: "rgba(201,164,62,0.15)", color: GOLD }}>
+          {card.name.slice(0, 1).toUpperCase()}
+        </div>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold truncate">{card.name}</div>
+          {card.org ? <div className="text-[11px] text-white/35 truncate">{card.org}</div> : null}
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {card.phone ? (
+          <a href={`tel:${card.phone.replace(/\s+/g, "")}`} className="rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1 text-[12px] font-semibold transition-colors">
+            {card.phone}
+          </a>
+        ) : null}
+        {card.email ? (
+          <a href={`mailto:${card.email}`} className="rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1 text-[12px] font-semibold transition-colors truncate max-w-[200px]">
+            {card.email}
+          </a>
+        ) : null}
+        <a href={a.url} download={a.name} className="rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1 text-[12px] font-semibold transition-colors">
+          Save
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// Exported so preview/chat-attach-main.tsx can render it against fixtures — the
+// lightbox is user-facing and must be eyeballed at phone + desktop sizes.
+export function AttachmentView({ a }: { a: Attachment }) {
+  const [open, setOpen] = useState(false);
+
+  if (isVCard(a)) return <ContactCard a={a} />;
+
   if (a.kind === "image") {
     return (
-      <a href={a.url} target="_blank" rel="noopener noreferrer" className="block mt-1.5 max-w-[320px]">
-        <img src={a.url} alt={a.name} loading="lazy" className="rounded-xl max-h-64 border border-white/[0.07]" />
-      </a>
+      <>
+        <button type="button" onClick={() => setOpen(true)} className="block mt-1.5 max-w-[320px] cursor-zoom-in">
+          <img src={a.url} alt={a.name} loading="lazy" className="rounded-xl max-h-64 border border-white/[0.07]" />
+        </button>
+        {open && <AttachmentLightbox a={a} onClose={() => setOpen(false)} />}
+      </>
     );
   }
   if (a.kind === "voice") {
@@ -1068,14 +1216,34 @@ function AttachmentView({ a }: { a: Attachment }) {
       </div>
     );
   }
+  // A video sent as a plain file still deserves a player, and a PDF should open
+  // over the conversation. Anything the browser cannot render stays a download.
+  if (isPreviewable(a)) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="mt-1.5 inline-flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.07] px-3 py-2.5 transition-colors max-w-full text-left"
+        >
+          <FileText className="w-5 h-5 text-white/40 shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-[13px] font-semibold truncate">{a.name}</span>
+            <span className="block text-[11px] text-white/35">{fmtBytes(a.size)} · tap to open</span>
+          </span>
+        </button>
+        {open && <AttachmentLightbox a={a} onClose={() => setOpen(false)} />}
+      </>
+    );
+  }
+
   return (
     <a
       href={a.url}
-      target="_blank"
-      rel="noopener noreferrer"
+      download={a.name}
       className="mt-1.5 inline-flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.07] px-3 py-2.5 transition-colors max-w-full"
     >
-      <FileText className="w-4.5 h-4.5 w-5 h-5 text-white/40 shrink-0" />
+      <FileText className="w-5 h-5 text-white/40 shrink-0" />
       <span className="min-w-0">
         <span className="block text-[13px] font-semibold truncate">{a.name}</span>
         <span className="block text-[11px] text-white/35">{fmtBytes(a.size)}</span>
@@ -1146,7 +1314,7 @@ function Composer(props: {
 
   const addFiles = async (files: FileList | File[]) => {
     for (const f of Array.from(files)) {
-      if (f.size > 25 * 1024 * 1024) {
+      if (f.size > UPLOAD_MAX_BYTES) {
         toast({ title: "Too big", description: `${f.name} is over 25MB`, variant: "destructive" });
         continue;
       }
@@ -1620,21 +1788,54 @@ function MembersDialog(props: {
   );
 }
 
-function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; channel: ChannelSummary; onBack: () => void }) {
+export function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; channel: ChannelSummary; onBack: () => void }) {
   const { open, onClose, channel, onBack } = props;
   const { toast } = useToast();
   const [name, setName] = useState(channel.name ?? "");
   const [topic, setTopic] = useState(channel.topic ?? "");
   const [announceOnly, setAnnounceOnly] = useState(channel.postPolicy === "leadership");
   const [busy, setBusy] = useState(false);
+  // An emoji OR an image, mirroring the server: picking one clears the other,
+  // so the dialog can never send a combination the API would have to arbitrate.
+  const [iconEmoji, setIconEmoji] = useState<string | null>(channel.iconEmoji ?? null);
+  const [iconUrl, setIconUrl] = useState<string | null>(channel.iconUrl ?? null);
+  const [iconBusy, setIconBusy] = useState(false);
+  const iconFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setName(channel.name ?? "");
       setTopic(channel.topic ?? "");
       setAnnounceOnly(channel.postPolicy === "leadership");
+      setIconEmoji(channel.iconEmoji ?? null);
+      setIconUrl(channel.iconUrl ?? null);
     }
   }, [open, channel]);
+
+  const uploadIcon = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Pick an image", description: "PNG, JPG or WebP.", variant: "destructive" });
+      return;
+    }
+    if (file.size > UPLOAD_MAX_BYTES) {
+      toast({ title: "That image is too big", description: `Limit is ${fmtBytes(UPLOAD_MAX_BYTES)}.`, variant: "destructive" });
+      return;
+    }
+    setIconBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/admin/chat/upload", { method: "POST", body: fd, credentials: "include" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Upload failed");
+      const a = await res.json();
+      setIconUrl(a.url);
+      setIconEmoji(null);
+    } catch (e: any) {
+      toast({ title: "Couldn't upload", description: e.message, variant: "destructive" });
+    } finally {
+      setIconBusy(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -1643,6 +1844,11 @@ function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; chan
         name,
         topic,
         postPolicy: announceOnly ? "leadership" : "anyone",
+        // Send both keys so clearing an icon actually clears it — omitting a
+        // key means "leave alone" on the server, which would make the Remove
+        // button silently do nothing.
+        iconEmoji: iconEmoji ?? "",
+        iconUrl: iconUrl ?? "",
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/admin/chat/sync"] });
       queryClient.invalidateQueries({ queryKey: [`/api/admin/chat/channels/${channel.id}/messages`] });
@@ -1673,6 +1879,66 @@ function ChannelSettingsDialog(props: { open: boolean; onClose: () => void; chan
           <h2 className="text-[15px] font-bold">Channel settings</h2>
         </div>
         <div className="p-4 space-y-3">
+          {/* ── Channel icon ───────────────────────────────────────────────── */}
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center shrink-0 overflow-hidden">
+              {iconBusy ? (
+                <Loader2 className="w-4 h-4 animate-spin text-white/40" />
+              ) : iconUrl ? (
+                <img src={iconUrl} alt="" className="w-full h-full object-cover" />
+              ) : iconEmoji ? (
+                <span className="text-[26px] leading-none">{iconEmoji}</span>
+              ) : (
+                <Hash className="w-5 h-5 text-white/25" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-semibold text-white/70">Channel icon</div>
+              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                {CHANNEL_ICON_EMOJIS.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    onClick={() => { setIconEmoji(e); setIconUrl(null); }}
+                    className={`w-7 h-7 rounded-lg text-[15px] leading-none flex items-center justify-center transition-colors ${
+                      iconEmoji === e ? "bg-white/[0.16] ring-1 ring-white/30" : "hover:bg-white/[0.08]"
+                    }`}
+                  >
+                    {e}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => iconFileRef.current?.click()}
+                  className="h-7 px-2 rounded-lg text-[11px] font-semibold border border-white/10 hover:border-white/25 transition-colors"
+                >
+                  Upload
+                </button>
+                {(iconEmoji || iconUrl) && (
+                  <button
+                    type="button"
+                    onClick={() => { setIconEmoji(null); setIconUrl(null); }}
+                    className="h-7 px-2 rounded-lg text-[11px] font-semibold text-white/45 hover:text-white/80 transition-colors"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                ref={iconFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadIcon(f);
+                  // Reset so re-picking the SAME file still fires onChange.
+                  e.target.value = "";
+                }}
+              />
+            </div>
+          </div>
+
           <div className="relative">
             <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
             <input value={name} onChange={(e) => setName(e.target.value)}

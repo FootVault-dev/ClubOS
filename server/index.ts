@@ -127,6 +127,19 @@ app.use(attributionCookieMiddleware);
   const { registerStaffChatRoutes } = await import("./staff-chat-routes");
   registerStaffChatRoutes(app);
 
+  // Notification preferences + staff push-device registration. Universal
+  // (requireAuth only) because settings belong to a PERSON, not a workspace —
+  // they must answer identically on web and phone, in any workspace.
+  // See migrations/2026-08-07_notifications.sql + shared/notifications.ts.
+  const { registerNotificationRoutes } = await import("./notification-routes");
+  registerNotificationRoutes(app);
+
+  // Opt-in daily / weekly digests. 15-minute sweep, idempotent on the NZ
+  // calendar day — see server/digest-cron.ts. Nobody receives anything unless
+  // they switched it on themselves, so this is inert until someone opts in.
+  const { startDigestCron } = await import("./digest-cron");
+  startDigestCron();
+
   // Hiring — job postings + applications. Admin side is gated by
   // requireTab("hiring") to the USG workspace; the public apply endpoints are
   // CORS-allow-listed to our own brand sites and carry no session.

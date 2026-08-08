@@ -69,6 +69,7 @@ import {
   Telescope,
   MessageSquarePlus,
   MessagesSquare,
+  Bell,
   Link2,
   Target,
   Activity,
@@ -98,6 +99,12 @@ const chatSecondary = { tab: "chat", title: "Chat", url: "/admin/chat", icon: Me
 // Same universal pattern again: one shared dataset, every workspace, gated
 // server-side by requireAuth rather than a per-workspace tab grant.
 const taskTrackerSecondary = { tab: "task-tracker", title: "Task Tracker", url: "/admin/task-tracker", icon: ListChecks };
+// Universal "Notification settings" — belongs to the PERSON, not a workspace,
+// so it follows the same pattern: requireAuth-gated server-side, appended
+// directly rather than filtered through the per-workspace tab whitelist.
+// Titled in full (not just "Notifications") so it never reads as a duplicate
+// of the CIC workspace's own "Notifications" (cic-push, fan broadcast) item.
+const notificationSettingsSecondary = { tab: "notification-settings", title: "Notification settings", url: "/admin/notification-settings", icon: Bell };
 import { useTheme } from "@/lib/theme-provider";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProfileDialog } from "@/components/profile-dialog";
@@ -612,7 +619,7 @@ export function AppSidebar() {
   const mainNav = allMainNav.filter(navFilter);
   // Chat + Feedback are universal — always shown (no tab-whitelist filtering),
   // for every staff member in every workspace. Chat sits first.
-  const secondaryNav = [...allSecondaryNav.filter(navFilter), taskTrackerSecondary, chatSecondary, feedbackSecondary];
+  const secondaryNav = [...allSecondaryNav.filter(navFilter), taskTrackerSecondary, chatSecondary, feedbackSecondary, notificationSettingsSecondary];
 
   // Resolved once across BOTH groups so a Navigation item and a System item
   // can never both look active on the same page.

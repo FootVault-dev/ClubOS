@@ -3749,15 +3749,24 @@ export const insertSkillsChallengeEntrySchema = createInsertSchema(skillsChallen
 export type InsertSkillsChallengeEntry = z.infer<typeof insertSkillsChallengeEntrySchema>;
 export type SkillsChallengeEntry = typeof skillsChallengeEntries.$inferSelect;
 
-// ---- Mobile push notifications (CIC Youth app) ----
-// Devices register their Expo push token via the public API on app launch;
-// broadcasts are composed in the ClubOS "Notifications" tab and fan out through
-// Expo's push service in batches of 100. `disabled` flips when Expo reports the
-// device as no longer registered (app uninstalled / token rotated).
+// ---- Mobile push notifications (CIC Youth fans + ClubOS staff) ----
+// Devices register their Expo push token on app launch; CIC broadcasts are
+// composed in the ClubOS "Notifications" tab and fan out through Expo's push
+// service in batches of 100. `disabled` flips when Expo reports the device as
+// no longer registered (app uninstalled / token rotated).
+//
+// 🔴 `app` SEPARATES TWO COMPLETELY DIFFERENT AUDIENCES and every query must
+// filter on it: "cic-youth" rows are anonymous FANS, "clubos-staff" rows are
+// named STAFF. Sending a staff message to an unfiltered device list would push
+// club-internal chat to every parent who installed the tournament app.
 export const devicePushTokens = pgTable("device_push_tokens", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   token: text("token").notNull().unique(),
   app: text("app").notNull().default("cic-youth"),
+  // NULL for CIC fan devices — they are deliberately anonymous and always will
+  // be. Set for staff phones, which is what makes person-addressed push
+  // possible at all. Cascade: a deleted user's token must be unreachable.
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
   platform: text("platform").notNull().default("unknown"), // "ios" | "android" | "unknown"
   deviceName: text("device_name"),
   disabled: boolean("disabled").notNull().default(false),
@@ -3765,6 +3774,43 @@ export const devicePushTokens = pgTable("device_push_tokens", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// ---- Per-person notification preferences ----
+// One row per user; a MISSING ROW IS VALID and means "never opened settings" —
+// the server answers DEFAULT_PREFERENCES (shared/notifications.ts), so nothing
+// needs backfilling and a new staff member works on day one.
+// Delivery columns are validated TEXT, never pg enums: adding a mode must not
+// require a migration. Hours are 0–23 NZ calendar parts, never timestamps.
+export const notificationPreferences = pgTable("notification_preferences", {
+  userId: integer("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  pushEnabled: boolean("push_enabled").notNull().default(true),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  // 'both' | 'push' | 'email' | 'none'
+  chatDm: text("chat_dm").notNull().default("both"),
+  chatMention: text("chat_mention").notNull().default("both"),
+  chatChannel: text("chat_channel").notNull().default("push"),
+  taskAssigned: text("task_assigned").notNull().default("both"),
+  taskDue: text("task_due").notNull().default("email"),
+  // Message text on the lock screen — chat can carry a child's name.
+  showPreview: boolean("show_preview").notNull().default(true),
+  quietHoursEnabled: boolean("quiet_hours_enabled").notNull().default(true),
+  quietHoursStart: integer("quiet_hours_start").notNull().default(20),
+  quietHoursEnd: integer("quiet_hours_end").notNull().default(8),
+  dailyDigest: boolean("daily_digest").notNull().default(false),
+  dailyDigestHour: integer("daily_digest_hour").notNull().default(8),
+  weeklyDigest: boolean("weekly_digest").notNull().default(false),
+  weeklyDigestDay: integer("weekly_digest_day").notNull().default(1), // ISO Mon=1
+  weeklyDigestHour: integer("weekly_digest_hour").notNull().default(8),
+  // Idempotency for the 15-minute digest sweep, compared on the NZ calendar day.
+  lastDailyDigestAt: timestamp("last_daily_digest_at", { withTimezone: true }),
+  lastWeeklyDigestAt: timestamp("last_weekly_digest_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type NotificationPreferencesRow = typeof notificationPreferences.$inferSelect;
 
 export const pushCampaigns = pgTable("push_campaigns", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -6826,6 +6872,11 @@ export const staffChannels = pgTable(
     isDefault: boolean("is_default").notNull().default(false),
     // 'anyone' | 'leadership' — announcements channels are leadership-post-only.
     postPolicy: text("post_policy").notNull().default("anyone"),
+    // The channel's mark. ALTERNATIVES, never both — setting one clears the
+    // other in the API, so no client has to decide which wins. Neither set
+    // falls back to the initial-letter mark the clients already draw.
+    iconEmoji: text("icon_emoji"),
+    iconUrl: text("icon_url"),
     // DMs only: sorted participant ids "4:17:23". Same people → same DM
     // (partial unique index in the migration).
     dmKey: text("dm_key"),
