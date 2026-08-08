@@ -83,6 +83,21 @@ case "$VITE_STRIPE_PUBLISHABLE_KEY" in
   *) echo "❌ VITE_STRIPE_PUBLISHABLE_KEY doesn't look like a Stripe key — aborting."; exit 1;;
 esac
 
+# ── D16 ENFORCED (2026-08-09) ────────────────────────────────────────────────
+# Printing the branch and asking a human to "confirm it's the right one" did not
+# work: attribution, squads (twice) and parent accounts were all silently
+# removed from production by a deploy off a branch that lacked them. This asks
+# PRODUCTION what it currently serves and refuses to ship a tree that would
+# serve less. Set PREFLIGHT_SKIP=1 only if you have decided to remove a feature
+# on purpose.
+if [ "${PREFLIGHT_SKIP:-0}" != "1" ]; then
+  echo "── Pre-deploy: would this branch remove anything live? ──"
+  npx tsx --env-file=.env script/preflight-deploy.ts || {
+    echo "❌ Pre-deploy check failed — not shipping. (PREFLIGHT_SKIP=1 to override deliberately.)"
+    exit 1
+  }
+fi
+
 _GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<unknown>")
 echo "==============================================="
 echo "  ClubOS deploy → app 'clubos' (Sydney)"
