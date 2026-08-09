@@ -46,6 +46,7 @@ const CANARIES: Canary[] = [
   { feature: "proposals",           path: "/api/admin/proposals",                 expect: [401] },
   { feature: "shop (MFL)",          path: "/api/public/shop/mfl/catalog",         expect: [200] },
   { feature: "attribution /t.js",   path: "/t.js",                                expect: [200] },
+  { feature: "CUGC mailer",         path: "/api/admin/cugc/mailer/contacts",      expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -68,6 +69,7 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/proposals":                 { file: "server/routes.ts",              needle: "/api/admin/proposals" },
   "/api/public/shop/mfl/catalog":         { file: "server/shop-routes.ts",         needle: "catalog" },
   "/t.js":                                { file: "server/routes.ts",              needle: '"/t.js"' },
+  "/api/admin/cugc/mailer/contacts":      { file: "server/routes.ts",              needle: "/api/admin/cugc/mailer/contacts" },
 };
 
 import { readFileSync, existsSync } from "fs";
