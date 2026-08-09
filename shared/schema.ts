@@ -3971,6 +3971,10 @@ export const cugcFreeSessions = pgTable("cugc_free_sessions", {
   sessionLabel: text("session_label").notNull(), // e.g. "Wednesday 4:00–4:45pm"
   sessionDate: text("session_date").notNull(),   // ISO date of the booked class, e.g. "2026-07-22"
   childName: text("child_name").notNull(),
+  // DOB is the truth; childAge is DERIVED from it on write (kept so the admin
+  // list and anything reading it keeps working). Nullable because bookings taken
+  // before 2026-08-09 have no DOB on file and one must never be invented.
+  childDob: text("child_dob"),
   childAge: integer("child_age"),
   parentName: text("parent_name").notNull(),
   email: text("email").notNull(),

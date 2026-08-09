@@ -73,6 +73,7 @@ import {
   POLICY_VERSION as ACADEMY_POLICY_VERSION,
   NZF_ETHNICITIES as NZF_ETHNICITY_OPTIONS,
 } from "@shared/academy";
+import { ageFromDob } from "@shared/family";
 import {
   NZF_COUNTRIES,
   NZF_ETHNICITY_GROUPS,
@@ -23014,6 +23015,26 @@ export async function registerRoutes(
     return org.id;
   }
 
+  // One date-of-birth check for BOTH CUGC sign-up flows (free trial + paid
+  // enrolment). Returns a parent-readable message, or "" when the date is fine.
+  //
+  // 🔴 Required, and enforced HERE rather than by the form's `required`
+  // attribute — that is client-side only, which is how two enrolments reached
+  // the database with no DOB at all. The bounds are deliberately loose: they
+  // catch a mistyped year without ever standing between a real family and a
+  // booking. Compared as calendar parts, so nothing shifts across the NZ/UTC
+  // boundary.
+  const cugcDobError = (dob: string): string => {
+    if (!dob) return "Please add your gymnast's date of birth.";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return "Please enter the date of birth as a date.";
+    const today = nzTodayIso();
+    if (dob > today) return "That date of birth is in the future — please check it.";
+    const age = ageFromDob(dob, today);
+    if (age === null) return "Please check the date of birth.";
+    if (age > 30) return "That date of birth looks like a typo — please check the year.";
+    return "";
+  };
+
   const CUGC_SITE_ORIGINS = ["https://cugc.co.nz", "https://www.cugc.co.nz"];
   const setCugcCors = (req: any, res: any) => {
     const origin = req.headers.origin || "";
@@ -23104,6 +23125,13 @@ export async function registerRoutes(
       if (!parentName || !/.+@.+\..+/.test(email) || !gymnastName) {
         return res.status(400).json({ message: "Please add the gymnast's name, your name and a valid email." });
       }
+      // The form has always marked this required, but `required` is client-side
+      // only — checked here so a date of birth can't be missing from a paid
+      // enrolment. Refused BEFORE any Stripe intent is created, so a rejected
+      // booking never leaves a half-made payment behind.
+      const gymnastDob = String(req.body.gymnastDob || "").trim().slice(0, 10);
+      const enrolDobError = cugcDobError(gymnastDob);
+      if (enrolDobError) return res.status(400).json({ message: enrolDobError });
 
       const { program, option, pricing } = priced;
 
@@ -23131,7 +23159,7 @@ export async function registerRoutes(
         fullPriceCents,
         term: termName,
         gymnastName,
-        gymnastDob: String(req.body.gymnastDob || "").trim() || null,
+        gymnastDob,
         parentName,
         email,
         phone: String(req.body.phone || "").trim() || null,
@@ -23261,8 +23289,15 @@ export async function registerRoutes(
       const email = String(req.body.email || "").trim().slice(0, 120);
       const phone = String(req.body.phone || "").trim().slice(0, 40);
       const notes = String(req.body.notes || "").trim().slice(0, 1000);
-      const ageNum = Number(req.body.childAge);
-      const childAge = Number.isInteger(ageNum) && ageNum >= 1 && ageNum <= 16 ? ageNum : null;
+
+      // Date of birth, not an age. Required from 2026-08-09 — the club needs it
+      // to grade a child into the right class and it can't be recovered later.
+      // Age is DERIVED from it (calendar parts, never Date arithmetic), so the
+      // number in the admin list is right on the day it's read.
+      const childDob = String(req.body.childDob || "").trim().slice(0, 10);
+      const dobError = cugcDobError(childDob);
+      if (dobError) return res.status(400).json({ message: dobError });
+      const childAge = ageFromDob(childDob, nzTodayIso());
 
       const program = CUGC_PROGRAMS.find((p) => p.slug === programSlug);
       if (!program || program.slug === "competitive") return res.status(400).json({ message: "That program isn't available for free sessions." });
@@ -23301,6 +23336,7 @@ export async function registerRoutes(
         sessionLabel,
         sessionDate,
         childName,
+        childDob,
         childAge,
         parentName,
         email,

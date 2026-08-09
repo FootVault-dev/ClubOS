@@ -36,6 +36,7 @@ interface FreeSession {
   sessionLabel: string;
   sessionDate: string;
   childName: string;
+  childDob: string | null;
   childAge: number | null;
   parentName: string;
   email: string;
@@ -70,6 +71,17 @@ function fmtDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// "2021-04-12" → "12 Apr 2021". Read straight off the string parts: a date of
+// birth is a calendar date, not an instant, and pushing one through `new Date()`
+// renders the day before for anyone west of UTC.
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtDobNz(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.slice(0, 10));
+  if (!m) return ymd;
+  const month = MONTHS_SHORT[Number(m[2]) - 1];
+  return month ? `${Number(m[3])} ${month} ${m[1]}` : ymd;
 }
 
 // "2026-07-22" → "Wed 22 Jul" (NZ style, no comma).
@@ -352,6 +364,7 @@ function DetailModal({ row, onClose }: { row: FreeSession; onClose: () => void }
           <div className="grid grid-cols-2 gap-4">
             {field("Status", <span className={`px-2 py-0.5 rounded-md border text-xs font-medium ${STATUS_STYLE[row.status] || STATUS_STYLE.cancelled}`}>{STATUS_LABEL[row.status] || row.status}</span>)}
             {field("Session", `${fmtSessionDate(row.sessionDate)} · ${row.sessionLabel}`)}
+            {field("Date of birth", row.childDob ? fmtDobNz(row.childDob) : null)}
             {field("Child age", row.childAge != null ? `${row.childAge} years` : null)}
             {field("Booked", fmtDate(row.createdAt))}
             {field("Attended at", row.attendedAt ? fmtDate(row.attendedAt) : null)}
