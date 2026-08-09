@@ -25908,14 +25908,20 @@ async function resolveCugcAudience(
     byEmail.set(email, { ...c, email });
   };
 
-  // Newsletter opt-ins first, so someone who both subscribed AND enrolled keeps
-  // the "Newsletter" tag they explicitly asked for.
   const enquiries = await db.select().from(inboxMessages)
     .where(eq(inboxMessages.organizationId, orgId))
     .orderBy(desc(inboxMessages.createdAt));
-  for (const m of enquiries) {
-    if (String(m.subject || "").trim().toLowerCase() !== "newsletter signup") continue;
-    add({ name: m.name || "", email: m.email || "", phone: m.phone || "", role: "Newsletter", program: "" });
+
+  // Newsletter opt-ins go in first, so someone who BOTH subscribed and enrolled
+  // keeps the "Newsletter" tag they explicitly asked for.
+  // 🔴 Skipped entirely for a per-programme send: a newsletter signup carries no
+  // programme, so adding them would silently widen "GymPlay families" to the
+  // whole subscriber list — the same trap as website enquiries below.
+  if (!programSlug) {
+    for (const m of enquiries) {
+      if (String(m.subject || "").trim().toLowerCase() !== "newsletter signup") continue;
+      add({ name: m.name || "", email: m.email || "", phone: m.phone || "", role: "Newsletter", program: "" });
+    }
   }
   if (audience === "newsletter") return Array.from(byEmail.values());
 
