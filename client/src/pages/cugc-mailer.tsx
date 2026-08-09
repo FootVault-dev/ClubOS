@@ -437,28 +437,30 @@ function CampaignDetail({ id, onClose }: { id: number; onClose: () => void }) {
 
             <div className="rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
               <div className="text-[10px] uppercase tracking-wider text-white/30 px-4 py-2 border-b border-white/5 font-semibold">Who it went to</div>
-              <div className="max-h-64 overflow-y-auto overflow-x-auto">
-                <table className="w-full min-w-[440px]">
-                  <tbody>
-                    {data.recipients.length === 0 ? (
-                      <tr><td className="px-4 py-6 text-center text-white/25 text-xs">Still sending — recipients appear as they go out.</td></tr>
-                    ) : data.recipients.map((r) => (
-                      <tr key={r.id} className="border-b border-white/[0.02]">
-                        <td className="px-4 py-2 text-sm text-white/70 truncate max-w-[240px]">{r.email}</td>
-                        <td className="px-4 py-2 text-xs whitespace-nowrap">
-                          {r.status === "failed"
-                            ? <span className="text-red-400">failed</span>
-                            : r.firstOpenedAt
-                              ? <span className="text-amber-300 inline-flex items-center gap-1"><MailOpen className="w-3 h-3" /> opened{r.openCount > 1 ? ` ×${r.openCount}` : ""}</span>
-                              : <span className="text-white/30">delivered</span>}
-                        </td>
-                        <td className="px-4 py-2 text-[11px] text-white/30 whitespace-nowrap">
-                          {r.firstOpenedAt ? new Date(r.firstOpenedAt).toLocaleString("en-NZ", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {/* A flex row, not a table: on a 390px phone a min-width table
+                  pushed the status off the right edge and hid the open time
+                  entirely. Here the address takes the slack and truncates,
+                  and the status/time column always stays on screen. */}
+              <div className="max-h-64 overflow-y-auto">
+                {data.recipients.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-white/25 text-xs">Still sending — recipients appear as they go out.</p>
+                ) : data.recipients.map((r) => (
+                  <div key={r.id} className="flex items-center gap-3 px-4 py-2 border-b border-white/[0.02]">
+                    <span className="text-sm text-white/70 truncate flex-1 min-w-0" title={r.email}>{r.email}</span>
+                    <span className="text-xs whitespace-nowrap flex-shrink-0 text-right">
+                      {r.status === "failed"
+                        ? <span className="text-red-400">failed</span>
+                        : r.firstOpenedAt
+                          ? <span className="text-amber-300 inline-flex items-center gap-1"><MailOpen className="w-3 h-3" /> opened{r.openCount > 1 ? ` ×${r.openCount}` : ""}</span>
+                          : <span className="text-white/30">delivered</span>}
+                      {r.firstOpenedAt && (
+                        <span className="block text-[10px] text-white/30 sm:inline sm:ml-2">
+                          {new Date(r.firstOpenedAt).toLocaleString("en-NZ", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
 
