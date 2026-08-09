@@ -137,6 +137,7 @@ import CugcInbox from "@/pages/cugc-inbox";
 import CugcRegistrations from "@/pages/cugc-registrations";
 import CugcFreeSessions from "@/pages/cugc-free-sessions";
 import CugcAnalytics from "@/pages/cugc-analytics";
+import CugcMailer from "@/pages/cugc-mailer";
 import LeagueBuilderPage from "@/pages/league-builder-page";
 import LeagueSettings from "@/pages/league-settings";
 import GymnasticsDashboard from "@/pages/gymnastics-dashboard";
@@ -379,6 +380,7 @@ function AdminRouter() {
         <Route path="/admin/cugc-free-sessions" component={CugcFreeSessions} />
         <Route path="/admin/cugc-analytics" component={CugcAnalytics} />
         <Route path="/admin/cugc-inbox" component={CugcInbox} />
+        <Route path="/admin/cugc-mailer" component={CugcMailer} />
         <Route path="/admin/terms" component={GymnasticsTerms} />
         {/* Reuse the camps detail + landing-page editor — they take a
             program id and don't care what type the program is. Gymnastics

@@ -1760,6 +1760,37 @@ function cugcEmailShell(opts: { headline: string; body: string; footerNote?: str
 }
 
 /**
+ * CUGC newsletter / broadcast — the Gymnastics Mailer's send function.
+ * Reuses the club's own white-card crest shell so a newsletter looks like every
+ * other email the gym sends, with the compulsory unsubscribe footer and an
+ * optional 1×1 open-tracking pixel appended last (so a broken image URL can
+ * never push itself into the middle of the copy).
+ */
+export async function sendCugcBroadcastEmail(params: {
+  to: string;
+  subject: string;
+  bodyHtml: string;
+  replyTo?: string;
+  unsubscribeUrl: string;
+  pixelUrl?: string;
+}): Promise<boolean> {
+  const body = `
+    <div style="color:#3d3d3d;font-size:15px;line-height:1.65;">${params.bodyHtml}</div>
+    <p style="color:#8492af;font-size:11px;line-height:1.6;margin:22px 0 0;border-top:1px solid #eef2f9;padding-top:14px;">
+      You're receiving this because you're part of the Christchurch United Gymnastics Club community.
+      <a href="${params.unsubscribeUrl}" style="color:#013590;text-decoration:underline;">Unsubscribe</a>
+    </p>
+    ${params.pixelUrl ? `<img src="${params.pixelUrl}" width="1" height="1" style="display:none;" alt="" />` : ""}`;
+  return sendEmail({
+    to: params.to,
+    from: "Christchurch United Gymnastics Club <noreply@cugc.co.nz>",
+    replyTo: params.replyTo || "info@cugc.co.nz",
+    subject: params.subject,
+    html: cugcEmailShell({ headline: params.subject, body }),
+  });
+}
+
+/**
  * CUGC enrolment confirmation — fired by the CUGC Stripe webhook once payment
  * clears. Sent to the PARENT. Clean white-card CUGC branding with the crest;
  * the club's internal copy is the fuller sendCugcEnrolmentNotification below.

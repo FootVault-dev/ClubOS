@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, leaguePaymentReminders, leaguePaymentReminderEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents, attendance, sessionCoaches } from "@shared/schema";
+import { shortLinks, linkClicks, insertContactSchema, insertProgramSchema, insertRegistrationSchema, registrations, emailCampaigns, emailCampaignRecipients, emailUnsubscribes, inboxMessages, analyticsEvents, splitTests, splitTestVariants, apiKeys, customDomains, organizations, programs as programsTable, facilityBookings, facilities, clubs, projectBoards, projectGroups, projectTasks, sponsorshipDeals, sponsorshipDeliverables, sponsorshipOnboardingTemplates, sponsorshipProspects, grantFunders, grantApplications, grantFunderDeadlines, billboardDeals, leagueCompetitions, leagueDivisions, leagueTeams, leagueGames, leagueTeamMembers, leagueGameReferees, leagueAnnouncements, leagueGoals, leagueCards, leagueMedia, users as usersTable, terms, campDates, calendarEvents, eventInvitees, eventReminders, insertBudgetCostCentreSchema, insertBudgetLineSchema, type InsertCalendarCategory, skillsChallengeEntries, tournamentTeams, appUsers, foodTruckShifts, cicVendors, cicVendorBookings, esignDocuments, esignSigners, esignEvents, esignFields, esignTemplates, footballInstituteApplications, bookingRequests, cic7sRegistrations, cugcRegistrations, cugcFreeSessions, passwordResetTokens, clubLogoConsents, tournamentStaff, devicePushTokens, pushCampaigns, apiKeyRequestLogs, leagueWaitlist, licensingCriteria, licensingSubtasks, communityEvents, communityEventTasks, membershipTiers, members, membershipDeliverables, departments, goals, goalMeasures, taskTemplates, taskTemplateItems, proposals, proposalCategories, proposalEvents, insertProposalSchema, insertProposalCategorySchema, sponsors, sponsorLinkEvents, leaguePaymentReminders, leaguePaymentReminderEvents, contentItems, contentSessions, contentTasks, chatConversations, chatMessages, cicInterestRegistrations, payablesDeclarations, payablesDeclarationSignatories, payablesDeclarationEvents, contacts, contactRelationships, academyWaitlist, clubSquads, clubSquadMembers, discounts, predictorFixtures, predictorEntrants, predictorPredictions, predictorSquad, volunteers, volunteerTaskTypes, volunteerAssignments, behaviorEvents, attendance, sessionCoaches } from "@shared/schema";
 import { isValidApiScope, API_SCOPES, normalizeProgramFilter, programFilterIsEmpty, programFilterSqlCondition, describeProgramFilter, rejectedProgramTokens, unknownProgramTypes, scopesOutsideProgramFilter, PROGRAM_TYPES, type ProgramFilter } from "@shared/api-scopes";
 import { apiSecurityHeaders, clientIp, isIpBlocked, recordAuthFailure, keyRateLimitExceeded, noteScopeDenial, API_KEY_RATE_LIMIT_PER_MIN } from "./api-security";
 import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
@@ -23,7 +23,7 @@ import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent, sendVenuePurchaseEvent } from "./meta-capi";
 import { purchaseEventId } from "@shared/meta-events";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCugcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -23460,6 +23460,202 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ── CUGC Mailer ─────────────────────────────────────────────────────────────
+  // Natalia's newsletter sender (Gymnastics workspace → Mailer tab, slug
+  // "cugc-mailer"). Same engine as the MFL/CIC/CUFC mailers (email_campaigns +
+  // runBroadcastQueue + signed unsubscribe tokens), plus per-recipient delivery
+  // and open tracking via email_campaign_recipients.
+
+  const CUGC_PIXEL_HOST = "join.cugc.co.nz";
+
+  // Everyone we can email, with their source tag + unsubscribed flag.
+  app.get("/api/admin/cugc/mailer/contacts", requireAuth, requireTab("cugc-mailer"), async (_req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const recipients = await resolveCugcAudience(orgId);
+      const unsub = await getUnsubscribedEmails(orgId);
+      const list = recipients.map((r) => ({ ...r, unsubscribed: unsub.has(r.email) }));
+      res.json({
+        contacts: list,
+        total: list.length,
+        unsubscribedCount: list.filter((c) => c.unsubscribed).length,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // The programmes a send can be aimed at — derived from what families have
+  // actually signed up to, so the picker can never offer an empty programme.
+  app.get("/api/admin/cugc/mailer/programs", requireAuth, requireTab("cugc-mailer"), async (_req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const unsub = await getUnsubscribedEmails(orgId);
+      const seen = new Map<string, { slug: string; name: string; count: number }>();
+      const regs = await db.select({ slug: cugcRegistrations.programSlug, name: cugcRegistrations.programName })
+        .from(cugcRegistrations).where(eq(cugcRegistrations.organizationId, orgId));
+      const trials = await db.select({ slug: cugcFreeSessions.programSlug, name: cugcFreeSessions.programName })
+        .from(cugcFreeSessions).where(eq(cugcFreeSessions.organizationId, orgId));
+      for (const r of [...regs, ...trials]) {
+        if (!r.slug) continue;
+        if (!seen.has(r.slug)) seen.set(r.slug, { slug: r.slug, name: r.name || r.slug, count: 0 });
+      }
+      for (const p of Array.from(seen.values())) {
+        const people = await resolveCugcAudience(orgId, { audience: "program", programSlug: p.slug });
+        p.count = people.filter((r) => !unsub.has(r.email)).length;
+      }
+      res.json({ programs: Array.from(seen.values()).sort((a, b) => b.count - a.count) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Recent sends — CUGC campaigns only, with delivery + open counts.
+  app.get("/api/admin/cugc/mailer/campaigns", requireAuth, requireTab("cugc-mailer"), async (_req, res) => {
+    try {
+      const all = await storage.getEmailCampaigns();
+      const mine = all.filter((c) => String(c.segmentType || "").startsWith("cugc"));
+      if (mine.length === 0) return res.json([]);
+      const stats = await db.select({
+        campaignId: emailCampaignRecipients.campaignId,
+        delivered: sql<number>`count(*) filter (where ${emailCampaignRecipients.status} = 'sent')`,
+        opened: sql<number>`count(*) filter (where ${emailCampaignRecipients.firstOpenedAt} is not null)`,
+      }).from(emailCampaignRecipients)
+        .where(inArray(emailCampaignRecipients.campaignId, mine.map((c) => c.id)))
+        .groupBy(emailCampaignRecipients.campaignId);
+      const byId = new Map(stats.map((s) => [s.campaignId, s]));
+      res.json(mine.map((c) => ({
+        ...c,
+        deliveredCount: Number(byId.get(c.id)?.delivered ?? 0),
+        openedCount: Number(byId.get(c.id)?.opened ?? 0),
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // One send, with the per-person list: who it went to and who opened it.
+  app.get("/api/admin/cugc/mailer/campaigns/:id", requireAuth, requireTab("cugc-mailer"), async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Bad id" });
+      const campaign = await storage.getEmailCampaign(id);
+      if (!campaign || !String(campaign.segmentType || "").startsWith("cugc")) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      const recipients = await db.select().from(emailCampaignRecipients)
+        .where(eq(emailCampaignRecipients.campaignId, id))
+        .orderBy(desc(emailCampaignRecipients.firstOpenedAt));
+      res.json({
+        campaign,
+        recipients,
+        deliveredCount: recipients.filter((r) => r.status === "sent").length,
+        failedCount: recipients.filter((r) => r.status === "failed").length,
+        openedCount: recipients.filter((r) => r.firstOpenedAt).length,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Live recipient count for the chosen audience (always excludes unsubscribed).
+  // `extraEmails` are the hand-typed additions that ride on top of any audience.
+  app.post("/api/admin/cugc/mailer/preview", requireAuth, requireTab("cugc-mailer"), async (req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const unsub = await getUnsubscribedEmails(orgId);
+      const emails = await resolveCugcSendList(orgId, req.body, unsub);
+      res.json({ count: emails.length });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Send a single test to one address — no DB blast, no campaign row.
+  app.post("/api/admin/cugc/mailer/test-send", requireAuth, requireTab("cugc-mailer"), async (req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const { to, subject, body, replyTo } = req.body || {};
+      const dest = String(to || "").trim();
+      if (!dest || !String(subject || "").trim() || !String(body || "").trim()) {
+        return res.status(400).json({ message: "to, subject and body are required" });
+      }
+      const ok = await sendCugcBroadcastEmail({
+        to: dest, subject: `[TEST] ${String(subject).trim()}`, bodyHtml: String(body),
+        replyTo: replyTo || undefined, unsubscribeUrl: cugcUnsubUrl(orgId, dest),
+      });
+      res.json({ ok });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/cugc/mailer/send", requireAuth, requireTab("cugc-mailer"), async (req, res) => {
+    try {
+      const orgId = await cugcOrgId();
+      const { subject, body, audience, programSlug, replyTo } = req.body || {};
+      const subj = String(subject || "").trim();
+      if (!subj || subj.length > 300) return res.status(400).json({ message: "A subject (under 300 chars) is required" });
+      if (!String(body || "").trim()) return res.status(400).json({ message: "Email body is required" });
+
+      const unsub = await getUnsubscribedEmails(orgId);
+      const recipients = await resolveCugcSendList(orgId, req.body, unsub);
+      if (recipients.length === 0) return res.status(400).json({ message: "No recipients in this audience" });
+      if (recipients.length > 2000) return res.status(400).json({ message: "That's over 2,000 recipients — split the send" });
+
+      const aud: CugcAudience = ["newsletter", "all", "program", "custom"].includes(audience) ? audience : "all";
+      const [campaign] = await db.insert(emailCampaigns).values({
+        subject: subj, body: String(body),
+        fromEmail: "Christchurch United Gymnastics Club <noreply@cugc.co.nz>",
+        replyTo: replyTo || "info@cugc.co.nz",
+        segmentType: `cugc_${aud}`,
+        segmentConfig: JSON.stringify({ orgId, audience: aud, programSlug: programSlug || null, emails: recipients }),
+        recipientCount: recipients.length, status: "sending",
+      }).returning();
+
+      // Queue runs after the response — Resend's rate limit makes a big audience
+      // take minutes, far longer than a request should hang.
+      void runBroadcastQueue(campaign.id, recipients, (email, pixelUrl) =>
+        sendCugcBroadcastEmail({
+          to: email, subject: subj, bodyHtml: String(body),
+          replyTo: replyTo || undefined,
+          unsubscribeUrl: cugcUnsubUrl(orgId, email),
+          pixelUrl,
+        }),
+        { pixelHost: CUGC_PIXEL_HOST },
+      ).catch((e) => console.error("[CUGC mailer queue] error:", e));
+
+      res.json({ queued: true, recipientCount: recipients.length });
+    } catch (e: any) {
+      console.error("[CUGC mailer send] error:", e);
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Public open-tracking pixel. Stateless signed token (HMAC of campaign:email),
+  // so it can be neither forged nor enumerated. Always returns the gif — a
+  // tracking failure must never render a broken image in someone's newsletter.
+  app.get("/api/public/email/open", async (req, res) => {
+    const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+    const done = () => {
+      res.set({
+        "Content-Type": "image/gif",
+        "Content-Length": String(gif.length),
+        // Never let a proxy cache the pixel, or the second open is invisible.
+        "Cache-Control": "no-store, no-cache, must-revalidate, private",
+        Pragma: "no-cache",
+      });
+      res.end(gif);
+    };
+    try {
+      const campaignId = parseInt(String(req.query.c || ""));
+      const email = String(req.query.e || "").trim().toLowerCase();
+      const token = String(req.query.t || "");
+      if (!campaignId || !email || emailOpenToken(campaignId, email) !== token) return done();
+      await db.update(emailCampaignRecipients).set({
+        // first_opened_at is stamped once and never moved — it's the "did this
+        // person ever open it" fact the reporting reads.
+        firstOpenedAt: sql`coalesce(${emailCampaignRecipients.firstOpenedAt}, now())`,
+        lastOpenedAt: new Date(),
+        openCount: sql`${emailCampaignRecipients.openCount} + 1`,
+      }).where(and(
+        eq(emailCampaignRecipients.campaignId, campaignId),
+        sql`lower(${emailCampaignRecipients.email}) = ${email}`,
+      ));
+    } catch (e) {
+      console.error("[email open pixel] error:", e);
+    }
+    done();
+  });
+
   // Public one-click unsubscribe from MFL broadcasts (link in every newsletter).
   // Stateless signed token (HMAC of org:email) — no auth, no enumeration.
   app.get("/api/public/unsubscribe", async (req, res) => {
@@ -23472,17 +23668,21 @@ export async function registerRoutes(
       // keeps the MFL page.
       const cicId = await skillsOrgId().catch(() => null);
       const cufcId = await predictorOrgId().catch(() => null);
+      const cugcId = await cugcOrgId().catch(() => null);
       const isCic = !!orgId && orgId === cicId;
       const isCufc = !!orgId && orgId === cufcId;
-      const page = isCic ? cicUnsubPage : isCufc ? cufcUnsubPage : mflUnsubPage;
+      const isCugc = !!orgId && orgId === cugcId;
+      const page = isCic ? cicUnsubPage : isCufc ? cufcUnsubPage : isCugc ? cugcUnsubPage : mflUnsubPage;
       if (!orgId || !email || mflUnsubToken(orgId, email) !== token) {
         return res.status(400).send(page("This unsubscribe link is invalid or has expired. Reply to any email and we'll remove you."));
       }
-      await db.insert(emailUnsubscribes).values({ organizationId: orgId, email, source: isCic ? "cic_broadcast" : isCufc ? "cufc_broadcast" : "league_broadcast" }).onConflictDoNothing();
+      await db.insert(emailUnsubscribes).values({ organizationId: orgId, email, source: isCic ? "cic_broadcast" : isCufc ? "cufc_broadcast" : isCugc ? "cugc_broadcast" : "league_broadcast" }).onConflictDoNothing();
       res.send(page(isCic
         ? "You've been unsubscribed. You won't receive any more Christchurch International Cup newsletters. You'll still get essential emails about teams you've entered."
         : isCufc
         ? "You've been unsubscribed. You won't receive any more Christchurch United newsletters. You'll still get essential emails about anything you've registered for."
+        : isCugc
+        ? "You've been unsubscribed. You won't receive any more United Gymnastics newsletters. You'll still get essential emails about anything your gymnast is enrolled in."
         : "You've been unsubscribed. You won't receive any more Mini Football Leagues newsletters. You'll still get essential emails about teams you've registered."));
     } catch (e: any) {
       res.status(500).send(mflUnsubPage("Something went wrong. Reply to any email and we'll remove you manually."));
@@ -25431,17 +25631,45 @@ function cicUnsubUrl(orgId: number, email: string): string {
 // So: one email at a time, spaced under the limit, 3 retries with backoff on
 // failure, progress written to the campaign row so the UI can poll it.
 const broadcastSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function runBroadcastQueue(campaignId: number, recipients: string[], sendOne: (email: string) => Promise<boolean>): Promise<void> {
+
+// Signed, stateless open-tracking token — same shape and secret as the
+// unsubscribe links, so a pixel URL can't be forged or enumerated.
+function emailOpenToken(campaignId: number, email: string): string {
+  return crypto.createHmac("sha256", UNSUB_SECRET)
+    .update(`open:${campaignId}:${email.trim().toLowerCase()}`).digest("hex").slice(0, 32);
+}
+function emailOpenPixelUrl(campaignId: number, email: string, host: string): string {
+  return `https://${host}/api/public/email/open?c=${campaignId}&e=${encodeURIComponent(email)}&t=${emailOpenToken(campaignId, email)}`;
+}
+
+// `sendOne` gains a second argument (the per-recipient pixel URL). Existing
+// callers that declare only `(email)` still type-check and behave exactly as
+// before — a mailer opts into open tracking by using the argument.
+async function runBroadcastQueue(
+  campaignId: number,
+  recipients: string[],
+  sendOne: (email: string, pixelUrl: string) => Promise<boolean>,
+  opts?: { pixelHost?: string },
+): Promise<void> {
   const SPACING_MS = 650;   // ~1.5 req/s — safely under Resend's 2/s
   const RETRIES = 3;
+  const pixelHost = opts?.pixelHost || "app.usg.co.nz";
   let sent = 0, failed = 0;
   for (let i = 0; i < recipients.length; i++) {
     let ok = false;
+    const email = recipients[i];
     for (let attempt = 0; attempt <= RETRIES && !ok; attempt++) {
       if (attempt > 0) await broadcastSleep(1500 * attempt);
-      try { ok = await sendOne(recipients[i]); } catch { ok = false; }
+      try { ok = await sendOne(email, emailOpenPixelUrl(campaignId, email, pixelHost)); } catch { ok = false; }
     }
     ok ? sent++ : failed++;
+    // Row-level record of who this went to — the spine open tracking hangs off.
+    // Best-effort on purpose: a bookkeeping failure must never halt a send.
+    try {
+      await db.insert(emailCampaignRecipients)
+        .values({ campaignId, email: email.trim().toLowerCase(), status: ok ? "sent" : "failed" })
+        .onConflictDoNothing();
+    } catch { /* keep sending */ }
     if ((i + 1) % 10 === 0) {
       try {
         await db.update(emailCampaigns).set({ sentCount: sent, failedCount: failed })
@@ -25646,6 +25874,118 @@ async function resolveCufcAudience(orgId: number): Promise<CufcContact[]> {
   }
 
   return Array.from(byEmail.values());
+}
+
+// ── CUGC (United Gymnastics, org 6) Mailer helpers ───────────────────────────
+// Natalia's newsletter sender. The gym's whole email list lives in three places
+// and nowhere else, so the audience is assembled from all three and deduped:
+//   - cugc_registrations  — families who enrolled and paid (or started to)
+//   - cugc_free_sessions  — families who booked a free trial
+//   - inbox_messages      — the cugc.co.nz forms; the site's Newsletter block
+//                           posts through the CONTACT endpoint with the subject
+//                           "Newsletter signup", which is what marks a true
+//                           newsletter opt-in (there is no subscribers table).
+
+function cugcUnsubUrl(orgId: number, email: string): string {
+  return `https://join.cugc.co.nz/api/public/unsubscribe?o=${orgId}&e=${encodeURIComponent(email)}&t=${mflUnsubToken(orgId, email)}`;
+}
+
+type CugcContact = { name: string; email: string; phone: string; role: string; program: string };
+export type CugcAudience = "newsletter" | "all" | "program" | "custom";
+
+// Every CUGC contact, tagged with where they came from. Callers filter this
+// down; the suppression list is applied by the caller (getUnsubscribedEmails).
+async function resolveCugcAudience(
+  orgId: number,
+  opts?: { audience?: CugcAudience; programSlug?: string | null },
+): Promise<CugcContact[]> {
+  const audience = opts?.audience || "all";
+  const programSlug = opts?.programSlug || null;
+  const byEmail = new Map<string, CugcContact>();
+  const add = (c: CugcContact) => {
+    const email = (c.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@") || byEmail.has(email)) return;
+    byEmail.set(email, { ...c, email });
+  };
+
+  // Newsletter opt-ins first, so someone who both subscribed AND enrolled keeps
+  // the "Newsletter" tag they explicitly asked for.
+  const enquiries = await db.select().from(inboxMessages)
+    .where(eq(inboxMessages.organizationId, orgId))
+    .orderBy(desc(inboxMessages.createdAt));
+  for (const m of enquiries) {
+    if (String(m.subject || "").trim().toLowerCase() !== "newsletter signup") continue;
+    add({ name: m.name || "", email: m.email || "", phone: m.phone || "", role: "Newsletter", program: "" });
+  }
+  if (audience === "newsletter") return Array.from(byEmail.values());
+
+  const regs = await db.select().from(cugcRegistrations)
+    .where(eq(cugcRegistrations.organizationId, orgId))
+    .orderBy(desc(cugcRegistrations.createdAt));
+  for (const r of regs) {
+    // A cancelled enrolment is not a customer to newsletter.
+    if (r.status === "cancelled") continue;
+    if (programSlug && r.programSlug !== programSlug) continue;
+    add({ name: r.parentName || "", email: r.email || "", phone: r.phone || "", role: "Enrolled", program: r.programName || "" });
+  }
+
+  const trials = await db.select().from(cugcFreeSessions)
+    .where(eq(cugcFreeSessions.organizationId, orgId))
+    .orderBy(desc(cugcFreeSessions.createdAt));
+  for (const t of trials) {
+    if (programSlug && t.programSlug !== programSlug) continue;
+    add({ name: t.parentName || "", email: t.email || "", phone: t.phone || "", role: "Free session", program: t.programName || "" });
+  }
+
+  // Website enquiries only join the general list, never a per-programme one —
+  // an enquiry carries no programme, so including it would silently widen a
+  // "GymPlay families" send to people who never picked a programme.
+  if (!programSlug) {
+    for (const m of enquiries) {
+      if (String(m.subject || "").trim().toLowerCase() === "newsletter signup") continue;
+      add({ name: m.name || "", email: m.email || "", phone: m.phone || "", role: "Enquiry", program: "" });
+    }
+  }
+
+  return Array.from(byEmail.values());
+}
+
+// The ONE place a CUGC send list is decided — preview and send both call it, so
+// the number Natalia is shown is by construction the number who get the email.
+// Hand-typed addresses ride ON TOP of whatever audience is picked (that's the
+// "everyone plus a few extras" case); audience "custom" means only the typed
+// ones. Unsubscribes are stripped last, so nothing can route around them.
+async function resolveCugcSendList(
+  orgId: number,
+  body: any,
+  unsub: Set<string>,
+): Promise<string[]> {
+  const audience: CugcAudience = ["newsletter", "all", "program", "custom"].includes(body?.audience)
+    ? body.audience : "all";
+  const extras = parseCustomEmails(body?.customEmails);
+  if (extras.length > 500) throw new Error("Hand-typed lists are capped at 500 addresses");
+
+  const out = new Set<string>();
+  if (audience !== "custom") {
+    const programSlug = audience === "program" ? String(body?.programSlug || "").trim() : null;
+    if (audience === "program" && !programSlug) throw new Error("Pick a programme first");
+    const people = await resolveCugcAudience(orgId, { audience, programSlug });
+    for (const p of people) out.add(p.email);
+  }
+  for (const e of extras) out.add(e.trim().toLowerCase());
+
+  return Array.from(out).filter((e) => !unsub.has(e));
+}
+
+function cugcUnsubPage(message: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Christchurch United Gymnastics Club</title></head>
+  <body style="margin:0;background:#f1f4fa;color:#191919;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <div style="max-width:480px;margin:0 auto;padding:64px 24px;text-align:center;">
+      <img src="https://cugc.co.nz/img/logo.png" alt="United Gymnastics" width="76" height="76" style="margin:0 0 18px;border:0;" />
+      <p style="color:#013590;margin:0 0 14px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Christchurch United Gymnastics Club</p>
+      <p style="font-size:16px;line-height:1.6;color:#3d3d3d;">${message}</p>
+    </div>
+  </body></html>`;
 }
 
 function cufcUnsubPage(message: string): string {

@@ -2032,6 +2032,26 @@ export const insertRegistrationItemSchema = createInsertSchema(registrationItems
 export const insertAttendanceSchema = createInsertSchema(attendance).omit({ id: true });
 export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({ id: true, sentAt: true });
 export const insertMetaEventLogSchema = createInsertSchema(metaEventLogs).omit({ id: true, sentAt: true });
+// Row-level detail behind a campaign's sent/failed counters: who it went to and
+// whether they opened it. Written by runBroadcastQueue for every mailer; opens
+// land via the tracking pixel (/api/public/email/open/:cid/:token/pixel.gif).
+// 🔴 `status: "sent"` means Resend ACCEPTED it — there is no delivery webhook,
+// so it must never be presented to staff as "delivered to the inbox".
+export const emailCampaignRecipients = pgTable("email_campaign_recipients", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  campaignId: integer("campaign_id").notNull().references(() => emailCampaigns.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  status: text("status").notNull().default("sent"), // 'sent' | 'failed'
+  sentAt: timestamp("sent_at", { withTimezone: true }).defaultNow().notNull(),
+  firstOpenedAt: timestamp("first_opened_at", { withTimezone: true }),
+  lastOpenedAt: timestamp("last_opened_at", { withTimezone: true }),
+  openCount: integer("open_count").notNull().default(0),
+}, (t) => ({
+  campaignIdx: index("email_campaign_recipients_campaign_idx").on(t.campaignId),
+}));
+
+export type EmailCampaignRecipient = typeof emailCampaignRecipients.$inferSelect;
+
 export const insertEmailCampaignSchema = createInsertSchema(emailCampaigns).omit({ id: true, createdAt: true, sentAt: true });
 export const insertEmailUnsubscribeSchema = createInsertSchema(emailUnsubscribes).omit({ id: true, createdAt: true });
 export type InsertEmailUnsubscribe = z.infer<typeof insertEmailUnsubscribeSchema>;

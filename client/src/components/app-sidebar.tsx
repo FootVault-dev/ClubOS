@@ -280,6 +280,7 @@ const gymnasticsNav = [
   { tab: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics", icon: BarChart3 },
   { tab: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox", icon: Inbox },
   { tab: "cugc-livechat", title: "Live Chat", url: "/admin/cugc-livechat", icon: MessageCircle },
+  { tab: "cugc-mailer", title: "Mailer", url: "/admin/cugc-mailer", icon: Mail },
   { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
 

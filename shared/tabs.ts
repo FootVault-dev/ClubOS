@@ -200,6 +200,7 @@ const gymnasticsTabs: TabDef[] = [
   { slug: "cugc-analytics", title: "Analytics", url: "/admin/cugc-analytics" },
   { slug: "cugc-inbox", title: "Inbox", url: "/admin/cugc-inbox" },
   { slug: "cugc-livechat", title: "Live Chat", url: "/admin/cugc-livechat" },
+  { slug: "cugc-mailer", title: "Mailer", url: "/admin/cugc-mailer" },
   { slug: "marketing", title: "Marketing", url: "/admin/marketing" },
   { slug: "studio", title: "Studio", url: "/admin/studio", secondary: true },
   { slug: "esign", title: "E-Sign", url: "/admin/esign", secondary: true },
