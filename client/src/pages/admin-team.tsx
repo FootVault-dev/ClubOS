@@ -22,6 +22,9 @@ interface TeamMember {
   lastName: string;
   globalRole: string;
   active: boolean;
+  // Global, not per-workspace: this person may send money back to a customer's
+  // card anywhere in ClubOS. Deliberately separate from every role.
+  canIssueRefunds: boolean;
   createdAt: string;
   memberships: Membership[];
 }
@@ -458,6 +461,24 @@ function ManageMembershipsModal({
   const [emailFlag, setEmailFlag] = useState<boolean | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const setRefundPermission = useMutation({
+    mutationFn: async (canIssueRefunds: boolean) => {
+      const res = await apiRequest("PATCH", `/api/admin/users/${memberId}`, { canIssueRefunds });
+      return res.json();
+    },
+    onSuccess: (r: { canIssueRefunds: boolean }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/team"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({
+        title: r.canIssueRefunds ? "Refunds enabled" : "Refunds disabled",
+        description: r.canIssueRefunds
+          ? `${member?.firstName} can now refund registrations. Their name is recorded on every one.`
+          : `${member?.firstName} can no longer issue refunds.`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Couldn't change refund access", description: e.message, variant: "destructive" }),
+  });
+
   const resetPassword = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/admin/team/${memberId}/reset-password`, { sendEmail: true });
@@ -508,6 +529,40 @@ function ManageMembershipsModal({
           </button>
         </div>
         <div className="p-6 space-y-5">
+          {/* Refund permission — global, and deliberately the first thing in
+              this modal. It is the only switch here that can move real money. */}
+          <div>
+            <h4 className="text-xs uppercase tracking-wider font-semibold text-white/40 mb-3">Refunds</h4>
+            <button
+              onClick={() => setRefundPermission.mutate(!member.canIssueRefunds)}
+              disabled={setRefundPermission.isPending}
+              className={`w-full flex items-start gap-3 p-3.5 rounded-xl border text-left transition-colors disabled:opacity-50 ${
+                member.canIssueRefunds
+                  ? "bg-amber-500/[0.07] border-amber-500/25 hover:border-amber-500/40"
+                  : "bg-white/[0.02] border-white/[0.07] hover:border-white/15"
+              }`}
+              data-testid="button-toggle-refund-permission"
+            >
+              <div className={`mt-0.5 w-9 h-5 rounded-full shrink-0 transition-colors relative ${
+                member.canIssueRefunds ? "bg-amber-500/70" : "bg-white/10"
+              }`}>
+                <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
+                  member.canIssueRefunds ? "left-[18px]" : "left-0.5"
+                }`} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm text-white/85 font-medium">
+                  {member.canIssueRefunds ? "Can issue refunds" : "Cannot issue refunds"}
+                </p>
+                <p className="text-[11px] text-white/45 mt-0.5 leading-relaxed">
+                  {member.canIssueRefunds
+                    ? "Can send money back to a customer's card, in any workspace they can reach. Every refund records their name, the amount and the time."
+                    : "Turn this on only for people who should be able to send money back to a customer's card. It is separate from their role on purpose — no workspace role grants it."}
+                </p>
+              </div>
+            </button>
+          </div>
+
           <div>
             <h4 className="text-xs uppercase tracking-wider font-semibold text-white/40 mb-3">Current workspace access</h4>
             {member.memberships.length === 0 ? (
@@ -819,13 +874,25 @@ export default function AdminTeam() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
-                      t.globalRole === "super_admin"
-                        ? "bg-purple-500/15 text-purple-400"
-                        : "bg-white/[0.05] text-white/60"
-                    }`}>
-                      {t.globalRole === "super_admin" ? "Super Admin" : t.globalRole}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
+                        t.globalRole === "super_admin"
+                          ? "bg-purple-500/15 text-purple-400"
+                          : "bg-white/[0.05] text-white/60"
+                      }`}>
+                        {t.globalRole === "super_admin" ? "Super Admin" : t.globalRole}
+                      </span>
+                      {/* Who can move money, visible without opening anyone. */}
+                      {t.canIssueRefunds && (
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/15 text-amber-400"
+                          title="Can issue refunds"
+                          data-testid={`badge-refunds-${t.id}`}
+                        >
+                          Refunds
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${

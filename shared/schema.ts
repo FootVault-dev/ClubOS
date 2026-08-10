@@ -66,6 +66,18 @@ export const users = pgTable("users", {
   // from a real choice. The UI falls back to initials.
   avatarUrl: text("avatar_url"),
   role: roleEnum("role").notNull().default("coach"),
+  // 🔴 May this person send money back to a customer's card?
+  //
+  // Deliberately a PER-PERSON flag and NOT derived from `role`. `canAccessTab`
+  // grants an `admin`/`manager` member every tab in a workspace they belong to,
+  // so keying refunds off the role would hand the club's Stripe balance to
+  // every workspace admin — and the role default is "coach", which every public
+  // fan signup receives. There is also no super-admin bypass: a refund is a
+  // named act, and "whoever happens to be super admin" is not a named person.
+  //
+  // Default false, no backfill: nobody gains this by existing. It is granted
+  // one person at a time in /admin/team by a super admin.
+  canIssueRefunds: boolean("can_issue_refunds").notNull().default(false),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

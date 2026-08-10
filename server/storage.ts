@@ -1028,7 +1028,13 @@ export class DatabaseStorage implements IStorage {
         const ids = uniq([...regs.map((r) => r.contactId), ...regs.map((r) => r.guardianId)]);
         return ids.length ? db.select().from(contacts).where(inArray(contacts.id, ids)) : [];
       })(),
-      (async () => { const ids = uniq(regs.map((r: any) => r.servedByUserId)); return ids.length ? db.select().from(users).where(inArray(users.id, ids)) : []; })(),
+      // Both the counter staffer who took the payment AND whoever refunded it,
+      // resolved in ONE batch. A second query per row here is what exhausted the
+      // pooler last time this page grew a join.
+      (async () => {
+        const ids = uniq([...regs.map((r: any) => r.servedByUserId), ...regs.map((r: any) => r.refundedBy)]);
+        return ids.length ? db.select().from(users).where(inArray(users.id, ids)) : [];
+      })(),
     ]);
 
     const itemChildIds = uniq(items.map((i) => i.childId));
@@ -1078,6 +1084,11 @@ export class DatabaseStorage implements IStorage {
         items: itemsByReg.get(r.id) ?? [],
         children: kidsByParent.get(r.contactId) ?? [],
         servedByName: r.servedByUserId ? staffById.get(r.servedByUserId) ?? null : null,
+        // Who sent the money back. Resolved at READ time from refundedBy rather
+        // than stamped onto the row, so a later name change corrects everywhere
+        // at once. Null when the refund predates the audit trail — which reads
+        // honestly as "we don't know", never as nobody.
+        refundedByName: (r as any).refundedBy ? staffById.get((r as any).refundedBy) ?? null : null,
       };
     });
   }

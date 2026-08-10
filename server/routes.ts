@@ -18,12 +18,12 @@ import { attributionOverview, revenueByCampaign, revenueByAd, leadsByChannel, re
 import { resolveBehaviorRange, behaviorOverview, behaviorPageDetail, behaviorJourneys, behaviorHours } from "./behavior-reports";
 import { eq, ne, and, or, sql, asc, desc, inArray, isNull, isNotNull, gt, gte, lte, like, ilike } from "drizzle-orm";
 import { z } from "zod";
-import { requireAuth, requireSuperAdmin, requireTab, verifyPassword, hashPassword } from "./auth";
+import { requireAuth, requireSuperAdmin, requireTab, requireRefundPermission, verifyPassword, hashPassword } from "./auth";
 import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent, sendVenuePurchaseEvent } from "./meta-capi";
 import { purchaseEventId } from "@shared/meta-events";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCugcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy } from "./email";
+import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCugcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy, sendRefundConfirmationEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -637,7 +637,10 @@ export async function registerRoutes(
     const user = await storage.getUser(req.session.userId);
     if (!user) return res.status(401).json({ message: "Not authenticated" });
     const orgs = await storage.getUserOrganizations(req.session.userId);
-    res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, avatarUrl: user.avatarUrl ?? null, role: user.role, organizations: orgs });
+    // canIssueRefunds drives whether the Refund button renders. The client copy
+    // of it is a convenience only — the server re-checks on every refund call,
+    // so flipping this in devtools buys nothing.
+    res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, avatarUrl: user.avatarUrl ?? null, role: user.role, canIssueRefunds: !!user.canIssueRefunds, organizations: orgs });
   });
 
   app.patch("/api/auth/me", requireAuth, async (req, res) => {
@@ -949,7 +952,7 @@ export async function registerRoutes(
   app.get("/api/admin/users", requireSuperAdmin, async (_req, res) => {
     try {
       const allUsers = await storage.getAllUsers();
-      res.json(allUsers.map(u => ({ id: u.id, email: u.email, firstName: u.firstName, lastName: u.lastName, role: u.role, active: u.active, createdAt: u.createdAt })));
+      res.json(allUsers.map(u => ({ id: u.id, email: u.email, firstName: u.firstName, lastName: u.lastName, role: u.role, active: u.active, canIssueRefunds: !!u.canIssueRefunds, createdAt: u.createdAt })));
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -997,6 +1000,7 @@ export async function registerRoutes(
         lastName: u.lastName,
         globalRole: u.role,
         active: u.active,
+        canIssueRefunds: !!(u as any).canIssueRefunds,
         createdAt: u.createdAt,
         memberships: u.memberships,
       })));
@@ -1262,11 +1266,15 @@ export async function registerRoutes(
       if (req.body.lastName) updates.lastName = req.body.lastName;
       if (req.body.email) updates.email = req.body.email;
       if (typeof req.body.active === "boolean") updates.active = req.body.active;
+      // Refund permission. Super-admin-only to set (this whole route is), and
+      // strictly a boolean — `if (req.body.x)` would silently ignore `false` and
+      // make the permission impossible to REVOKE through the UI.
+      if (typeof req.body.canIssueRefunds === "boolean") updates.canIssueRefunds = req.body.canIssueRefunds;
       if (req.body.password) updates.password = await hashPassword(req.body.password);
 
       const updated = await storage.updateUser(userId, updates);
       if (!updated) return res.status(404).json({ message: "User not found" });
-      res.json({ id: updated.id, email: updated.email, firstName: updated.firstName, lastName: updated.lastName, role: updated.role, active: updated.active });
+      res.json({ id: updated.id, email: updated.email, firstName: updated.firstName, lastName: updated.lastName, role: updated.role, active: updated.active, canIssueRefunds: !!updated.canIssueRefunds });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -4159,7 +4167,11 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/registrations/:id/refund", requireAuth, async (req, res) => {
+  // 🔴 requireRefundPermission, not requireAuth. Until 2026-08-10 this route was
+  // requireAuth only — every logged-in staff member, including a part-time coach
+  // whose account exists to take a roll, could send any customer's money back to
+  // their card. The flag is per-person and has no role bypass; see server/auth.ts.
+  app.post("/api/admin/registrations/:id/refund", requireAuth, requireRefundPermission, async (req, res) => {
     try {
       const regId = parseInt(req.params.id);
       const reg = await storage.getRegistration(regId);
@@ -4296,6 +4308,38 @@ export async function registerRoutes(
         stripeRefundStatus: refund.status,
       });
 
+      // Tell the payer, best-effort.
+      //
+      // 🔴 Wrapped so an email failure can never surface as a failed refund. The
+      // money has already moved at this point; reporting failure to the operator
+      // would invite them to click Refund a second time, and the idempotency key
+      // is scoped to the amount — a second click for a DIFFERENT partial amount
+      // would be a genuine second refund. Silence about the email is recoverable;
+      // a double refund is not.
+      let emailSent = false;
+      try {
+        const guardian = reg.guardianId ? await storage.getContact(reg.guardianId) : null;
+        const child = reg.contactId ? await storage.getContact(reg.contactId) : null;
+        const program = await storage.getProgram(reg.programId);
+        const to = guardian?.email || child?.email || null;
+        if (to) {
+          emailSent = await sendRefundConfirmationEmail({
+            to,
+            payerName: guardian?.firstName || child?.firstName || null,
+            amountCents: refundAmount,
+            originalTotalCents: totalCents,
+            isFullRefund,
+            programName: program?.name || "your registration",
+            childName: child ? `${child.firstName} ${child.lastName ?? ""}`.trim() : null,
+            reason: reason || null,
+          });
+        } else {
+          console.warn(`[Refund] reg#${regId} refunded but no email address on file — nobody was told.`);
+        }
+      } catch (mailErr) {
+        console.error(`[Refund] reg#${regId} refunded OK but confirmation email failed:`, mailErr);
+      }
+
       res.json({
         ok: true,
         refundId: refund.id,
@@ -4303,6 +4347,7 @@ export async function registerRoutes(
         amountRefunded: refundAmount,
         totalRefunded: newRefundedTotal,
         isFullRefund,
+        emailSent,
       });
     } catch (error: any) {
       console.error("Refund endpoint error:", error);

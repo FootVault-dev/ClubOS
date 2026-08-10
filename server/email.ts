@@ -537,6 +537,64 @@ export async function sendCufcParentLoginCode(params: {
 }
 
 /**
+ * "Your refund has been processed."
+ *
+ * Sent to the payer the moment Stripe accepts the refund. The point is the
+ * waiting period: the money leaves our balance immediately but takes days to
+ * surface on their statement, and a parent who has already had to chase us once
+ * reads that silence as being ignored again. So the timeframe is stated plainly
+ * and up front rather than buried.
+ *
+ * Deliberately says "5–10 business days" — that is Stripe's own guidance for a
+ * card refund reaching the cardholder, and it is the bank's timeline, not ours.
+ * Promising faster would just restart the chasing.
+ *
+ * Partial refunds name what was kept, because "you have been refunded $245" on a
+ * $405 payment reads like an error unless the remaining $160 is accounted for.
+ */
+export async function sendRefundConfirmationEmail(params: {
+  to: string;
+  payerName: string | null;
+  amountCents: number;
+  originalTotalCents: number;
+  isFullRefund: boolean;
+  programName: string;
+  childName?: string | null;
+  reason?: string | null;
+}): Promise<boolean> {
+  const money = (c: number) => `$${(c / 100).toFixed(2)}`;
+  const greeting = params.payerName ? `Kia ora ${esc(params.payerName)},` : "Kia ora,";
+  const forWhom = params.childName
+    ? `${esc(params.childName)}'s ${esc(params.programName)} registration`
+    : `your ${esc(params.programName)} registration`;
+  const kept = params.originalTotalCents - params.amountCents;
+
+  const html = cufcShellWrap("Refund processed", `
+    <p style="margin:0 0 14px;">${greeting}</p>
+    <p style="margin:0 0 18px;">We've processed a refund for ${forWhom}.</p>
+    <div style="background:#101a3a;border:1px solid #2a3a6b;border-radius:12px;padding:18px;margin:0 0 18px;text-align:center;">
+      <p style="color:#7d95ff;margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;">Amount refunded</p>
+      <p style="color:#ffffff;font-size:30px;font-weight:800;margin:0;letter-spacing:-0.5px;">${money(params.amountCents)}</p>
+      ${!params.isFullRefund
+        ? `<p style="color:#9fb0d0;font-size:12px;margin:10px 0 0;">Partial refund of your ${money(params.originalTotalCents)} payment — ${money(kept)} remains on your registration.</p>`
+        : ``}
+    </div>
+    ${params.reason ? `<p style="margin:0 0 14px;color:#9fb0d0;">Reason: ${esc(params.reason)}</p>` : ``}
+    <p style="margin:0 0 14px;"><strong style="color:#ffffff;">It usually takes 5–10 business days</strong> to appear in your account. That's your bank's processing time, not ours — the refund has already left us, so there's nothing further you need to do.</p>
+    <p style="margin:0 0 14px;">It goes back to the same card you paid with. If that card has since been cancelled, your bank will normally still route it to your account — talk to them if it hasn't landed after 10 business days.</p>
+    <p style="margin:0;">If anything looks wrong, just reply to this email and we'll sort it.</p>
+  `);
+
+  return sendEmail({
+    to: params.to,
+    from: CUFC_FROM,
+    replyTo: "accounts@cufc.co.nz",
+    subject: `Refund processed — ${money(params.amountCents)}`,
+    html,
+  });
+}
+
+/**
  * CUFC broadcast / newsletter — wraps the composer's rich HTML in the navy
  * Christchurch United shell with the subject as the heading and a
  * per-recipient signed unsubscribe link. Sent one-per-recipient (the mailer

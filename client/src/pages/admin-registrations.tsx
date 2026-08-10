@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +27,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { MoneyInput } from "@/components/ui/money-input";
 
 type RegItem = {
   id: number;
@@ -68,6 +69,9 @@ type Registration = {
   refundedAt?: string | null;
   refundedAmountCents?: number | null;
   refundReason?: string | null;
+  // Resolved server-side from refundedBy at read time. Null for refunds issued
+  // before the audit trail existed.
+  refundedByName?: string | null;
   stripeRefundId?: string | null;
   stripeRefundStatus?: string | null;
   stripePaymentIntentId?: string | null;
@@ -125,6 +129,13 @@ function RefundDialog({
   const [reason, setReason] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [confirmStep, setConfirmStep] = useState(false);
+  // "items" only makes sense for camp registrations, which are sold as per-day
+  // sessions. An ACADEMY term enrolment writes no registration_items at all, so
+  // before these modes existed the dialog rendered "No items to refund" with a
+  // permanently disabled button — the whole feature was unreachable for exactly
+  // the registrations Olga needed to refund.
+  const [mode, setMode] = useState<"full" | "amount" | "items">("full");
+  const [customAmount, setCustomAmount] = useState("");
 
   const items = reg.items || [];
   const totalCents = reg.totalCents || 0;
@@ -179,12 +190,29 @@ function RefundDialog({
     return Math.min(sum, remainingCents);
   }, [items, selectedIds, itemRefundValue, remainingCents]);
 
+  // How much is being refunded, by mode.
+  //
+  // 🔴 `full` sends NO amount at all — the server refunds the remaining balance
+  // it computes itself. Sending a client-computed "full" figure would let a
+  // stale page (opened before an earlier partial refund) ask for more than is
+  // left, and the server would clamp it to something nobody chose.
+  const amountCents = useMemo(() => {
+    const n = Math.round(parseFloat(customAmount || "0") * 100);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [customAmount]);
+
+  const refundTotal =
+    mode === "full" ? remainingCents : mode === "amount" ? Math.min(amountCents, remainingCents) : selectedTotal;
+
+  const amountTooBig = mode === "amount" && amountCents > remainingCents;
+
   const refundMut = useMutation({
     mutationFn: async () => {
-      return apiRequest("POST", `/api/admin/registrations/${reg.id}/refund`, {
-        itemIds: Array.from(selectedIds),
-        reason: reason.trim() || undefined,
-      });
+      const body: Record<string, unknown> = { reason: reason.trim() || undefined };
+      if (mode === "items") body.itemIds = Array.from(selectedIds);
+      else if (mode === "amount") body.amountCents = amountCents;
+      // mode === "full": send neither — the server refunds the remainder.
+      return apiRequest("POST", `/api/admin/registrations/${reg.id}/refund`, body);
     },
     onSuccess: async (res: any) => {
       const data = await res.json().catch(() => ({}));
@@ -207,10 +235,22 @@ function RefundDialog({
       setSelectedIds(new Set());
       setReason("");
       setConfirmStep(false);
+      setCustomAmount("");
+      setMode(refundableItems.length > 0 ? "items" : "full");
     }
   };
 
-  const canSubmit = selectedIds.size > 0 && selectedTotal > 0 && !refundMut.isPending;
+  // Open on the mode that fits what was actually sold: sessions for a camp,
+  // whole-amount for a term enrolment.
+  useEffect(() => {
+    if (open) setMode(refundableItems.length > 0 ? "items" : "full");
+  }, [open, refundableItems.length]);
+
+  const canSubmit =
+    !refundMut.isPending &&
+    refundTotal > 0 &&
+    !amountTooBig &&
+    (mode !== "items" || selectedIds.size > 0);
 
   return (
     <AlertDialog open={open} onOpenChange={handleClose}>
@@ -223,15 +263,44 @@ function RefundDialog({
                 Refund — #{reg.orderNumber || reg.id}
               </AlertDialogTitle>
               <AlertDialogDescription className="text-white/50">
-                Select the sessions to refund for{" "}
+                Refund{" "}
                 <strong className="text-white/80">
                   {reg.contact?.firstName} {reg.contact?.lastName}
                 </strong>
-                .
+                . They'll get a confirmation email automatically.
               </AlertDialogDescription>
             </AlertDialogHeader>
 
             <div className="space-y-3 py-1">
+              {/* Mode selector */}
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-white/[0.03] border border-white/[0.06] p-1">
+                {([
+                  { key: "full", label: "Full refund" },
+                  { key: "amount", label: "Part amount" },
+                  { key: "items", label: "By session" },
+                ] as const).map((m) => {
+                  const disabled = m.key === "items" && refundableItems.length === 0;
+                  return (
+                    <button
+                      key={m.key}
+                      onClick={() => !disabled && setMode(m.key)}
+                      disabled={disabled}
+                      title={disabled ? "This registration isn't sold as individual sessions" : undefined}
+                      className={`rounded-lg px-2 py-1.5 text-[12px] font-medium transition-colors ${
+                        mode === m.key
+                          ? "bg-red-500/15 text-red-300 border border-red-500/30"
+                          : disabled
+                            ? "text-white/20 cursor-not-allowed border border-transparent"
+                            : "text-white/50 hover:text-white/80 border border-transparent"
+                      }`}
+                      data-testid={`button-refund-mode-${m.key}`}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
+
               {/* Summary bar */}
               <div className="flex items-center justify-between text-[11px] text-white/40 px-1">
                 <span>
@@ -243,7 +312,7 @@ function RefundDialog({
                     </>
                   )}
                 </span>
-                {refundableItems.length > 1 && (
+                {mode === "items" && refundableItems.length > 1 && (
                   <div className="flex items-center gap-2">
                     <button onClick={selectAll} className="text-blue-400/70 hover:text-blue-400 transition-colors" data-testid="button-select-all">Select all</button>
                     <span className="text-white/15">·</span>
@@ -252,7 +321,51 @@ function RefundDialog({
                 )}
               </div>
 
+              {/* Full refund — nothing to choose, just state the number */}
+              {mode === "full" && (
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-4 text-center">
+                  <p className="text-[11px] uppercase tracking-wider text-white/35 mb-1">Refunding the full remaining balance</p>
+                  <p className="text-[26px] font-semibold text-white/90 tabular-nums">
+                    {formatCurrency(remainingCents, { fromCents: true })}
+                  </p>
+                  {alreadyRefundedCents > 0 && (
+                    <p className="text-[11px] text-white/40 mt-1">
+                      {formatCurrency(alreadyRefundedCents, { fromCents: true })} was already refunded earlier
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Partial amount */}
+              {mode === "amount" && (
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3.5 space-y-2">
+                  <label className="text-[11px] text-white/50 block">How much to refund</label>
+                  <MoneyInput
+                    value={customAmount}
+                    onChange={setCustomAmount}
+                    placeholder="0.00"
+                    className="bg-white/[0.03] border-white/[0.08] text-white/90 text-[15px]"
+                    data-testid="input-refund-amount"
+                  />
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className={amountTooBig ? "text-red-400" : "text-white/35"}>
+                      {amountTooBig
+                        ? `More than the ${formatCurrency(remainingCents, { fromCents: true })} left on this registration`
+                        : `Up to ${formatCurrency(remainingCents, { fromCents: true })} available`}
+                    </span>
+                    <button
+                      onClick={() => setCustomAmount((remainingCents / 100).toFixed(2))}
+                      className="text-blue-400/70 hover:text-blue-400 transition-colors"
+                      data-testid="button-refund-amount-max"
+                    >
+                      Use max
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Items list */}
+              {mode === "items" && (
               <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] max-h-[280px] overflow-y-auto divide-y divide-white/[0.04]">
                 {pricingLoading ? (
                   <div className="p-3 space-y-2">
@@ -309,16 +422,21 @@ function RefundDialog({
                   })
                 )}
               </div>
+              )}
 
-              {/* Selected total */}
+              {/* Running total */}
               <div className="flex items-center justify-between rounded-xl bg-red-500/[0.06] border border-red-500/20 px-3.5 py-2.5">
                 <span className="text-[12px] text-white/60">
-                  {selectedIds.size === 0
-                    ? "No sessions selected"
-                    : `${selectedIds.size} session${selectedIds.size > 1 ? "s" : ""} selected`}
+                  {mode === "items"
+                    ? selectedIds.size === 0
+                      ? "No sessions selected"
+                      : `${selectedIds.size} session${selectedIds.size > 1 ? "s" : ""} selected`
+                    : mode === "full"
+                      ? "Full remaining balance"
+                      : "Partial refund"}
                 </span>
                 <span className="text-[15px] font-semibold text-red-400" data-testid="text-refund-total">
-                  {formatCurrency(selectedTotal, { fromCents: true })}
+                  {formatCurrency(refundTotal, { fromCents: true })}
                 </span>
               </div>
 
@@ -349,7 +467,7 @@ function RefundDialog({
                 className="bg-red-500/90 hover:bg-red-500 text-white border-0 disabled:opacity-40"
                 data-testid="button-refund-next"
               >
-                Refund {formatCurrency(selectedTotal, { fromCents: true })}
+                Refund {formatCurrency(refundTotal, { fromCents: true })}
               </AlertDialogAction>
             </AlertDialogFooter>
           </>
@@ -362,11 +480,19 @@ function RefundDialog({
               </AlertDialogTitle>
               <AlertDialogDescription className="text-white/55 space-y-2">
                 <span className="block">
-                  Refund <strong className="text-red-400">{formatCurrency(selectedTotal, { fromCents: true })}</strong> to{" "}
-                  <strong className="text-white/85">{reg.contact?.firstName} {reg.contact?.lastName}</strong> for {selectedIds.size} session{selectedIds.size > 1 ? "s" : ""}.
+                  Refund <strong className="text-red-400">{formatCurrency(refundTotal, { fromCents: true })}</strong> to{" "}
+                  <strong className="text-white/85">{reg.contact?.firstName} {reg.contact?.lastName}</strong>
+                  {mode === "items"
+                    ? ` for ${selectedIds.size} session${selectedIds.size > 1 ? "s" : ""}.`
+                    : mode === "full"
+                      ? " — the full remaining balance."
+                      : ` — a partial refund, leaving ${formatCurrency(remainingCents - refundTotal, { fromCents: true })} on the registration.`}
                 </span>
                 <span className="block text-amber-400/80 text-[12px]">
                   This processes a real refund through Stripe and cannot be undone. The money will appear in their account within 5–10 business days.
+                </span>
+                <span className="block text-white/40 text-[12px]">
+                  They'll be emailed a confirmation, and your name is recorded against this refund.
                 </span>
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -692,6 +818,11 @@ export default function AdminRegistrations() {
 
   const [editingReg, setEditingReg] = useState<Registration | null>(null);
   const [refundingReg, setRefundingReg] = useState<Registration | null>(null);
+  // Whether to offer the Refund button at all. Cosmetic only — the server
+  // re-checks the same flag on every refund call, so this is about not dangling
+  // a button in front of someone who'd only get a 403.
+  const { data: me } = useQuery<{ canIssueRefunds?: boolean }>({ queryKey: ["/api/auth/me"] });
+  const canRefund = !!me?.canIssueRefunds;
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
 
   const deleteRegMutation = useMutation({
@@ -950,7 +1081,18 @@ export default function AdminRegistrations() {
                                   </span>
                                 </div>
                                 <p className="text-[10px] text-white/40">
-                                  {new Date(reg.refundedAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })}
+                                  {/* Who did this, and when — to the minute. A refund is a
+                                      named act; "someone refunded this in August" is not an
+                                      audit trail. Falls back to the date alone for refunds
+                                      issued before the trail existed, which reads honestly as
+                                      "we don't know" rather than blaming nobody. */}
+                                  {reg.refundedByName
+                                    ? `${reg.refundedByName} refunded this on `
+                                    : ""}
+                                  {new Date(reg.refundedAt).toLocaleString("en-NZ", {
+                                    day: "numeric", month: "short", year: "numeric",
+                                    hour: "2-digit", minute: "2-digit",
+                                  })}
                                   {reg.status === "partially_refunded" && (
                                     <span className="text-white/30"> · {formatCurrency(((reg.totalCents || 0) - (reg.refundedAmountCents || 0)), { fromCents: true })} remaining</span>
                                   )}
@@ -987,13 +1129,13 @@ export default function AdminRegistrations() {
                               </div>
                             )}
                           </div>
-                          {reg.status !== "refunded" && (reg.totalCents || 0) > (reg.refundedAmountCents || 0) && reg.stripePaymentIntentId && (
+                          {canRefund && reg.status !== "refunded" && (reg.totalCents || 0) > (reg.refundedAmountCents || 0) && reg.stripePaymentIntentId && (
                             <button
                               onClick={(e) => { e.stopPropagation(); setRefundingReg(reg); }}
                               className="w-full flex items-center justify-center gap-1.5 text-[11px] text-red-400/70 hover:text-red-400 hover:bg-red-500/10 border border-red-500/15 hover:border-red-500/30 rounded-lg py-1.5 transition-colors cursor-pointer"
                               data-testid={`button-refund-${reg.id}`}
                             >
-                              <RotateCcw className="w-3 h-3" /> {reg.status === "partially_refunded" ? "Refund More Sessions" : "Refund"}
+                              <RotateCcw className="w-3 h-3" /> {reg.status === "partially_refunded" ? "Refund More" : "Refund"}
                             </button>
                           )}
                           <div className="pt-1 border-t border-white/[0.04] space-y-1.5">
