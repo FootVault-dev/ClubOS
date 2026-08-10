@@ -5477,11 +5477,52 @@ export const insertWhLocationSchema = createInsertSchema(whLocations); // no .om
 export type InsertWhLocation = z.infer<typeof insertWhLocationSchema>;
 export type WhLocation = typeof whLocations.$inferSelect;
 
+// D32 — the model a variant belongs to: "the KELME shorts", above the eleven
+// barcoded colour/size rows that ARE the shorts. Its own table rather than a
+// self-referencing wh_items row, because a model holds no stock, no barcode,
+// no tracking mode and no location — as an item it would have to be excluded
+// by hand from every stock, count and reconcile query in the module, and the
+// first query that forgot would double-count the warehouse.
+export const whModels = pgTable("wh_models", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  // The manufacturer. NEVER inferred — the catalogue mixes KELME kit with
+  // CIC-branded merch, and organization_id says who SELLS a product, not who
+  // MADE it. A wrong vendor is worse than a blank one.
+  vendor: text("vendor"),
+  // Separate from vendorModel on purpose (Dima's own mid-build correction):
+  // "KELME, then what?" is not answerable from a vendor and an article number.
+  title: text("title").notNull(),
+  vendorModel: text("vendor_model"),
+  // Our code for the model line. Deliberately NOT unique and NOT namespaced
+  // against whItems.sku — that one identifies a single scannable variant, this
+  // identifies a family.
+  sku: text("sku"),
+  notes: text("notes"),
+  // No upload path ships yet: ClubOS Supabase storage is egress-restricted
+  // (402), which is also why D29's mid-count sheet has no photo field. The
+  // column costs nothing and means no second migration when storage is paid.
+  imageUrl: text("image_url"),
+  // D34 — provenance: a backfilled model is distinguishable from one typed in.
+  shopProductId: integer("shop_product_id").references(() => shopProducts.id, { onDelete: "set null" }),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  shopProductUnq: uniqueIndex("wh_models_shop_product_unique")
+    .on(t.shopProductId)
+    .where(sql`${t.shopProductId} IS NOT NULL`),
+}));
+export const insertWhModelSchema = createInsertSchema(whModels); // no .omit() — see note above whLocations (drizzle-zod omit() bug w/ generatedAlwaysAsIdentity)
+export type InsertWhModel = z.infer<typeof insertWhModelSchema>;
+export type WhModel = typeof whModels.$inferSelect;
+
 // Everything stocked: sellable merch + uniforms, print-shop materials, club
 // equipment, event stock. Identical physical products owned by different
 // brands are DIFFERENT items (D4) — brand_owner is part of the item's
 // identity, never a pooled row. Channel mappings are nullable + partial-unique
 // so an item can be unmapped, native-mapped, or Shopify-mapped.
+//
+// An item IS a variant (D32): one barcode, one colour, one size, one shelf.
 export const whItems = pgTable("wh_items", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   sku: text("sku").notNull().unique(),            // BRAND-CAT-STYLE-COLOUR-SIZE (D7) — shared/warehouse.ts isValidSku
@@ -5503,7 +5544,21 @@ export const whItems = pgTable("wh_items", {
   isLoanable: boolean("is_loanable").notNull().default(false),
   minQty: numeric("min_qty", { precision: 12, scale: 3 }), // reorder alert threshold
   costCents: integer("cost_cents"),                // reference only, NZD cents
+  // D35 — the BUILDING half of the warehouse address (USC Warehouse, Big Shed,
+  // Office, Print Shop). Pre-dates the rack code below and is unchanged by it.
   defaultLocationId: integer("default_location_id").references(() => whLocations.id, { onDelete: "set null" }),
+  // D33 — which model this is a variant of. NULLABLE, and that is load-bearing:
+  // an item without a model behaves exactly as it always has, which is what
+  // keeps materials, equipment and event stock out of a garment hierarchy they
+  // do not belong in. ON DELETE SET NULL — deleting a model UN-GROUPS its
+  // variants, it must never destroy the stock (or the ledger) underneath them.
+  modelId: integer("model_id").references(() => whModels.id, { onDelete: "set null" }),
+  // D35 — the RACK half: 'L1', 'C3', 'R2', 'T1' (left / centre / right / rear
+  // wall, numbered out from the entrance). Free text with autocomplete, never
+  // an enum and never a wh_locations row — racks get rearranged by people
+  // carrying boxes, and that must not require a data migration. wh_stock stays
+  // the single source of truth for quantity per location.
+  rackCode: text("rack_code"),
   active: boolean("active").notNull().default(true),
   notes: text("notes"),
   // Native ClubOS commerce mapping (MFL/CIC) — D11.
