@@ -11,6 +11,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Search, Plus, X, Truck, PackageCheck, Trash2, Loader2, ChevronRight } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { askConfirm } from "@/components/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -327,7 +328,10 @@ function PoLineRowView({ poId, line, locations }: { poId: number; line: PoLineRo
           )}
           {line.qtyReceived === 0 && (
             <button
-              onClick={() => { if (confirm(`Remove ${line.itemSku} from this PO?`)) removeLine.mutate(); }}
+              onClick={async () => {
+                if (await askConfirm(`Remove ${line.itemSku} from this PO?`,
+                  { title: "Remove this line?", confirmLabel: "Remove" })) removeLine.mutate();
+              }}
               disabled={removeLine.isPending}
               className="text-white/20 hover:text-red-400"
             >
@@ -473,7 +477,10 @@ function PoDetailModal({
 
             <div className="flex justify-between items-center pt-3 border-t border-white/5">
               <button
-                onClick={() => { if (confirm(`Delete this PO from ${po.supplierName}? This can't be undone.`)) remove.mutate(); }}
+                onClick={async () => {
+                  if (await askConfirm(`Delete this PO from ${po.supplierName}? This can't be undone.`,
+                    { title: "Delete this purchase order?", confirmLabel: "Delete" })) remove.mutate();
+                }}
                 disabled={remove.isPending}
                 className="text-xs text-red-400/70 hover:text-red-400 flex items-center gap-1.5"
               >

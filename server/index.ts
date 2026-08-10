@@ -112,6 +112,12 @@ app.use(attributionCookieMiddleware);
   const { registerWarehouseV2Routes } = await import("./warehouse-v2-routes");
   registerWarehouseV2Routes(app);
 
+  // Warehouse models (D32–D35): the model layer above the barcoded variants,
+  // the autocomplete the counting cockpit runs on, and the catalogue CSV in
+  // Dima's column order. Same requireTab("warehouse") gate as v1 and v2.
+  const { registerWarehouseModelRoutes } = await import("./warehouse-models-routes");
+  registerWarehouseModelRoutes(app);
+
   // United Prints workspace — Warehouse channel sync (T12/SPEC §4.3): the
   // public Shopify webhook endpoint (siu/cufc) + the debounced push queue
   // wired into server/warehouse.ts's post-commit hook. Entirely inert

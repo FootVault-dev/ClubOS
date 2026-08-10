@@ -26,10 +26,15 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
   ScanLine, Plus, Minus, Trash2, Loader2, Download, CheckCircle2, AlertTriangle,
-  PackageCheck, MapPin, X, ChevronRight, PackagePlus, Search,
+  PackageCheck, MapPin, X, ChevronRight, PackagePlus, Search, Volume2, VolumeX, StickyNote,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { askConfirm } from "@/components/confirm-dialog";
+import { useScannerFocus } from "@/lib/use-scanner-focus";
+import {
+  isMuted, setMuted, primeAudio, soundCounted, soundUnknown, soundSaved, soundError,
+} from "@/lib/scan-sounds";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -43,13 +48,22 @@ interface CountLine {
   sku: string;
   name: string;
   counted: number;
+  // D32 — the model this variant belongs to. A REAL record now, read from
+  // wh_models, not inferred from the words these item names happen to share.
+  // Still optional: a roll of vinyl belongs to no model and stands on its own.
+  modelId?: number | null;
+  modelTitle?: string | null;
   // D29 — the apparel attributes, so a count of forty shirts reads as four
-  // models rather than forty unrelated rows. Optional: a roll of vinyl has none.
+  // models rather than forty unrelated rows.
   vendor?: string | null;
   vendorModel?: string | null;
   colour?: string | null;
   sizeAsian?: string | null;
   sizeEU?: string | null;
+  // D35 — where it physically sits, so a recount can be walked rack by rack.
+  rackCode?: string | null;
+  barcode?: string | null;
+  notes?: string | null;
 }
 
 /** Survives a reload / the phone locking mid-count — an hour of scanning must
@@ -73,14 +87,18 @@ function saveDraft(locationId: string, lines: CountLine[]) {
   } catch { /* storage blocked — the count still works, it just won't survive a reload */ }
 }
 
-/** Lines that share a vendor + model are the same garment in different colours
- *  and sizes, and belong under one heading. Anything without those attributes
- *  (materials, older imported stock) stands on its own — grouping items we know
- *  nothing about would invent a relationship that isn't there. */
+/** D32 — a variant sits under the model it actually belongs to.
+ *
+ *  This used to bucket lines by vendor+model text and then GUESS each heading
+ *  from the words the item names shared. That rendered correctly and was not
+ *  real: it broke whenever a vendor field was blank or two names diverged, and
+ *  there was no record behind it to edit, photograph or add a variant to.
+ *
+ *  Items with no model still stand on their own — materials and equipment
+ *  belong to no garment family, and inventing one would be a relationship that
+ *  isn't there. */
 function groupKeyFor(l: CountLine): string {
-  const v = (l.vendor ?? "").trim().toUpperCase();
-  const m = (l.vendorModel ?? "").trim().toUpperCase();
-  return v || m ? `attr:${v}|${m}` : `item:${l.itemId}`;
+  return l.modelId ? `model:${l.modelId}` : `item:${l.itemId}`;
 }
 
 interface LineGroup {
@@ -90,32 +108,6 @@ interface LineGroup {
   title: string;
   lines: CountLine[];
   total: number;
-}
-
-/**
- * The heading for a group of variants. Item names carry the whole description —
- * "KELME Football Shorts Adults Navy L" — so using the first one verbatim would
- * print the vendor twice next to the vendor chip, and would label a heading
- * covering Navy L, Navy M and Red L as "Navy L".
- *
- * The words every member shares ARE the garment; the words they don't are the
- * variant. So take the common leading words and drop the vendor off the front.
- */
-function groupTitle(names: string[], vendor: string | null): string {
-  const split = names.map((n) => n.trim().split(/\s+/));
-  let common: string[] = split[0] ?? [];
-  for (const words of split.slice(1)) {
-    let i = 0;
-    while (i < common.length && i < words.length && common[i].toLowerCase() === words[i].toLowerCase()) i++;
-    common = common.slice(0, i);
-  }
-  // Everything identical (one member, or true duplicates) — keep the whole name.
-  if (!common.length) common = split[0] ?? [];
-  if (vendor) {
-    const v = vendor.trim().toLowerCase().split(/\s+/);
-    if (v.every((w, i) => common[i]?.toLowerCase() === w)) common = common.slice(v.length);
-  }
-  return common.join(" ").trim() || (names[0] ?? "");
 }
 
 function groupLines(lines: CountLine[]): LineGroup[] {
@@ -129,7 +121,9 @@ function groupLines(lines: CountLine[]): LineGroup[] {
         key,
         vendor: l.vendor?.trim() || null,
         model: l.vendorModel?.trim() || null,
-        title: l.name,
+        // The model's own title, verbatim. An unmodelled item keeps its full
+        // name — that IS its whole description.
+        title: l.modelTitle?.trim() || l.name,
         lines: [],
         total: 0,
       };
@@ -139,7 +133,6 @@ function groupLines(lines: CountLine[]): LineGroup[] {
     g.lines.push(l);
     g.total += l.counted;
   }
-  for (const g of out) g.title = groupTitle(g.lines.map((l) => l.name), g.vendor);
   return out;
 }
 
@@ -168,6 +161,10 @@ export default function WarehouseStockTake() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [register, setRegister] = useState<{ barcode: string } | null>(null);
+  const [muted, setMutedState] = useState(isMuted);
+  // Spec §3 — the rack most recently entered, offered as the default on the
+  // next add. A run of new items is nearly always one shelf.
+  const [lastRack, setLastRack] = useState("");
   const manualRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { saveDraft(locationId, lines); }, [locationId, lines]);
@@ -179,27 +176,60 @@ export default function WarehouseStockTake() {
 
   const countable = (locations ?? []).filter((l) => l.kind !== "virtual" && l.active);
 
-  const focusScanner = useCallback(() => {
-    requestAnimationFrame(() => manualRef.current?.focus());
-  }, []);
+  // Spec §2 — the cursor never leaves the scan box. Suspended while the
+  // registration form is open: in that state the keyboard belongs to whichever
+  // field the operator is filling in.
+  const focusScanner = useScannerFocus(manualRef, { enabled: register === null });
 
-  /** An item already in ClubOS carries its attributes in wh_item_fields, not in
-   *  the scan response. Fetched once when a line first appears — never per scan
-   *  — and merged in when it lands, so scanning stays instant and the grouping
-   *  still becomes correct for the ~2,900 items imported from the shops. */
-  const hydrateAttrs = useCallback(async (itemId: number) => {
+  /** D32/D34 — the model and the real colour/size for a scanned item.
+   *
+   *  This used to read wh_item_fields alone, one request per new line. That was
+   *  empty for all 4,726 items seeded from the shop catalogue (their colour and
+   *  size live on shop_variants), which is precisely why the old screen had to
+   *  guess a model name from common word prefixes. The server now reads the
+   *  hand-entered field first and falls back to the shop record, so the whole
+   *  catalogue shows real attributes.
+   *
+   *  Batched: a real count meets a new item every few seconds, and one request
+   *  per garment is a request per garment. */
+  const pendingHydrate = useRef<Set<number>>(new Set());
+  const hydrateTimer = useRef<number | null>(null);
+
+  const flushHydrate = useCallback(async () => {
+    const ids = Array.from(pendingHydrate.current);
+    pendingHydrate.current.clear();
+    if (!ids.length) return;
     try {
-      const r = await (await apiRequest("GET", `/api/admin/warehouse/fields/item/${itemId}`)).json();
-      const d = r?.display ?? {};
-      const str = (v: unknown) => (v === null || v === undefined || v === "" ? null : String(v));
-      const attrs = {
-        vendor: str(d.vendor), vendorModel: str(d.vendor_model), colour: str(d.colour),
-        sizeAsian: str(d.size_asian), sizeEU: str(d.size_eu),
-      };
-      if (!Object.values(attrs).some(Boolean)) return;
-      setLines((prev) => prev.map((l) => (l.itemId === itemId ? { ...l, ...attrs } : l)));
+      const r = await (await apiRequest("POST", "/api/admin/warehouse/variant-details", { itemIds: ids })).json();
+      const byId = new Map<number, any>((r?.details ?? []).map((d: any) => [d.itemId, d]));
+      setLines((prev) => prev.map((l) => {
+        const d = byId.get(l.itemId);
+        if (!d) return l;
+        return {
+          ...l,
+          modelId: d.modelId ?? null,
+          modelTitle: d.modelTitle ?? null,
+          vendor: d.modelVendor ?? null,
+          vendorModel: d.modelVendorModel ?? null,
+          colour: d.colour ?? null,
+          sizeAsian: d.sizeAsian ?? null,
+          sizeEU: d.sizeEU ?? null,
+          rackCode: d.rackCode ?? null,
+          barcode: d.barcode ?? null,
+        };
+      }));
     } catch { /* attributes are decoration on a count — never block the scan */ }
   }, []);
+
+  const hydrateAttrs = useCallback((itemId: number) => {
+    pendingHydrate.current.add(itemId);
+    if (hydrateTimer.current) window.clearTimeout(hydrateTimer.current);
+    // Short debounce: a burst of scans down one rack becomes one request, and
+    // a single scan still resolves fast enough to feel immediate.
+    hydrateTimer.current = window.setTimeout(() => { void flushHydrate(); }, 250);
+  }, [flushHydrate]);
+
+  useEffect(() => () => { if (hydrateTimer.current) window.clearTimeout(hydrateTimer.current); }, []);
 
   const addLine = useCallback((line: CountLine, hydrate: boolean) => {
     setLines((prev) => {
@@ -222,6 +252,9 @@ export default function WarehouseStockTake() {
       // 🔴 D29 — an unknown code during a first count is stock we haven't met
       // yet, not a mistake. Offer to register it rather than dropping the scan.
       if (r.kind === "unknown") {
+        // Spec §8 — a deliberately different tone. The operator can tell by ear
+        // that this scan needs typing in, without looking up from the shelf.
+        soundUnknown();
         setRegister({ barcode: trimmed });
         return;
       }
@@ -229,6 +262,7 @@ export default function WarehouseStockTake() {
         // A bin label or an asset tag scanned during a count IS a mis-scan —
         // say which, so it's obvious what happened.
         const what = r.kind === "location" ? "a bin label" : "an asset tag";
+        soundError();
         toast({ title: `That's ${what}, not stock`, description: trimmed, variant: "destructive" });
         return;
       }
@@ -246,8 +280,10 @@ export default function WarehouseStockTake() {
         isNew: !existing,
         sub: existing ? variantLabel(existing) : item.sku,
       });
+      soundCounted();
       if (navigator.vibrate) navigator.vibrate(15);
     } catch {
+      soundError();
       toast({ title: "Couldn't look that code up", description: trimmed, variant: "destructive" });
     }
   }, [toast, addLine, lines]);
@@ -403,6 +439,10 @@ export default function WarehouseStockTake() {
             value={manual}
             onChange={(e) => setManual(e.target.value)}
             onKeyDown={(e) => {
+              // Spec §8 — a browser will not start an AudioContext until the
+              // user has interacted. A scanner IS a keyboard, so its first
+              // keystroke is the gesture that unlocks the beeps.
+              primeAudio();
               if (e.key === "Enter" && manual.trim()) {
                 addScan(manual);
                 setManual("");
@@ -459,14 +499,38 @@ export default function WarehouseStockTake() {
         <Button variant="outline" onClick={() => setRegister({ barcode: "" })} className="gap-1.5">
           <PackagePlus className="w-4 h-4" /> New item
         </Button>
+        {/* Spec §8 — mute, and it remembers. Someone counting next to a class
+            in the gym should not have to choose between the beep and the job. */}
+        <Button
+          variant="ghost"
+          onClick={() => { const next = !muted; setMutedState(next); setMuted(next); if (!next) { primeAudio(); soundCounted(); } }}
+          className="gap-1.5"
+          title={muted ? "Sound is off" : "Sound is on"}
+        >
+          {muted ? <VolumeX className="w-4 h-4 text-white/40" /> : <Volume2 className="w-4 h-4" />}
+          {muted ? "Sound: Off" : "Sound: On"}
+        </Button>
         <a
-          href="/api/admin/warehouse/stock.csv"
+          href="/api/admin/warehouse/catalogue.csv"
           className="px-3 py-2 rounded-lg text-sm text-white/70 bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] flex items-center gap-1.5"
         >
           <Download className="w-4 h-4" /> Export CSV
         </a>
         {lines.length > 0 && (
-          <Button variant="ghost" onClick={() => { setLines([]); saveDraft("", []); }}>Clear</Button>
+          <Button
+            variant="ghost"
+            onClick={async () => {
+              // Spec §7 — our own modal, never confirm(). And it states the
+              // cost: an hour of scanning is a real thing to lose.
+              const ok = await askConfirm(
+                `${total} unit${total === 1 ? "" : "s"} counted across ${lines.length} variant${lines.length === 1 ? "" : "s"} will be discarded.\n\nThis clears the count in progress. It does not change any stock, and nothing in the catalogue is deleted.`,
+                { title: "Clear this count?", confirmLabel: "Clear the count" },
+              );
+              if (ok) { setLines([]); saveDraft("", []); focusScanner(); }
+            }}
+          >
+            Clear
+          </Button>
         )}
       </div>
 
@@ -484,7 +548,12 @@ export default function WarehouseStockTake() {
             </div>
 
             {groups.length === 0 ? (
-              <div className="text-center py-12">
+              // 🔴 Sticky-left inside the 720px-wide scroller. Centring it in
+              // that width puts it off-screen on a 390px phone — caught by
+              // ui-preflight showing "Nothing c…" and "Scan the first thi…"
+              // running off the right edge. An empty state you cannot read is
+              // worse than none, because it looks like the page failed to load.
+              <div className="sticky left-0 w-screen max-w-full sm:w-auto text-center py-12 px-4">
                 <PackageCheck className="w-8 h-8 text-white/15 mx-auto mb-3" />
                 <p className="text-sm text-white/50">
                   {lines.length === 0 ? "Nothing counted yet." : "Nothing matches that search."}
@@ -515,16 +584,31 @@ export default function WarehouseStockTake() {
 
                   {open && (
                     <div className="bg-white/[0.015] border-t border-white/[0.03] px-3 pb-2 pt-1">
-                      <div className="grid grid-cols-[1.2fr_70px_70px_1.4fr_150px_40px] gap-2 px-2 py-1.5 text-[10px] uppercase tracking-wide text-white/30 font-bold">
-                        <span>Colour</span><span>Asian</span><span>EU</span><span>Our SKU</span>
+                      <div className="grid grid-cols-[1.2fr_70px_70px_1.1fr_64px_150px_40px] gap-2 px-2 py-1.5 text-[10px] uppercase tracking-wide text-white/30 font-bold">
+                        <span>Colour</span><span>Asian</span><span>EU</span><span>Our SKU</span><span>Rack</span>
                         <span className="text-center">Qty</span><span />
                       </div>
                       {g.lines.map((l) => (
-                        <div key={l.itemId} className="grid grid-cols-[1.2fr_70px_70px_1.4fr_150px_40px] gap-2 px-2 py-1.5 items-center rounded-lg hover:bg-white/[0.03]">
-                          <span className="text-sm text-white/80 truncate">{l.colour ?? l.name}</span>
+                        <div key={l.itemId} className="grid grid-cols-[1.2fr_70px_70px_1.1fr_64px_150px_40px] gap-2 px-2 py-1.5 items-center rounded-lg hover:bg-white/[0.03]">
+                          <span className="text-sm text-white/80 truncate flex items-center gap-1">
+                            {l.colour ?? l.name}
+                            {/* Spec §6 — a note is the exception, not the norm,
+                                so it gets an indicator rather than a column of
+                                mostly-empty cells. */}
+                            {l.notes && (
+                              <span title={l.notes} className="shrink-0 leading-none" aria-label={`Note: ${l.notes}`}>
+                                <StickyNote className="w-3 h-3 text-amber-300/70" />
+                              </span>
+                            )}
+                          </span>
                           <span className="text-sm text-white/60 truncate">{l.sizeAsian ?? "—"}</span>
                           <span className="text-sm text-white/60 truncate">{l.sizeEU ?? "—"}</span>
                           <span className="text-[11px] text-white/35 font-mono truncate">{l.sku}</span>
+                          <span className="text-[11px] truncate">
+                            {l.rackCode
+                              ? <span className="px-1.5 py-0.5 rounded bg-blue-400/10 text-blue-200/80 font-mono">{l.rackCode}</span>
+                              : <span className="text-white/20">—</span>}
+                          </span>
                           <div className="flex items-center gap-1 justify-center">
                             <button
                               onClick={() => setQty(l.itemId, l.counted - 1)}
@@ -582,9 +666,11 @@ export default function WarehouseStockTake() {
       {register && (
         <RegisterItemSheet
           barcode={register.barcode}
+          lastRack={lastRack}
           onClose={() => { setRegister(null); focusScanner(); }}
           onRegistered={(line) => {
             addLine({ ...line, counted: 1 }, false);
+            if (line.rackCode) setLastRack(line.rackCode);
             setLastScan({ sku: line.sku, label: line.name, counted: 1, isNew: true, sub: variantLabel(line) });
             setRegister(null);
             focusScanner();
@@ -607,10 +693,15 @@ function RegisterItemSheet({
   barcode,
   onClose,
   onRegistered,
+  lastRack,
 }: {
   barcode: string;
   onClose: () => void;
   onRegistered: (line: CountLine) => void;
+  /** Spec §3 — the rack last used in this session. Different colours and sizes
+   *  of one model are almost always shelved together, so this saves a re-type
+   *  on nearly every add. */
+  lastRack: string;
 }) {
   const { toast } = useToast();
   const [vendor, setVendor] = useState("");
@@ -620,12 +711,24 @@ function RegisterItemSheet({
   const [sizeAsian, setSizeAsian] = useState("");
   const [sizeEU, setSizeEU] = useState("");
   const [notes, setNotes] = useState("");
+  const [rackCode, setRackCode] = useState(lastRack);
   const [code, setCode] = useState(barcode);
   const [sku, setSku] = useState("");
   const [skuTouched, setSkuTouched] = useState(false);
   const firstRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { firstRef.current?.focus(); }, []);
+
+  // Spec §5 — autocomplete built from values already in the catalogue, rebuilt
+  // each time the form opens. Stops Blue/blue/BLUE drift without imposing a
+  // taxonomy on a catalogue still being entered for the first time.
+  const { data: suggestions } = useQuery<{
+    vendor: string[]; colour: string[]; sizeAsian: string[]; sizeEU: string[]; rackCode: string[];
+  }>({
+    queryKey: ["/api/admin/warehouse/suggestions"],
+    queryFn: async () => (await apiRequest("GET", "/api/admin/warehouse/suggestions")).json(),
+    staleTime: 0,
+  });
 
   // The SKU writes itself from what's been typed, until someone edits it — at
   // which point it's theirs and we stop overwriting their work.
@@ -647,17 +750,21 @@ function RegisterItemSheet({
         sizeAsian: sizeAsian.trim() || undefined,
         sizeEU: sizeEU.trim() || undefined,
         notes: notes.trim() || undefined,
+        rackCode: rackCode.trim() || undefined,
       })).json(),
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/warehouse/items"] });
+      // Spec §8 — the third tone: saved, distinct from both scan sounds.
+      soundSaved();
       toast({ title: "Registered", description: `${r.item.sku} — counted 1` });
       onRegistered({
         itemId: r.item.id, sku: r.item.sku, name: r.item.name, counted: 1,
         vendor: r.line?.vendor ?? null, vendorModel: r.line?.vendorModel ?? null,
         colour: r.line?.colour ?? null, sizeAsian: r.line?.sizeAsian ?? null, sizeEU: r.line?.sizeEU ?? null,
+        rackCode: r.line?.rackCode ?? null, notes: r.line?.notes ?? null, barcode: r.barcode ?? null,
       });
     },
-    onError: (e: any) => toast({ title: "Couldn't register that", description: e.message, variant: "destructive" }),
+    onError: (e: any) => { soundError(); toast({ title: "Couldn't register that", description: e.message, variant: "destructive" }); },
   });
 
   const canSave = (vendor.trim() || vendorModel.trim() || title.trim()) && sku.trim() && !save.isPending;
@@ -698,23 +805,66 @@ function RegisterItemSheet({
 
           <div className="p-4 space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              {field("Vendor", <Input ref={firstRef} value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="KELME" className="scroll-mb-24" />)}
+              {field("Vendor",
+                <>
+                  <Input ref={firstRef} value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="KELME" list="wh-vendors" className="scroll-mb-24" />
+                  <datalist id="wh-vendors">
+                    {(suggestions?.vendor ?? []).map((v) => <option key={v} value={v} />)}
+                  </datalist>
+                </>)}
               {field("Vendor model", <Input value={vendorModel} onChange={(e) => setVendorModel(e.target.value)} placeholder="K123-45" className="scroll-mb-24" />)}
             </div>
 
             {field("Title", <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Football Shorts Adults" className="scroll-mb-24" />,
               "Left blank, we'll name it from the vendor, model and colour.")}
 
-            {field("Colour", <Input value={colour} onChange={(e) => setColour(e.target.value)} placeholder="Navy" className="scroll-mb-24" />)}
+            {field("Colour",
+              <>
+                <Input value={colour} onChange={(e) => setColour(e.target.value)} placeholder="Navy" list="wh-colours" className="scroll-mb-24" />
+                <datalist id="wh-colours">
+                  {(suggestions?.colour ?? []).map((c) => <option key={c} value={c} />)}
+                </datalist>
+              </>)}
 
             <div className="grid grid-cols-2 gap-3">
-              {field("Asian size", <Input value={sizeAsian} onChange={(e) => setSizeAsian(e.target.value)} placeholder="L / 170" className="scroll-mb-24" />)}
-              {field("EU size", <Input value={sizeEU} onChange={(e) => setSizeEU(e.target.value)} placeholder="XL / 42" className="scroll-mb-24" />)}
+              {field("Asian size",
+                <>
+                  <Input value={sizeAsian} onChange={(e) => setSizeAsian(e.target.value)} placeholder="L / 170" list="wh-sizes-asian" className="scroll-mb-24" />
+                  <datalist id="wh-sizes-asian">
+                    {(suggestions?.sizeAsian ?? []).map((s) => <option key={s} value={s} />)}
+                  </datalist>
+                </>)}
+              {field("EU size",
+                <>
+                  <Input value={sizeEU} onChange={(e) => setSizeEU(e.target.value)} placeholder="XL / 42" list="wh-sizes-eu" className="scroll-mb-24" />
+                  <datalist id="wh-sizes-eu">
+                    {(suggestions?.sizeEU ?? []).map((s) => <option key={s} value={s} />)}
+                  </datalist>
+                </>)}
             </div>
 
             {field("Barcode",
               <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Scan or type — optional" className="font-mono scroll-mb-24" />,
               "The code on the garment's own label. Linked to this item so it counts next time.")}
+
+            {/* D35 — the rack half of the address. Free text with autocomplete
+                from racks already in use, never a fixed list: the room gets
+                rearranged by people carrying boxes. Pre-filled with the last
+                rack used, because a run of new items is almost always one shelf. */}
+            {field("Rack",
+              <>
+                <Input
+                  value={rackCode}
+                  onChange={(e) => setRackCode(e.target.value.toUpperCase())}
+                  placeholder="L1, C3, R2, T1"
+                  list="wh-rack-codes"
+                  className="font-mono scroll-mb-24"
+                />
+                <datalist id="wh-rack-codes">
+                  {(suggestions?.rackCode ?? []).map((r) => <option key={r} value={r} />)}
+                </datalist>
+              </>,
+              "Whereabouts in the building. L = left, C = centre, R = right, T = rear wall, numbered out from the entrance.")}
 
             {field("Our SKU",
               <Input

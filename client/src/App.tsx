@@ -2,6 +2,7 @@ import { Switch, Route, useRoute, useLocation, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { ConfirmHost } from "@/components/confirm-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/lib/theme-provider";
 import RsvpPage from "@/pages/rsvp";
@@ -822,6 +823,9 @@ function App() {
           </Switch>
         )}
         <Toaster />
+        {/* Spec §7 — askConfirm()'s host. Mounted once, next to the toaster,
+            for the same reason: both are called imperatively from anywhere. */}
+        <ConfirmHost />
       </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
