@@ -17,6 +17,7 @@ import {
   TrackingModeChooser, DynamicItemForm, ModeHeader, EMPTY_DRAFT, draftToPayload, type ItemDraft,
 } from "@/components/warehouse-item-form";
 import { useToast } from "@/hooks/use-toast";
+import { askConfirm } from "@/components/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -470,7 +471,10 @@ function ItemDetailModal({
 
                 <div className="flex justify-between items-center pt-3 border-t border-white/5">
                   <button
-                    onClick={() => { if (confirm(`Delete ${item.sku}? This can't be undone.`)) remove.mutate(); }}
+                    onClick={async () => {
+                      if (await askConfirm(`Delete ${item.sku}? This can't be undone.`,
+                        { title: "Delete this item?", confirmLabel: "Delete" })) remove.mutate();
+                    }}
                     disabled={remove.isPending}
                     className="text-xs text-red-400/70 hover:text-red-400 flex items-center gap-1.5"
                   >

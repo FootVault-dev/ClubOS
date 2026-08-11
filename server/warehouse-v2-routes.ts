@@ -634,6 +634,16 @@ export function registerWarehouseV2Routes(app: Express) {
       const sizeEU = clean(b.sizeEU);
       const notes = clean(b.notes);
       const title = clean(b.title);
+      // D35 — the rack this variant sits on. Uppercased so 'l1' and 'L1' are
+      // one rack in the autocomplete, not two.
+      const rackCode = clean(b.rackCode)?.toUpperCase();
+      // D32 — which model it belongs to, when registering from an expanded
+      // model row. parseId rejects anything that isn't a real id rather than
+      // coercing it to NaN and writing null silently.
+      const modelId = b.modelId === undefined || b.modelId === null ? null : parseId(b.modelId);
+      if (b.modelId !== undefined && b.modelId !== null && !modelId) {
+        throw new V2Error("That isn't a model");
+      }
 
       // A name is the one thing the shelf can't be read back without.
       const name = title
@@ -706,6 +716,8 @@ export function registerWarehouseV2Routes(app: Express) {
             category: clean(b.category) ?? QUICK_ITEM_CATEGORY,
             unit: "ea",
             notes: notes ?? null,
+            modelId,
+            rackCode: rackCode ?? null,
           })
           .returning();
 
@@ -733,7 +745,11 @@ export function registerWarehouseV2Routes(app: Express) {
         item: created,
         barcode,
         // Exactly what the counting screen needs to add a line without a re-fetch.
-        line: { itemId: created.id, sku: created.sku, name: created.name, vendor, vendorModel, colour, sizeAsian, sizeEU },
+        line: {
+          itemId: created.id, sku: created.sku, name: created.name,
+          vendor, vendorModel, colour, sizeAsian, sizeEU,
+          rackCode: created.rackCode, modelId: created.modelId, notes: created.notes,
+        },
       });
     } catch (e: any) {
       handleError(res, e, "quick item");

@@ -11,6 +11,7 @@ import { useLocation } from "wouter";
 import { Search, Plus, X, Printer, Trash2, MapPin } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { askConfirm } from "@/components/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -126,7 +127,10 @@ function EditModal({
         <div className="flex justify-between items-center mt-5">
           {!isNew ? (
             <button
-              onClick={() => { if (confirm(`Delete ${locationLabel(location!)}? This can't be undone.`)) remove.mutate(); }}
+              onClick={async () => {
+                if (await askConfirm(`Delete ${locationLabel(location!)}? This can't be undone.`,
+                  { title: "Delete this location?", confirmLabel: "Delete" })) remove.mutate();
+              }}
               disabled={remove.isPending}
               className="text-xs text-red-400/70 hover:text-red-400 flex items-center gap-1.5"
             >
