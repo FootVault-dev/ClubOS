@@ -85,6 +85,7 @@ import {
   ClipboardList,
   CloudUpload,
   Megaphone,
+  HelpCircle,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
