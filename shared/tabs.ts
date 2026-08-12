@@ -263,6 +263,8 @@ const printsTabs: TabDef[] = [
   // The FAQs on unitedprints.co.nz + inside the live-chat widget. Not
   // super-admin-locked — Dima owns this content.
   { slug: "faqs", title: "FAQs", url: "/admin/print-faqs" },
+  // Every purchase the print shop makes, with its invoice PDF attached.
+  { slug: "expenses", title: "Expenses", url: "/admin/print-expenses" },
   { slug: "orders", title: "Orders", url: "/admin/print-orders" },
   { slug: "materials", title: "Materials", url: "/admin/print-materials" },
   { slug: "crm", title: "CRM", url: "/admin/print-crm" },

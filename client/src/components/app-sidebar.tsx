@@ -347,6 +347,7 @@ const printsNav = [
   { tab: "requests", title: "Requests", url: "/admin/print-requests", icon: Inbox },
   { tab: "quotes", title: "Quotes", url: "/admin/print-quotes", icon: Receipt },
   { tab: "faqs", title: "FAQs", url: "/admin/print-faqs", icon: HelpCircle },
+  { tab: "expenses", title: "Expenses", url: "/admin/print-expenses", icon: Receipt },
   { tab: "orders", title: "Orders", url: "/admin/print-orders", icon: ShoppingCart },
   { tab: "materials", title: "Materials", url: "/admin/print-materials", icon: FileText },
   { tab: "crm", title: "CRM", url: "/admin/print-crm", icon: Users },

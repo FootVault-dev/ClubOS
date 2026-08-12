@@ -118,6 +118,7 @@ import CugcLiveChat from "@/pages/cugc-livechat";
 import PrintLiveChat from "@/pages/print-livechat";
 import PrintsRequests from "@/pages/prints-requests";
 import PrintsFaqs from "@/pages/prints-faqs";
+import PrintsExpenses from "@/pages/prints-expenses";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import MediaLibrary from "@/pages/media-library";
 import CicMailer from "@/pages/cic-mailer";
@@ -295,6 +296,7 @@ function AdminRouter() {
         <Route path="/admin/print-requests" component={PrintsRequests} />
         <Route path="/admin/print-quotes" component={PrintsQuotes} />
         <Route path="/admin/print-faqs" component={PrintsFaqs} />
+        <Route path="/admin/print-expenses" component={PrintsExpenses} />
         <Route path="/admin/print-orders/:id" component={PrintsOrderDetail} />
         <Route path="/admin/print-orders" component={PrintsOrders} />
         <Route path="/admin/print-materials" component={PrintsMaterials} />

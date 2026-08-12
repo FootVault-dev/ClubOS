@@ -3435,6 +3435,56 @@ export const insertPrintQuoteItemSchema = createInsertSchema(printQuoteItems).om
 export type InsertPrintQuoteItem = z.infer<typeof insertPrintQuoteItemSchema>;
 export type PrintQuoteItem = typeof printQuoteItems.$inferSelect;
 
+// ── Print expenses ──────────────────────────────────────────────────────────
+// Every purchase the print shop makes — merchandise, materials, a printer, a
+// service — with its invoice PDF attached, so the shop's real cost base is in
+// one place instead of a folder of emails.
+//
+// 🔴 GST is RECORDED, never inferred. New Zealand's rate is 15%, but a supplier
+// invoice can be GST-inclusive, plus-GST, zero-rated, or from overseas with no
+// GST at all — and an overseas purchase attracts customs GST on a different
+// document entirely (the /reconcile rule: never invent a GST claim). So Dima
+// states the position per expense and the app does the arithmetic he asks for,
+// rather than assuming a rate and quietly creating a wrong claim.
+export const printExpenses = pgTable("print_expenses", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // merchandise | materials | equipment | services | freight | software | other
+  category: text("category").notNull(),
+  supplier: text("supplier"),
+  description: text("description").notNull(),
+  reference: text("reference"),
+
+  // Money in cents, always. totalCents is what left the bank; gstCents is the
+  // GST inside it (0 for overseas / zero-rated). The net is DERIVED at read
+  // time, never stored — two columns that must agree is one too many.
+  totalCents: integer("total_cents").notNull().default(0),
+  gstCents: integer("gst_cents").notNull().default(0),
+  // inclusive | plus_gst | zero_rated | overseas_no_gst
+  gstTreatment: text("gst_treatment").notNull().default("inclusive"),
+
+  // A bare ISO date — the invoice date, never a timestamp, and never round-tripped
+  // through a JS Date: that prints the day before in NZ.
+  spentOn: date("spent_on").notNull(),
+  paidWith: text("paid_with"),
+
+  // The invoice itself, base64 — the same pattern as esignDocuments.sourcePdf,
+  // because ClubOS Supabase storage is egress-restricted (402). Capped and
+  // validated server-side.
+  invoiceFileName: text("invoice_file_name"),
+  invoiceMime: text("invoice_mime"),
+  invoiceData: text("invoice_data"),
+
+  notes: text("notes"),
+  createdByUserId: integer("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertPrintExpenseSchema = createInsertSchema(printExpenses).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPrintExpense = z.infer<typeof insertPrintExpenseSchema>;
+export type PrintExpense = typeof printExpenses.$inferSelect;
+
 // ── Site FAQs ───────────────────────────────────────────────────────────────
 // The questions and answers on a brand's website AND in its live-chat widget.
 // Both used to be hardcoded in the website repo — two separate lists, in two

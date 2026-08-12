@@ -181,6 +181,12 @@ app.use(attributionCookieMiddleware);
   const { registerFaqRoutes } = await import("./faq-routes");
   registerFaqRoutes(app);
 
+  // Print expenses — every purchase the shop makes, with its invoice stored
+  // inline (Supabase storage is egress-restricted). Gated by
+  // requireTab("expenses"); GST is recorded per expense, never inferred.
+  const { registerPrintExpenseRoutes } = await import("./print-expense-routes");
+  registerPrintExpenseRoutes(app);
+
   // USG Invoices — tracked, payable invoices (org 7, super-admin only). Admin
   // side is gated by requireTab("invoices"); public endpoints are CORS-allow-
   // listed to usg-invoices.vercel.app and carry no session.

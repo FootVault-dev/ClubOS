@@ -58,6 +58,11 @@ const CANARIES: Canary[] = [
   { feature: "UP print requests",   path: "/api/admin/print-requests",              expect: [401] },
   // unitedprints.co.nz and its chat widget read their FAQ list from here.
   { feature: "site FAQs",           path: "/api/public/faqs/unitedprints",          expect: [200] },
+  // The Knowledge Base tab is universal — every workspace's sidebar links to it,
+  // so losing the route breaks a link for every staff member at once, and the
+  // vault of written specifications becomes unreachable while the data sits
+  // untouched in the database.
+  { feature: "knowledge base",      path: "/api/admin/kb/articles",                 expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -83,7 +88,9 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/cugc/mailer/contacts":      { file: "server/routes.ts",              needle: "/api/admin/cugc/mailer/contacts" },
   "/api/public/unitedprints/quote-materials": { file: "server/print-quote-routes.ts", needle: "quote-materials" },
   "/api/admin/print-requests":            { file: "server/print-request-routes.ts", needle: "/api/admin/print-requests" },
+  "/api/admin/kb/articles":               { file: "server/kb-routes.ts",           needle: "/api/admin/kb/articles" },
   "/api/public/faqs/unitedprints":        { file: "server/faq-routes.ts",           needle: "/api/public/faqs/" },
+  "/api/admin/print-expenses":            { file: "server/print-expense-routes.ts", needle: "/api/admin/print-expenses" },
 };
 
 import { readFileSync, existsSync } from "fs";
