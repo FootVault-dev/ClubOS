@@ -327,37 +327,60 @@ export function totalsFor(programmes: ProgrammeEntry[], payments: PaymentEntry[]
 }
 
 /**
- * A household roll-up: the parent's own record plus every child's, with each
- * shared booking counted exactly once no matter how many siblings it covered.
+ * A household roll-up: the parent's own record plus every child's.
+ *
+ * Returns the LISTS as well as the totals. A parent's page that showed
+ * household totals over their own (usually empty) rows read "$320.00 paid" and
+ * "No programmes recorded" in the same card — which looks exactly like a bug,
+ * because a guardian rarely has a registration of their own. Every row is
+ * therefore labelled with the child it belongs to.
+ *
+ * 🔴 A shared booking is deduplicated by registration id: it appears once in
+ * the household list and its total is added once, however many siblings it
+ * covered.
  */
-export function householdTotals(
-  own: PersonHistory | null,
-  childHistories: PersonHistory[],
-): HistoryTotals & { childCount: number; sharedBookingCount: number } {
+export function householdRollup(
+  own: { history: PersonHistory; name: string; key: string } | null,
+  children: { history: PersonHistory; name: string; key: string }[],
+): PersonHistory & { childCount: number; sharedBookingCount: number } {
   const programmes: ProgrammeEntry[] = [];
   const payments: PaymentEntry[] = [];
-  for (const h of [own, ...childHistories]) {
-    if (!h) continue;
-    programmes.push(...h.programmes);
-    payments.push(...h.payments);
-  }
-
-  // Each shared basket adds its total once, keyed by registration id.
+  const seenShared = new Set<number>();
   const sharedTotals = new Map<number, number>();
-  for (const p of programmes) {
-    if (p.sharedBooking && p.sharedBooking.totalCents !== null) {
-      sharedTotals.set(p.sharedBooking.registrationId, p.sharedBooking.totalCents);
+
+  for (const who of [own, ...children]) {
+    if (!who) continue;
+    for (const p of who.history.programmes) {
+      if (p.sharedBooking) {
+        const rid = p.sharedBooking.registrationId;
+        if (p.sharedBooking.totalCents !== null) sharedTotals.set(rid, p.sharedBooking.totalCents);
+        // One row for the booking, not one per sibling.
+        if (seenShared.has(rid)) continue;
+        seenShared.add(rid);
+      }
+      programmes.push({ ...p, personName: who.name, personKey: who.key });
+    }
+    for (const p of who.history.payments) {
+      payments.push({ ...p, personName: who.name, personKey: who.key });
     }
   }
+
+  programmes.sort((a, b) => {
+    const ay = a.seasonYear ?? -1, by = b.seasonYear ?? -1;
+    if (ay !== by) return by - ay;
+    return (b.termLabel || b.registeredAt || "").localeCompare(a.termLabel || a.registeredAt || "");
+  });
+  payments.sort((a, b) => (b.paidOn || "").localeCompare(a.paidOn || ""));
 
   const base = totalsFor(programmes, payments);
   let sharedSum = 0;
   for (const cents of Array.from(sharedTotals.values())) sharedSum += cents;
 
   return {
-    ...base,
-    paidCents: base.paidCents + sharedSum,
-    childCount: childHistories.length,
+    programmes,
+    payments,
+    totals: { ...base, paidCents: base.paidCents + sharedSum },
+    childCount: children.length,
     sharedBookingCount: sharedTotals.size,
   };
 }

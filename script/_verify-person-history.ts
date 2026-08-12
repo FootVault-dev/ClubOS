@@ -49,9 +49,18 @@ const kidsWithHistory = (mum?.children || []).filter(c => (c.history?.programmes
 ok(kidsWithHistory.length >= 2, "each child card carries its own history",
    `${kidsWithHistory.length} children with programmes`);
 const childSum = (mum?.children || []).reduce((n, c) => n + (c.history?.totals.paidCents ?? 0), 0);
-ok((mum?.household?.paidCents ?? 0) >= childSum,
+ok((mum?.household?.totals.paidCents ?? 0) >= childSum,
    "household total includes every child's payments",
-   `household ${money(mum?.household?.paidCents ?? 0)} vs children ${money(childSum)}`);
+   `household ${money(mum?.household?.totals.paidCents ?? 0)} vs children ${money(childSum)}`);
+// 🔴 The contradiction that shipped in v410: household totals over the parent's
+// own (empty) rows printed "$320.00 paid" above "No programmes recorded".
+ok((mum?.household?.programmes.length ?? 0) > 0,
+   "the household LIST is populated, not just the total",
+   `${mum?.household?.programmes.length} rows`);
+ok((mum?.household?.programmes || []).every(p => !!p.personName),
+   "every household row says whose it is");
+ok((mum?.household?.payments || []).some(p => p.personName?.includes("Kai")),
+   "a child's payment appears on the parent's page, attributed to them");
 
 // ── 3. 🔴 The double-count trap ──────────────────────────────────────────────
 // Registration 317 is ONE $60 camp booking covering two children (358, 359).
@@ -74,10 +83,14 @@ ok(childPaid === 0 || childPaid < basket * 2,
    `children sum ${money(childPaid)}, basket ${money(basket)}`);
 ok((camp?.household?.sharedBookingCount ?? 0) >= 1,
    "the household reports the shared booking", `${camp?.household?.sharedBookingCount}`);
+const sharedInList = (camp?.household?.programmes || []).filter(p => p.sharedBooking?.registrationId === 317);
+ok(sharedInList.length === 1,
+   "🔴 the shared booking is listed ONCE on the parent's page, not once per sibling",
+   `${sharedInList.length} row`);
 // Counted once: the household must not exceed (children's own money + basket once).
-ok((camp?.household?.paidCents ?? 0) <= childPaid + basket + (camp?.history.totals.paidCents ?? 0),
+ok((camp?.household?.totals.paidCents ?? 0) <= childPaid + basket + (camp?.history.totals.paidCents ?? 0),
    "🔴 the household counts that basket exactly ONCE",
-   `household ${money(camp?.household?.paidCents ?? 0)}`);
+   `household ${money(camp?.household?.totals.paidCents ?? 0)}`);
 
 // ── 4. Totals never invented from a status ───────────────────────────────────
 console.log("\n4. A confirmed registration with amount_paid 0.00");

@@ -41,7 +41,7 @@ import {
   type FamilyChild, type FamilyGuardian, type RegistrationSummary,
   type PersonHistory, type HistoryTotals, emptyHistoryTotals,
 } from "@shared/family";
-import { resolvePeopleHistory, householdTotals, totalsFor } from "./person-history";
+import { resolvePeopleHistory, householdRollup, totalsFor } from "./person-history";
 
 const s = (v: any, max = 300): string => String(v ?? "").trim().slice(0, max);
 
@@ -197,10 +197,11 @@ export type Family = {
   /** Everything this person signed up for and paid — see server/person-history.ts. */
   history: PersonHistory;
   /**
-   * Present on a parent: their own record plus every child, each shared booking
-   * counted once. Null on a player, who is not a household.
+   * Present on a parent: their own record plus every child's, every row labelled
+   * with whose it is and each shared booking listed once. Null on a player, who
+   * is not a household.
    */
-  household: (HistoryTotals & { childCount: number; sharedBookingCount: number }) | null;
+  household: (PersonHistory & { childCount: number; sharedBookingCount: number }) | null;
   today: string;
 };
 
@@ -343,9 +344,15 @@ export async function resolveFamily(kind: PersonKind, id: number): Promise<Famil
     guardians, children: mergedChildren,
     registrations: byContact.get(id) || [],
     history: ownHistory,
-    household: householdTotals(
-      ownHistory,
-      mergedChildren.map(c => c.history).filter(Boolean) as PersonHistory[],
+    household: householdRollup(
+      { history: ownHistory, name: `${person.firstName} ${person.lastName}`.trim(), key: person.key },
+      mergedChildren
+        .filter(c => c.history)
+        .map(c => ({
+          history: c.history as PersonHistory,
+          name: `${c.firstName} ${c.lastName}`.trim(),
+          key: c.key,
+        })),
     ),
     today,
   };

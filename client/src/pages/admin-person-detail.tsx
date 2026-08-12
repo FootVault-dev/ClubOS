@@ -47,7 +47,7 @@ function StatPill({ label, value, hint }: { label: string; value: string; hint?:
 }
 
 function HistorySummary({ totals, household }: { totals: any; household?: any }) {
-  const t = household || totals;
+  const t = household?.totals || totals;
   if (!t) return null;
   const span = t.firstActivity && t.lastActivity && t.firstActivity !== t.lastActivity
     ? `${t.firstActivity.slice(0, 4)}–${t.lastActivity.slice(0, 4)}`
@@ -70,7 +70,10 @@ function ProgrammeRow({ e }: { e: any }) {
   return (
     <div className="flex items-start justify-between gap-3 py-2.5 border-b border-blue-500/[0.04] last:border-0">
       <div className="min-w-0">
-        <div className="text-[13px] text-white/85 truncate">{e.programme}</div>
+        <div className="text-[13px] text-white/85 truncate">
+          {e.personName && <span className="text-emerald-300/60">{e.personName} · </span>}
+          {e.programme}
+        </div>
         <div className="text-[11px] text-white/35 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
           {e.termLabel && <span>{e.termLabel}</span>}
           {!e.termLabel && e.registeredAt && <span>{formatDate(e.registeredAt)}</span>}
@@ -111,7 +114,10 @@ function PaymentRow({ e }: { e: any }) {
   return (
     <div className="flex items-center justify-between gap-3 py-2.5 border-b border-blue-500/[0.04] last:border-0">
       <div className="min-w-0">
-        <div className="text-[13px] text-white/85 truncate">{e.description || e.termLabel || "Payment"}</div>
+        <div className="text-[13px] text-white/85 truncate">
+          {e.personName && <span className="text-emerald-300/60">{e.personName} · </span>}
+          {e.description || e.termLabel || "Payment"}
+        </div>
         <div className="text-[11px] text-white/35 mt-0.5 flex flex-wrap items-center gap-x-2">
           <span>{e.paidOn ? formatDate(e.paidOn) : "Date not recorded"}</span>
           {e.method && <span className="text-white/25 capitalize">{e.method.replace(/_/g, " ")}</span>}
@@ -128,9 +134,13 @@ function HistorySection({ history, household, title, emptyNote }: {
   history: any; household?: any; title: string; emptyNote: string;
 }) {
   const [tab, setTab] = useState<"programmes" | "payments">("programmes");
-  const programmes: any[] = history?.programmes || [];
-  const payments: any[] = history?.payments || [];
-  const hasAny = programmes.length > 0 || payments.length > 0 || (household?.paidCents ?? 0) > 0;
+  // On a parent, read the HOUSEHOLD lists. A guardian almost never has a
+  // registration of their own, so showing their own rows under household totals
+  // printed "$320.00 paid" directly above "No programmes recorded".
+  const src = household || history;
+  const programmes: any[] = src?.programmes || [];
+  const payments: any[] = src?.payments || [];
+  const hasAny = programmes.length > 0 || payments.length > 0;
 
   return (
     <Card title={title}>

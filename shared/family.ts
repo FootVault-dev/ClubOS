@@ -142,6 +142,9 @@ export type ProgrammeEntry = {
    * would libel more than half the families who did pay.
    */
   matchedPaymentCents: number | null;
+  /** Whose row this is. Set only in a household roll-up, where rows are mixed. */
+  personName?: string;
+  personKey?: PersonKey;
 };
 
 /** One payment actually recorded. Negative amounts are refunds. */
@@ -153,6 +156,8 @@ export type PaymentEntry = {
   method: string | null;
   description: string | null;
   termLabel: string | null;
+  personName?: string;
+  personKey?: PersonKey;
 };
 
 export type HistoryTotals = {
