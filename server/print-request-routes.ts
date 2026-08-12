@@ -355,7 +355,11 @@ export function registerPrintRequestRoutes(app: Express) {
             customerPhone: null,
             title: row.title,
             description: description || null,
-            status: "design",   // approved internal work starts at pre-press
+            // 🔴 "in_design", not "design". print_orders.status IS a real
+            // pgEnum (unlike print_requests.status, which is text on purpose),
+            // so an invalid value 500s the whole approve. The Jobs board's
+            // Design column maps to in_design.
+            status: "in_design",   // approved internal work starts at pre-press
             amount: "0.00",
             subtotalCents: 0, gstCents: 0, totalCents: 0, paidCents: 0,
             deliveryMethod: "pickup",
