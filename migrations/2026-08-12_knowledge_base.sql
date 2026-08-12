@@ -125,10 +125,17 @@ CREATE TABLE IF NOT EXISTS kb_chat_messages (
 CREATE INDEX IF NOT EXISTS kb_chat_messages_session_idx
   ON kb_chat_messages (session_id, created_at);
 
--- 🔴 The security audit, and it records REFUSALS as well as grants. A single
--- denied question is someone being curious; the same person probing for budget
--- figures forty times is something Daniel should be able to see. SET NULL on
--- the user so deleting an account cannot erase the trail.
+-- The security audit: which tool ran, for whom, and whether it was allowed.
+--
+-- ⚠️ Read `allowed = false` correctly. A refusal is logged only if a tool is
+-- CALLED and rejected — and because a tool the person can't use is never handed
+-- to the model, that path is the unreachable second wall. In normal operation
+-- this table is all grants, and an empty denied-list means the design is
+-- working, NOT that nobody has asked. Someone repeatedly fishing for budget
+-- figures shows up in kb_chat_messages (their questions are all stored), not
+-- here. Don't build a "suspicious activity" report on this column alone.
+--
+-- SET NULL on the user so deleting an account cannot erase the trail.
 CREATE TABLE IF NOT EXISTS kb_access_log (
   id            integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   user_id       integer REFERENCES users(id) ON DELETE SET NULL,
@@ -156,4 +163,4 @@ ALTER TABLE kb_access_log         ENABLE ROW LEVEL SECURITY;
 COMMENT ON TABLE kb_articles IS
   'Knowledge Base articles — the club vault. Universal tab in every workspace; brand is a tag, not an owner. required_tab gates a sensitive article behind the same ClubOS tab its contents came from.';
 COMMENT ON TABLE kb_access_log IS
-  'Rambo tool-access audit. Records denials as well as grants — a pattern of refused requests is the signal worth having.';
+  'Rambo tool-access audit: which tool ran, for whom, allowed or not. allowed=false is the unreachable second wall (restricted tools are never offered to the model), so an empty denied-list means the design works, not that nobody asked. Questions live in kb_chat_messages.';
