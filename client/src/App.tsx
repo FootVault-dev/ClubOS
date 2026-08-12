@@ -286,6 +286,12 @@ function AdminRouter() {
         <Route path="/admin/print-orders/:id" component={PrintsOrderDetail} />
         <Route path="/admin/print-orders" component={PrintsOrders} />
         <Route path="/admin/print-materials" component={PrintsMaterials} />
+        {/* The visitor live-chat inbox for unitedprints.co.nz. 🔴 This route was
+            only ever listed in the CIC tournament Switch below, so the Live Chat
+            tab in THIS workspace fell through to NotFound and 404'd from the day
+            it shipped. The United Prints workspace has its own Switch — a
+            shared/tabs.ts entry alone is never enough. */}
+        <Route path="/admin/print-livechat" component={PrintLiveChat} />
         <Route path="/admin/print-crm" component={PrintsCRM} />
         <Route path="/admin/print-sales" component={PrintsSales} />
         <Route path="/admin/print-projects" component={PrintsProjects} />
