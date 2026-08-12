@@ -195,6 +195,7 @@ import WarehouseLabels from "@/pages/warehouse-labels";
 import WarehouseAssets from "@/pages/warehouse-assets";
 import WarehouseFieldTemplates from "@/pages/warehouse-field-templates";
 import WarehouseStockTake from "@/pages/warehouse-stock-take";
+import WarehouseUniformStocktake from "@/pages/warehouse-uniform-stocktake";
 import PrintHub from "@/pages/print-hub";
 import PrintConfigure from "@/pages/print-configure";
 import PrintCheckout from "@/pages/print-checkout";
@@ -204,6 +205,7 @@ import ClubDossier from "@/pages/club-dossier";
 import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
 import TaskTracker from "@/pages/task-tracker";
+import KnowledgeBase from "@/pages/knowledge-base";
 import StaffChat from "@/pages/staff-chat";
 import NotificationSettings from "@/pages/notification-settings";
 import MarketingHome from "@/pages/marketing/Home";
@@ -258,6 +260,10 @@ function AdminRouter() {
   // Task Tracker — one organisation-wide project/task system, deliberately
   // not workspace-scoped, so it is reachable from every workspace too.
   if (location.startsWith("/admin/task-tracker")) return <TaskTracker />;
+  // Knowledge Base — one club-wide vault plus Rambo. Universal for the same
+  // reason: the knowledge is the organisation's, not a workspace's, and brand
+  // is a filter inside the tab.
+  if (location.startsWith("/admin/knowledge-base")) return <KnowledgeBase />;
   const isVenue = currentOrg?.slug === "united-sports-centre";
   const isLeague = currentOrg?.slug === "mini-football-leagues";
   const isTournament = currentOrg?.slug === "christchurch-international-cup";
@@ -310,7 +316,8 @@ function AdminRouter() {
         <Route path="/admin/warehouse/locations" component={WarehouseLocations} />
         <Route path="/admin/warehouse/assets" component={WarehouseAssets} />
         <Route path="/admin/warehouse/fields" component={WarehouseFieldTemplates} />
-        <Route path="/admin/warehouse/stock-take" component={WarehouseStockTake} />
+        <Route path="/admin/warehouse/stock-take-classic" component={WarehouseStockTake} />
+        <Route path="/admin/warehouse/stock-take" component={WarehouseUniformStocktake} />
         <Route path="/admin/warehouse/pos" component={WarehousePOs} />
         <Route path="/admin/warehouse/requisitions" component={WarehouseRequisitions} />
         <Route path="/admin/warehouse/loans" component={WarehouseLoans} />

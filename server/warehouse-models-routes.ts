@@ -230,6 +230,31 @@ export function registerWarehouseModelRoutes(app: Express) {
   });
 
   // ── Create / edit a model ─────────────────────────────────────────────────
+  /**
+   * A model photo, as a data: URI.
+   *
+   * 🔴 Stored inline in the column, not in object storage, because ClubOS's
+   * Supabase storage is egress-restricted (402) — the same wall that took the
+   * shop images down in July. The client resizes to 300px / JPEG 0.7 before
+   * sending, which lands at roughly 15–25KB; the cap here is the backstop, not
+   * the plan. Swap this for a storage URL the day storage is paid for: the
+   * column already holds a URL either way.
+   */
+  const MAX_IMAGE_CHARS = 400_000; // ~300KB of base64
+  function cleanImageUrl(raw: unknown): string | null {
+    if (raw === null || raw === undefined || raw === "") return null;
+    const s = String(raw);
+    // Only an image data URI or an https URL — never arbitrary text in a field
+    // the front end renders into an <img src>.
+    if (!/^data:image\/(png|jpeg|jpg|webp);base64,/.test(s) && !/^https:\/\//.test(s)) {
+      throw new ModelError("That photo isn't in a format we can store");
+    }
+    if (s.length > MAX_IMAGE_CHARS) {
+      throw new ModelError("That photo is too big even after resizing — try a smaller one");
+    }
+    return s;
+  }
+
   app.post("/api/admin/warehouse/models", requireAuth, requireTab("warehouse"), async (req, res) => {
     try {
       const title = clean(req.body?.title);
@@ -242,6 +267,7 @@ export function registerWarehouseModelRoutes(app: Express) {
           vendorModel: clean(req.body?.vendorModel) ?? null,
           sku: clean(req.body?.sku) ?? null,
           notes: clean(req.body?.notes) ?? null,
+          imageUrl: cleanImageUrl(req.body?.imageUrl),
         })
         .returning();
       res.status(201).json(model);
@@ -260,6 +286,8 @@ export function registerWarehouseModelRoutes(app: Express) {
       for (const k of ["vendor", "title", "vendorModel", "sku", "notes"] as const) {
         if (k in (req.body ?? {})) patch[k] = clean(req.body[k]) ?? null;
       }
+      // Explicitly null-able: "Remove photo" has to be able to clear it.
+      if ("imageUrl" in (req.body ?? {})) patch.imageUrl = cleanImageUrl(req.body.imageUrl);
       if (patch.title === null) throw new ModelError("A model needs a title");
       if ("active" in (req.body ?? {})) patch.active = Boolean(req.body.active);
 
