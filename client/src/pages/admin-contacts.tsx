@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { useLocation } from "wouter";
 import { Search, Download, Users, X, ChevronRight } from "lucide-react";
 import { ageFromDob } from "@shared/family";
+import { workspaceFetch } from "@/lib/queryClient";
 
 type Person = {
   key: string;
@@ -80,9 +81,12 @@ export default function AdminContacts() {
   const { data, isLoading, isFetching } = useQuery<PeopleData>({
     queryKey: ["/api/admin/people", query, filter],
     queryFn: async () => {
-      const res = await fetch(
+      // workspaceFetch, not fetch — /api/admin/people is gated by
+      // requireTab("contacts"), which 400s without X-Workspace-Slug for anyone
+      // who isn't a super admin. A bare fetch here left the whole tab blank for
+      // every staff member while looking perfect to Daniel.
+      const res = await workspaceFetch(
         `/api/admin/people?q=${encodeURIComponent(query)}&filter=${filter}&limit=100`,
-        { credentials: "include" },
       );
       if (!res.ok) throw new Error("Failed to load people");
       return res.json();

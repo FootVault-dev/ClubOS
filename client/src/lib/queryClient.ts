@@ -15,6 +15,25 @@ function workspaceHeaders(): Record<string, string> {
   return slug ? { "X-Workspace-Slug": slug } : {};
 }
 
+/**
+ * A GET that carries the workspace header — for the places that hand-roll a
+ * fetch() instead of going through apiRequest() or getQueryFn().
+ *
+ * 🔴 A bare fetch() to a requireTab()-gated endpoint is INVISIBLE to a super
+ * admin and broken for everybody else. requireTab returns early on the
+ * super_admin role check, one line before it looks for X-Workspace-Slug, so
+ * Daniel gets a working page and every staff member gets HTTP 400 and a blank
+ * screen. That is exactly how the Contacts tab shipped: it worked for the only
+ * person who could never hit the bug. Reach for this, not fetch().
+ */
+export async function workspaceFetch(url: string, init: RequestInit = {}) {
+  return fetch(url, {
+    ...init,
+    credentials: "include",
+    headers: { ...workspaceHeaders(), ...(init.headers || {}) },
+  });
+}
+
 export async function apiRequest(
   method: string,
   url: string,

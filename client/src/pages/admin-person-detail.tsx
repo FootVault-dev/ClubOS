@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { useBackTo } from "@/lib/back-to";
 import { formatCurrency } from "@/lib/format";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, workspaceFetch } from "@/lib/queryClient";
 import { RELATIONSHIP_OPTIONS, ageFromDob } from "@shared/family";
 
 function formatDate(d: string | null | undefined): string {
@@ -89,9 +89,8 @@ function LinkDialog({ personKey, mode, onClose }: { personKey: string; mode: "gu
   const { data, isFetching } = useQuery<any>({
     queryKey: ["/api/admin/people", "link-search", mode, q],
     queryFn: async () => {
-      const res = await fetch(
+      const res = await workspaceFetch(
         `/api/admin/people?filter=${linkingGuardian ? "parents" : "players"}&limit=8&q=${encodeURIComponent(q)}`,
-        { credentials: "include" },
       );
       if (!res.ok) throw new Error("Search failed");
       return res.json();
@@ -239,7 +238,7 @@ export default function AdminPersonDetail() {
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ["/api/admin/people", personKeyParam],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/people/${personKeyParam}`, { credentials: "include" });
+      const res = await workspaceFetch(`/api/admin/people/${personKeyParam}`);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Not found");
       return res.json();
     },
