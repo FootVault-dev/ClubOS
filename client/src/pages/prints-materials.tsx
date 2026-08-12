@@ -10,7 +10,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, workspaceFetch } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, X, Search, Globe, ExternalLink, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -336,9 +336,27 @@ export default function PrintsMaterials() {
   const [editing, setEditing] = useState<PrintMaterial | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const { data: materials = [], isLoading } = useQuery<PrintMaterial[]>({
+  // 🔴 workspaceFetch, NEVER a bare fetch(). This endpoint is requireTab-gated,
+  // and requireTab returns early on the super_admin check one line BEFORE it
+  // looks for X-Workspace-Slug — so a bare fetch works perfectly for Daniel and
+  // hands every other staff member HTTP 400 and a blank screen. That is exactly
+  // how this page shipped on 2026-08-12: gated the route, left the bare fetch,
+  // verified it as a super admin, and Dima got nothing.
+  const { data: materials = [], isLoading, error } = useQuery<PrintMaterial[]>({
     queryKey: ["/api/admin/print-materials", { orgId }],
-    queryFn: () => fetch(`/api/admin/print-materials?orgId=${orgId}`, { credentials: "include" }).then(r => r.json()),
+    queryFn: async () => {
+      const res = await workspaceFetch(`/api/admin/print-materials?orgId=${orgId}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.message || `Couldn't load the catalog (HTTP ${res.status})`);
+      }
+      const data = await res.json();
+      // Defensive: an error body is an object, and .filter() on one throws
+      // inside render — which is what turned a 400 into a completely blank
+      // page instead of a message anyone could act on.
+      if (!Array.isArray(data)) throw new Error("The catalog came back in an unexpected shape.");
+      return data;
+    },
     enabled: !!orgId,
   });
 
@@ -393,7 +411,19 @@ export default function PrintsMaterials() {
         </div>
       </div>
 
-      {isLoading ? (
+      {error ? (
+        // Never a blank screen. If the catalog won't load, say so.
+        <div className="rounded-xl border border-red-500/30 bg-red-500/[0.06] p-4">
+          <div className="text-sm font-semibold text-white">The materials catalog didn't load</div>
+          <div className="mt-1 text-sm text-white/60">{(error as Error).message}</div>
+          <Button
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/admin/print-materials"] })}
+            className="mt-3 bg-blue-600 hover:bg-blue-700"
+          >
+            Try again
+          </Button>
+        </div>
+      ) : isLoading ? (
         <div className="text-white/40 text-sm">Loading...</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
