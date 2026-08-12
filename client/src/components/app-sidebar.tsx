@@ -331,6 +331,12 @@ const printsNav = [
   { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "behavior", title: "Behavior", url: "/admin/behavior", icon: Activity },
   { tab: "jobs", title: "Jobs", url: "/admin/print-jobs", icon: FolderKanban },
+  // 🔴 A tab needs registering in THREE places, not two: shared/tabs.ts (the
+  // permission list), the workspace's route Switch in App.tsx (or it 404s), and
+  // HERE (or there is no link to click). Missing this one left Travis — who has
+  // tabs:["requests"] and nothing else — staring at a completely empty sidebar,
+  // because navFilter then removed every item in the list.
+  { tab: "requests", title: "Requests", url: "/admin/print-requests", icon: Inbox },
   { tab: "quotes", title: "Quotes", url: "/admin/print-quotes", icon: Receipt },
   { tab: "orders", title: "Orders", url: "/admin/print-orders", icon: ShoppingCart },
   { tab: "materials", title: "Materials", url: "/admin/print-materials", icon: FileText },
