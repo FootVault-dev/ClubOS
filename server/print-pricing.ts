@@ -48,7 +48,7 @@ export interface QuoteResult {
 
 export interface QuoteFallback {
   ok: false;
-  reason: "size_out_of_range" | "qty_over_cap" | "total_over_cap" | "human_quote_required" | "no_matching_tier" | "missing_dimensions";
+  reason: "size_out_of_range" | "over_roll_width" | "qty_over_cap" | "total_over_cap" | "human_quote_required" | "no_matching_tier" | "missing_dimensions";
   message: string;
 }
 
@@ -141,6 +141,11 @@ export function quotePrintItem(material: PrintMaterial, config: ItemConfig): Quo
       if (material.sizeMinHMm && config.heightMm < material.sizeMinHMm) return outOfRange(material);
       if (material.sizeMaxHMm && config.heightMm > material.sizeMaxHMm) return outOfRange(material);
 
+      // Physical limit of the machine, checked last so the friendlier
+      // range messages win where both apply.
+      const rollFail = overRollWidth(material, config.widthMm, config.heightMm);
+      if (rollFail) return rollFail;
+
       areaM2 = (config.widthMm * config.heightMm) / 1_000_000;
       perimeterM = 2 * (config.widthMm + config.heightMm) / 1000;
 
@@ -173,6 +178,10 @@ export function quotePrintItem(material: PrintMaterial, config: ItemConfig): Quo
       if (!tier) {
         // Custom-size fallback — if the material has a base_rate_cents, use per_m2 for non-stock
         if (material.baseRateCents > 0 && config.widthMm && config.heightMm) {
+          // A custom size on a tiered product is still printed on the same
+          // machine, so the roll limit applies here too.
+          const rollFail = overRollWidth(material, config.widthMm, config.heightMm);
+          if (rollFail) return rollFail;
           areaM2 = (config.widthMm * config.heightMm) / 1_000_000;
           unitPriceCents = Math.round(areaM2 * material.baseRateCents * config.quantity);
           breakdown.push({ label: `Custom size — ${areaM2.toFixed(2)} m² × ${moneyLabel(material.baseRateCents)}/m² × ${config.quantity}`, cents: unitPriceCents });
@@ -287,6 +296,30 @@ function outOfRange(material: PrintMaterial): QuoteFallback {
     ok: false,
     reason: "size_out_of_range",
     message: `Size is outside our standard range for ${material.name} — pop your details in and we'll quote it within 4 hours.`,
+  };
+}
+
+/**
+ * The printer's roll width.
+ *
+ * 🔴 Checked against the NARROWER of the two dimensions, deliberately. Our
+ * printer runs a 1.6m roll with no limit on length, so a 3000 × 800mm banner
+ * is fine — it goes through with the 800mm across the roll. Testing the field
+ * that happens to be labelled "width" would refuse that job, and refuse it
+ * silently: the customer just sees "too big" on something we print every week.
+ *
+ * NULL maxRollWidthMm means the product isn't roll-fed (a composite panel, a
+ * garment) and there is nothing to check.
+ */
+function overRollWidth(material: PrintMaterial, widthMm: number, heightMm: number): QuoteFallback | null {
+  const limit = material.maxRollWidthMm;
+  if (!limit || limit <= 0) return null;
+  const narrower = Math.min(widthMm, heightMm);
+  if (narrower <= limit) return null;
+  return {
+    ok: false,
+    reason: "over_roll_width",
+    message: `Our printer runs a ${(limit / 1000).toFixed(2).replace(/0$/, "")}m roll, so one side needs to be ${(limit / 1000).toFixed(2).replace(/0$/, "")}m or under — the other side can be any length. Send it through and we'll quote it as panels if you need it bigger.`,
   };
 }
 

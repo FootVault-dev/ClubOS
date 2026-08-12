@@ -47,6 +47,11 @@ const CANARIES: Canary[] = [
   { feature: "shop (MFL)",          path: "/api/public/shop/mfl/catalog",         expect: [200] },
   { feature: "attribution /t.js",   path: "/t.js",                                expect: [200] },
   { feature: "CUGC mailer",         path: "/api/admin/cugc/mailer/contacts",      expect: [401] },
+  // unitedprints.co.nz reads its whole price list from here. If a deploy drops
+  // this route the Instant Quote page can't load a single product, and its
+  // honest failure state ("email us your job") looks like a working page —
+  // nobody would notice for days.
+  { feature: "UP quote materials",  path: "/api/public/unitedprints/quote-materials", expect: [200] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -70,6 +75,7 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/public/shop/mfl/catalog":         { file: "server/shop-routes.ts",         needle: "catalog" },
   "/t.js":                                { file: "server/routes.ts",              needle: '"/t.js"' },
   "/api/admin/cugc/mailer/contacts":      { file: "server/routes.ts",              needle: "/api/admin/cugc/mailer/contacts" },
+  "/api/public/unitedprints/quote-materials": { file: "server/print-quote-routes.ts", needle: "quote-materials" },
 };
 
 import { readFileSync, existsSync } from "fs";

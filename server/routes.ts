@@ -20307,7 +20307,31 @@ export async function registerRoutes(
   });
 
   // ── Print Materials (catalog) ──────────────────────────────────────────
-  app.get("/api/admin/print-materials", requireAuth, async (req, res) => {
+  // 🔴 Gated on the "materials" tab, not bare requireAuth. These rows are now
+  // the live price list on unitedprints.co.nz — a change here is a change to
+  // what the public is quoted, with no deploy in between. requireAuth alone
+  // means every logged-in account, and `users.role` defaults to "coach" (what
+  // a public fan signup gets), so the shop's prices were writable by anyone
+  // who could log in at all. Same hole, same fix, as the refund endpoint.
+  //
+  // A material also belongs to an org, so the mutations check the row against
+  // the workspace the caller is standing in rather than trusting an id in the
+  // URL. By-id routes answer 404 on a mismatch, never 403 — a wrong workspace
+  // shouldn't confirm the row exists.
+  const materialsTab = requireTab("materials");
+
+  async function materialInWorkspace(req: Request, id: number) {
+    if (!Number.isFinite(id)) return null;
+    const m = await storage.getPrintMaterial(id);
+    if (!m) return null;
+    const org = await workspaceOrg(req);
+    // A super admin standing in the right workspace is still scoped by it;
+    // what they get extra is the tab itself, not other orgs' rows.
+    if (!org || m.organizationId !== org.id) return null;
+    return m;
+  }
+
+  app.get("/api/admin/print-materials", requireAuth, materialsTab, async (req, res) => {
     try {
       const orgId = parseInt(req.query.orgId as string);
       if (!orgId) return res.status(400).json({ message: "orgId required" });
@@ -20317,30 +20341,53 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  app.get("/api/admin/print-materials/:id", requireAuth, async (req, res) => {
+  app.get("/api/admin/print-materials/:id", requireAuth, materialsTab, async (req, res) => {
     try {
-      const m = await storage.getPrintMaterial(parseInt(req.params.id));
+      const m = await materialInWorkspace(req, parseInt(req.params.id));
       if (!m) return res.status(404).json({ message: "Not found" });
       res.json(m);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  app.post("/api/admin/print-materials", requireAuth, async (req, res) => {
+  app.post("/api/admin/print-materials", requireAuth, materialsTab, async (req, res) => {
     try {
-      if (!req.body.organizationId) return res.status(400).json({ message: "organizationId required" });
-      const m = await storage.createPrintMaterial(req.body);
+      // 🔴 The org comes from the workspace header, never the body. A caller
+      // must not be able to plant a product in another brand's catalog by
+      // typing its id — the same trap the hiring POST fell into with `brand`.
+      const org = await workspaceOrg(req);
+      if (!org?.id) return res.status(400).json({ message: "X-Workspace-Slug header required" });
+
+      const name = String(req.body?.name ?? "").trim();
+      if (!name) return res.status(400).json({ message: "A name is required." });
+
+      // Slug is derived when not given, so Dima never has to think about it.
+      const rawSlug = String(req.body?.slug ?? "").trim() || name;
+      const materialSlug = rawSlug.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+      if (!materialSlug) return res.status(400).json({ message: "Couldn't build a web address from that name — try plain letters." });
+
+      const m = await storage.createPrintMaterial({
+        ...req.body,
+        slug: materialSlug,
+        name,
+        organizationId: org.id,
+      });
       res.status(201).json(m);
     } catch (e: any) {
       if (e?.code === "23505") {
-        return res.status(409).json({ message: "A material with that slug already exists." });
+        return res.status(409).json({ message: "A material with that name already exists — give this one a slightly different name." });
       }
       res.status(400).json({ message: e.message });
     }
   });
 
-  app.patch("/api/admin/print-materials/:id", requireAuth, async (req, res) => {
+  app.patch("/api/admin/print-materials/:id", requireAuth, materialsTab, async (req, res) => {
     try {
-      const m = await storage.updatePrintMaterial(parseInt(req.params.id), req.body);
+      const existing = await materialInWorkspace(req, parseInt(req.params.id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      // organizationId and slug are identity, not settings — a PATCH may not
+      // move a product between brands or change its public address.
+      const { organizationId: _o, slug: _s, id: _i, ...patch } = req.body ?? {};
+      const m = await storage.updatePrintMaterial(existing.id, patch);
       if (!m) return res.status(404).json({ message: "Not found" });
       res.json(m);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
@@ -20377,18 +20424,31 @@ export async function registerRoutes(
 
   app.delete("/api/admin/print-materials/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deletePrintMaterial(parseInt(req.params.id));
+      const existing = await materialInWorkspace(req, parseInt(req.params.id));
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      await storage.deletePrintMaterial(existing.id);
       res.status(204).end();
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // Public-facing: list active materials by org (for the order page).
   // No auth — this is the public catalog.
+  //
+  // 🔴 Stripped of substrate_cost_per_m2_cents and markup_multiplier. Until
+  // now this endpoint served the whole row, so anyone could read the club's
+  // cost price and its margin on every product (PVC banner: $14/m² cost
+  // against a $45 rate, ×3.2). base_rate_cents stays — that is the retail
+  // price and it is printed on the website anyway.
+  const publicMaterial = (m: any) => {
+    const { substrateCostPerM2Cents, markupMultiplier, ...safe } = m;
+    return safe;
+  };
+
   app.get("/api/print/materials", async (req, res) => {
     try {
       const orgId = parseInt(req.query.orgId as string) || 8;  // United Prints default
       const materials = await storage.getPrintMaterials(orgId, { activeOnly: true });
-      res.json(materials);
+      res.json(materials.map(publicMaterial));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -20396,7 +20456,7 @@ export async function registerRoutes(
     try {
       const m = await storage.getPrintMaterialBySlug(req.params.slug);
       if (!m || !m.isActive) return res.status(404).json({ message: "Not found" });
-      res.json(m);
+      res.json(publicMaterial(m));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

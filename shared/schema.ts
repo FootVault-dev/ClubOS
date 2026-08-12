@@ -3183,6 +3183,13 @@ export const printMaterials = pgTable("print_materials", {
   isActive: boolean("is_active").notNull().default(true),
   displayOrder: integer("display_order").notNull().default(0),
 
+  // Show this product in the unitedprints.co.nz Instant Quote generator.
+  // Opt-in per product and deliberately separate from isActive: the catalog
+  // holds things a width × height signage form cannot price (a garment), and
+  // "sell this at all" is a different decision from "put this on that one
+  // form". Dima flips it in the Materials tab; no deploy, no code edit.
+  quoteOnWebsite: boolean("quote_on_website").notNull().default(false),
+
   pricingMethod: printPricingMethodEnum("pricing_method").notNull(),
   baseRateCents: integer("base_rate_cents").notNull().default(0),
   substrateCostPerM2Cents: integer("substrate_cost_per_m2_cents").notNull().default(0),
@@ -3193,6 +3200,12 @@ export const printMaterials = pgTable("print_materials", {
   sizeMaxWMm: integer("size_max_w_mm"),
   sizeMinHMm: integer("size_min_h_mm"),
   sizeMaxHMm: integer("size_max_h_mm"),
+
+  // The printer's roll width in mm — United Prints runs 1.6m, unlimited
+  // length. 🔴 Enforced against the NARROWER side (min(w,h)), not against the
+  // field called "width": a 3000 × 800 banner prints fine with the 800 across
+  // the roll. NULL = not a roll product (a panel, a garment), so no check.
+  maxRollWidthMm: integer("max_roll_width_mm"),
 
   // Add-ons: [{id, name, formula: 'flat'|'per_unit'|'per_m'|'per_perimeter_m', unitPriceCents, default?}]
   addonsJson: jsonb("addons_json").notNull().default(sql`'[]'::jsonb`),
