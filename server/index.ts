@@ -97,6 +97,14 @@ app.use(attributionCookieMiddleware);
   const { registerTaskTrackerRoutes } = await import("./task-tracker-routes");
   registerTaskTrackerRoutes(app);
 
+  // Knowledge Base — the club vault (articles per brand) + Rambo, the assistant
+  // that reads it. Universal tab like Chat/Feedback/Task Tracker, so gated by
+  // requireAuth only; visibility is per ARTICLE, and Rambo's live-stat tools are
+  // filtered per request against the caller's real ClubOS tab access.
+  // See migrations/2026-08-12_knowledge_base.sql + shared/knowledge-base.ts.
+  const { registerKnowledgeBaseRoutes } = await import("./kb-routes");
+  registerKnowledgeBaseRoutes(app);
+
   // United Prints workspace — Warehouse Management System. Dark-launched
   // (requireTab("warehouse") — super_admin only until T17 wires "warehouse"
   // into shared/tabs.ts). This registers items/locations/barcode-alias CRUD +

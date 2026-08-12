@@ -17,6 +17,7 @@ import {
   Tent,
   ClipboardCheck,
   ListChecks,
+  BookOpen,
   Home,
   Users,
   Mail,
@@ -100,6 +101,12 @@ const chatSecondary = { tab: "chat", title: "Chat", url: "/admin/chat", icon: Me
 // Same universal pattern again: one shared dataset, every workspace, gated
 // server-side by requireAuth rather than a per-workspace tab grant.
 const taskTrackerSecondary = { tab: "task-tracker", title: "Task Tracker", url: "/admin/task-tracker", icon: ListChecks };
+// Universal "Knowledge Base" tab — the club vault (how we do things, per brand)
+// plus Rambo, the assistant that reads it. Same universal pattern: one shared
+// body of knowledge, every workspace, requireAuth-gated server-side. Brand is a
+// filter INSIDE the tab, not a workspace, because "how United Prints sizes a
+// banner" is the same fact whichever workspace you happen to be standing in.
+const knowledgeBaseSecondary = { tab: "knowledge-base", title: "Knowledge Base", url: "/admin/knowledge-base", icon: BookOpen };
 // Universal "Notification settings" — belongs to the PERSON, not a workspace,
 // so it follows the same pattern: requireAuth-gated server-side, appended
 // directly rather than filtered through the per-workspace tab whitelist.
@@ -628,7 +635,7 @@ export function AppSidebar() {
   const mainNav = allMainNav.filter(navFilter);
   // Chat + Feedback are universal — always shown (no tab-whitelist filtering),
   // for every staff member in every workspace. Chat sits first.
-  const secondaryNav = [...allSecondaryNav.filter(navFilter), taskTrackerSecondary, chatSecondary, feedbackSecondary, notificationSettingsSecondary];
+  const secondaryNav = [...allSecondaryNav.filter(navFilter), taskTrackerSecondary, knowledgeBaseSecondary, chatSecondary, feedbackSecondary, notificationSettingsSecondary];
 
   // Resolved once across BOTH groups so a Navigation item and a System item
   // can never both look active on the same page.

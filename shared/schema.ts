@@ -7948,3 +7948,91 @@ export const ttPages = pgTable("tt_pages", {
 }));
 
 export type TtPage = typeof ttPages.$inferSelect;
+
+// ── Knowledge Base ──────────────────────────────────────────────────────────
+// The club's vault (see migrations/2026-08-12_knowledge_base.sql). A universal
+// tab in every workspace, so these tables are deliberately NOT org-scoped —
+// brand is a tag on the row, the same call made for tt_* and staff_chat.
+export const kbArticles = pgTable("kb_articles", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  brand: text("brand").notNull().default("all"),
+  category: text("category"),
+  title: text("title").notNull(),
+  summary: text("summary"),
+  body: text("body").notNull().default(""),
+  keywords: text("keywords").array().notNull().default(sql`'{}'::text[]`),
+  status: text("status").notNull().default("draft"),   // draft | published | archived
+  // NULL = every staff member. Set = only people who can reach that ClubOS tab.
+  requiredTab: text("required_tab"),
+  requiredWorkspace: text("required_workspace"),
+  ownerUserId: integer("owner_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  updatedBy: integer("updated_by").references(() => users.id, { onDelete: "set null" }),
+  viewCount: integer("view_count").notNull().default(0),
+  // When a human last confirmed the facts are still true — not the same as a
+  // typo fix moving updated_at.
+  verifiedAt: timestamp("verified_at"),
+  verifiedBy: integer("verified_by").references(() => users.id, { onDelete: "set null" }),
+  publishedAt: timestamp("published_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  brandStatusIdx: index("kb_articles_brand_status_idx").on(t.brand, t.status, t.updatedAt),
+  categoryIdx: index("kb_articles_category_idx").on(t.category),
+}));
+export type KbArticle = typeof kbArticles.$inferSelect;
+
+export const kbArticleRevisions = pgTable("kb_article_revisions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  articleId: integer("article_id").notNull().references(() => kbArticles.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  summary: text("summary"),
+  body: text("body").notNull().default(""),
+  editedBy: integer("edited_by").references(() => users.id, { onDelete: "set null" }),
+  editNote: text("edit_note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  articleIdx: index("kb_article_revisions_article_idx").on(t.articleId, t.createdAt),
+}));
+export type KbArticleRevision = typeof kbArticleRevisions.$inferSelect;
+
+export const kbChatSessions = pgTable("kb_chat_sessions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  brand: text("brand").notNull().default("all"),
+  title: text("title"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  userIdx: index("kb_chat_sessions_user_idx").on(t.userId, t.updatedAt),
+}));
+export type KbChatSession = typeof kbChatSessions.$inferSelect;
+
+export const kbChatMessages = pgTable("kb_chat_messages", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  sessionId: integer("session_id").notNull().references(() => kbChatSessions.id, { onDelete: "cascade" }),
+  role: text("role").notNull(),                        // user | assistant
+  content: text("content").notNull().default(""),
+  toolsUsed: jsonb("tools_used").notNull().default(sql`'[]'::jsonb`),
+  sources: jsonb("sources").notNull().default(sql`'[]'::jsonb`),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  sessionIdx: index("kb_chat_messages_session_idx").on(t.sessionId, t.createdAt),
+}));
+export type KbChatMessage = typeof kbChatMessages.$inferSelect;
+
+// Records refusals as well as grants — the pattern is the signal.
+export const kbAccessLog = pgTable("kb_access_log", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  userLabel: text("user_label"),
+  toolName: text("tool_name").notNull(),
+  allowed: boolean("allowed").notNull(),
+  reason: text("reason"),
+  brand: text("brand"),
+  question: text("question"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  createdIdx: index("kb_access_log_created_idx").on(t.createdAt),
+}));
+export type KbAccessLog = typeof kbAccessLog.$inferSelect;
