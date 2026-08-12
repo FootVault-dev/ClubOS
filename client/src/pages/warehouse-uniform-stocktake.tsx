@@ -289,12 +289,13 @@ export default function WarehouseUniformStocktake() {
     return m;
   }, [variants]);
 
-  const byBarcode = useMemo(() => {
-    const m = new Map<string, Variant>();
-    variants.forEach((v) => { if (v.barcode) m.set(v.barcode.trim().toUpperCase(), v); });
-    variants.forEach((v) => m.set(v.sku.trim().toUpperCase(), v));
-    return m;
-  }, [details, variants]);
+  // 🔴 Barcodes are resolved by the SERVER, not from a map built here.
+  // A local map only works if every barcode is already loaded, and the items
+  // list is capped — the first real barcode I tested (34643646363) belonged to
+  // an item outside the loaded page, so it silently read as unknown and offered
+  // to register a garment that was already in the catalogue. The server checks
+  // SKUs and every alias, and knows about pack quantities.
+  const byId = useMemo(() => new Map(variants.map((v) => [v.id, v])), [variants]);
 
   // Models plus a synthetic bucket for variants that belong to no model yet, so
   // nothing counted is ever invisible.
@@ -353,19 +354,39 @@ export default function WarehouseUniformStocktake() {
     return m ? [m.vendor, m.title || m.vendorModel].filter(Boolean).join(" ") : v.name;
   };
 
-  const handleScan = (raw: string) => {
+  const handleScan = async (raw: string) => {
     const code = raw.trim();
     if (!code) return;
     setScanValue("");
-    const hit = byBarcode.get(code.toUpperCase());
-    if (hit) {
-      const qty = (counts[hit.id] ?? 0) + 1;
-      bump(hit, 1);
-      primeAudio(); soundCounted();
-      setFlash({ kind: "show", qty: String(qty), name: modelNameFor(hit), sub: variantSub(hit) });
-      if (hit.modelId) setExpanded((e) => new Set(e).add(hit.modelId!));
+    let resolved: any = null;
+    try {
+      resolved = await (await apiRequest("POST", "/api/admin/warehouse/scan", { code })).json();
+    } catch {
+      // A dropped connection must not look like an unknown barcode — offering to
+      // register a garment that already exists is how you get duplicate SKUs.
+      soundError();
+      toast({ title: "Couldn't reach the catalogue", description: "Scan again in a moment.", variant: "destructive" });
       return;
     }
+
+    if (resolved?.kind === "item" && resolved.item?.id) {
+      const id = Number(resolved.item.id);
+      // packQty: a case barcode counts as the whole case (server's own number).
+      const step = Number(resolved.packQty) > 0 ? Number(resolved.packQty) : 1;
+      const known = byId.get(id);
+      const qty = (counts[id] ?? 0) + step;
+      setCounts((prev) => ({ ...prev, [id]: Math.max(0, (prev[id] ?? 0) + step) }));
+      primeAudio(); soundCounted();
+      setFlash({
+        kind: "show",
+        qty: String(qty),
+        name: known ? modelNameFor(known) : (resolved.item.name ?? resolved.item.sku),
+        sub: known ? variantSub(known) : (resolved.item.sku ?? ""),
+      });
+      if (known?.modelId) setExpanded((e) => new Set(e).add(known.modelId!));
+      return;
+    }
+
     // Unknown → his "New variant (barcode not found)" sheet, pre-filled.
     primeAudio(); soundUnknown();
     setVariantModal({ mode: "new", barcode: code, lockModelId: null });
