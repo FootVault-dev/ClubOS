@@ -249,13 +249,19 @@ export default function KnowledgeBase() {
               </button>
             </div>
           ) : (
+            /* 🔴 Each card carries min-w-0. A grid item defaults to
+               min-width:auto, and `truncate` sets white-space:nowrap, so the
+               card's min-content width is the FULL untruncated title and the
+               track grows to fit it — 8px of page overflow at 390px. Truncation
+               can only shrink a box that is allowed to shrink. */
             <div className="grid gap-2 sm:grid-cols-2">
               {articles.map((a) => (
                 <button
                   key={a.id}
                   onClick={() => setOpenId(a.id)}
                   data-testid={`article-${a.id}`}
-                  className="text-left rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 hover:bg-white/[0.04] hover:border-white/[0.12] transition-colors group"
+                  /* min-w-0 is load-bearing — see the note above the grid. */
+                  className="text-left rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 hover:bg-white/[0.04] hover:border-white/[0.12] transition-colors group min-w-0"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -282,14 +288,14 @@ export default function KnowledgeBase() {
                     </div>
                     <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/50 shrink-0 mt-0.5" />
                   </div>
-                  <div className="flex items-center gap-3 mt-3 text-[11px] text-white/25">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3 text-[11px] text-white/25">
                     {a.verifiedAt && (
-                      <span className="inline-flex items-center gap-1 text-emerald-400/60">
+                      <span className="inline-flex items-center gap-1 text-emerald-400/60 whitespace-nowrap">
                         <ShieldCheck className="w-3 h-3" /> Verified {new Date(a.verifiedAt).toLocaleDateString("en-NZ")}
                       </span>
                     )}
                     <span className="inline-flex items-center gap-1"><Eye className="w-3 h-3" /> {a.viewCount}</span>
-                    {a.ownerName && <span className="truncate">Kept by {a.ownerName}</span>}
+                    {a.ownerName && <span className="truncate min-w-0">Kept by {a.ownerName}</span>}
                   </div>
                 </button>
               ))}
@@ -424,9 +430,12 @@ function RamboPanel({
         <button
           onClick={() => setShowScopes(!showScopes)}
           data-testid="button-rambo-scopes"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-white/45 hover:text-white/80 transition-colors"
+          className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap rounded-lg border border-white/[0.08] bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-white/45 hover:text-white/80 transition-colors"
         >
-          <Shield className="w-3 h-3" /> What can Rambo see?
+          <Shield className="w-3 h-3 shrink-0" />
+          {/* The full question wraps to two lines at 390px and looks broken. */}
+          <span className="hidden sm:inline">What can Rambo see?</span>
+          <span className="sm:hidden">Access</span>
         </button>
       </div>
 
