@@ -23,6 +23,159 @@ function formatDate(d: string | null | undefined): string {
   return new Date(d + "T00:00:00").toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
 }
 
+// ── Programme & payment history ──────────────────────────────────────────────
+// The accounts view: what a person signed up for, and what was actually paid.
+// See server/person-history.ts for the money rules — most importantly that a
+// missing payment is NEVER rendered as "unpaid", because payments and term
+// registrations only agree 58% of the time and the club would be accusing
+// families who did pay.
+
+const SOURCE_LABEL: Record<string, string> = {
+  friendly_manager: "Friendly Manager",
+  clubos: "ClubOS",
+  camp: "Holiday camp",
+};
+
+function StatPill({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-xl bg-white/[0.03] border border-blue-500/[0.08] px-3 py-2.5">
+      <div className="text-[10px] uppercase tracking-wider text-white/30">{label}</div>
+      <div className="text-[15px] font-semibold text-white/90 mt-0.5">{value}</div>
+      {hint && <div className="text-[10px] text-white/25 mt-0.5">{hint}</div>}
+    </div>
+  );
+}
+
+function HistorySummary({ totals, household }: { totals: any; household?: any }) {
+  const t = household || totals;
+  if (!t) return null;
+  const span = t.firstActivity && t.lastActivity && t.firstActivity !== t.lastActivity
+    ? `${t.firstActivity.slice(0, 4)}–${t.lastActivity.slice(0, 4)}`
+    : t.firstActivity?.slice(0, 4) || "—";
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+      <StatPill
+        label={household ? "Household paid" : "Total paid"}
+        value={formatCurrency(t.paidCents, { fromCents: true })}
+        hint={t.refundedCents > 0 ? `${formatCurrency(t.refundedCents, { fromCents: true })} refunded` : undefined}
+      />
+      <StatPill label="Terms" value={String(t.termCount)} hint={`${t.programmeCount} sign-ups`} />
+      <StatPill label="Payments" value={String(t.paymentCount)} />
+      <StatPill label="Active" value={span} />
+    </div>
+  );
+}
+
+function ProgrammeRow({ e }: { e: any }) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2.5 border-b border-blue-500/[0.04] last:border-0">
+      <div className="min-w-0">
+        <div className="text-[13px] text-white/85 truncate">{e.programme}</div>
+        <div className="text-[11px] text-white/35 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          {e.termLabel && <span>{e.termLabel}</span>}
+          {!e.termLabel && e.registeredAt && <span>{formatDate(e.registeredAt)}</span>}
+          <span className="text-white/20">{SOURCE_LABEL[e.source] || e.source}</span>
+          {e.status && <span className="text-white/40 capitalize">{e.status.replace(/_/g, " ")}</span>}
+        </div>
+        {e.sharedBooking && (
+          // Never split across siblings — there is no per-child price to split by.
+          <div className="text-[10.5px] text-amber-300/50 mt-1">
+            Part of one booking covering {e.sharedBooking.childCount} children
+            {e.sharedBooking.totalCents !== null
+              ? ` — ${formatCurrency(e.sharedBooking.totalCents, { fromCents: true })} total`
+              : ""}
+          </div>
+        )}
+      </div>
+      <div className="text-right flex-shrink-0">
+        {e.chargedCents !== null && !e.sharedBooking && (
+          <div className="text-[13px] text-white/70">{formatCurrency(e.chargedCents, { fromCents: true })}</div>
+        )}
+        {e.matchedPaymentCents !== null && e.matchedPaymentCents > 0 && (
+          <div className="text-[10.5px] text-emerald-400/60">
+            {formatCurrency(e.matchedPaymentCents, { fromCents: true })} paid this term
+          </div>
+        )}
+        {e.refundedCents > 0 && (
+          <div className="text-[10.5px] text-rose-300/60">
+            −{formatCurrency(e.refundedCents, { fromCents: true })} refunded
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PaymentRow({ e }: { e: any }) {
+  const refund = e.amountCents < 0;
+  return (
+    <div className="flex items-center justify-between gap-3 py-2.5 border-b border-blue-500/[0.04] last:border-0">
+      <div className="min-w-0">
+        <div className="text-[13px] text-white/85 truncate">{e.description || e.termLabel || "Payment"}</div>
+        <div className="text-[11px] text-white/35 mt-0.5 flex flex-wrap items-center gap-x-2">
+          <span>{e.paidOn ? formatDate(e.paidOn) : "Date not recorded"}</span>
+          {e.method && <span className="text-white/25 capitalize">{e.method.replace(/_/g, " ")}</span>}
+        </div>
+      </div>
+      <div className={`text-[13px] font-medium flex-shrink-0 ${refund ? "text-rose-300/80" : "text-emerald-400/80"}`}>
+        {refund ? "−" : ""}{formatCurrency(Math.abs(e.amountCents), { fromCents: true })}
+      </div>
+    </div>
+  );
+}
+
+function HistorySection({ history, household, title, emptyNote }: {
+  history: any; household?: any; title: string; emptyNote: string;
+}) {
+  const [tab, setTab] = useState<"programmes" | "payments">("programmes");
+  const programmes: any[] = history?.programmes || [];
+  const payments: any[] = history?.payments || [];
+  const hasAny = programmes.length > 0 || payments.length > 0 || (household?.paidCents ?? 0) > 0;
+
+  return (
+    <Card title={title}>
+      {!hasAny ? (
+        <p className="text-white/30 text-[13px] py-3">{emptyNote}</p>
+      ) : (
+        <>
+          <HistorySummary totals={history?.totals} household={household} />
+          <div className="flex gap-1.5 mb-1">
+            {(["programmes", "payments"] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                data-testid={`tab-history-${t}`}
+                className={`px-3 py-1.5 rounded-lg text-[12px] transition-colors ${
+                  tab === t
+                    ? "bg-blue-500/15 text-white/90 border border-blue-500/20"
+                    : "bg-white/[0.03] text-white/40 border border-transparent hover:text-white/70"
+                }`}
+              >
+                {t === "programmes" ? `Programmes (${programmes.length})` : `Payments (${payments.length})`}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2">
+            {tab === "programmes" ? (
+              programmes.length
+                ? programmes.map(e => <ProgrammeRow key={e.key} e={e} />)
+                : <p className="text-white/30 text-[13px] py-3">No programmes recorded.</p>
+            ) : payments.length
+                ? payments.map(e => <PaymentRow key={e.key} e={e} />)
+                : <p className="text-white/30 text-[13px] py-3">No payments recorded against this person.</p>}
+          </div>
+          {tab === "payments" && payments.length > 0 && (
+            <p className="text-[10.5px] text-white/25 mt-3 leading-relaxed">
+              Every payment on file, from Friendly Manager and ClubOS. A programme with no payment
+              beside it means none is recorded against that term — not that it went unpaid.
+            </p>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
 function DetailRow({ label, value, icon: Icon }: { label: string; value: string | null | undefined; icon?: any }) {
   return (
     <div className="flex items-start gap-3 py-2.5 border-b border-blue-500/[0.04]">
@@ -177,6 +330,16 @@ function LinkDialog({ personKey, mode, onClose }: { personKey: string; mode: "gu
 }
 
 // ── Child row ────────────────────────────────────────────────────────────────
+/** The distinct programmes a child appears under, newest first, capped. */
+function historyBadges(history: any): string[] {
+  const seen: string[] = [];
+  for (const p of history?.programmes || []) {
+    if (p.programme && !seen.includes(p.programme)) seen.push(p.programme);
+    if (seen.length >= 3) break;
+  }
+  return seen;
+}
+
 function ChildRow({ child, today, onOpen }: { child: any; today: string; onOpen: (key: string) => void }) {
   const age = ageFromDob(child.dateOfBirth, today);
   const hasMedical = child.allergies || child.medicalNotes || child.epiPen;
@@ -206,13 +369,34 @@ function ChildRow({ child, today, onOpen }: { child: any; today: string; onOpen:
               Pooled across every record the child has, so a camp booking and a
               term enrolment appear on the same line. */}
           <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {child.registrations.length === 0 && (
-              <span className="text-[11px] text-white/25">No programmes</span>
-            )}
             {child.registrations.map((r: any) => (
               <ProgrammeBadge key={r.id} name={r.programName} status={r.status} />
             ))}
+            {/* A child with no LIVE registration usually still has years of
+                Friendly Manager history. Reading only `registrations` is what
+                printed "No programmes" under a child with two terms and a $160
+                card payment on file. */}
+            {child.registrations.length === 0 && historyBadges(child.history).map((label: string) => (
+              <span
+                key={label}
+                className="text-[10.5px] px-2 py-0.5 rounded-md bg-white/[0.05] border border-blue-500/[0.08] text-white/50"
+              >
+                {label}
+              </span>
+            ))}
+            {child.registrations.length === 0 && !child.history?.programmes?.length && (
+              <span className="text-[11px] text-white/25">No programmes</span>
+            )}
           </div>
+
+          {(child.history?.totals?.termCount > 0 || child.history?.totals?.paidCents > 0) && (
+            <p className="text-[11px] text-white/35 mt-1.5">
+              {child.history.totals.termCount > 0 && `${child.history.totals.termCount} term${child.history.totals.termCount === 1 ? "" : "s"}`}
+              {child.history.totals.termCount > 0 && child.history.totals.paidCents > 0 && " · "}
+              {child.history.totals.paidCents > 0 && `${formatCurrency(child.history.totals.paidCents, { fromCents: true })} paid`}
+              {child.history.totals.firstActivity && ` · since ${child.history.totals.firstActivity.slice(0, 4)}`}
+            </p>
+          )}
 
           {extra > 0 && (
             <p className="text-[11px] text-white/30 mt-1.5 flex items-center gap-1.5">
@@ -350,6 +534,21 @@ export default function AdminPersonDetail() {
           </div>
         </div>
       )}
+
+      {/* ── Programme & payment history ──────────────────────────────────────
+          On a player: everything they signed up for and everything paid against
+          them. On a parent: their own record, with the household roll-up in the
+          summary strip — each shared booking counted once. */}
+      <HistorySection
+        title={isPlayer ? "Programme & payment history" : "Household programme & payment history"}
+        history={data.history}
+        household={isPlayer ? undefined : data.household}
+        emptyNote={
+          isPlayer
+            ? "Nothing on file yet — no programmes and no payments recorded against this player."
+            : "Nothing on file yet for this parent or their children."
+        }
+      />
 
       {/* ── Children ─────────────────────────────────────────────────────────
           Always rendered for a parent, even when empty. A card that simply

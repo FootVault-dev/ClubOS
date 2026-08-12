@@ -39,7 +39,9 @@ import {
   personKey, parsePersonKey, mergeChildRecords, relationshipLabel,
   type PersonKey, type PersonKind, type LinkSource,
   type FamilyChild, type FamilyGuardian, type RegistrationSummary,
+  type PersonHistory, type HistoryTotals, emptyHistoryTotals,
 } from "@shared/family";
+import { resolvePeopleHistory, householdTotals, totalsFor } from "./person-history";
 
 const s = (v: any, max = 300): string => String(v ?? "").trim().slice(0, max);
 
@@ -192,6 +194,13 @@ export type Family = {
   guardians: FamilyGuardian[];
   children: FamilyChild[];
   registrations: RegistrationSummary[];
+  /** Everything this person signed up for and paid — see server/person-history.ts. */
+  history: PersonHistory;
+  /**
+   * Present on a parent: their own record plus every child, each shared booking
+   * counted once. Null on a player, who is not a household.
+   */
+  household: (HistoryTotals & { childCount: number; sharedBookingCount: number }) | null;
   today: string;
 };
 
@@ -225,11 +234,16 @@ export async function resolveFamily(kind: PersonKind, id: number): Promise<Famil
         relationship: "Parent", sources: ["camp_parent"],
       });
     }
-    const regMap = await regsByChildId([id]);
+    const [regMap, hist] = await Promise.all([
+      regsByChildId([id]),
+      resolvePeopleHistory([], [id]),
+    ]);
     return {
       person: { ...person, age: null },
       guardians, children,
       registrations: regMap.get(id) || [],
+      history: hist.byChild.get(id) || blankPersonHistory(),
+      household: null,
       today,
     };
   }
@@ -307,12 +321,52 @@ export async function resolveFamily(kind: PersonKind, id: number): Promise<Famil
   const mergedChildren = mergeChildRecords(children);
   mergedChildren.sort((a, b) => (a.dateOfBirth || "9999").localeCompare(b.dateOfBirth || "9999"));
 
+  // History for this person and every child, in ONE batched pass — a parent of
+  // six resolving a query each is what exhausted the pool before.
+  const hist = await resolvePeopleHistory([...childContactIds, id], campChildIds);
+  const ownHistory = hist.byContact.get(id) || blankPersonHistory();
+
+  // A merged child card pools history across every record it stands for, the
+  // same way its registrations are pooled — otherwise a child who did a camp as
+  // a `children` row and the academy as a `contacts` row shows only half.
+  for (const c of mergedChildren) {
+    const parts: PersonHistory[] = [];
+    for (const rec of c.records || [{ kind: c.kind, id: c.id } as any]) {
+      const h = rec.kind === "contact" ? hist.byContact.get(rec.id) : hist.byChild.get(rec.id);
+      if (h) parts.push(h);
+    }
+    c.history = mergeHistories(parts);
+  }
+
   return {
     person: { ...person, age: null },
     guardians, children: mergedChildren,
     registrations: byContact.get(id) || [],
+    history: ownHistory,
+    household: householdTotals(
+      ownHistory,
+      mergedChildren.map(c => c.history).filter(Boolean) as PersonHistory[],
+    ),
     today,
   };
+}
+
+function blankPersonHistory(): PersonHistory {
+  return { programmes: [], payments: [], totals: emptyHistoryTotals() };
+}
+
+/** Pool several records' history into one, de-duplicated by entry key. */
+function mergeHistories(parts: PersonHistory[]): PersonHistory {
+  if (parts.length === 1) return parts[0];
+  const programmes = new Map<string, any>();
+  const payments = new Map<string, any>();
+  for (const p of parts) {
+    for (const x of p.programmes) programmes.set(x.key, x);
+    for (const x of p.payments) payments.set(x.key, x);
+  }
+  const prog = Array.from(programmes.values());
+  const pay = Array.from(payments.values());
+  return { programmes: prog, payments: pay, totals: totalsFor(prog, pay) };
 }
 
 // ── Search across BOTH people tables ─────────────────────────────────────────

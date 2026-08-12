@@ -104,6 +104,90 @@ export type ChildRecord = {
   registrationCount: number;
 };
 
+// ── Programme & payment history ──────────────────────────────────────────────
+// Built 2026-08-12 so the office, the accounts team and any future loyalty
+// scheme can see everything a person has ever signed up for and everything
+// they have actually paid — across Friendly Manager (10 years) and ClubOS.
+
+export type HistorySource = "friendly_manager" | "clubos" | "camp";
+
+/** One thing a person signed up for: an FM term, a ClubOS term, a camp. */
+export type ProgrammeEntry = {
+  key: string;
+  source: HistorySource;
+  programme: string;
+  /** FM's long fee wording, or a ClubOS option label. Null when there isn't one. */
+  detail: string | null;
+  termLabel: string | null;
+  seasonYear: number | null;
+  /** ClubOS registration status. Null for FM rows, which record no status. */
+  status: string | null;
+  /** What was charged. Null when the source never recorded an amount. */
+  chargedCents: number | null;
+  refundedCents: number;
+  registeredAt: string | null;
+  /**
+   * Set when this row is one child on a booking that covered several children.
+   * 🔴 The basket is NEVER split across them: registration_items.price_cents is
+   * null on 779 of 834 lines, so there is no per-child price to split by, and a
+   * child on a half day did not pay the same as a sibling on a full day. The
+   * amount belongs to the booking, and the household counts it once.
+   */
+  sharedBooking: { registrationId: number; childCount: number; totalCents: number | null } | null;
+  /**
+   * Payments whose term matches this row's term, for this same person. Shown as
+   * supporting evidence ONLY. 🔴 Their absence is NOT evidence of non-payment —
+   * only 5,969 of 10,294 FM term registrations have a term-name match and 5,612
+   * payments match no registration at all, so an "unpaid" badge built on this
+   * would libel more than half the families who did pay.
+   */
+  matchedPaymentCents: number | null;
+};
+
+/** One payment actually recorded. Negative amounts are refunds. */
+export type PaymentEntry = {
+  key: string;
+  source: HistorySource;
+  paidOn: string | null;
+  amountCents: number;
+  method: string | null;
+  description: string | null;
+  termLabel: string | null;
+};
+
+export type HistoryTotals = {
+  programmeCount: number;
+  /** Distinct terms enrolled — the number a loyalty tier would key on. */
+  termCount: number;
+  seasons: number[];
+  paymentCount: number;
+  /** Sum of real payment rows, net of refunds. Never inferred from a status. */
+  paidCents: number;
+  refundedCents: number;
+  firstActivity: string | null;
+  lastActivity: string | null;
+};
+
+export type PersonHistory = {
+  programmes: ProgrammeEntry[];
+  payments: PaymentEntry[];
+  totals: HistoryTotals;
+};
+
+/** A parent's roll-up: their own record plus every child, counted once each. */
+export type HouseholdTotals = HistoryTotals & {
+  childCount: number;
+  /** Bookings that covered more than one child, counted once in paidCents. */
+  sharedBookingCount: number;
+};
+
+export function emptyHistoryTotals(): HistoryTotals {
+  return {
+    programmeCount: 0, termCount: 0, seasons: [], paymentCount: 0,
+    paidCents: 0, refundedCents: 0, firstActivity: null, lastActivity: null,
+  };
+}
+
 export type FamilyChild = {
   key: PersonKey;          // the record to open when the card is tapped
   kind: PersonKind;
@@ -126,6 +210,9 @@ export type FamilyChild = {
   // That is normal and expected, NOT a data-entry mistake, and is worded
   // differently in the UI from a genuine duplicate.
   crossShape?: boolean;
+  // Everything this child ever signed up for and paid, pooled across their
+  // records the same way `registrations` is.
+  history?: PersonHistory;
 };
 
 export type FamilyGuardian = {
