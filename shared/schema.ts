@@ -3435,6 +3435,42 @@ export const insertPrintQuoteItemSchema = createInsertSchema(printQuoteItems).om
 export type InsertPrintQuoteItem = z.infer<typeof insertPrintQuoteItemSchema>;
 export type PrintQuoteItem = typeof printQuoteItems.$inferSelect;
 
+// ── Site FAQs ───────────────────────────────────────────────────────────────
+// The questions and answers on a brand's website AND in its live-chat widget.
+// Both used to be hardcoded in the website repo — two separate lists, in two
+// files, so fixing a typo or answering a new question meant a code edit and a
+// deploy. Dima edits them here instead.
+//
+// Brand-keyed rather than print-only: the live-chat widget is already
+// brand-agnostic and CIC/MFL/CUGC can adopt this with no schema change. The tab
+// is org-scoped, so each workspace only ever edits its own.
+export const siteFaqs = pgTable("site_faqs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // Matches the CHAT_BRANDS key ("unitedprints", "cicyouth", …) so the widget
+  // and the website can ask for the same list.
+  brandKey: text("brand_key").notNull(),
+
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+
+  // The two surfaces are separate switches on purpose: the website answers run
+  // long and detailed, the chat answers need to be short. An FAQ can be on
+  // one, both, or neither while it's being drafted.
+  showOnWebsite: boolean("show_on_website").notNull().default(true),
+  showInChat: boolean("show_in_chat").notNull().default(true),
+
+  isActive: boolean("is_active").notNull().default(true),
+  displayOrder: integer("display_order").notNull().default(0),
+
+  updatedByUserId: integer("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertSiteFaqSchema = createInsertSchema(siteFaqs).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertSiteFaq = z.infer<typeof insertSiteFaqSchema>;
+export type SiteFaq = typeof siteFaqs.$inferSelect;
+
 // ── Internal print requests ─────────────────────────────────────────────────
 // Staff across the club ask the print shop for something — a banner for a
 // fixture, names and numbers on a kit, stickers for a tournament — and Dima

@@ -167,6 +167,12 @@ app.use(attributionCookieMiddleware);
   const { registerPrintRequestRoutes } = await import("./print-request-routes");
   registerPrintRequestRoutes(app);
 
+  // Site FAQs — the questions on a brand's website and in its live-chat widget,
+  // edited in ClubOS instead of the website's source. Public read is CORS-allow-
+  // listed to the brand sites; editing is gated by requireTab("faqs").
+  const { registerFaqRoutes } = await import("./faq-routes");
+  registerFaqRoutes(app);
+
   // USG Invoices — tracked, payable invoices (org 7, super-admin only). Admin
   // side is gated by requireTab("invoices"); public endpoints are CORS-allow-
   // listed to usg-invoices.vercel.app and carry no session.

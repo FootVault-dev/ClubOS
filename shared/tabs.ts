@@ -260,6 +260,9 @@ const printsTabs: TabDef[] = [
   // separately on the workspace role, not on the tab.
   { slug: "requests", title: "Requests", url: "/admin/print-requests" },
   { slug: "quotes", title: "Quotes", url: "/admin/print-quotes" },
+  // The FAQs on unitedprints.co.nz + inside the live-chat widget. Not
+  // super-admin-locked — Dima owns this content.
+  { slug: "faqs", title: "FAQs", url: "/admin/print-faqs" },
   { slug: "orders", title: "Orders", url: "/admin/print-orders" },
   { slug: "materials", title: "Materials", url: "/admin/print-materials" },
   { slug: "crm", title: "CRM", url: "/admin/print-crm" },

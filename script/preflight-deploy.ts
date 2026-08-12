@@ -56,6 +56,8 @@ const CANARIES: Canary[] = [
   // have this one tab in United Prints — if the route vanishes, their whole
   // reason for being in that workspace vanishes with it.
   { feature: "UP print requests",   path: "/api/admin/print-requests",              expect: [401] },
+  // unitedprints.co.nz and its chat widget read their FAQ list from here.
+  { feature: "site FAQs",           path: "/api/public/faqs/unitedprints",          expect: [200] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -81,6 +83,7 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/cugc/mailer/contacts":      { file: "server/routes.ts",              needle: "/api/admin/cugc/mailer/contacts" },
   "/api/public/unitedprints/quote-materials": { file: "server/print-quote-routes.ts", needle: "quote-materials" },
   "/api/admin/print-requests":            { file: "server/print-request-routes.ts", needle: "/api/admin/print-requests" },
+  "/api/public/faqs/unitedprints":        { file: "server/faq-routes.ts",           needle: "/api/public/faqs/" },
 };
 
 import { readFileSync, existsSync } from "fs";
