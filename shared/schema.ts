@@ -3435,6 +3435,72 @@ export const insertPrintQuoteItemSchema = createInsertSchema(printQuoteItems).om
 export type InsertPrintQuoteItem = z.infer<typeof insertPrintQuoteItemSchema>;
 export type PrintQuoteItem = typeof printQuoteItems.$inferSelect;
 
+// ── Internal print requests ─────────────────────────────────────────────────
+// Staff across the club ask the print shop for something — a banner for a
+// fixture, names and numbers on a kit, stickers for a tournament — and Dima
+// approves or declines it. Until now this happened by WhatsApp and someone
+// hand-typed the result into print_orders (three such rows exist, with no order
+// number, one of them literally titled "…from Travis").
+//
+// A request is NOT a print_orders row. It is a question awaiting an answer; an
+// order is work the shop has committed to. Approving turns one into the other,
+// exactly as approving a website quote does, and keeps the link.
+//
+// Status is app-validated text, not a pgEnum — same reasoning as print_quotes,
+// hiring, vehicles and housing: a stale enum in prod is how the MFL checkout
+// 500'd.
+export const printRequests = pgTable("print_requests", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // 🔴 RESTRICT: who asked for a print job is part of its history. Deleting a
+  // staff account must never quietly erase who ordered $400 of signage.
+  requesterUserId: integer("requester_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+
+  status: text("status").notNull().default("new"), // new | approved | declined
+
+  // banner | corflute | signage | garment | sticker_decal | poster | other
+  requestType: text("request_type").notNull(),
+  title: text("title").notNull(),
+  // Which brand/team it's for — CUFC, SIU, MFL, CIC, CUGC, USC, USG.
+  forBrand: text("for_brand"),
+
+  quantity: integer("quantity").notNull().default(1),
+
+  // Nullable on purpose: a shirt has no width and height, and a zero would
+  // read as a real measurement.
+  widthMm: integer("width_mm"),
+  heightMm: integer("height_mm"),
+  sizeNote: text("size_note"),
+
+  // Garment work: [{ size, qty, name, number }] — the club's most common ask
+  // ("name and number for Anderson #22") needs per-shirt detail, and a single
+  // quantity box loses it.
+  garmentDetailsJson: jsonb("garment_details_json").notNull().default(sql`'[]'::jsonb`),
+  printLocation: text("print_location"), // front / back / sleeve / chest
+
+  details: text("details"),
+  // A LINK, not an upload. There is no file transport on this path yet, and a
+  // filename alone is worthless to whoever has to print it.
+  artworkUrl: text("artwork_url"),
+  artworkNote: text("artwork_note"),
+
+  neededBy: date("needed_by"),
+  urgency: text("urgency").notNull().default("standard"), // standard | urgent
+
+  decidedByUserId: integer("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  decidedAt: timestamp("decided_at"),
+  declineReason: text("decline_reason"),
+  // Set when approved — the job this became.
+  printOrderId: integer("print_order_id").references(() => printOrders.id, { onDelete: "set null" }),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertPrintRequestSchema = createInsertSchema(printRequests).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPrintRequest = z.infer<typeof insertPrintRequestSchema>;
+export type PrintRequest = typeof printRequests.$inferSelect;
+
 export const printProjectStatusEnum = pgEnum("print_project_status", ["planning", "active", "on_hold", "completed", "archived"]);
 
 export const printProjects = pgTable("print_projects", {

@@ -52,6 +52,10 @@ const CANARIES: Canary[] = [
   // honest failure state ("email us your job") looks like a working page —
   // nobody would notice for days.
   { feature: "UP quote materials",  path: "/api/public/unitedprints/quote-materials", expect: [200] },
+  // Internal print requests. Travis and (later) the rest of the staff only
+  // have this one tab in United Prints — if the route vanishes, their whole
+  // reason for being in that workspace vanishes with it.
+  { feature: "UP print requests",   path: "/api/admin/print-requests",              expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -76,6 +80,7 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/t.js":                                { file: "server/routes.ts",              needle: '"/t.js"' },
   "/api/admin/cugc/mailer/contacts":      { file: "server/routes.ts",              needle: "/api/admin/cugc/mailer/contacts" },
   "/api/public/unitedprints/quote-materials": { file: "server/print-quote-routes.ts", needle: "quote-materials" },
+  "/api/admin/print-requests":            { file: "server/print-request-routes.ts", needle: "/api/admin/print-requests" },
 };
 
 import { readFileSync, existsSync } from "fs";

@@ -19655,7 +19655,21 @@ export async function registerRoutes(
 
   app.post("/api/admin/print-orders", requireAuth, async (req, res) => {
     try {
-      const order = await storage.createPrintOrder({ ...req.body, createdBy: req.session.userId! });
+      // Assign an order number when the caller hasn't got one. Staff-created
+      // jobs went in without one, which is why three real CUFC jobs sit on the
+      // board with a blank reference and nothing to quote down the phone.
+      // Same scheme as every other path — never invent one that could collide,
+      // and never overwrite a number that already exists.
+      const body = { ...req.body };
+      const orgId = Number(body.organizationId) || 8;
+      if (!body.orderNumber) {
+        const existing = await storage.getPrintOrdersByOrg(orgId);
+        body.orderNumber = `UP-${new Date().getFullYear()}-${String(existing.length + 1).padStart(4, "0")}`;
+      }
+      if (!body.magicLinkToken) {
+        body.magicLinkToken = crypto.randomBytes(24).toString("hex");
+      }
+      const order = await storage.createPrintOrder({ ...body, createdBy: req.session.userId! });
       res.json(order);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

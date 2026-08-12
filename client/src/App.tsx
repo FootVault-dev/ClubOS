@@ -116,6 +116,7 @@ import CicLiveChat from "@/pages/cic-livechat";
 import MflLiveChat from "@/pages/mfl-livechat";
 import CugcLiveChat from "@/pages/cugc-livechat";
 import PrintLiveChat from "@/pages/print-livechat";
+import PrintsRequests from "@/pages/prints-requests";
 import CicLogoConsents from "@/pages/cic-logo-consents";
 import MediaLibrary from "@/pages/media-library";
 import CicMailer from "@/pages/cic-mailer";
@@ -282,6 +283,9 @@ function AdminRouter() {
         <Route path="/admin" component={PrintsDashboard} />
         <Route path="/admin/print-management" component={PrintsManagement} />
         <Route path="/admin/print-jobs" component={PrintsJobs} />
+        {/* Internal print requests. In the isPrints Switch, deliberately — a
+            tabs.ts entry alone 404s, which is exactly what Live Chat did. */}
+        <Route path="/admin/print-requests" component={PrintsRequests} />
         <Route path="/admin/print-quotes" component={PrintsQuotes} />
         <Route path="/admin/print-orders/:id" component={PrintsOrderDetail} />
         <Route path="/admin/print-orders" component={PrintsOrders} />

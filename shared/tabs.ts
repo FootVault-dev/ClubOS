@@ -254,6 +254,11 @@ const printsTabs: TabDef[] = [
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "behavior", title: "Behavior", url: "/admin/behavior" },
   { slug: "jobs", title: "Jobs", url: "/admin/print-jobs" },
+  // Internal print requests from club staff → Dima approves into a job.
+  // Deliberately NOT super-admin-locked: the point is that other staff (Travis
+  // first) get this tab and nothing else in the workspace. Approving is gated
+  // separately on the workspace role, not on the tab.
+  { slug: "requests", title: "Requests", url: "/admin/print-requests" },
   { slug: "quotes", title: "Quotes", url: "/admin/print-quotes" },
   { slug: "orders", title: "Orders", url: "/admin/print-orders" },
   { slug: "materials", title: "Materials", url: "/admin/print-materials" },

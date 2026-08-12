@@ -160,6 +160,13 @@ app.use(attributionCookieMiddleware);
   const { registerPrintQuoteRoutes } = await import("./print-quote-routes");
   registerPrintQuoteRoutes(app);
 
+  // Internal print requests — club staff ask the print shop for something,
+  // Dima approves it into a job or declines it. Gated by requireTab("requests");
+  // approving/declining is separately gated on the workspace role, because the
+  // tab whitelist can't tell a submitter from an approver.
+  const { registerPrintRequestRoutes } = await import("./print-request-routes");
+  registerPrintRequestRoutes(app);
+
   // USG Invoices — tracked, payable invoices (org 7, super-admin only). Admin
   // side is gated by requireTab("invoices"); public endpoints are CORS-allow-
   // listed to usg-invoices.vercel.app and carry no session.

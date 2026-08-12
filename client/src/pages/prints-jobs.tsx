@@ -2,10 +2,13 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, workspaceFetch } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Filter, Clock, AlertCircle } from "lucide-react";
+import { Search, Filter, Clock, AlertCircle, Plus, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { MoneyInput } from "@/components/ui/money-input";
+import { dollarInputToCents } from "@/lib/format";
 import type { PrintOrder } from "@shared/schema";
 
 // Six Kanban columns matching the canonical print MIS workflow stages.
@@ -44,6 +47,127 @@ function daysOverdue(order: PrintOrder): number {
   return Math.floor((Date.now() - due) / (1000 * 60 * 60 * 24));
 }
 
+// A job that walked in the door, rang up, or came off a request — anything that
+// didn't arrive through the website. Dima types the little he knows and moves it
+// along the board like any other.
+function AddJobModal({ open, onClose, orgId }: { open: boolean; onClose: () => void; orgId?: number }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    title: "", customerName: "", customerEmail: "", customerPhone: "",
+    description: "", amount: "", dueDate: "", status: "in_design", notes: "",
+  });
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const cents = dollarInputToCents(form.amount);
+      const res = await apiRequest("POST", "/api/admin/print-orders", {
+        organizationId: orgId,
+        title: form.title.trim(),
+        // Internal club work usually has no "customer" — default it rather than
+        // forcing Dima to invent one.
+        customerName: form.customerName.trim() || "Walk-in",
+        customerEmail: form.customerEmail.trim() || null,
+        customerPhone: form.customerPhone.trim() || null,
+        description: form.description.trim() || null,
+        status: form.status,
+        // Money in dollars in the UI, cents on the wire. `amount` is the legacy
+        // decimal column the list view reads; the cents columns are what the
+        // board totals from — set both or the card shows $0.00 next to a price.
+        amount: cents ? (cents / 100).toFixed(2) : "0.00",
+        subtotalCents: cents,
+        gstCents: Math.round(cents * 0.15),
+        totalCents: cents + Math.round(cents * 0.15),
+        paidCents: 0,
+        deliveryMethod: "pickup",
+        dueDate: form.dueDate || null,
+        notes: form.notes.trim() || null,
+      });
+      return res.json();
+    },
+    onSuccess: (order: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/print-orders"] });
+      toast({ title: order?.orderNumber ? `Job ${order.orderNumber} added` : "Job added" });
+      onClose();
+    },
+    onError: (e: Error) => toast({ title: "Couldn't add the job", description: e.message, variant: "destructive" }),
+  });
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-lg rounded-2xl border border-white/10 bg-[#02060E] p-6 max-h-[90vh] overflow-auto">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-lg font-semibold text-white">Add a job</h3>
+          <button onClick={onClose} className="text-white/40 hover:text-white" aria-label="Close"><X className="w-4 h-4" /></button>
+        </div>
+        <p className="text-xs text-white/40 mb-4">For work that didn't come through the website — a walk-in, a phone order, or something you've agreed off the books.</p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-white/40">What is it</label>
+            <Input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
+              placeholder="e.g. 3m fence banner for Saturday" className="bg-white/[0.02] border-white/10 text-white" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Customer</label>
+              <Input value={form.customerName} onChange={e => setForm({ ...form, customerName: e.target.value })}
+                placeholder="Walk-in" className="bg-white/[0.02] border-white/10 text-white" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Starts in</label>
+              <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}
+                className="w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm">
+                {COLUMNS.map(c => <option key={c.id} value={STATUS_TARGET_BY_COL[c.id]} className="bg-[#02060E]">{c.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Email</label>
+              <Input value={form.customerEmail} onChange={e => setForm({ ...form, customerEmail: e.target.value })}
+                placeholder="optional" className="bg-white/[0.02] border-white/10 text-white" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Phone</label>
+              <Input value={form.customerPhone} onChange={e => setForm({ ...form, customerPhone: e.target.value })}
+                placeholder="optional" className="bg-white/[0.02] border-white/10 text-white" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Price (ex GST)</label>
+              <MoneyInput value={form.amount} onChange={v => setForm({ ...form, amount: v })}
+                className="bg-white/[0.02] border-white/10 text-white" />
+              <div className="text-[10px] text-white/30 mt-0.5">Leave blank if you haven't priced it</div>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-white/40">Due date</label>
+              <Input type="date" value={form.dueDate} onChange={e => setForm({ ...form, dueDate: e.target.value })}
+                className="bg-white/[0.02] border-white/10 text-white" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-white/40">Details</label>
+            <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
+              placeholder="Size, material, finishing, artwork — whatever the press needs to know."
+              className="w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm min-h-[70px]" />
+          </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-white/40">Internal notes</label>
+            <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })}
+              placeholder="optional" className="bg-white/[0.02] border-white/10 text-white" />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-5">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !form.title.trim()} className="bg-blue-600 hover:bg-blue-700">
+            {save.isPending ? "Adding..." : "Add job"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PrintsJobs() {
   const { currentOrg } = useWorkspace();
   const orgId = currentOrg?.id;
@@ -51,10 +175,19 @@ export default function PrintsJobs() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [draggedId, setDraggedId] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
 
+  // workspaceFetch, not a bare fetch — see the note in prints-materials.tsx.
+  // This route isn't tab-gated today, but the moment it is, a bare fetch breaks
+  // for everyone except a super admin and does it silently.
   const { data: orders = [], isLoading } = useQuery<PrintOrder[]>({
     queryKey: ["/api/admin/print-orders", { orgId }],
-    queryFn: () => fetch(`/api/admin/print-orders?orgId=${orgId}`, { credentials: "include" }).then(r => r.json()),
+    queryFn: async () => {
+      const res = await workspaceFetch(`/api/admin/print-orders?orgId=${orgId}`);
+      if (!res.ok) throw new Error(`Couldn't load jobs (HTTP ${res.status})`);
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    },
     enabled: !!orgId,
     refetchInterval: 30000,  // poll every 30s — Dima's screen stays current
   });
@@ -97,17 +230,24 @@ export default function PrintsJobs() {
           <h1 className="text-2xl font-bold text-white">Jobs</h1>
           <p className="text-sm text-white/40 mt-0.5">Drag cards between columns to update status. Customers get an email at every stage.</p>
         </div>
-        <div className="relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-          <Input
-            type="text"
-            placeholder="Search by order #, customer, or title..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-10 bg-white/[0.02] border-white/10 text-white w-80"
-          />
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+            <Input
+              type="text"
+              placeholder="Search by order #, customer, or title..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-10 bg-white/[0.02] border-white/10 text-white w-64 sm:w-80"
+            />
+          </div>
+          <Button onClick={() => setAdding(true)} className="bg-blue-600 hover:bg-blue-700 shrink-0">
+            <Plus className="w-4 h-4 mr-1.5" /> Add job
+          </Button>
         </div>
       </div>
+
+      <AddJobModal open={adding} onClose={() => setAdding(false)} orgId={orgId} key={adding ? "open" : "closed"} />
 
       {isLoading ? (
         <div className="text-white/40 text-sm">Loading orders...</div>
