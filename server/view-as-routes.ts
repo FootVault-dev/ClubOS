@@ -45,8 +45,17 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { requireAuth } from "./auth";
 
-/** Endpoints that must keep working while viewing as someone. */
-const ALWAYS_ALLOWED = new Set(["/api/admin/view-as/stop"]);
+/**
+ * The way out must ALWAYS work.
+ *
+ * A prefix test, not an exact match: `/stop/` with a trailing slash was refused
+ * by an exact-match Set, and "you can get in but not out" is the worst failure
+ * this feature has. Everything under the stop path is allowed through.
+ */
+const STOP_PATH = "/api/admin/view-as/stop";
+function isStopPath(p: string): boolean {
+  return p === STOP_PATH || p === `${STOP_PATH}/`;
+}
 
 /**
  * Global gate: while a view-as session is active, nothing may be written.
@@ -56,7 +65,7 @@ export function viewAsReadOnly(req: Request, res: Response, next: NextFunction) 
   const original = (req.session as any).viewAsOriginalUserId;
   if (!original) return next();
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
-  if (ALWAYS_ALLOWED.has(req.path)) return next();
+  if (isStopPath(req.path)) return next();
   return res.status(403).json({
     message: "You're viewing as someone else, which is read-only. Stop viewing to make changes.",
     viewAsReadOnly: true,
@@ -106,6 +115,29 @@ export function registerViewAsRoutes(app: Express) {
     }
   });
 
+  // 🔴 Registered BEFORE /:userId. Express matches in order, so with the
+  // parameterised route first this endpoint was swallowed by it and answered
+  // 400 "Invalid user" (parseInt("stop") is NaN) — leaving a super admin with
+  // no way out of the account they were viewing. Order is load-bearing here.
+  app.post("/api/admin/view-as/stop", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const original = (req.session as any).viewAsOriginalUserId;
+      if (!original) return res.status(400).json({ message: "You're not viewing as anyone" });
+      const eventId = (req.session as any).viewAsEventId;
+
+      req.session.userId = Number(original);
+      delete (req.session as any).viewAsOriginalUserId;
+      delete (req.session as any).viewAsEventId;
+
+      if (eventId) {
+        await db.execute(sql`UPDATE view_as_events SET ended_at = now() WHERE id = ${eventId}`);
+      }
+      req.session.save(() => res.json({ stopped: true }));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/admin/view-as/:userId", requireAuth, async (req: Request, res: Response) => {
     try {
       const me = actingUserId(req)!;
@@ -143,22 +175,5 @@ export function registerViewAsRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/view-as/stop", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const original = (req.session as any).viewAsOriginalUserId;
-      if (!original) return res.status(400).json({ message: "You're not viewing as anyone" });
-      const eventId = (req.session as any).viewAsEventId;
 
-      req.session.userId = Number(original);
-      delete (req.session as any).viewAsOriginalUserId;
-      delete (req.session as any).viewAsEventId;
-
-      if (eventId) {
-        await db.execute(sql`UPDATE view_as_events SET ended_at = now() WHERE id = ${eventId}`);
-      }
-      req.session.save(() => res.json({ stopped: true }));
-    } catch (e: any) {
-      res.status(500).json({ message: e.message });
-    }
-  });
 }
