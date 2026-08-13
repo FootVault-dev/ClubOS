@@ -114,6 +114,7 @@ import {
 import { registerMediaRoutes } from "./media-routes";
 import { registerMarketingRoutes } from "./marketing/routes";
 import { registerFamilyRoutes } from "./family-routes";
+import { registerViewAsRoutes } from "./view-as-routes";
 import { registerParentRoutes, resolveOwnedChildContactId } from "./parent-routes";
 
 export async function registerRoutes(
@@ -637,10 +638,24 @@ export async function registerRoutes(
     const user = await storage.getUser(req.session.userId);
     if (!user) return res.status(401).json({ message: "Not authenticated" });
     const orgs = await storage.getUserOrganizations(req.session.userId);
+    // While a super admin is viewing as someone, this endpoint answers as the
+    // PERSON BEING VIEWED — that is the whole point, since every screen keys off
+    // it. `viewingAs` rides alongside so the client can show the banner and the
+    // way back; without it the impersonator has no visible exit.
+    const originalId = (req.session as any).viewAsOriginalUserId;
+    let viewingAs: any = null;
+    if (originalId) {
+      const actor = await storage.getUser(Number(originalId));
+      viewingAs = {
+        target: { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email },
+        actor: actor ? { id: actor.id, firstName: actor.firstName, lastName: actor.lastName } : null,
+        readOnly: true,
+      };
+    }
     // canIssueRefunds drives whether the Refund button renders. The client copy
     // of it is a convenience only — the server re-checks on every refund call,
     // so flipping this in devtools buys nothing.
-    res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, avatarUrl: user.avatarUrl ?? null, role: user.role, canIssueRefunds: !!user.canIssueRefunds, organizations: orgs });
+    res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, avatarUrl: user.avatarUrl ?? null, role: user.role, canIssueRefunds: !!user.canIssueRefunds, organizations: orgs, viewingAs });
   });
 
   app.patch("/api/auth/me", requireAuth, async (req, res) => {
@@ -24692,6 +24707,11 @@ export async function registerRoutes(
   // Every screen that shows a family goes through resolveFamily() in there, so
   // two pages can never disagree about whose child someone is.
   registerFamilyRoutes(app);
+
+  // View As — see ClubOS exactly as a staff member sees it (super admin only,
+  // read-only, audited). Born from Olga's and Travis's blank tabs: a super admin
+  // cannot otherwise reproduce what staff see.
+  registerViewAsRoutes(app);
 
   // Parent accounts — the family's own view of that same data, on
   // join.cufc.co.nz/account. A parent credential, never a staff session: it

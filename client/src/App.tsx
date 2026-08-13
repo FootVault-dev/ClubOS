@@ -218,6 +218,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
 import { CommandPalette } from "@/components/command-palette";
+import { ViewAsBar } from "@/components/view-as-bar";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading, error } = useQuery({
@@ -671,6 +672,8 @@ function AdminLayout() {
                 <kbd className="hidden sm:inline-flex items-center text-[10px] text-white/30 border border-white/10 rounded px-1.5 py-0.5">⌘K</kbd>
               </button>
               <div className="flex items-center gap-2">
+                {/* View As — super-admin only; renders nothing for everyone else. */}
+                <ViewAsBar />
                 <Button variant="ghost" size="icon" className="text-white/30 hover:text-white/50 relative transition-colors duration-300 rounded-xl">
                   <Bell className="w-4 h-4" />
                 </Button>

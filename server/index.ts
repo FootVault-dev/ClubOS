@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth } from "./auth";
+import { viewAsReadOnly } from "./view-as-routes";
 import { attributionCookieMiddleware } from "./attribution-cookies";
 
 const app = express();
@@ -29,6 +30,12 @@ app.use(
 app.use(express.urlencoded({ extended: false, limit: "25mb" }));
 
 setupAuth(app);
+
+// 🔴 Mounted immediately after the session, before every route: while a super
+// admin is viewing ClubOS as a member of staff, nothing may be written. See
+// server/view-as-routes.ts — a write made while impersonating would be recorded
+// under the staff member's name.
+app.use(viewAsReadOnly);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
