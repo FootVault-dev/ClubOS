@@ -116,9 +116,17 @@ try {
 
     // 🔴 A tab that renders but has no sidebar link is unreachable — the exact
     // failure that emptied a single-tab user's whole sidebar once before.
+    // On a phone the sidebar is a sheet behind the hamburger, so it has to be
+    // opened before the link exists in the DOM at all.
+    if (mobile) {
+      const toggle = await page.$('[data-sidebar="trigger"], button[aria-label*="Sidebar"], button[aria-label*="sidebar"]');
+      if (toggle) { await toggle.click(); await new Promise((r) => setTimeout(r, 900)); }
+    }
     const inNav = await page.evaluate(() =>
       Array.from(document.querySelectorAll('a[href="/admin/drive"]')).length > 0);
     ok("a Drive link exists in the sidebar nav", inNav);
+    if (mobile) await page.keyboard.press("Escape");
+    await new Promise((r) => setTimeout(r, 400));
     ok("the request carried X-Workspace-Slug", sawHeader);
     ok("the listing returned 200 (304 = cache, also fine)", listStatus === 200 || listStatus === 304, `HTTP ${listStatus}`);
     ok("a seeded folder is actually rendered", body.includes("Sponsorship"), body.slice(0, 60).replace(/\n/g, " "));
