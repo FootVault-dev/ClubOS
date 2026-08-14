@@ -50,6 +50,10 @@ import {
   emailDebounced,
   classifyUpload,
   extensionFor,
+  extractLinks,
+  MAX_FORWARD_TARGETS,
+  STAFF_FILE_KINDS,
+  type StaffFileKind,
 } from "@shared/staff-chat";
 import { sendStaffChatNotification } from "./email";
 import {
@@ -350,7 +354,13 @@ async function hydrateMessages(msgIds: number[], viewerId: number) {
   const ackCounts = new Map<number, number>();
   const myAcks = new Set<number>();
   const mentionIds = new Map<number, number[]>();
-  if (msgIds.length === 0) return { reactions, ackCounts, myAcks, mentionIds };
+  if (msgIds.length === 0)
+    return {
+      reactions, ackCounts, myAcks, mentionIds,
+      replyCounts: new Map<number, number>(),
+      lastReplyAt: new Map<number, Date>(),
+      forwardRefs: new Map<number, any>(),
+    };
 
   const rx = await db
     .select()
@@ -384,7 +394,56 @@ async function hydrateMessages(msgIds: number[], viewerId: number) {
     mentionIds.set(m.messageId, list);
   }
 
-  return { reactions, ackCounts, myAcks, mentionIds };
+  // ── Thread reply counts, DERIVED never stored ──────────────────────────────
+  // Consistent with the rest of this codebase (overdue, occupancy, progress are
+  // all computed): a stored counter drifts the first time a reply is deleted.
+  const replyCounts = new Map<number, number>();
+  const lastReplyAt = new Map<number, Date>();
+  {
+    const reps = await db.execute(sql`
+      SELECT parent_message_id, count(*)::int AS n, max(created_at) AS last_at
+      FROM staff_messages
+      WHERE parent_message_id IN (${sql.join(msgIds.map((i) => sql`${i}`), sql`, `)})
+        AND deleted_at IS NULL
+      GROUP BY parent_message_id`);
+    for (const r of reps.rows as any[]) {
+      replyCounts.set(Number(r.parent_message_id), Number(r.n));
+      if (r.last_at) lastReplyAt.set(Number(r.parent_message_id), r.last_at);
+    }
+  }
+
+  // ── What a forward is quoting ──────────────────────────────────────────────
+  // Rendered as provenance in the UI. A forward that looks like an original is
+  // how quotes get misattributed to the wrong person.
+  const forwardRefs = new Map<number, any>();
+  const fwdRows = await db.execute(sql`
+    SELECT DISTINCT forwarded_from_message_id AS fid FROM staff_messages
+    WHERE id IN (${sql.join(msgIds.map((i) => sql`${i}`), sql`, `)})
+      AND forwarded_from_message_id IS NOT NULL`);
+  const fwdIds = (fwdRows.rows as any[]).map((r) => Number(r.fid));
+  if (fwdIds.length) {
+    const rows = await db.execute(sql`
+      SELECT m.id, m.body, m.attachments, m.created_at, m.author_id, m.deleted_at,
+             u.first_name, u.last_name, c.name AS channel_name, c.kind AS channel_kind
+      FROM staff_messages m
+      JOIN staff_channels c ON c.id = m.channel_id
+      LEFT JOIN users u ON u.id = m.author_id
+      WHERE m.id IN (${sql.join(fwdIds.map((i) => sql`${i}`), sql`, `)})`);
+    for (const r of rows.rows as any[]) {
+      forwardRefs.set(Number(r.id), {
+        messageId: Number(r.id),
+        channelName: r.channel_name,
+        channelKind: r.channel_kind,
+        authorName: [r.first_name, r.last_name].filter(Boolean).join(" ") || "Unknown",
+        body: r.deleted_at ? "" : excerpt(String(r.body || ""), 300),
+        createdAt: r.created_at,
+        attachmentCount: r.deleted_at ? 0 : ((r.attachments || []) as any[]).length,
+        deleted: !!r.deleted_at,
+      });
+    }
+  }
+
+  return { reactions, ackCounts, myAcks, mentionIds, replyCounts, lastReplyAt, forwardRefs };
 }
 
 function shapeMessage(
@@ -409,6 +468,13 @@ function shapeMessage(
     ackCount: h.ackCounts.get(m.id) ?? 0,
     ackedByMe: h.myAcks.has(m.id),
     mentionedUserIds: h.mentionIds.get(m.id) ?? [],
+    // Threads: a reply stays visible in the channel (that is the mitigation for
+    // the v1 "conversations vanish into side-rooms" concern), and its root
+    // carries the count that opens the panel.
+    parentMessageId: m.parentMessageId ?? null,
+    replyCount: h.replyCounts.get(m.id) ?? 0,
+    lastReplyAt: h.lastReplyAt.get(m.id) ?? null,
+    forwardedFrom: m.forwardedFromMessageId ? (h.forwardRefs.get(m.forwardedFromMessageId) ?? null) : null,
   };
 }
 
@@ -585,6 +651,29 @@ export function registerStaffChatRoutes(app: Express) {
           : null;
       const requiresAck = req.body?.requiresAck === true && leadership && channel.kind === "channel";
 
+      // ── Threads ─────────────────────────────────────────────────────────────
+      // 🔴 ONE LEVEL ONLY. A reply to a reply is refused: Slack's own
+      // thread-of-a-thread confusion is exactly what this avoids, and it cannot
+      // be a CHECK constraint because it needs a lookup.
+      // 🔴 The parent must live in THIS channel — otherwise a reply could be
+      // hung off a message in a private channel the sender cannot read.
+      let parentMessageId: number | null = null;
+      if (req.body?.parentMessageId != null) {
+        const pid = parseInt(String(req.body.parentMessageId), 10);
+        if (!Number.isFinite(pid)) return res.status(400).json({ message: "Bad parent message id" });
+        const [parent] = await db.select().from(staffMessages).where(eq(staffMessages.id, pid));
+        if (!parent) return res.status(404).json({ message: "That message no longer exists" });
+        if (parent.channelId !== channelId) {
+          return res.status(400).json({ message: "You can only reply to a message in this conversation" });
+        }
+        if (parent.parentMessageId) {
+          return res.status(400).json({
+            message: "Replies are one level deep — reply to the first message in the thread instead.",
+          });
+        }
+        parentMessageId = pid;
+      }
+
       let [created] = await db
         .insert(staffMessages)
         .values({
@@ -594,6 +683,7 @@ export function registerStaffChatRoutes(app: Express) {
           attachments: attachments.length ? attachments : null,
           clientMessageId,
           requiresAck,
+          parentMessageId,
         })
         .onConflictDoNothing()
         .returning();
@@ -616,6 +706,20 @@ export function registerStaffChatRoutes(app: Express) {
       if (!created) return res.status(500).json({ message: "Send failed" });
 
       if (!isRetry) {
+        // Links are indexed ON WRITE for the Files & links browser — scanning
+        // bodies at read time across a growing history would not stay fast.
+        // Best-effort: a link that fails to index must never fail the send.
+        try {
+          const links = extractLinks(created.body || "");
+          for (const l of links) {
+            await db.execute(sql`
+              INSERT INTO staff_message_links (message_id, channel_id, author_id, url, host, created_at)
+              VALUES (${created.id}, ${channelId}, ${userId}, ${l.url}, ${l.host}, ${created.createdAt})
+              ON CONFLICT (message_id, url) DO NOTHING`);
+          }
+        } catch (e) {
+          console.error("[staff-chat] link indexing failed (message still sent):", e);
+        }
         await db.update(staffChannels).set({ lastMessageAt: created.createdAt }).where(eq(staffChannels.id, channelId));
         // Sending implies having read the room.
         await db
@@ -1035,6 +1139,236 @@ export function registerStaffChatRoutes(app: Express) {
           .map((m) => ({ userId: m.userId, name: fullName(m) })),
       });
     } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ── Threads, forwarding, files & links (v2, 2026-08-15) ────────────────────
+  // 🔴 Every one of these reuses the SAME visibility predicate as search: a
+  // public channel, or a channel you are an active member of. A thread reader, a
+  // forward target and a file browser are each a way to read a private channel
+  // sideways if that check is skipped.
+  const visibleChannel = (userId: number) => sql`(
+    (c.kind = 'channel' AND c.is_private = false)
+    OR EXISTS (
+      SELECT 1 FROM staff_channel_members cm
+      WHERE cm.channel_id = c.id AND cm.user_id = ${userId} AND cm.left_at IS NULL
+    )
+  )`;
+
+  /** The root message of a thread plus every reply, oldest first. */
+  app.get("/api/admin/chat/messages/:id/thread", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const id = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Bad message id" });
+
+      // Resolve to the ROOT: opening a thread from a reply must show the whole
+      // thread, not an empty one.
+      const [seed] = await db.select().from(staffMessages).where(eq(staffMessages.id, id));
+      if (!seed) return res.status(404).json({ message: "Message not found" });
+      const rootId = seed.parentMessageId ?? seed.id;
+
+      const rows = await db.execute(sql`
+        SELECT m.id, m.channel_id, m.author_id, m.body, m.attachments, m.created_at,
+               m.edited_at, m.deleted_at, m.parent_message_id, m.requires_ack,
+               u.first_name, u.last_name, u.avatar_url,
+               c.name AS channel_name, c.kind AS channel_kind
+        FROM staff_messages m
+        JOIN staff_channels c ON c.id = m.channel_id
+        LEFT JOIN users u ON u.id = m.author_id
+        WHERE (m.id = ${rootId} OR m.parent_message_id = ${rootId})
+          AND ${visibleChannel(userId)}
+        ORDER BY m.id ASC`);
+
+      const all = rows.rows as any[];
+      // Empty means the channel is not visible to this person — 404, never a
+      // partial answer that reveals the thread exists.
+      if (!all.length) return res.status(404).json({ message: "Message not found" });
+
+      const shape = (r: any) => ({
+        id: Number(r.id),
+        channelId: Number(r.channel_id),
+        authorId: Number(r.author_id),
+        authorName: [r.first_name, r.last_name].filter(Boolean).join(" ") || "Unknown",
+        avatarUrl: r.avatar_url ?? null,
+        body: r.deleted_at ? "" : String(r.body || ""),
+        attachments: r.deleted_at ? [] : (r.attachments || []),
+        createdAt: r.created_at,
+        editedAt: r.edited_at,
+        deleted: !!r.deleted_at,
+        parentMessageId: r.parent_message_id ? Number(r.parent_message_id) : null,
+      });
+
+      const root = all.find((r) => Number(r.id) === rootId);
+      const replies = all.filter((r) => Number(r.id) !== rootId);
+      res.json({
+        channelId: root ? Number(root.channel_id) : null,
+        channelName: root?.channel_name ?? null,
+        root: root ? shape(root) : null,
+        replies: replies.map(shape),
+        replyCount: replies.length,
+      });
+    } catch (e: any) {
+      console.error("[staff-chat] thread failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  /**
+   * Forward a message into other conversations.
+   *
+   * 🔴 PERMISSION IS CHECKED ON BOTH ENDS — the forwarder must be able to READ
+   * the source and POST to each destination. Forwarding is the obvious way to
+   * leak a private channel into a public one, and checking only the destination
+   * would allow exactly that.
+   */
+  app.post("/api/admin/chat/messages/:id/forward", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const id = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Bad message id" });
+
+      // Source must be readable BY THIS PERSON.
+      const src = await db.execute(sql`
+        SELECT m.id, m.body, m.attachments, m.deleted_at
+        FROM staff_messages m JOIN staff_channels c ON c.id = m.channel_id
+        WHERE m.id = ${id} AND ${visibleChannel(userId)}
+        LIMIT 1`);
+      const source = (src.rows as any[])[0];
+      if (!source) return res.status(404).json({ message: "Message not found" });
+      if (source.deleted_at) return res.status(400).json({ message: "That message was deleted" });
+
+      const rawTargets = Array.isArray(req.body?.channelIds) ? req.body.channelIds : [];
+      const targets = Array.from(new Set(rawTargets.map((n: any) => parseInt(String(n), 10))))
+        .filter((n): n is number => Number.isFinite(n))
+        .slice(0, MAX_FORWARD_TARGETS);
+      if (!targets.length) return res.status(400).json({ message: "Pick at least one conversation" });
+
+      const comment =
+        typeof req.body?.comment === "string" ? req.body.comment.slice(0, MESSAGE_MAX_LENGTH).trimEnd() : "";
+
+      const sent: number[] = [];
+      const refused: { channelId: number; reason: string }[] = [];
+      for (const channelId of targets) {
+        const [channel] = await db.select().from(staffChannels).where(eq(staffChannels.id, channelId));
+        if (!channel || channel.archivedAt) { refused.push({ channelId, reason: "unavailable" }); continue; }
+
+        let membership = await activeMembership(channelId, userId);
+        if (!membership && channel.kind === "channel" && !channel.isPrivate) {
+          await ensureMember(channelId, userId);
+          membership = await activeMembership(channelId, userId);
+        }
+        if (!membership) { refused.push({ channelId, reason: "not a member" }); continue; }
+
+        const leadership = await isLeadershipUser(userId);
+        if (channel.postPolicy === "leadership" && !leadership) {
+          refused.push({ channelId, reason: "leadership only" });
+          continue;
+        }
+
+        // 🔴 Attachments carry BY REFERENCE — the same object-storage paths, never
+        // re-uploaded. A forward must not duplicate a 25MB file per destination.
+        const [created] = await db
+          .insert(staffMessages)
+          .values({
+            channelId,
+            authorId: userId,
+            body: comment,
+            attachments: (source.attachments as StaffChatAttachment[] | null) ?? null,
+            forwardedFromMessageId: id,
+          })
+          .returning();
+        if (created) {
+          sent.push(channelId);
+          await db.update(staffChannels).set({ lastMessageAt: created.createdAt })
+            .where(eq(staffChannels.id, channelId));
+        }
+      }
+
+      res.json({ forwardedTo: sent, refused });
+    } catch (e: any) {
+      console.error("[staff-chat] forward failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  /**
+   * Files & links — everything shared, findable.
+   *
+   * Files are read straight off staff_messages.attachments rather than copied
+   * into an index: the data is already there and a second copy would drift.
+   * Links come from staff_message_links, extracted on write.
+   */
+  app.get("/api/admin/chat/files", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const q = String(req.query.q ?? "").trim().slice(0, 100).toLowerCase();
+      const kindRaw = String(req.query.kind ?? "").trim() as StaffFileKind;
+      const kind = STAFF_FILE_KINDS.includes(kindRaw) ? kindRaw : null;
+      const channelId = req.query.channelId ? parseInt(String(req.query.channelId), 10) : null;
+      const authorId = req.query.authorId ? parseInt(String(req.query.authorId), 10) : null;
+      const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "60")) || 60, 1), 100);
+
+      const chanFilter = Number.isFinite(channelId as number) ? sql` AND c.id = ${channelId}` : sql``;
+      const authFilter = Number.isFinite(authorId as number) ? sql` AND m.author_id = ${authorId}` : sql``;
+
+      const items: any[] = [];
+
+      if (kind !== "link") {
+        const rows = await db.execute(sql`
+          SELECT m.id, m.channel_id, m.author_id, m.attachments, m.created_at,
+                 u.first_name, u.last_name, c.name AS channel_name, c.kind AS channel_kind
+          FROM staff_messages m
+          JOIN staff_channels c ON c.id = m.channel_id
+          LEFT JOIN users u ON u.id = m.author_id
+          WHERE m.deleted_at IS NULL AND m.attachments IS NOT NULL
+            AND ${visibleChannel(userId)}${chanFilter}${authFilter}
+          ORDER BY m.id DESC
+          LIMIT 400`);
+        for (const r of rows.rows as any[]) {
+          for (const a of (r.attachments || []) as StaffChatAttachment[]) {
+            if (kind && a.kind !== kind) continue;
+            if (q && !String(a.name || "").toLowerCase().includes(q)) continue;
+            items.push({
+              type: a.kind, url: a.url, name: a.name, size: a.size, contentType: a.contentType,
+              messageId: Number(r.id), channelId: Number(r.channel_id),
+              channelName: r.channel_name, channelKind: r.channel_kind,
+              authorName: [r.first_name, r.last_name].filter(Boolean).join(" ") || "Unknown",
+              createdAt: r.created_at,
+            });
+          }
+        }
+      }
+
+      if (!kind || kind === "link") {
+        const rows = await db.execute(sql`
+          SELECT l.id, l.message_id, l.channel_id, l.author_id, l.url, l.host, l.created_at,
+                 u.first_name, u.last_name, c.name AS channel_name, c.kind AS channel_kind
+          FROM staff_message_links l
+          JOIN staff_channels c ON c.id = l.channel_id
+          JOIN staff_messages m ON m.id = l.message_id AND m.deleted_at IS NULL
+          LEFT JOIN users u ON u.id = l.author_id
+          WHERE ${visibleChannel(userId)}${chanFilter}
+            ${Number.isFinite(authorId as number) ? sql` AND l.author_id = ${authorId}` : sql``}
+            ${q ? sql` AND lower(l.url) LIKE ${"%" + q + "%"}` : sql``}
+          ORDER BY l.id DESC
+          LIMIT ${limit}`);
+        for (const r of rows.rows as any[]) {
+          items.push({
+            type: "link", url: r.url, name: r.host || r.url, host: r.host,
+            messageId: Number(r.message_id), channelId: Number(r.channel_id),
+            channelName: r.channel_name, channelKind: r.channel_kind,
+            authorName: [r.first_name, r.last_name].filter(Boolean).join(" ") || "Unknown",
+            createdAt: r.created_at,
+          });
+        }
+      }
+
+      items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      res.json({ items: items.slice(0, limit), total: items.length });
+    } catch (e: any) {
+      console.error("[staff-chat] files failed:", e);
       res.status(500).json({ message: e.message });
     }
   });

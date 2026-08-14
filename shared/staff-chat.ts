@@ -193,3 +193,60 @@ export function extensionFor(contentType: string): string {
   };
   return map[ct] ?? "bin";
 }
+
+// ── Threads, forwarding, files & links (v2, 2026-08-15) ──────────────────────
+// Added on Travis's feedback. ⚠️ Threads reverse the v1 decision recorded at the
+// top of this file; the failure mode that decision guarded against (replies
+// vanishing into side-rooms) is mitigated by keeping replies visible in the
+// channel, not by leaving threads out.
+
+/** 🔴 One level only — a reply may never itself be replied to. */
+export const THREAD_MAX_DEPTH = 1;
+
+export interface StaffThreadSummary {
+  /** Replies to this message. Derived on read, never stored. */
+  replyCount: number;
+  /** Distinct repliers, for the "N replies" avatar stack. */
+  replierIds: number[];
+  lastReplyAt: string | null;
+}
+
+export interface StaffForwardRef {
+  messageId: number;
+  channelId: number;
+  channelName: string;
+  authorId: number;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  attachmentCount: number;
+}
+
+/** How many channels one forward may target in a single action. */
+export const MAX_FORWARD_TARGETS = 10;
+
+/**
+ * URLs in a message body, de-duplicated and stripped of trailing punctuation.
+ *
+ * Extracted ON WRITE into staff_message_links — scanning bodies at read time
+ * across a growing history would not stay fast, and the Links browser exists to
+ * make "that thing someone shared months ago" findable in a second.
+ */
+export function extractLinks(body: string): { url: string; host: string | null }[] {
+  const out: { url: string; host: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const raw of String(body || "").match(/https?:\/\/[^\s<>"')\]]+/gi) || []) {
+    // A URL at the end of a sentence picks up the full stop.
+    const url = raw.replace(/[.,;:!?]+$/, "").slice(0, 2000);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    let host: string | null = null;
+    try { host = new URL(url).host; } catch { host = null; }
+    out.push({ url, host });
+  }
+  return out;
+}
+
+/** What the Files browser can filter by. `link` reads staff_message_links. */
+export type StaffFileKind = "image" | "voice" | "file" | "link";
+export const STAFF_FILE_KINDS: readonly StaffFileKind[] = ["image", "voice", "file", "link"];

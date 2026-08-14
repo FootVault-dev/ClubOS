@@ -7169,6 +7169,19 @@ export const staffChannelMembers = pgTable(
   ],
 );
 
+export const staffMessageLinks = pgTable(
+  "staff_message_links",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    messageId: integer("message_id").notNull().references(() => staffMessages.id, { onDelete: "cascade" }),
+    channelId: integer("channel_id").notNull().references(() => staffChannels.id, { onDelete: "cascade" }),
+    authorId: integer("author_id").notNull(),
+    url: text("url").notNull(),
+    host: text("host"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+);
+
 export const staffMessages = pgTable(
   "staff_messages",
   {
@@ -7183,6 +7196,13 @@ export const staffMessages = pgTable(
     // Leadership can request explicit confirmation ("Confirm you've seen this")
     // — the read-acknowledgment WhatsApp structurally can't do.
     requiresAck: boolean("requires_ack").notNull().default(false),
+    // Threads (v2). 🔴 One level only — enforced in the API, since refusing a
+    // parent that already has a parent needs a lookup a CHECK cannot do.
+    parentMessageId: integer("parent_message_id"),
+    // A forward points back at what it quoted so the UI can show provenance.
+    // ON DELETE SET NULL in the migration: deleting the original must never
+    // delete somebody else's forward of it.
+    forwardedFromMessageId: integer("forwarded_from_message_id"),
     editedAt: timestamp("edited_at"),
     // Soft delete: row stays (channel history + "message removed" stub), body
     // is blanked and attachments cleared at delete time.
