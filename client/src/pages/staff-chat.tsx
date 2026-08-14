@@ -73,7 +73,7 @@ interface HistoryResponse {
 interface Bootstrap { viewer: { userId: number; isLeadership: boolean }; users: Person[]; channels: ChannelSummary[] }
 
 import { ThreadPanel, ForwardDialog, ForwardedQuote, FilesBrowser } from "@/components/chat-v2";
-import { EmojiPicker, rememberEmoji } from "@/components/emoji-picker";
+import { ReactionBar } from "@/components/emoji-picker";
 
 const GOLD = "#c9a43e";
 const QUICK_EMOJIS = ["👍", "✅", "🔥", "😂", "🙏", "👀"];
@@ -900,6 +900,7 @@ function ConversationPane(props: {
           me={me}
           historyKey={historyKey}
           members={members}
+          channels={props.allChannels}
           onClose={() => setThreadRootId(null)}
         />
       )}
@@ -1180,22 +1181,12 @@ function MessageRow(props: {
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="end">
-              {/* The six quick reactions stay one tap away — they cover most of
-                  what anyone sends — with the full catalogue below, so desktop
-                  matches what mobile has had since 2026-08-07. */}
-              <div className="flex gap-1 p-1.5 border-b border-white/[0.07]">
-                {QUICK_EMOJIS.map((e) => (
-                  <button
-                    key={e}
-                    onClick={() => { setReactOpen(false); rememberEmoji(e); react(e); }}
-                    data-testid={`quick-emoji-${e}`}
-                    className="w-8 h-8 text-[17px] rounded-lg hover:bg-white/[0.08]"
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
-              <EmojiPicker onPick={(e) => { setReactOpen(false); react(e); }} />
+              {/* Quick six, then "+" for the full catalogue — WhatsApp's shape.
+                  Keeps the common case one click and the popover small. */}
+              <ReactionBar
+                quick={QUICK_EMOJIS}
+                onPick={(e) => { setReactOpen(false); react(e); }}
+              />
             </PopoverContent>
           </Popover>
           {canEdit && (

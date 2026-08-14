@@ -19,12 +19,15 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, workspaceFetch } from "@/lib/queryClient";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ReactionBar } from "@/components/emoji-picker";
 import {
-  X, Search, Send, Loader2, CornerUpRight, MessageSquare, FileText,
+  X, Search, Send, Loader2, CornerUpRight, MessageSquare, FileText, SmilePlus,
   Image as ImageIcon, Mic, Link2, Paperclip,
 } from "lucide-react";
 
 const GOLD = "#c9a43e";
+const QUICK_EMOJIS = ["👍", "✅", "🔥", "😂", "🙏", "👀"] as const;
 const initials = (n: string) => n.split(" ").filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("");
 const fmtWhen = (iso: string) =>
   new Date(iso).toLocaleString("en-NZ", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
@@ -35,11 +38,16 @@ const fmtBytes = (n: number) =>
 // Thread panel
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function ThreadPanel({ rootId, onClose, me, historyKey, members = [] }: {
+export function ThreadPanel({ rootId, onClose, me, historyKey, members = [], channels = [] }: {
   rootId: number; onClose: () => void; me: number; historyKey: string[];
   /** Needed for @ mentions — see the note on `mentionUserIds` below. */
   members?: { userId: number; name: string }[];
+  /** Forward targets, so a message can leave the thread the same way it can
+   *  leave the channel. */
+  channels?: { id: number; name: string | null; kind: string }[];
 }) {
+  const [forwardId, setForwardId] = useState<number | null>(null);
+  const [reactOpenFor, setReactOpenFor] = useState<number | null>(null);
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
   // 🔴 Mentions are EXPLICIT on the server — it validates the ids you send and
@@ -108,6 +116,15 @@ export function ThreadPanel({ rootId, onClose, me, historyKey, members = [] }: {
     },
   });
 
+  // A message in a thread is still a message: it can be reacted to and
+  // forwarded like any other. Leaving those out made the thread panel a
+  // read-only dead end. (Daniel, 2026-08-15)
+  const react = useMutation({
+    mutationFn: ({ id, emoji }: { id: number; emoji: string }) =>
+      apiRequest("POST", `/api/admin/chat/messages/${id}/reactions`, { emoji }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: key }),
+  });
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -115,7 +132,32 @@ export function ThreadPanel({ rootId, onClose, me, historyKey, members = [] }: {
   }, [onClose]);
 
   const Row = ({ m, isRoot }: { m: any; isRoot?: boolean }) => (
-    <div className={`flex gap-2.5 ${isRoot ? "pb-3 mb-3 border-b border-white/[0.07]" : "py-2"}`}>
+    <div className={`group relative flex gap-2.5 ${isRoot ? "pb-3 mb-3 border-b border-white/[0.07]" : "py-2"}`}>
+      {!m.deleted && (
+        <div className="absolute -top-2 right-0 hidden group-hover:flex items-center gap-0.5 bg-[#16171a] border border-white/10 rounded-xl p-0.5 shadow-xl z-10">
+          <Popover open={reactOpenFor === m.id} onOpenChange={(o) => setReactOpenFor(o ? m.id : null)}>
+            <PopoverTrigger asChild>
+              <button title="React"
+                      data-testid={`thread-react-${m.id}`}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]">
+                <SmilePlus className="w-3.5 h-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <ReactionBar
+                quick={QUICK_EMOJIS}
+                onPick={(emoji) => { setReactOpenFor(null); react.mutate({ id: m.id, emoji }); }}
+              />
+            </PopoverContent>
+          </Popover>
+          <button title="Forward"
+                  onClick={() => setForwardId(m.id)}
+                  data-testid={`thread-forward-${m.id}`}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]">
+            <CornerUpRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
       <div className="w-8 h-8 rounded-lg bg-white/[0.06] flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-white/60">
         {initials(m.authorName)}
       </div>
@@ -127,6 +169,23 @@ export function ThreadPanel({ rootId, onClose, me, historyKey, members = [] }: {
         <div className="text-[13.5px] text-white/80 whitespace-pre-wrap break-words mt-0.5">
           {m.deleted ? <span className="italic text-white/30">Message removed</span> : m.body}
         </div>
+        {(m.reactions || []).length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {m.reactions.map((r: any) => {
+              const mine = r.userIds?.includes(me);
+              return (
+                <button
+                  key={r.emoji}
+                  onClick={() => react.mutate({ id: m.id, emoji: r.emoji })}
+                  className={`text-[12px] px-1.5 py-0.5 rounded-lg border flex items-center gap-1 ${mine ? "border-white/30 bg-white/[0.1]" : "border-white/10 bg-white/[0.04] hover:border-white/25"}`}
+                >
+                  <span>{r.emoji}</span>
+                  <span className="text-white/50">{r.userIds?.length ?? 0}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {(m.attachments || []).length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {m.attachments.map((a: any, i: number) => (
@@ -213,10 +272,18 @@ export function ThreadPanel({ rootId, onClose, me, historyKey, members = [] }: {
             </button>
           </div>
           <p className="text-[10.5px] text-white/25 mt-1.5">
-            Replies also appear in the channel, so nobody misses them.
+            Replies stay in this thread. Mention someone with @ and they'll still be notified.
           </p>
         </div>
       </aside>
+
+      {forwardId !== null && (
+        <ForwardDialog
+          messageId={forwardId}
+          channels={channels as any}
+          onClose={() => setForwardId(null)}
+        />
+      )}
     </div>,
     document.body,
   );

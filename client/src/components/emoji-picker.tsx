@@ -4,16 +4,37 @@
 // offered the six quick reactions, which Daniel spotted on 2026-08-15 — the two
 // clients disagreed about what a reaction could be.
 //
-// `unicode-emoji-json` is DATA only — a JSON dump from unicode.org with zero
-// runtime JS and no React dependency — so it carries none of the "does this
-// still work on the current React" risk a picker COMPONENT library would. Same
-// reasoning as the mobile app, and deliberately the same dataset so the two
-// clients can't drift.
+// 🔴 `unicode-emoji-json/data-by-group.json` is an ARRAY of
+// `{ name, slug, emojis: [{ emoji, name }] }` — NOT an object keyed by group
+// name. The first cut indexed it as a map, every lookup came back undefined and
+// the grid rendered empty while the category tabs looked fine. Check the shape,
+// don't assume it.
+//
+// The dataset is DATA only — a JSON dump from unicode.org with no runtime JS and
+// no React dependency — so it carries none of the "does this still work on the
+// current React" risk a picker COMPONENT library would. Deliberately the same
+// dataset the mobile app uses, so the two clients cannot drift apart again.
 import { useMemo, useState, useEffect } from "react";
-import dataByGroup from "unicode-emoji-json/data-by-group.json";
+import rawGroups from "unicode-emoji-json/data-by-group.json";
 import { Search } from "lucide-react";
 
-interface Entry { emoji: string; name: string }
+interface Emoji { emoji: string; name: string }
+interface Group { name: string; slug: string; emojis: Emoji[] }
+
+const GROUPS = rawGroups as unknown as Group[];
+
+// A representative glyph per category, for the tab strip.
+const TAB_GLYPH: Record<string, string> = {
+  smileys_emotion: "😀",
+  people_body: "👍",
+  animals_nature: "🌿",
+  food_drink: "🍕",
+  travel_places: "✈️",
+  activities: "⚽",
+  objects: "💡",
+  symbols: "❤️",
+  flags: "🏳️",
+};
 
 // Recent picks live in localStorage so the emoji someone actually uses is one
 // tap away — the quick row is a guess, this is their real habit.
@@ -33,49 +54,33 @@ export function rememberEmoji(emoji: string): void {
   } catch { /* private mode — a lost history must never break reacting */ }
 }
 
-const GROUPS: { key: string; label: string; glyph: string }[] = [
-  { key: "Smileys & Emotion", label: "Smileys", glyph: "😀" },
-  { key: "People & Body", label: "People", glyph: "👍" },
-  { key: "Animals & Nature", label: "Nature", glyph: "🌿" },
-  { key: "Food & Drink", label: "Food", glyph: "🍕" },
-  { key: "Activities", label: "Activity", glyph: "⚽" },
-  { key: "Travel & Places", label: "Travel", glyph: "✈️" },
-  { key: "Objects", label: "Objects", glyph: "💡" },
-  { key: "Symbols", label: "Symbols", glyph: "❤️" },
-  { key: "Flags", label: "Flags", glyph: "🏳️" },
-];
-
 export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
   const [q, setQ] = useState("");
-  const [group, setGroup] = useState(GROUPS[0].key);
+  const [slug, setSlug] = useState(GROUPS[0]?.slug ?? "smileys_emotion");
   const [recent, setRecent] = useState<string[]>([]);
 
   useEffect(() => { setRecent(readRecentEmoji()); }, []);
 
-  const byGroup = dataByGroup as unknown as Record<string, Entry[]>;
-
-  const shown = useMemo(() => {
+  const shown = useMemo<Emoji[]>(() => {
     const s = q.trim().toLowerCase();
     if (s) {
-      // Search every group, not just the open one — nobody knows which
-      // category "rocket" lives in.
-      const out: Entry[] = [];
+      // Search every category — nobody knows which one "rocket" lives in.
+      const out: Emoji[] = [];
       for (const g of GROUPS) {
-        for (const e of byGroup[g.key] ?? []) {
+        for (const e of g.emojis) {
           if (e.name.toLowerCase().includes(s)) out.push(e);
-          if (out.length >= 90) break;
+          if (out.length >= 120) return out;
         }
-        if (out.length >= 90) break;
       }
       return out;
     }
-    return (byGroup[group] ?? []).slice(0, 240);
-  }, [q, group, byGroup]);
+    return GROUPS.find((g) => g.slug === slug)?.emojis ?? [];
+  }, [q, slug]);
 
   const pick = (emoji: string) => { rememberEmoji(emoji); onPick(emoji); };
 
   return (
-    <div className="w-[302px]" data-testid="emoji-picker">
+    <div className="w-[304px]" data-testid="emoji-picker">
       <div className="relative p-2 pb-1.5">
         <Search className="w-3.5 h-3.5 text-white/25 absolute left-4 top-1/2 -translate-y-1/2" />
         <input
@@ -94,20 +99,26 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
           <div className="flex flex-wrap">
             {recent.slice(0, 16).map((e) => (
               <button key={`r-${e}`} onClick={() => pick(e)}
+                      data-testid={`emoji-recent-${e}`}
                       className="w-8 h-8 text-[17px] rounded-lg hover:bg-white/[0.08]">{e}</button>
             ))}
           </div>
         </div>
       )}
 
-      <div className="max-h-[190px] overflow-y-auto px-2 pb-1">
+      <div className="h-[196px] overflow-y-auto px-2 pb-1" data-testid="emoji-grid">
+        {!q && (
+          <div className="text-[10px] uppercase tracking-wider text-white/25 px-0.5 py-1 sticky top-0 bg-[#16171a]">
+            {GROUPS.find((g) => g.slug === slug)?.name}
+          </div>
+        )}
         <div className="flex flex-wrap">
           {shown.map((e) => (
             <button
               key={e.emoji}
               onClick={() => pick(e.emoji)}
               title={e.name}
-              data-testid={`emoji-${e.emoji}`}
+              data-testid="emoji-option"
               className="w-8 h-8 text-[17px] rounded-lg hover:bg-white/[0.08]"
             >
               {e.emoji}
@@ -123,16 +134,54 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
         <div className="flex border-t border-white/[0.07] px-1">
           {GROUPS.map((g) => (
             <button
-              key={g.key}
-              onClick={() => setGroup(g.key)}
-              title={g.label}
-              className={`flex-1 h-8 text-[15px] rounded-lg ${group === g.key ? "bg-white/[0.1]" : "hover:bg-white/[0.06] opacity-60"}`}
+              key={g.slug}
+              onClick={() => setSlug(g.slug)}
+              title={g.name}
+              data-testid={`emoji-tab-${g.slug}`}
+              className={`flex-1 h-8 text-[15px] rounded-lg ${slug === g.slug ? "bg-white/[0.1]" : "hover:bg-white/[0.06] opacity-55"}`}
             >
-              {g.glyph}
+              {TAB_GLYPH[g.slug] ?? "•"}
             </button>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The reaction bar: the quick six, then a "+" that opens the full catalogue —
+ * WhatsApp's shape, which is what Daniel asked for. Keeping the catalogue behind
+ * the "+" means the common case stays one click and the popover stays small.
+ */
+export function ReactionBar({ quick, onPick }: {
+  quick: readonly string[];
+  onPick: (emoji: string) => void;
+}) {
+  const [full, setFull] = useState(false);
+
+  if (full) return <EmojiPicker onPick={onPick} />;
+
+  return (
+    <div className="flex items-center gap-1 p-1.5">
+      {quick.map((e) => (
+        <button
+          key={e}
+          onClick={() => { rememberEmoji(e); onPick(e); }}
+          data-testid={`quick-emoji-${e}`}
+          className="w-8 h-8 text-[17px] rounded-lg hover:bg-white/[0.08]"
+        >
+          {e}
+        </button>
+      ))}
+      <button
+        onClick={() => setFull(true)}
+        title="More emoji"
+        data-testid="button-more-emoji"
+        className="w-8 h-8 rounded-lg hover:bg-white/[0.08] text-white/45 hover:text-white/85 text-[17px] leading-none border border-white/10"
+      >
+        +
+      </button>
     </div>
   );
 }
