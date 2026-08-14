@@ -10,6 +10,7 @@
 // Transport is react-query polling: sidebar sync 6s, open conversation 3.5s.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -510,6 +511,51 @@ function ConversationPane(props: {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   // v2: the thread panel and the forward dialog. Both portal to document.body.
+  // ── Drop a file ANYWHERE on the conversation (Daniel, 2026-08-15) ─────────
+  // The composer bar is thin and hard to hit. The whole screen is the target
+  // while a conversation is open.
+  //
+  // 🔴 A dragenter/dragleave COUNTER, not a boolean. Both fire again every time
+  // the pointer crosses into a child element, so a boolean flickers the overlay
+  // off as soon as the file passes over a message bubble. The counter only
+  // reaches zero when the drag has genuinely left the window.
+  const [dropDepth, setDropDepth] = useState(0);
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  const dragging = dropDepth > 0;
+
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types?.includes("Files");
+    const onEnter = (e: DragEvent) => { if (hasFiles(e)) { e.preventDefault(); setDropDepth((d) => d + 1); } };
+    // 🔴 dragover must preventDefault too, or the browser refuses the drop and
+    // navigates to the file instead — the app vanishes and the upload is lost.
+    const onOver = (e: DragEvent) => { if (hasFiles(e)) e.preventDefault(); };
+    const onLeave = (e: DragEvent) => { if (hasFiles(e)) setDropDepth((d) => Math.max(0, d - 1)); };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDropDepth(0);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length) setDroppedFiles(files);
+    };
+    // Dropping outside the window, or pressing Escape mid-drag, fires neither
+    // drop nor a balancing dragleave — without these the overlay would stick.
+    const reset = () => setDropDepth(0);
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onDrop);
+    window.addEventListener("dragend", reset);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onDrop);
+      window.removeEventListener("dragend", reset);
+      window.removeEventListener("blur", reset);
+    };
+  }, []);
+
   const [threadRootId, setThreadRootId] = useState<number | null>(null);
   const [forwardId, setForwardId] = useState<number | null>(null);
 
@@ -802,6 +848,8 @@ function ConversationPane(props: {
           isLeadership={isLeadership}
           onSend={(p) => sendMutation.mutate(p)}
           toast={toast}
+          droppedFiles={droppedFiles}
+          onDroppedHandled={() => setDroppedFiles(null)}
         />
       ) : (
         <div className="shrink-0 border-t border-white/[0.06] p-4 text-center text-[13px] text-white/40">
@@ -822,11 +870,35 @@ function ConversationPane(props: {
         <ChannelSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} channel={channel} onBack={onBack} />
       )}
 
+      {/* 🔴 Portalled to document.body: the ClubOS header carries a
+          backdrop-filter, which makes it a containing block for fixed children
+          and would clip this to a 56px strip. Same trap as View As. */}
+      {dragging && createPortal(
+        <div
+          className="fixed inset-0 z-[300] flex items-center justify-center pointer-events-none"
+          style={{ background: "rgba(3,6,12,0.72)", backdropFilter: "blur(2px)" }}
+          data-testid="chat-drop-overlay"
+        >
+          <div
+            className="rounded-3xl border-2 border-dashed px-10 py-9 text-center"
+            style={{ borderColor: GOLD, background: "rgba(201,164,62,0.07)" }}
+          >
+            <Paperclip className="w-9 h-9 mx-auto mb-3" style={{ color: GOLD }} />
+            <div className="text-[19px] font-bold text-white/90">Drop files anywhere</div>
+            <div className="text-[13px] text-white/45 mt-1.5">
+              They'll attach to your message in {channel.kind === "dm" ? "this conversation" : `#${channel.name}`}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {threadRootId !== null && (
         <ThreadPanel
           rootId={threadRootId}
           me={me}
           historyKey={historyKey}
+          members={members}
           onClose={() => setThreadRootId(null)}
         />
       )}
@@ -1366,8 +1438,11 @@ function Composer(props: {
   isLeadership: boolean;
   onSend: (p: { body: string; attachments: Attachment[]; mentionUserIds: number[]; requiresAck: boolean; clientMessageId: string }) => void;
   toast: ReturnType<typeof useToast>["toast"];
+  /** Files caught by the screen-wide drop zone in ConversationPane. */
+  droppedFiles?: File[] | null;
+  onDroppedHandled?: () => void;
 }) {
-  const { channel, members, me, isLeadership, onSend, toast } = props;
+  const { channel, members, me, isLeadership, onSend, toast, droppedFiles, onDroppedHandled } = props;
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // ── Drafts survive leaving the tab (Travis, 2026-08-15) ───────────────────
@@ -1384,7 +1459,6 @@ function Composer(props: {
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
   const [requiresAck, setRequiresAck] = useState(false);
-  const [dragging, setDragging] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const recRef = useRef<{ recorder: MediaRecorder; chunks: Blob[]; timer: ReturnType<typeof setInterval>; start: number } | null>(null);
@@ -1521,38 +1595,20 @@ function Composer(props: {
   const placeholder =
     channel.kind === "dm" ? "Message…" : channel.postPolicy === "leadership" ? `Post an announcement…` : `Message #${channel.name}`;
 
+  // Files dropped anywhere on the conversation land here — the drop target is
+  // the whole screen, not this thin bar. See ConversationPane's window-level
+  // listeners; the composer just receives what they caught.
+  useEffect(() => {
+    if (droppedFiles?.length) {
+      addFiles(droppedFiles);
+      onDroppedHandled?.();
+    }
+    // addFiles is recreated on every render, so the files themselves are the
+    // stable dependency to key on.
+  }, [droppedFiles]);
+
   return (
-    <div
-      className="shrink-0 border-t border-white/[0.06] p-3 sm:p-4 relative"
-      // Drag a file or an image straight onto the composer (Travis, 2026-08-15).
-      // 🔴 dragenter/dragover MUST preventDefault or the browser navigates away
-      // to the dropped file and the whole app disappears.
-      onDragEnter={(e) => { e.preventDefault(); if (e.dataTransfer?.types?.includes("Files")) setDragging(true); }}
-      onDragOver={(e) => { e.preventDefault(); }}
-      // dragleave fires when crossing INTO a child element too, which flickers
-      // the overlay — only clear when the pointer has actually left this box.
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragging(false);
-        const files = e.dataTransfer?.files;
-        if (files?.length) addFiles(files);
-      }}
-      data-testid="composer-dropzone"
-    >
-      {dragging && (
-        <div
-          className="absolute inset-1.5 rounded-2xl border-2 border-dashed flex items-center justify-center pointer-events-none z-20"
-          style={{ borderColor: GOLD, background: "rgba(201,164,62,0.08)" }}
-          data-testid="composer-drop-overlay"
-        >
-          <span className="text-[13px] font-semibold" style={{ color: GOLD }}>
-            Drop to attach
-          </span>
-        </div>
-      )}
+    <div className="shrink-0 border-t border-white/[0.06] p-3 sm:p-4 relative" data-testid="composer-dropzone">
       {/* Mention autocomplete */}
       {mentionMatches.length > 0 && (
         <div className="absolute bottom-full left-4 right-4 sm:right-auto sm:w-72 mb-1 rounded-xl border border-white/10 bg-[#16171a] shadow-2xl overflow-hidden z-10">

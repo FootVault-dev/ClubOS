@@ -4,16 +4,18 @@
 //
 // ⚠️ Threads reverse a documented v1 decision — Google Chat shipped
 // topic-threading and had to remove it because conversations vanished into
-// side-rooms nobody read. The mitigation lives here as much as in the API:
-// 🔴 a reply STILL RENDERS IN THE CHANNEL. The panel is a focused view of a
-// conversation that is already visible, never the only place it exists.
+// side-rooms nobody read. v2 first hedged by ALSO showing replies in the
+// channel; Daniel saw that live and called it duplicated and messy, so replies
+// are now thread-only (Slack's behaviour). 🔴 The buried-conversation risk is
+// carried by notifications instead: a mention inside a thread still badges,
+// which is why this composer must send mentionUserIds.
 //
 // 🔴 Every modal is PORTALLED to document.body. The chat page sits under a
 // header with `backdrop-blur-2xl`, and a backdrop-filter makes an element a
 // containing block for its `position: fixed` descendants — an inline overlay
 // gets clipped to a 56px strip. Learned twice now (View As, and the coaching
 // app's exercise picker).
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, workspaceFetch } from "@/lib/queryClient";
@@ -33,11 +35,47 @@ const fmtBytes = (n: number) =>
 // Thread panel
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function ThreadPanel({ rootId, onClose, me, historyKey }: {
+export function ThreadPanel({ rootId, onClose, me, historyKey, members = [] }: {
   rootId: number; onClose: () => void; me: number; historyKey: string[];
+  /** Needed for @ mentions — see the note on `mentionUserIds` below. */
+  members?: { userId: number; name: string }[];
 }) {
   const [text, setText] = useState("");
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  // 🔴 Mentions are EXPLICIT on the server — it validates the ids you send and
+  // never parses names out of the body. A thread reply typed with a plain
+  // textarea therefore mentioned nobody, however it looked. (Daniel, 2026-08-15)
+  const [picked, setPicked] = useState<{ id: number; name: string }[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIdx, setMentionIdx] = useState(0);
   const key = ["/api/admin/chat/messages", rootId, "thread"];
+
+  const others = members.filter((m) => m.userId !== me);
+  const matches = mentionQuery != null
+    ? others.filter((m) => m.name.toLowerCase().includes(mentionQuery.toLowerCase())).slice(0, 6)
+    : [];
+
+  const onType = (v: string) => {
+    setText(v);
+    const caret = taRef.current?.selectionStart ?? v.length;
+    const m = v.slice(0, caret).match(/@([^\s@]{0,24})$/);
+    setMentionQuery(m ? m[1] : null);
+    setMentionIdx(0);
+  };
+
+  const pickMention = (person: { userId: number; name: string }) => {
+    const ta = taRef.current;
+    const caret = ta?.selectionStart ?? text.length;
+    const upto = text.slice(0, caret).replace(/@([^\s@]{0,24})$/, `@${person.name} `);
+    const next = upto + text.slice(caret);
+    setText(next);
+    setPicked((cur) => (cur.some((x) => x.id === person.userId) ? cur : [...cur, { id: person.userId, name: person.name }]));
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      ta?.focus();
+      if (ta) ta.selectionStart = ta.selectionEnd = upto.length;
+    });
+  };
 
   const { data, isLoading } = useQuery<any>({
     queryKey: key,
@@ -53,14 +91,19 @@ export function ThreadPanel({ rootId, onClose, me, historyKey }: {
     mutationFn: async () => {
       const body = text.trim();
       if (!body) return;
+      // Only send ids whose name still appears in the body — deleting the text
+      // of a mention must un-mention them, or people get pinged for a name that
+      // is no longer in the message.
+      const mentionUserIds = picked.filter((p) => body.includes(`@${p.name}`)).map((p) => p.id);
       await apiRequest("POST", `/api/admin/chat/channels/${data.channelId}/messages`, {
-        body, parentMessageId: rootId,
+        body, parentMessageId: rootId, mentionUserIds,
       });
     },
     onSuccess: () => {
       setText("");
+      setPicked([]);
       queryClient.invalidateQueries({ queryKey: key });
-      // The channel shows the reply and the root's count, so refresh it too.
+      // The channel shows the root's reply count, so refresh it too.
       queryClient.invalidateQueries({ queryKey: historyKey });
     },
   });
@@ -124,11 +167,34 @@ export function ThreadPanel({ rootId, onClose, me, historyKey }: {
         </div>
 
         <div className="p-3 border-t border-white/[0.07] flex-shrink-0">
+          {matches.length > 0 && (
+            <div className="mb-2 rounded-xl border border-white/10 bg-[#16171a] overflow-hidden shadow-2xl">
+              {matches.map((m, i) => (
+                <button
+                  key={m.userId}
+                  onClick={() => pickMention(m)}
+                  data-testid={`thread-mention-${m.userId}`}
+                  className={`w-full text-left px-3 py-2 text-[13px] ${i === mentionIdx ? "bg-white/[0.08] text-white/90" : "text-white/65 hover:bg-white/[0.05]"}`}
+                >
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex items-end gap-2">
             <textarea
+              ref={taRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => onType(e.target.value)}
               onKeyDown={(e) => {
+                // While the mention list is open the arrows and Enter belong to
+                // it, not to sending — otherwise picking someone sends instead.
+                if (matches.length > 0) {
+                  if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => (i + 1) % matches.length); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => (i - 1 + matches.length) % matches.length); return; }
+                  if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(matches[mentionIdx]); return; }
+                  if (e.key === "Escape") { setMentionQuery(null); return; }
+                }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send.mutate(); }
               }}
               rows={2}
