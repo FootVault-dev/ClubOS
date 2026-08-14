@@ -28,7 +28,7 @@ import {
   Hash, Lock, Megaphone, Plus, Search, Send, Paperclip, Mic, Square, X,
   ChevronLeft, ChevronDown, ChevronRight, Users, Bell, BellOff, Volume2,
   MoreHorizontal, Pencil, SmilePlus, CheckCheck, Check, ArchiveX,
-  MessageSquare, CornerUpRight, Paperclip as PaperclipIcon,
+  MessageSquare, CornerUpRight, Paperclip as PaperclipIcon, Maximize2, Minimize2, Expand,
   MessagesSquare, LogOut, FileText, Download, ShieldCheck, Loader2, UserPlus,
 } from "lucide-react";
 
@@ -1270,18 +1270,98 @@ function readVCard(text: string): { name: string; phone?: string; email?: string
  */
 function AttachmentLightbox({ a, onClose }: { a: Attachment; onClose: () => void }) {
   const ct = (a.contentType || "").toLowerCase();
+  const isImage = ct.startsWith("image/");
+  const isVideo = ct.startsWith("video/");
+
+  // Full screen for attachments (Daniel, 2026-08-15): the dialog caps at 78vh
+  // inside a 5xl box, which leaves a screenshot of a screenshot unreadable —
+  // worst on a small device, which is where staff actually read these.
+  //
+  // 🔴 Two separate things, deliberately:
+  //   • "Fit"  — expand the dialog itself to the whole viewport. Always works.
+  //   • Native full screen — the OS one, via the Fullscreen API. Genuinely
+  //     better on a phone, but iOS Safari does not support it on arbitrary
+  //     elements, so it must never be the ONLY way to get a bigger view.
+  const [expanded, setExpanded] = useState(false);
+  const [native, setNative] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
+
+  const canNative = typeof document !== "undefined" && !!document.fullscreenEnabled;
+
+  const toggleNative = async () => {
+    const el = shellRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await el.requestFullscreen();
+    } catch {
+      // Refused (iOS Safari, or a permissions policy) — fall back to expanding
+      // the dialog, so the button always does something useful.
+      setExpanded((v) => !v);
+    }
+  };
+
+  // The user can leave full screen with Escape or the OS chrome, which fires no
+  // click of ours — track the real state rather than assuming our own.
+  useEffect(() => {
+    const onFs = () => setNative(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "f" || e.key === "F") { e.preventDefault(); setExpanded((v) => !v); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const big = expanded || native;
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-5xl w-[calc(100vw-2rem)] p-0 gap-0 bg-[#0e1116] border-white/10">
-        {/* pr-12 keeps the Download button clear of the Dialog's own absolutely
+      <DialogContent
+        className={
+          big
+            ? "max-w-none w-screen h-screen sm:rounded-none p-0 gap-0 bg-[#0e1116] border-0 translate-x-0 translate-y-0 left-0 top-0"
+            : "max-w-5xl w-[calc(100vw-2rem)] p-0 gap-0 bg-[#0e1116] border-white/10"
+        }
+        data-testid="attachment-lightbox"
+      >
+        {/* pr-12 keeps the buttons clear of the Dialog's own absolutely
             positioned close X (top-4 right-4) — without it the two overlap on a
             phone and the X lands on top of "Download". */}
-        <div className="flex items-center gap-3 px-4 py-3 pr-12 border-b border-white/[0.07] min-w-0">
+        <div className="flex items-center gap-2 px-4 py-3 pr-12 border-b border-white/[0.07] min-w-0">
           <FileText className="w-4 h-4 text-white/40 shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-semibold truncate">{a.name}</div>
             <div className="text-[11px] text-white/35">{fmtBytes(a.size)}</div>
           </div>
+
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? "Exit full screen (F)" : "Full screen (F)"}
+            aria-label={expanded ? "Exit full screen" : "Full screen"}
+            data-testid="button-toggle-expand"
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1.5 text-[12px] font-semibold transition-colors"
+          >
+            {expanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{expanded ? "Exit" : "Full screen"}</span>
+          </button>
+
+          {canNative && (
+            <button
+              onClick={toggleNative}
+              title={native ? "Leave device full screen" : "Device full screen"}
+              aria-label={native ? "Leave device full screen" : "Device full screen"}
+              data-testid="button-toggle-native-fullscreen"
+              className="shrink-0 inline-flex items-center justify-center rounded-lg border border-white/10 hover:border-white/25 w-8 h-8 transition-colors"
+            >
+              <Expand className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           <a
             href={a.url}
             download={a.name}
@@ -1289,17 +1369,29 @@ function AttachmentLightbox({ a, onClose }: { a: Attachment; onClose: () => void
             className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1.5 text-[12px] font-semibold transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
-            {/* Label hidden on the narrowest screens — the icon plus the aria
-                label carries it, and a wrapped two-line header looks broken. */}
             <span className="hidden sm:inline">Download</span>
           </a>
         </div>
+
         {/* Fixed viewport height so a tall PDF scrolls INSIDE the dialog rather
-            than growing it past the bottom of the screen. */}
-        <div className="bg-black/40 flex items-center justify-center" style={{ height: "min(78vh, 900px)" }}>
-          {ct.startsWith("image/") ? (
-            <img src={a.url} alt={a.name} className="max-w-full max-h-full object-contain" />
-          ) : ct.startsWith("video/") ? (
+            than growing it past the bottom of the screen. Expanded, it takes
+            everything left after the header. */}
+        <div
+          ref={shellRef}
+          className="bg-black/40 flex items-center justify-center overflow-auto"
+          style={big ? { height: "calc(100vh - 61px)" } : { height: "min(78vh, 900px)" }}
+        >
+          {isImage ? (
+            // Click the image itself to toggle — the obvious gesture, and the
+            // only comfortable one on a phone where the header buttons are small.
+            <img
+              src={a.url}
+              alt={a.name}
+              onClick={() => setExpanded((v) => !v)}
+              className="max-w-full max-h-full object-contain cursor-zoom-in"
+              data-testid="lightbox-image"
+            />
+          ) : isVideo ? (
             <video src={a.url} controls autoPlay className="max-w-full max-h-full" />
           ) : (
             <iframe src={a.url} title={a.name} className="w-full h-full bg-white" />
