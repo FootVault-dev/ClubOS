@@ -833,7 +833,12 @@ export default function AdminRegistrations() {
     }
 
     return list;
-  }, [registrations, searchTerm, filterDay, filterSession, filterPayment, filterServedBy]);
+    // 🔴 EVERY filter this memo reads must be in this array. Omitting one does
+    // not throw and does not warn — the list simply never recomputes when that
+    // control changes, so the filter silently does nothing. `filterRefund` was
+    // missing, which is why picking "Refunded" left every confirmed booking on
+    // screen. Add the dependency in the same commit as the filter.
+  }, [registrations, searchTerm, filterDay, filterSession, filterPayment, filterServedBy, filterRefund]);
 
   // Only the people who have actually served someone — a dropdown of all 16
   // staff when three of them work the counter is noise, not a filter.

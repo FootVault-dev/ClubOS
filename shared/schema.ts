@@ -8086,3 +8086,76 @@ export const kbAccessLog = pgTable("kb_access_log", {
   createdIdx: index("kb_access_log_created_idx").on(t.createdAt),
 }));
 export type KbAccessLog = typeof kbAccessLog.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Club Drive — the club's own file store (migrations/2026-08-15_club_drive.sql).
+//
+// ONE table for folders and files (`kind`) so the tree, moves and — the
+// important one — permission INHERITANCE stay simple. Gates accumulate down the
+// tree via the `drive_node_gates` view; see shared/drive.ts for the decider.
+// ─────────────────────────────────────────────────────────────────────────────
+export const driveNodes: any = pgTable("drive_nodes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  // RESTRICT, never CASCADE — deleting a folder must not take the club's
+  // records with it. The app trashes; the database refuses to orphan.
+  parentId: integer("parent_id").references((): any => driveNodes.id, { onDelete: "restrict" }),
+  kind: text("kind").notNull().default("file"),        // folder | file
+  name: text("name").notNull(),
+
+  // Opaque above the storage adapter: a Supabase path today, an R2 key later.
+  storageKey: text("storage_key"),
+  storageBackend: text("storage_backend").notNull().default("supabase"),
+  mimeType: text("mime_type"),
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
+  checksum: text("checksum"),
+
+  brand: text("brand").notNull().default("all"),
+
+  // NULL = every staff member. Set = only people who can reach that ClubOS tab.
+  // Inherited and accumulated down the tree — never released by a child.
+  requiredTab: text("required_tab"),
+  requiredWorkspace: text("required_workspace"),
+
+  // NULL = not yet extracted; '' = extracted and genuinely empty (a photo).
+  extractedText: text("extracted_text"),
+  extractStatus: text("extract_status"),               // done | unsupported | failed
+  extractError: text("extract_error"),
+  description: text("description"),
+  keywords: text("keywords").array().notNull().default(sql`'{}'::text[]`),
+
+  source: text("source").notNull().default("clubos"),  // clubos | google_drive
+  sourceId: text("source_id"),
+  sourceUrl: text("source_url"),
+  sourceModifiedAt: timestamp("source_modified_at"),
+
+  // Soft delete only. Club files are legal records.
+  trashedAt: timestamp("trashed_at"),
+  trashedBy: integer("trashed_by").references(() => users.id, { onDelete: "set null" }),
+
+  ownerUserId: integer("owner_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  updatedBy: integer("updated_by").references(() => users.id, { onDelete: "set null" }),
+
+  viewCount: integer("view_count").notNull().default(0),
+  lastOpenedAt: timestamp("last_opened_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t: any) => ({
+  parentIdx: index("drive_nodes_parent_idx2").on(t.parentId),
+  brandIdx: index("drive_nodes_brand_idx2").on(t.brand),
+}));
+export type DriveNode = typeof driveNodes.$inferSelect;
+
+// Who opened what. An audit trail, not analytics — when a contract is in here,
+// "who read this, and when" is a question that gets asked.
+export const driveAccessLog = pgTable("drive_access_log", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  nodeId: integer("node_id").references((): any => driveNodes.id, { onDelete: "cascade" }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  action: text("action").notNull(),   // view | download | upload | move | rename | trash | restore
+  detail: text("detail"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  nodeIdx: index("drive_access_log_node_idx2").on(t.nodeId, t.createdAt),
+}));
+export type DriveAccessLog = typeof driveAccessLog.$inferSelect;

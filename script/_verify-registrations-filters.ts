@@ -78,6 +78,55 @@ try {
   }));
   ok("picking a camp brings the day + session filters back", !!campVal && afterCamp.day && afterCamp.session);
   await page.screenshot({ path: join(outDir,"filters-camp-selected.png"), clip:{x:330,y:60,width:1110,height:220} });
+  // ── 🔴 The refund filter must actually filter ──────────────────────────────
+  // It shipped inert: the filter logic was written but `filterRefund` was left
+  // out of the useMemo dependency array, so the list never recomputed and every
+  // confirmed booking stayed on screen under "Refunded". React does not warn.
+  const pick = async (testid: string, match: RegExp) => page.evaluate(({ testid, src }: any) => {
+    const sel = document.querySelector(`[data-testid="${testid}"]`) as HTMLSelectElement;
+    const re = new RegExp(src, "i");
+    const opt = Array.from(sel.querySelectorAll("option")).find(o => re.test(o.textContent || ""));
+    if (!opt) return null;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!;
+    setter.call(sel, (opt as HTMLOptionElement).value);
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    return (opt as HTMLOptionElement).value;
+  }, { testid, src: match.source });
+
+  const rowIds = () => page.evaluate(() =>
+    Array.from(document.body.innerText.matchAll(/#(\d+) — /g)).map(m => Number(m[1])));
+
+  await pick("select-camp-filter", /^All programmes$/);
+  await new Promise(r => setTimeout(r, 2500));
+  await pick("select-refund-filter", /^Refunded$/);
+  await new Promise(r => setTimeout(r, 2500));
+  const refunded = await rowIds();
+  // The nine CUFC registrations carrying refunded money.
+  const expected = [53, 93, 258, 281, 288, 392, 401, 419, 432];
+  ok("🔴 'Refunded' shows only refunded bookings",
+     refunded.length > 0 && refunded.every(id => expected.includes(id)),
+     `${refunded.length} rows: ${refunded.slice(0, 12).join(", ")}`);
+  ok("and finds the ones that are only PARTLY refunded",
+     refunded.includes(53) || refunded.includes(93),
+     "partial refunds keep status 'confirmed'-ish and must not be missed");
+
+  await pick("select-refund-filter", /^Not refunded$/);
+  await new Promise(r => setTimeout(r, 2500));
+  const notRefunded = await rowIds();
+  ok("'Not refunded' excludes every refunded booking",
+     notRefunded.length > 0 && !notRefunded.some(id => expected.includes(id)),
+     `${notRefunded.length} rows`);
+
+  // Daniel's exact combination: Technification + Refunded → nothing is refunded
+  // in that programme, so the list must be empty, not full.
+  await pick("select-refund-filter", /^Refunded$/);
+  await pick("select-camp-filter", /Technification/);
+  await new Promise(r => setTimeout(r, 3000));
+  const tech = await rowIds();
+  ok("🔴 Technification + Refunded shows NOTHING (nothing in it was refunded)",
+     tech.length === 0, `${tech.length} rows`);
+  await page.screenshot({ path: join(outDir, "filters-refunded-empty.png"), clip: { x: 330, y: 60, width: 1110, height: 320 } });
+
   console.log(`\nscreenshots → outputs/ui-preflight/clubos-registrations/`);
 } finally {
   if (browser) await browser.close();
