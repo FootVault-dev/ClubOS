@@ -765,7 +765,11 @@ function ConversationPane(props: {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="w-8 h-8 rounded-lg flex items-center justify-center text-white/45 hover:text-white/80 hover:bg-white/[0.06]">
+            <button
+              data-testid="button-channel-menu"
+              aria-label="Conversation options"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-white/45 hover:text-white/80 hover:bg-white/[0.06]"
+            >
               <MoreHorizontal className="w-4 h-4" />
             </button>
           </DropdownMenuTrigger>

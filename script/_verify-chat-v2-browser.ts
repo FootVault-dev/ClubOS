@@ -292,6 +292,40 @@ try {
     ok("a thread exists to test actions in", false);
   }
 
+  // ── Full screen for attachments, and mark-as-unread ────────────────────────
+  await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 3000));
+
+  // 🔴 Mark unread must SURVIVE — the auto-read effect fires whenever the newest
+  // message is on screen, so the real test is whether it sticks, not whether the
+  // request returned 200.
+  const before = await (await fetch(`${BASE}/api/admin/chat/sync`, {
+    headers: { Cookie: cookie, "X-Workspace-Slug": "christchurch-united" } })).json();
+  const wasUnread = (before.channels || []).find((c: any) => c.id === channelId)?.unreadCount ?? 0;
+
+  const kebab = await page.$('[data-testid="button-channel-menu"]');
+  ok("the conversation menu is reachable", !!kebab);
+  if (kebab) await kebab.evaluate((b: any) => b.click());
+  await new Promise((r) => setTimeout(r, 1000));
+  const item = await page.$('[data-testid="menu-mark-unread"]');
+  ok("a 'Mark as unread' option is offered", !!item);
+  if (item) {
+    await item.evaluate((b: any) => b.click());
+    await new Promise((r) => setTimeout(r, 3500));
+    const after = await (await fetch(`${BASE}/api/admin/chat/sync`, {
+      headers: { Cookie: cookie, "X-Workspace-Slug": "christchurch-united" } })).json();
+    const nowUnread = (after.channels || []).find((c: any) => c.id === channelId)?.unreadCount ?? 0;
+    ok("🔴 and it STAYS unread (the auto-read effect doesn't undo it)",
+       nowUnread > 0, `unread ${wasUnread} → ${nowUnread}`);
+    ok("and it closes the conversation, which is what makes that possible",
+       !(await page.evaluate(() => !!document.querySelector('[data-testid="composer-dropzone"]'))));
+  }
+
+  // Attachment full screen — the lightbox capped at 78vh and left a screenshot
+  // of a screenshot unreadable.
+  await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 2500));
+
   // Mobile pass — this is a phone-first staff tool.
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   await new Promise((r) => setTimeout(r, 1500));
