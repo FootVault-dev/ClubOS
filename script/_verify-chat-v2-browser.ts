@@ -237,17 +237,59 @@ try {
   ok("a react action is offered", !!reactBtn);
   if (reactBtn) {
     await reactBtn.evaluate((b: any) => b.click());
-    await new Promise((r) => setTimeout(r, 1500));
-    const picker = await page.evaluate(() => ({
-      quick: !!document.querySelector('[data-testid^="quick-emoji-"]'),
-      full: !!document.querySelector('[data-testid="emoji-picker"]'),
+    await new Promise((r) => setTimeout(r, 1200));
+    ok("the six quick reactions are one click away",
+       await page.evaluate(() => !!document.querySelector('[data-testid^="quick-emoji-"]')));
+    ok("🔴 and a '+' opens the rest (WhatsApp's shape)",
+       await page.evaluate(() => !!document.querySelector('[data-testid="button-more-emoji"]')));
+
+    await page.click('[data-testid="button-more-emoji"]');
+    await new Promise((r) => setTimeout(r, 1200));
+    const cat = await page.evaluate(() => ({
+      picker: !!document.querySelector('[data-testid="emoji-picker"]'),
       search: !!document.querySelector('[data-testid="input-emoji-search"]'),
+      // 🔴 The bug that shipped: tabs rendered, grid was empty, because the
+      // dataset is an ARRAY of groups and was indexed as a map.
+      count: document.querySelectorAll('[data-testid="emoji-option"]').length,
+      tabs: document.querySelectorAll('[data-testid^="emoji-tab-"]').length,
     }));
-    ok("the six quick reactions are still one tap away", picker.quick);
-    ok("🔴 and the FULL emoji catalogue is there too", picker.full);
-    ok("with a search box", picker.search);
+    ok("the full catalogue opens", cat.picker && cat.search);
+    ok("🔴 and the grid actually CONTAINS emoji", cat.count > 50, `${cat.count} emoji`);
+    ok("with category tabs to scroll through", cat.tabs >= 8, `${cat.tabs} categories`);
+
+    await page.type('[data-testid="input-emoji-search"]', "rocket");
+    await new Promise((r) => setTimeout(r, 900));
+    const found = await page.evaluate(() =>
+      document.querySelectorAll('[data-testid="emoji-option"]').length);
+    ok("searching finds something", found > 0, `${found} results for "rocket"`);
     await page.screenshot({ path: join(outDir, "emoji-picker.png") });
     await page.keyboard.press("Escape");
+    await new Promise((r) => setTimeout(r, 800));
+  }
+
+  // ── Actions inside the thread ──────────────────────────────────────────────
+  // 🔴 Thread messages had no react/forward at all — the panel was a read-only
+  // dead end.
+  const openThread2 = await page.$('[data-testid^="button-open-thread-"]');
+  if (openThread2) {
+    await openThread2.evaluate((b: any) => b.click());
+    await new Promise((r) => setTimeout(r, 2500));
+    await page.evaluate(() => {
+      const rows = document.querySelectorAll('[data-testid="panel-thread"] .group');
+      (rows[0] as HTMLElement | undefined)?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    const acts = await page.evaluate(() => ({
+      react: !!document.querySelector('[data-testid^="thread-react-"]'),
+      forward: !!document.querySelector('[data-testid^="thread-forward-"]'),
+      staleCopy: /Replies also appear in the channel/.test(document.body.innerText),
+    }));
+    ok("🔴 thread messages can be reacted to", acts.react);
+    ok("🔴 and forwarded", acts.forward);
+    ok("the footnote no longer claims replies appear in the channel", !acts.staleCopy);
+    await page.screenshot({ path: join(outDir, "thread-actions.png") });
+    await page.keyboard.press("Escape");
+  } else {
+    ok("a thread exists to test actions in", false);
   }
 
   // Mobile pass — this is a phone-first staff tool.
