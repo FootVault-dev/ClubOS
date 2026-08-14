@@ -114,7 +114,7 @@ import {
 import { registerMediaRoutes } from "./media-routes";
 import { registerMarketingRoutes } from "./marketing/routes";
 import { registerFamilyRoutes } from "./family-routes";
-import { registerViewAsRoutes } from "./view-as-routes";
+import { registerViewAsRoutes, clearViewAs } from "./view-as-routes";
 import { registerParentRoutes, resolveOwnedChildContactId } from "./parent-routes";
 
 export async function registerRoutes(
@@ -351,6 +351,7 @@ export async function registerRoutes(
       const valid = await verifyPassword(password, user.password);
       if (!valid) return res.status(401).json({ message: "Invalid credentials" });
       req.session.userId = user.id;
+      clearViewAs(req.session); // a fresh login is a fresh identity
       res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -448,6 +449,7 @@ export async function registerRoutes(
         .where(and(eq(passwordResetTokens.userId, user.id), isNull(passwordResetTokens.usedAt)));
 
       req.session.userId = user.id;
+      clearViewAs(req.session); // a fresh login is a fresh identity
       return res.json({ ok: true, id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role });
     } catch (error: any) {
       console.error("[reset-password] failed:", error);
@@ -510,6 +512,7 @@ export async function registerRoutes(
       if (!user.active) return res.status(403).json({ message: "Account disabled" });
 
       req.session.userId = user.id;
+      clearViewAs(req.session); // a fresh login is a fresh identity
       res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role });
     } catch (e: any) {
       console.error("[google-auth]", e);
@@ -548,6 +551,7 @@ export async function registerRoutes(
         role: "coach",
       }).returning();
       req.session.userId = user.id;
+      clearViewAs(req.session); // a fresh login is a fresh identity
       res.status(201).json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role });
     } catch (e: any) {
       console.error("[signup]", e);
@@ -626,6 +630,7 @@ export async function registerRoutes(
       if (!user.active) return res.status(403).json({ message: "Account disabled" });
 
       req.session.userId = user.id;
+      clearViewAs(req.session); // a fresh login is a fresh identity
       res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role });
     } catch (e: any) {
       console.error("[apple-auth]", e);

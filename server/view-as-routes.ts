@@ -58,6 +58,23 @@ function isStopPath(p: string): boolean {
 }
 
 /**
+ * 🔴 THE READ-ONLY GATE MUST NEVER BE ABLE TO LOCK SOMEBODY OUT OF THEIR OWN
+ * ACCOUNT. Signing in is a POST, so a session left in a view-as state refused
+ * `/api/auth/login` with "you're viewing as someone else" — from the login
+ * screen, where the message is nonsense and there is no way to act on it. That
+ * is precisely what happened to Daniel: he viewed as Olga, signed out, and
+ * could not get back in.
+ *
+ * The whole auth lifecycle is therefore exempt — login, logout, password reset,
+ * the social sign-ins. `/api/auth/me` is NOT: PATCHing a name or avatar while
+ * impersonating is a real write under the staff member's identity, which is the
+ * exact thing this gate exists to prevent.
+ */
+function isAuthLifecycle(p: string): boolean {
+  return p.startsWith("/api/auth/") && !p.startsWith("/api/auth/me");
+}
+
+/**
  * Global gate: while a view-as session is active, nothing may be written.
  * Mounted before the routes so no handler can be reached another way.
  */
@@ -66,6 +83,7 @@ export function viewAsReadOnly(req: Request, res: Response, next: NextFunction) 
   if (!original) return next();
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
   if (isStopPath(req.path)) return next();
+  if (isAuthLifecycle(req.path)) return next();
   return res.status(403).json({
     message: "You're viewing as someone else, which is read-only. Stop viewing to make changes.",
     viewAsReadOnly: true,
@@ -75,6 +93,15 @@ export function viewAsReadOnly(req: Request, res: Response, next: NextFunction) 
 async function isSuperAdmin(userId: number): Promise<boolean> {
   const u = await storage.getUser(userId);
   return !!u && u.role === "super_admin";
+}
+
+/**
+ * Wipe any view-as state. Called on every successful sign-in: a fresh login is a
+ * fresh identity, so a stale actor id must never survive into the new session.
+ */
+export function clearViewAs(session: any): void {
+  delete session.viewAsOriginalUserId;
+  delete session.viewAsEventId;
 }
 
 /** The real person behind the session, whoever is being viewed. */
