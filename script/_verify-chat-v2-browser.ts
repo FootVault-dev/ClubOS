@@ -296,25 +296,37 @@ try {
   await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
   await new Promise((r) => setTimeout(r, 3000));
 
-  // 🔴 Mark unread must SURVIVE — the auto-read effect fires whenever the newest
+  // 🔴 Mark unread anchors to the newest message NOT written by you — marking
+  // your own message unread would badge you about yourself. Every message in
+  // this channel so far is the probe's own, so seed one from the other member
+  // or the endpoint correctly does nothing and the test blames the app.
+  await pool.query(
+    `INSERT INTO staff_messages (channel_id, author_id, body) VALUES ($1,$2,$3)`,
+    [channelId, mateId, "Can you sort the team sheet for Saturday?"]);
+  await new Promise((r) => setTimeout(r, 500));
+
+  // Mark unread must SURVIVE — the auto-read effect fires whenever the newest
   // message is on screen, so the real test is whether it sticks, not whether the
   // request returned 200.
   const before = await (await fetch(`${BASE}/api/admin/chat/sync`, {
     headers: { Cookie: cookie, "X-Workspace-Slug": "christchurch-united" } })).json();
-  const wasUnread = (before.channels || []).find((c: any) => c.id === channelId)?.unreadCount ?? 0;
+  const wasUnread = (before.channels || []).find((c: any) => c.id === channelId)?.unread ?? 0;
 
   const kebab = await page.$('[data-testid="button-channel-menu"]');
   ok("the conversation menu is reachable", !!kebab);
-  if (kebab) await kebab.evaluate((b: any) => b.click());
-  await new Promise((r) => setTimeout(r, 1000));
+  // 🔴 A real mouse click, not element.click(): Radix's DropdownMenu opens on
+  // POINTERDOWN, and a synthetic click never opens it — the menu looked missing
+  // when it was working perfectly.
+  if (kebab) await kebab.click();
+  await new Promise((r) => setTimeout(r, 1200));
   const item = await page.$('[data-testid="menu-mark-unread"]');
   ok("a 'Mark as unread' option is offered", !!item);
   if (item) {
-    await item.evaluate((b: any) => b.click());
+    await item.click();
     await new Promise((r) => setTimeout(r, 3500));
     const after = await (await fetch(`${BASE}/api/admin/chat/sync`, {
       headers: { Cookie: cookie, "X-Workspace-Slug": "christchurch-united" } })).json();
-    const nowUnread = (after.channels || []).find((c: any) => c.id === channelId)?.unreadCount ?? 0;
+    const nowUnread = (after.channels || []).find((c: any) => c.id === channelId)?.unread ?? 0;
     ok("🔴 and it STAYS unread (the auto-read effect doesn't undo it)",
        nowUnread > 0, `unread ${wasUnread} → ${nowUnread}`);
     ok("and it closes the conversation, which is what makes that possible",
