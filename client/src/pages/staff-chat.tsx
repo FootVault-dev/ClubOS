@@ -1370,16 +1370,33 @@ function Composer(props: {
   const { channel, members, me, isLeadership, onSend, toast } = props;
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState("");
+  // ── Drafts survive leaving the tab (Travis, 2026-08-15) ───────────────────
+  // He types a message, clicks another ClubOS tab, comes back and it's gone.
+  // The composer unmounts when the page does, so state alone can't survive it.
+  // Kept per channel: a half-written note to Dima must not reappear in #general.
+  const draftKey = `clubos_chat_draft_${channel.id}`;
+  const [text, setText] = useState<string>(() => {
+    try { return localStorage.getItem(draftKey) ?? ""; } catch { return ""; }
+  });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
   const [mentions, setMentions] = useState<{ id: number; name: string }[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
   const [requiresAck, setRequiresAck] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const recRef = useRef<{ recorder: MediaRecorder; chunks: Blob[]; timer: ReturnType<typeof setInterval>; start: number } | null>(null);
+
+  // Persist on every keystroke — the tab can be left at any moment, and there
+  // is no "closing" event we can rely on. Cheap: one small string per channel.
+  useEffect(() => {
+    try {
+      if (text.trim()) localStorage.setItem(draftKey, text);
+      else localStorage.removeItem(draftKey);
+    } catch { /* private mode / quota — a lost draft must never break the composer */ }
+  }, [text, draftKey]);
 
   const otherMembers = members.filter((m) => m.userId !== me);
   const mentionMatches =
@@ -1493,6 +1510,7 @@ function Composer(props: {
       clientMessageId: crypto.randomUUID(),
     });
     setText("");
+    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     setAttachments([]);
     setMentions([]);
     setRequiresAck(false);
@@ -1504,7 +1522,37 @@ function Composer(props: {
     channel.kind === "dm" ? "Message…" : channel.postPolicy === "leadership" ? `Post an announcement…` : `Message #${channel.name}`;
 
   return (
-    <div className="shrink-0 border-t border-white/[0.06] p-3 sm:p-4 relative">
+    <div
+      className="shrink-0 border-t border-white/[0.06] p-3 sm:p-4 relative"
+      // Drag a file or an image straight onto the composer (Travis, 2026-08-15).
+      // 🔴 dragenter/dragover MUST preventDefault or the browser navigates away
+      // to the dropped file and the whole app disappears.
+      onDragEnter={(e) => { e.preventDefault(); if (e.dataTransfer?.types?.includes("Files")) setDragging(true); }}
+      onDragOver={(e) => { e.preventDefault(); }}
+      // dragleave fires when crossing INTO a child element too, which flickers
+      // the overlay — only clear when the pointer has actually left this box.
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        const files = e.dataTransfer?.files;
+        if (files?.length) addFiles(files);
+      }}
+      data-testid="composer-dropzone"
+    >
+      {dragging && (
+        <div
+          className="absolute inset-1.5 rounded-2xl border-2 border-dashed flex items-center justify-center pointer-events-none z-20"
+          style={{ borderColor: GOLD, background: "rgba(201,164,62,0.08)" }}
+          data-testid="composer-drop-overlay"
+        >
+          <span className="text-[13px] font-semibold" style={{ color: GOLD }}>
+            Drop to attach
+          </span>
+        </div>
+      )}
       {/* Mention autocomplete */}
       {mentionMatches.length > 0 && (
         <div className="absolute bottom-full left-4 right-4 sm:right-auto sm:w-72 mb-1 rounded-xl border border-white/10 bg-[#16171a] shadow-2xl overflow-hidden z-10">

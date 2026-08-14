@@ -554,9 +554,22 @@ export function registerStaffChatRoutes(app: Express) {
       const before = req.query.before ? parseInt(String(req.query.before), 10) : undefined;
       const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "50"), 10) || 50, 1), 100);
 
+      // 🔴 THREAD REPLIES ARE EXCLUDED FROM THE CHANNEL FEED (Daniel, 2026-08-15).
+      //
+      // v2 originally kept replies in the channel as a hedge against the
+      // documented risk that threads bury conversations (Google Chat removed
+      // topic-threading for exactly that). Daniel saw it running in
+      // #help-it-admin and called it: the feed reads as duplicated and messy —
+      // the root says "1 reply" and the reply sits right underneath it saying
+      // "in thread". Slack's behaviour it is. A reply now lives ONLY in its
+      // thread, reachable from the root's reply count.
+      //
+      // Mentions still badge from inside a thread, so the buried-conversation
+      // risk is mitigated by notification rather than by duplication.
+      const notAReply = isNull(staffMessages.parentMessageId);
       const where = before
-        ? and(eq(staffMessages.channelId, channelId), sql`${staffMessages.id} < ${before}`)
-        : eq(staffMessages.channelId, channelId);
+        ? and(eq(staffMessages.channelId, channelId), notAReply, sql`${staffMessages.id} < ${before}`)
+        : and(eq(staffMessages.channelId, channelId), notAReply);
       const page = await db
         .select({ message: staffMessages, author: { firstName: usersTable.firstName, lastName: usersTable.lastName } })
         .from(staffMessages)
