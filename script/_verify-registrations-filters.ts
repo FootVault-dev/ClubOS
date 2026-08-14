@@ -93,26 +93,30 @@ try {
     return (opt as HTMLOptionElement).value;
   }, { testid, src: match.source });
 
-  const rowIds = () => page.evaluate(() =>
+  // 🔴 The list renders `orderNumber || id`, NOT the registration id. Asserting
+  // against registration ids compared two different numbering systems and made
+  // a correct filter look broken.
+  const rowOrderNumbers = () => page.evaluate(() =>
     Array.from(document.body.innerText.matchAll(/#(\d+) — /g)).map(m => Number(m[1])));
 
   await pick("select-camp-filter", /^All programmes$/);
   await new Promise(r => setTimeout(r, 2500));
   await pick("select-refund-filter", /^Refunded$/);
   await new Promise(r => setTimeout(r, 2500));
-  const refunded = await rowIds();
-  // The nine CUFC registrations carrying refunded money.
-  const expected = [53, 93, 258, 281, 288, 392, 401, 419, 432];
+  const refunded = await rowOrderNumbers();
+  // The nine CUFC registrations carrying refunded money, by ORDER NUMBER —
+  // ids 53/93/258/281/288/392/401/419/432 respectively.
+  const expected = [27, 59, 191, 211, 217, 286, 294, 311, 321];
   ok("🔴 'Refunded' shows only refunded bookings",
      refunded.length > 0 && refunded.every(id => expected.includes(id)),
      `${refunded.length} rows: ${refunded.slice(0, 12).join(", ")}`);
-  ok("and finds the ones that are only PARTLY refunded",
-     refunded.includes(53) || refunded.includes(93),
-     "partial refunds keep status 'confirmed'-ish and must not be missed");
+  ok("and finds the four that are only PARTLY refunded",
+     [27, 59, 191, 211].every(n => refunded.includes(n)),
+     "a partial refund leaves real money returned and must not be missed");
 
   await pick("select-refund-filter", /^Not refunded$/);
   await new Promise(r => setTimeout(r, 2500));
-  const notRefunded = await rowIds();
+  const notRefunded = await rowOrderNumbers();
   ok("'Not refunded' excludes every refunded booking",
      notRefunded.length > 0 && !notRefunded.some(id => expected.includes(id)),
      `${notRefunded.length} rows`);
@@ -122,7 +126,7 @@ try {
   await pick("select-refund-filter", /^Refunded$/);
   await pick("select-camp-filter", /Technification/);
   await new Promise(r => setTimeout(r, 3000));
-  const tech = await rowIds();
+  const tech = await rowOrderNumbers();
   ok("🔴 Technification + Refunded shows NOTHING (nothing in it was refunded)",
      tech.length === 0, `${tech.length} rows`);
   await page.screenshot({ path: join(outDir, "filters-refunded-empty.png"), clip: { x: 330, y: 60, width: 1110, height: 320 } });
