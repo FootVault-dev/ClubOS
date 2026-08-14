@@ -87,6 +87,7 @@ import {
   CloudUpload,
   Megaphone,
   HelpCircle,
+  HardDrive,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -97,6 +98,9 @@ const feedbackSecondary = { tab: "feedback", title: "Feedback", url: "/admin/fee
 // Universal "Chat" tab — the in-house Slack (staff channels + DMs). Same
 // universal pattern as Feedback: every workspace, requireAuth-gated.
 const chatSecondary = { tab: "chat", title: "Chat", url: "/admin/chat", icon: MessagesSquare };
+// Universal "Drive" tab — the club's own file store. Same universal pattern:
+// every workspace, requireAuth-gated server-side, visibility judged per FILE.
+const driveSecondary = { tab: "drive", title: "Drive", url: "/admin/drive", icon: HardDrive };
 // Universal "Task Tracker" tab — the organisation-wide project & task system.
 // Same universal pattern again: one shared dataset, every workspace, gated
 // server-side by requireAuth rather than a per-workspace tab grant.
@@ -636,7 +640,7 @@ export function AppSidebar() {
   const mainNav = allMainNav.filter(navFilter);
   // Chat + Feedback are universal — always shown (no tab-whitelist filtering),
   // for every staff member in every workspace. Chat sits first.
-  const secondaryNav = [...allSecondaryNav.filter(navFilter), taskTrackerSecondary, knowledgeBaseSecondary, chatSecondary, feedbackSecondary, notificationSettingsSecondary];
+  const secondaryNav = [...allSecondaryNav.filter(navFilter), taskTrackerSecondary, knowledgeBaseSecondary, driveSecondary, chatSecondary, feedbackSecondary, notificationSettingsSecondary];
 
   // Resolved once across BOTH groups so a Navigation item and a System item
   // can never both look active on the same page.

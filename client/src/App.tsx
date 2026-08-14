@@ -207,6 +207,7 @@ import MarketResearch from "@/pages/market-research";
 import Feedback from "@/pages/feedback";
 import TaskTracker from "@/pages/task-tracker";
 import KnowledgeBase from "@/pages/knowledge-base";
+import Drive from "@/pages/drive";
 import StaffChat from "@/pages/staff-chat";
 import NotificationSettings from "@/pages/notification-settings";
 import MarketingHome from "@/pages/marketing/Home";
@@ -266,6 +267,10 @@ function AdminRouter() {
   // reason: the knowledge is the organisation's, not a workspace's, and brand
   // is a filter inside the tab.
   if (location.startsWith("/admin/knowledge-base")) return <KnowledgeBase />;
+  // Club Drive — one file store for the whole organisation. Universal for the
+  // same reason as the vault above: a contract is the club's document whichever
+  // workspace you happen to be standing in when you need it.
+  if (location.startsWith("/admin/drive")) return <Drive />;
   const isVenue = currentOrg?.slug === "united-sports-centre";
   const isLeague = currentOrg?.slug === "mini-football-leagues";
   const isTournament = currentOrg?.slug === "christchurch-international-cup";
