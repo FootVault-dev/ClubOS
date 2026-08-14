@@ -278,6 +278,29 @@ export const RAMBO_TOOLS: RamboToolDef[] = [
       },
     },
   },
+  {
+    name: "search_drive",
+    title: "Club Drive files",
+    description:
+      "Search Club Drive — every document the club stores: contracts, proposals, budgets, policies, plans, " +
+      "spreadsheets and PDFs. Searches the CONTENTS of files as well as their names, so use it when someone " +
+      "half-remembers a document ('the thing about the gym partnership', 'that sponsorship deck from last year') " +
+      "and cannot name it. Returns the file name, where it sits in the folder tree, and a matching extract. " +
+      "Always give the person the file name and its folder path so they can go and open it.",
+    // 🔴 null on purpose: every staff member may SEARCH the drive. Files are
+    // then filtered one by one against that person's real tab access inside the
+    // handler — a locked file never reaches the model, not even its name.
+    // Gating the whole tool instead would either hide the drive from everyone
+    // or expose every contract in it.
+    requiredTab: null,
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to look for, e.g. 'gym partnership agreement' or 'academy fee schedule'." },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 /**

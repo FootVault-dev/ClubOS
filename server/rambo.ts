@@ -409,8 +409,99 @@ async function runBudgetSummary(_viewer: Viewer, input: any): Promise<ToolResult
   };
 }
 
+/**
+ * Search Club Drive on behalf of the asker.
+ *
+ * 🔴 The permission filter is a WHERE-clause-and-then-drop, never an instruction
+ * to the model. Every hit is judged against the accumulated gates of its folder
+ * chain and dropped before it is written into the context. A file the person
+ * cannot open is not summarised, not named, and not hinted at — the filename of
+ * a restricted document is very often the sensitive part ("Redundancy letter —
+ * <name>.pdf"). This is what stops Rambo becoming a way around the drive's own
+ * permissions.
+ */
+async function runSearchDrive(viewer: Viewer, input: any): Promise<ToolResult> {
+  const query = String(input?.query ?? "").trim();
+  if (!query) return { text: "No search terms given." };
+
+  const { driveNodes } = await import("@shared/schema");
+  const { viewerCanReadDriveNode } = await import("@shared/drive");
+
+  const raw: any = await db.execute(sql`
+    SELECT id, parent_id, name, mime_type, size_bytes, description, extracted_text, updated_at,
+      ts_rank(
+        setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
+        setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
+        setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C'),
+        plainto_tsquery('english', ${query})
+      ) AS rank
+    FROM drive_nodes
+    WHERE trashed_at IS NULL AND kind = 'file'
+      AND (
+        (
+          setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
+          setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
+          setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C')
+        ) @@ plainto_tsquery('english', ${query})
+        OR lower(name) LIKE ${"%" + query.toLowerCase() + "%"}
+        OR similarity(lower(name), lower(${query})) > 0.3
+      )
+    ORDER BY rank DESC, updated_at DESC
+    LIMIT 25
+  `);
+  const rows = Array.isArray(raw) ? raw : raw.rows ?? [];
+  if (!rows.length) {
+    return { text: `No files in Club Drive matched "${query}". Say plainly that nothing is filed under that and do NOT answer from general knowledge.` };
+  }
+
+  const gateRaw: any = await db.execute(
+    sql`SELECT id, gates FROM drive_node_gates WHERE id IN (${sql.join(rows.map((r: any) => sql`${Number(r.id)}`), sql`, `)})`,
+  );
+  const gateRows = Array.isArray(gateRaw) ? gateRaw : gateRaw.rows ?? [];
+  const gates = new Map<number, string[]>();
+  for (const g of gateRows) gates.set(Number(g.id), (g.gates ?? []) as string[]);
+
+  const visible = rows.filter((r: any) => viewerCanReadDriveNode(viewer, gates.get(Number(r.id)) ?? []));
+  if (!visible.length) {
+    return { text: `Nothing you have access to matched "${query}". Tell them any matching files sit behind a part of ClubOS they haven't been given.` };
+  }
+
+  // The folder path is most of the value — "it's in Sponsorship / 2026" is what
+  // actually gets someone to the document.
+  async function pathOf(id: number | null): Promise<string> {
+    if (!id) return "/";
+    const p: any = await db.execute(sql`
+      WITH RECURSIVE up AS (
+        SELECT id, parent_id, name, 0 AS d FROM drive_nodes WHERE id = ${id}
+        UNION ALL
+        SELECT n.id, n.parent_id, n.name, up.d + 1 FROM drive_nodes n JOIN up ON n.id = up.parent_id
+      ) SELECT name FROM up ORDER BY d DESC
+    `);
+    const list = Array.isArray(p) ? p : p.rows ?? [];
+    return "/" + list.map((x: any) => x.name).join("/");
+  }
+
+  const parts: string[] = [];
+  for (const r of visible.slice(0, 8)) {
+    const text: string = r.extracted_text ?? "";
+    const at = text.toLowerCase().indexOf(query.toLowerCase());
+    const extract = text
+      ? (at >= 0 ? text.slice(Math.max(0, at - 200), at + 1200) : text.slice(0, 1200))
+      : "(no readable text — the file's contents were not indexed)";
+    parts.push(
+      `<file id="${r.id}" name="${r.name}" folder="${await pathOf(r.parent_id ? Number(r.parent_id) : null)}">\n${extract}\n</file>`,
+    );
+  }
+
+  return {
+    text: parts.join("\n\n"),
+    sources: visible.slice(0, 8).map((r: any) => ({ id: Number(r.id), title: String(r.name), brand: "drive" })),
+  };
+}
+
 const HANDLERS: Record<string, (viewer: Viewer, input: any) => Promise<ToolResult>> = {
   search_knowledge_base: runSearchKnowledgeBase,
+  search_drive: runSearchDrive,
   print_materials: runPrintMaterials,
   print_jobs_summary: () => runPrintJobsSummary(),
   programme_list: runProgrammeList,

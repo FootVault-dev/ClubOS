@@ -120,12 +120,15 @@ CREATE INDEX IF NOT EXISTS drive_nodes_trashed_idx ON drive_nodes (trashed_at) W
 
 -- Full text over name + description + extracted text. The name matters most
 -- (people half-remember filenames), so it is weighted A.
+-- The doubled parentheses are required: an index expression that is not a bare
+-- column or a simple function call has to be wrapped, or Postgres reads the ||
+-- as the start of a second index column and fails to parse.
 CREATE INDEX IF NOT EXISTS drive_nodes_fts_idx ON drive_nodes
-  USING gin (
+  USING gin ((
     setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
     setweight(to_tsvector('english', coalesce(description, '')), 'B') ||
     setweight(to_tsvector('english', coalesce(extracted_text, '')), 'C')
-  );
+  ));
 
 -- Typo tolerance on names — "buget" should still find "Budget".
 CREATE INDEX IF NOT EXISTS drive_nodes_name_trgm_idx ON drive_nodes USING gin (lower(name) gin_trgm_ops);

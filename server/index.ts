@@ -112,6 +112,14 @@ app.use(attributionCookieMiddleware);
   const { registerKnowledgeBaseRoutes } = await import("./kb-routes");
   registerKnowledgeBaseRoutes(app);
 
+  // Club Drive — the club's own file store. Universal tab like the above, so
+  // gated by requireAuth only; visibility is per NODE and INHERITS down the
+  // folder tree, judged by the same decider the KB and Rambo use. Rambo gets a
+  // search_drive tool whose results are filtered file-by-file for the asker.
+  // See migrations/2026-08-15_club_drive.sql + shared/drive.ts.
+  const { registerDriveRoutes } = await import("./drive-routes");
+  registerDriveRoutes(app);
+
   // United Prints workspace — Warehouse Management System. Dark-launched
   // (requireTab("warehouse") — super_admin only until T17 wires "warehouse"
   // into shared/tabs.ts). This registers items/locations/barcode-alias CRUD +
