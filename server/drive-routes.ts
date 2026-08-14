@@ -97,7 +97,10 @@ function present(node: any, gates: string[]) {
     parentId: node.parentId,
     kind: node.kind,
     name: node.name,
-    category: driveCategory(node.mimeType, node.name),
+    // 🔴 A folder has no mime type and usually no extension, so asking
+    // driveCategory alone answers "other" and every folder renders with a file
+    // icon. The kind decides first.
+    category: node.kind === "folder" ? "folder" : driveCategory(node.mimeType, node.name),
     mimeType: node.mimeType,
     sizeBytes: node.sizeBytes === null || node.sizeBytes === undefined ? null : Number(node.sizeBytes),
     brand: node.brand,
