@@ -18,6 +18,7 @@ let pass = 0, fail = 0;
 const ok = (l: string, c: boolean, d = "") => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${l}${d ? ` — ${d}` : ""}`); };
 
 let uid: number | null = null, browser: any = null;
+const extraUsers: number[] = [];
 const channels: number[] = [];
 
 try {
@@ -45,6 +46,16 @@ try {
     [`zz-uiprobe-target-${crypto.randomBytes(3).toString("hex")}`, uid]);
   channels.push(other.rows[0].id);
   await pool.query(`INSERT INTO staff_channel_members (channel_id, user_id) VALUES ($1,$2)`, [other.rows[0].id, uid]);
+
+  // 🔴 A second member — @ mentions can only offer OTHER people, so a
+  // single-member channel produces an empty list and the earlier failure was
+  // the harness's setup, not the app.
+  const mate = await pool.query(
+    `INSERT INTO users (email, first_name, last_name, password, role, active)
+     VALUES ($1,'Mentionable','Colleague',$2,'admin',true) RETURNING id`,
+    [`chatmate-${crypto.randomBytes(5).toString("hex")}@example.com`, await bcrypt.hash(crypto.randomBytes(12).toString("hex"), 10)]);
+  const mateId = mate.rows[0].id; extraUsers.push(mateId);
+  await pool.query(`INSERT INTO staff_channel_members (channel_id, user_id) VALUES ($1,$2)`, [channelId, mateId]);
 
   const lr = await fetch(`${BASE}/api/auth/login`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -142,22 +153,40 @@ try {
   await page.keyboard.press("Escape");
   await new Promise((r) => setTimeout(r, 1200));
 
-  const zone = await page.$('[data-testid="composer-dropzone"]');
-  ok("the composer is a drop zone", !!zone);
-  if (zone) {
-    // Synthesise a real dragenter carrying a file, the way a browser does.
-    await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="composer-dropzone"]')!;
-      const dt = new DataTransfer();
-      dt.items.add(new File(["x"], "team-sheet.pdf", { type: "application/pdf" }));
-      el.dispatchEvent(new DragEvent("dragenter", { bubbles: true, dataTransfer: dt }));
-    });
-    await new Promise((r) => setTimeout(r, 600));
-    const overlay = await page.evaluate(() =>
-      !!document.querySelector('[data-testid="composer-drop-overlay"]'));
-    ok("dragging a file over it shows 'Drop to attach'", overlay);
-    await page.screenshot({ path: join(outDir, "drag-drop.png") });
-  }
+  // 🔴 Drop target is the WHOLE conversation, not the thin composer bar.
+  const dragOverCentre = async (type: string) => page.evaluate((ev: string) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["x"], "team-sheet.pdf", { type: "application/pdf" }));
+    const target = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2) || document.body;
+    target.dispatchEvent(new DragEvent(ev, { bubbles: true, dataTransfer: dt, clientX: window.innerWidth / 2, clientY: window.innerHeight / 2 }));
+  }, type);
+  const overlayOpen = () => page.evaluate(() =>
+    !!document.querySelector('[data-testid="chat-drop-overlay"]'));
+
+  await dragOverCentre("dragenter");
+  await new Promise((r) => setTimeout(r, 700));
+  ok("dragging over the MIDDLE of the messages shows the overlay", await overlayOpen());
+  const overlaySize = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="chat-drop-overlay"]') as HTMLElement | null;
+    const r = el?.getBoundingClientRect();
+    return { h: r ? r.height : 0, viewport: window.innerHeight };
+  });
+  ok("and it covers the screen, not a strip",
+     overlaySize.h > overlaySize.viewport - 4, `${Math.round(overlaySize.h)}px of ${overlaySize.viewport}px`);
+  await page.screenshot({ path: join(outDir, "drag-drop.png") });
+
+  // 🔴 Dragging back out must clear it — a stuck overlay blocks the whole app.
+  await dragOverCentre("dragleave");
+  await new Promise((r) => setTimeout(r, 600));
+  ok("dragging back out clears the overlay", !(await overlayOpen()));
+
+  // 🔴 And an abandoned drag (dropped outside / Escape) must clear it too:
+  // neither fires a drop nor a balancing dragleave.
+  await dragOverCentre("dragenter");
+  await new Promise((r) => setTimeout(r, 500));
+  await page.evaluate(() => window.dispatchEvent(new Event("dragend")));
+  await new Promise((r) => setTimeout(r, 600));
+  ok("an abandoned drag doesn't leave the overlay stuck", !(await overlayOpen()));
 
   // 🔴 Travis's actual complaint: type, leave the tab, come back, it's gone.
   const composerSel = 'textarea';
@@ -175,6 +204,52 @@ try {
   ok("🔴 the draft is still there after switching tabs and coming back",
      restored.includes("Half-written note about the bus"), JSON.stringify(restored.slice(0, 40)));
 
+  // ── @ mentions inside a thread ─────────────────────────────────────────────
+  // 🔴 The server takes mentions EXPLICITLY, so a plain textarea pinged nobody.
+  await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 3500));
+  const openThread = await page.$('[data-testid^="button-open-thread-"]');
+  if (openThread) {
+    await openThread.evaluate((b: any) => b.click());
+    await new Promise((r) => setTimeout(r, 2500));
+    await page.click('[data-testid="input-thread-reply"]');
+    await page.type('[data-testid="input-thread-reply"]', "@");
+    await new Promise((r) => setTimeout(r, 1200));
+    const hasList = await page.evaluate(() =>
+      !!document.querySelector('[data-testid^="thread-mention-"]'));
+    ok("🔴 typing @ in a thread opens the mention list", hasList);
+    await page.screenshot({ path: join(outDir, "thread-mentions.png") });
+  } else {
+    ok("a thread exists to test mentions in", false, "no thread affordance found");
+  }
+
+  // ── Full emoji catalogue on desktop (Daniel, 2026-08-15) ───────────────────
+  // Mobile has had one since 2026-08-07; desktop offered only the six quick
+  // reactions, so the two clients disagreed about what a reaction could be.
+  await page.keyboard.press("Escape");
+  await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 3500));
+  await page.evaluate(() => {
+    const row = document.querySelector('[data-testid^="button-forward-"]')?.parentElement;
+    (row as HTMLElement | null)?.style.setProperty("display", "flex");
+  });
+  const reactBtn = await page.$('button[title="React"]');
+  ok("a react action is offered", !!reactBtn);
+  if (reactBtn) {
+    await reactBtn.evaluate((b: any) => b.click());
+    await new Promise((r) => setTimeout(r, 1500));
+    const picker = await page.evaluate(() => ({
+      quick: !!document.querySelector('[data-testid^="quick-emoji-"]'),
+      full: !!document.querySelector('[data-testid="emoji-picker"]'),
+      search: !!document.querySelector('[data-testid="input-emoji-search"]'),
+    }));
+    ok("the six quick reactions are still one tap away", picker.quick);
+    ok("🔴 and the FULL emoji catalogue is there too", picker.full);
+    ok("with a search box", picker.search);
+    await page.screenshot({ path: join(outDir, "emoji-picker.png") });
+    await page.keyboard.press("Escape");
+  }
+
   // Mobile pass — this is a phone-first staff tool.
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   await new Promise((r) => setTimeout(r, 1500));
@@ -190,6 +265,10 @@ try {
     await pool.query(`DELETE FROM staff_messages WHERE channel_id=$1`, [id]);
     await pool.query(`DELETE FROM staff_channel_members WHERE channel_id=$1`, [id]);
     await pool.query(`DELETE FROM staff_channels WHERE id=$1`, [id]);
+  }
+  for (const id of extraUsers) {
+    await pool.query(`DELETE FROM staff_chat_presence WHERE user_id=$1`, [id]);
+    await pool.query(`DELETE FROM users WHERE id=$1`, [id]);
   }
   if (uid) {
     await pool.query(`DELETE FROM staff_chat_presence WHERE user_id=$1`, [uid]);
