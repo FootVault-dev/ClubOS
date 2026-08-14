@@ -27,6 +27,7 @@ import {
   Hash, Lock, Megaphone, Plus, Search, Send, Paperclip, Mic, Square, X,
   ChevronLeft, ChevronDown, ChevronRight, Users, Bell, BellOff, Volume2,
   MoreHorizontal, Pencil, SmilePlus, CheckCheck, Check, ArchiveX,
+  MessageSquare, CornerUpRight, Paperclip as PaperclipIcon,
   MessagesSquare, LogOut, FileText, Download, ShieldCheck, Loader2, UserPlus,
 } from "lucide-react";
 
@@ -49,6 +50,18 @@ interface ChatMessage {
   reactions: { emoji: string; userIds: number[] }[]; ackCount: number; ackedByMe: boolean;
   mentionedUserIds: number[];
   pending?: boolean; failed?: boolean;
+  // ── v2: threads + forwarding (2026-08-15) ──────────────────────────────────
+  // A reply keeps its place in the channel — that is the mitigation for the v1
+  // concern that threads make conversations vanish into side-rooms. The root
+  // carries the count that opens the panel.
+  parentMessageId?: number | null;
+  replyCount?: number;
+  lastReplyAt?: string | null;
+  forwardedFrom?: {
+    messageId: number; channelName: string | null; channelKind: string;
+    authorName: string; body: string; createdAt: string;
+    attachmentCount: number; deleted: boolean;
+  } | null;
 }
 interface HistoryResponse {
   channel: { id: number; kind: string; name: string | null; topic: string | null; isPrivate: boolean; isDefault: boolean; postPolicy: string; archived: boolean };
@@ -57,6 +70,8 @@ interface HistoryResponse {
   hasMore: boolean;
 }
 interface Bootstrap { viewer: { userId: number; isLeadership: boolean }; users: Person[]; channels: ChannelSummary[] }
+
+import { ThreadPanel, ForwardDialog, ForwardedQuote, FilesBrowser } from "@/components/chat-v2";
 
 const GOLD = "#c9a43e";
 const QUICK_EMOJIS = ["👍", "✅", "🔥", "😂", "🙏", "👀"];
@@ -210,6 +225,7 @@ export default function StaffChat() {
             me={me}
             isLeadership={isLeadership}
             users={users}
+            allChannels={channels}
             onBack={() => setMobilePane("list")}
             toast={toast}
           />
@@ -253,6 +269,7 @@ function ChannelListPane(props: {
   searchQ: string; setSearchQ: (s: string) => void; className?: string;
 }) {
   const { channels, users, me, isLeadership, activeId, openChannel, searchQ, setSearchQ } = props;
+  const [filesOpen, setFilesOpen] = useState(false);
   const [showBrowse, setShowBrowse] = useState(false);
   const [newDmOpen, setNewDmOpen] = useState(false);
   const [newChannelOpen, setNewChannelOpen] = useState(false);
@@ -275,6 +292,16 @@ function ChannelListPane(props: {
     <aside className={`w-full md:w-72 lg:w-80 shrink-0 flex-col border-r border-white/[0.06] bg-black/20 ${props.className ?? ""}`}>
       <div className="p-3 pb-2 flex items-center gap-2">
         <h1 className="text-[15px] font-bold tracking-tight flex-1 px-1">Chat</h1>
+        {/* Files & links — Travis's second ask: find that thing somebody shared
+            months ago without scrolling a channel to find it. */}
+        <button
+          onClick={() => setFilesOpen(true)}
+          title="Files & links"
+          data-testid="button-open-files"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/[0.06] transition-colors"
+        >
+          <PaperclipIcon className="w-4 h-4" />
+        </button>
         {isLeadership && (
           <button
             onClick={() => setNewChannelOpen(true)}
@@ -368,6 +395,12 @@ function ChannelListPane(props: {
       <NewDmDialog open={newDmOpen} onClose={() => setNewDmOpen(false)} users={users} me={me} onOpened={openChannel} />
       {isLeadership && (
         <NewChannelDialog open={newChannelOpen} onClose={() => setNewChannelOpen(false)} onCreated={openChannel} />
+      )}
+      {filesOpen && (
+        <FilesBrowser
+          onClose={() => setFilesOpen(false)}
+          onOpenMessage={(channelId) => openChannel(channelId)}
+        />
       )}
     </aside>
   );
@@ -463,6 +496,8 @@ function BrowseRow({ c, onJoined }: { c: ChannelSummary; onJoined: () => void })
 function ConversationPane(props: {
   channel: ChannelSummary; me: number; isLeadership: boolean; users: Person[];
   onBack: () => void; toast: ReturnType<typeof useToast>["toast"];
+  /** Every conversation the viewer can post to — the forward dialog's targets. */
+  allChannels: ChannelSummary[];
 }) {
   const { channel, me, isLeadership, users, onBack, toast } = props;
   const channelId = channel.id;
@@ -474,6 +509,9 @@ function ConversationPane(props: {
   const [membersOpen, setMembersOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  // v2: the thread panel and the forward dialog. Both portal to document.body.
+  const [threadRootId, setThreadRootId] = useState<number | null>(null);
+  const [forwardId, setForwardId] = useState<number | null>(null);
 
   const historyKey = [`/api/admin/chat/channels/${channelId}/messages`];
   const { data: hist } = useQuery<HistoryResponse>({
@@ -743,6 +781,8 @@ function ConversationPane(props: {
               setEditing={(on) => setEditingId(on ? msg.id : null)}
               historyKey={historyKey}
               retryFailed={retryFailed}
+              onOpenThread={setThreadRootId}
+              onForward={setForwardId}
               toast={toast}
             />
           </Fragment>
@@ -780,6 +820,22 @@ function ConversationPane(props: {
       />
       {isLeadership && (
         <ChannelSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} channel={channel} onBack={onBack} />
+      )}
+
+      {threadRootId !== null && (
+        <ThreadPanel
+          rootId={threadRootId}
+          me={me}
+          historyKey={historyKey}
+          onClose={() => setThreadRootId(null)}
+        />
+      )}
+      {forwardId !== null && (
+        <ForwardDialog
+          messageId={forwardId}
+          channels={props.allChannels}
+          onClose={() => setForwardId(null)}
+        />
       )}
     </>
   );
@@ -830,8 +886,10 @@ function MessageRow(props: {
   editing: boolean; setEditing: (on: boolean) => void;
   historyKey: string[]; retryFailed: (m: ChatMessage) => void;
   toast: ReturnType<typeof useToast>["toast"];
+  onOpenThread: (rootId: number) => void;
+  onForward: (messageId: number) => void;
 }) {
-  const { msg, me, isLeadership, grouped, mentionNames, memberCount, editing, setEditing, historyKey, retryFailed, toast } = props;
+  const { msg, me, isLeadership, grouped, mentionNames, memberCount, editing, setEditing, historyKey, retryFailed, toast, onOpenThread, onForward } = props;
   const mine = msg.authorId === me;
   const mentionsMe = msg.mentionedUserIds.includes(me);
   const [editText, setEditText] = useState(msg.body);
@@ -943,6 +1001,33 @@ function MessageRow(props: {
           </>
         )}
 
+        {/* Provenance for a forwarded message — a forward that looks like an
+            original is how a quote gets misattributed to the wrong person. */}
+        {msg.forwardedFrom && <ForwardedQuote ref={msg.forwardedFrom} />}
+
+        {/* 🔴 A thread reply stays in the channel — this is the mitigation for
+            the v1 concern that threads hide conversations. The root gets an
+            affordance that opens the panel; the reply gets a quiet marker. */}
+        {!!msg.replyCount && msg.replyCount > 0 && (
+          <button
+            onClick={() => onOpenThread(msg.id)}
+            data-testid={`button-open-thread-${msg.id}`}
+            className="mt-1 text-[12px] font-semibold flex items-center gap-1.5 hover:underline"
+            style={{ color: GOLD }}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            {msg.replyCount} {msg.replyCount === 1 ? "reply" : "replies"}
+          </button>
+        )}
+        {!!msg.parentMessageId && (
+          <button
+            onClick={() => onOpenThread(msg.parentMessageId!)}
+            className="mt-0.5 text-[11px] text-white/30 hover:text-white/60 flex items-center gap-1"
+          >
+            <MessageSquare className="w-3 h-3" /> in thread
+          </button>
+        )}
+
         {/* Reactions */}
         {msg.reactions.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -995,6 +1080,26 @@ function MessageRow(props: {
         <div
           className={`absolute -top-3 right-2 ${reactOpen ? "flex" : "hidden group-hover:flex"} items-center gap-0.5 bg-[#16171a] border border-white/10 rounded-xl p-0.5 shadow-xl`}
         >
+          {/* Reply in thread — only on a ROOT message. A reply cannot itself be
+              replied to (one level only), so offering it there would dead-end. */}
+          {!msg.parentMessageId && (
+            <button
+              onClick={() => onOpenThread(msg.id)}
+              title="Reply in thread"
+              data-testid={`button-reply-thread-${msg.id}`}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            onClick={() => onForward(msg.id)}
+            title="Forward"
+            data-testid={`button-forward-${msg.id}`}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]"
+          >
+            <CornerUpRight className="w-3.5 h-3.5" />
+          </button>
           <Popover open={reactOpen} onOpenChange={setReactOpen}>
             <PopoverTrigger asChild>
               <button className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]" title="React">

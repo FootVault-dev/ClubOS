@@ -36,6 +36,8 @@ async function mkUser(name: string) {
     body: JSON.stringify({ email, password }) });
   return { id, cookie: (lr.headers.get("set-cookie") || "").split(";")[0] };
 }
+/** A new message is 201; a retry of the same client id is 200. Both are sent. */
+const sentOk = (s: number) => s === 200 || s === 201;
 const call = (cookie: string, path: string, method = "GET", body?: any) =>
   fetch(`${BASE}${path}`, {
     method,
@@ -65,15 +67,15 @@ try {
   console.log("1. Threads");
   const rootRes = await call(alice.cookie, `/api/admin/chat/channels/${priv}/messages`, "POST",
     { body: "Week 2 field is not ready — moving to the centre. https://example.com/bus-times" });
-  ok(rootRes.status === 200, "root message posts", `HTTP ${rootRes.status}`);
+  ok(sentOk(rootRes.status), "root message posts", `HTTP ${rootRes.status}`);
   const root = await rootRes.json();
-  const rootId = root?.message?.id ?? root?.id;
+  const rootId = root?.id ?? root?.message?.id;
 
   const replyRes = await call(alice.cookie, `/api/admin/chat/channels/${priv}/messages`, "POST",
     { body: "Bus leaves 09:30.", parentMessageId: rootId });
-  ok(replyRes.status === 200, "a reply posts against the root", `HTTP ${replyRes.status}`);
+  ok(sentOk(replyRes.status), "a reply posts against the root", `HTTP ${replyRes.status}`);
   const reply = await replyRes.json();
-  const replyId = reply?.message?.id ?? reply?.id;
+  const replyId = reply?.id ?? reply?.message?.id;
 
   // 🔴 One level only.
   const nested = await call(alice.cookie, `/api/admin/chat/channels/${priv}/messages`, "POST",
@@ -83,7 +85,9 @@ try {
   // 🔴 Parent must be in the same channel.
   const crossRoot = await call(alice.cookie, `/api/admin/chat/channels/${pub}/messages`, "POST",
     { body: "elsewhere" });
-  const crossId = (await crossRoot.json())?.message?.id ?? null;
+  const crossJson = await crossRoot.json();
+  const crossId = crossJson?.id ?? crossJson?.message?.id ?? null;
+  ok(!!crossId, "a message in the other channel exists to test against", String(crossId));
   const cross = await call(alice.cookie, `/api/admin/chat/channels/${priv}/messages`, "POST",
     { body: "hijack", parentMessageId: crossId });
   ok(cross.status === 400, "🔴 you cannot hang a reply off a message in another channel", `HTTP ${cross.status}`);
