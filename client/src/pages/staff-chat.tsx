@@ -28,7 +28,7 @@ import {
   Hash, Lock, Megaphone, Plus, Search, Send, Paperclip, Mic, Square, X,
   ChevronLeft, ChevronDown, ChevronRight, Users, Bell, BellOff, Volume2,
   MoreHorizontal, Pencil, SmilePlus, CheckCheck, Check, ArchiveX,
-  MessageSquare, CornerUpRight, Paperclip as PaperclipIcon, Maximize2, Minimize2, Expand,
+  MessageSquare, CornerUpRight, Paperclip as PaperclipIcon, Maximize2, Minimize2, Expand, MailQuestion,
   MessagesSquare, LogOut, FileText, Download, ShieldCheck, Loader2, UserPlus,
 } from "lucide-react";
 
@@ -229,6 +229,7 @@ export default function StaffChat() {
             users={users}
             allChannels={channels}
             onBack={() => setMobilePane("list")}
+            onDeselect={() => { setActiveId(null); setMobilePane("list"); }}
             toast={toast}
           />
         ) : (
@@ -500,6 +501,8 @@ function ConversationPane(props: {
   onBack: () => void; toast: ReturnType<typeof useToast>["toast"];
   /** Every conversation the viewer can post to — the forward dialog's targets. */
   allChannels: ChannelSummary[];
+  /** Close the conversation entirely — used after marking it unread. */
+  onDeselect: () => void;
 }) {
   const { channel, me, isLeadership, users, onBack, toast } = props;
   const channelId = channel.id;
@@ -557,6 +560,20 @@ function ConversationPane(props: {
     };
   }, []);
 
+  const markUnread = async () => {
+    suppressRead.current = true;
+    try {
+      await apiRequest("POST", `/api/admin/chat/channels/${channelId}/unread`);
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/chat/sync"] });
+      // Leaving is part of the action, not a side effect: staying put re-reads it.
+      props.onDeselect();
+      toast({ title: "Marked as unread", description: "It'll show as unread in your list." });
+    } catch {
+      suppressRead.current = false;
+      toast({ title: "Couldn't mark it unread", variant: "destructive" });
+    }
+  };
+
   const [threadRootId, setThreadRootId] = useState<number | null>(null);
   const [forwardId, setForwardId] = useState<number | null>(null);
 
@@ -594,8 +611,13 @@ function ConversationPane(props: {
 
   // Mark read when the latest message is on screen and the tab has focus.
   const lastMarked = useRef<number>(0);
+  // 🔴 Set while marking UNREAD. Without it this effect fires on the very next
+  // render and marks the conversation read again — the button would appear to
+  // do nothing at all.
+  const suppressRead = useRef(false);
   useEffect(() => {
     const latest = messages.filter((m) => !m.pending).at(-1)?.id ?? 0;
+    if (suppressRead.current) return;
     if (latest > lastMarked.current && document.hasFocus()) {
       lastMarked.current = latest;
       apiRequest("POST", `/api/admin/chat/channels/${channelId}/read`)
@@ -748,6 +770,13 @@ function ConversationPane(props: {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
+            {/* "I've seen this but I can't deal with it yet." 🔴 Marking unread
+                must LEAVE the conversation — the auto-read effect above would
+                otherwise mark it read again on the next render. */}
+            <DropdownMenuItem onClick={markUnread} data-testid="menu-mark-unread">
+              <MailQuestion className="w-3.5 h-3.5 mr-2" /> Mark as unread
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             {channel.kind === "channel" && isLeadership && (
               <>
                 <DropdownMenuItem onClick={() => setSettingsOpen(true)}>

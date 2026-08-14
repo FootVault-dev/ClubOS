@@ -811,6 +811,62 @@ export function registerStaffChatRoutes(app: Express) {
     }
   });
 
+  /**
+   * Mark a conversation UNREAD — "I've seen this but I can't deal with it yet."
+   *
+   * Daniel, 2026-08-15: staff open a message, find they can't action it, and
+   * need it to still look like it needs doing. Without this the only way to
+   * remember is to leave it unopened, which nobody manages.
+   *
+   * 🔴 Unread is ONE last_read_at pointer per membership (the Campfire model —
+   * see the header of this file), so marking unread is moving that pointer BACK
+   * to just before the newest message rather than storing an "unread" flag. A
+   * flag would be a second source of truth that disagrees with the pointer the
+   * moment anything else touches it.
+   *
+   * 🔴 A conversation with no messages cannot be unread — there is nothing to
+   * come back to — and NULL would read as "never opened" and badge forever.
+   */
+  app.post("/api/admin/chat/channels/:id/unread", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const channelId = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(channelId)) return res.status(400).json({ message: "Bad channel id" });
+
+      const membership = await activeMembership(channelId, userId);
+      if (!membership) return res.status(403).json({ message: "Not a member of this conversation" });
+
+      // The newest message NOT written by this person: marking your own message
+      // unread would badge you about yourself, which reads as a bug.
+      const [latest] = await db
+        .select({ createdAt: staffMessages.createdAt })
+        .from(staffMessages)
+        .where(and(
+          eq(staffMessages.channelId, channelId),
+          isNull(staffMessages.deletedAt),
+          isNull(staffMessages.parentMessageId),
+          sql`${staffMessages.authorId} <> ${userId}`,
+        ))
+        .orderBy(desc(staffMessages.id))
+        .limit(1);
+
+      if (!latest) return res.json({ ok: true, unread: false, reason: "nothing to mark" });
+
+      // One millisecond before it, so that message (and nothing after it) counts
+      // as unread. Using its exact timestamp would leave it read on a >= compare.
+      const before = new Date(new Date(latest.createdAt).getTime() - 1);
+      await db
+        .update(staffChannelMembers)
+        .set({ lastReadAt: before })
+        .where(and(eq(staffChannelMembers.channelId, channelId), eq(staffChannelMembers.userId, userId)));
+
+      res.json({ ok: true, unread: true });
+    } catch (e: any) {
+      console.error("[staff-chat] mark unread failed:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // ── Create a channel (leadership — channel sprawl is governed from day one).
   app.post("/api/admin/chat/channels", requireAuth, async (req, res) => {
     try {
