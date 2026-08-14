@@ -104,7 +104,10 @@ try {
   const rootInList = (list.messages || []).find((m: any) => m.id === rootId);
   const replyInList = (list.messages || []).find((m: any) => m.id === replyId);
   ok(rootInList?.replyCount === 1, "the root carries a reply count in the channel list");
-  ok(!!replyInList, "🔴 and the reply is STILL VISIBLE in the channel, not hidden in a side-room");
+  // 🔴 Reversed 2026-08-15 (Daniel): a reply lives ONLY in its thread. Keeping
+  // it in the channel too made the feed read as duplicated — the root says
+  // "1 reply" with the reply directly beneath saying "in thread".
+  ok(!replyInList, "🔴 the reply does NOT appear in the channel feed — thread only");
 
   // 🔴 An outsider must not read a private thread.
   const stolen = await call(outsider.cookie, `/api/admin/chat/messages/${rootId}/thread`);

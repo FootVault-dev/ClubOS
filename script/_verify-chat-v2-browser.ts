@@ -98,8 +98,10 @@ try {
     await page.click('[data-testid="button-close-thread"]');
     await new Promise((r) => setTimeout(r, 2500));
     const after = await page.evaluate(() => document.body.innerText);
-    ok("🔴 the reply is ALSO visible in the channel, not hidden in a side-room",
-       /Bus leaves 09:30 sharp/.test(after));
+    // 🔴 Reversed 2026-08-15: replies are thread-only. The channel keeps just
+    // the root and its count, so the feed stays clean.
+    ok("🔴 the reply is NOT in the channel feed — thread only",
+       !/Bus leaves 09:30 sharp/.test(after));
     ok("and the root shows a reply count", /1 reply/.test(after));
   }
 
@@ -135,6 +137,43 @@ try {
   ok("searching narrows to that link",
      /uiprobe-timetable|example\.com/.test(await page.evaluate(() => document.body.innerText)));
   await page.screenshot({ path: join(outDir, "files-browser.png") });
+
+  // ── Drag & drop, and the sticky draft ──────────────────────────────────────
+  await page.keyboard.press("Escape");
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const zone = await page.$('[data-testid="composer-dropzone"]');
+  ok("the composer is a drop zone", !!zone);
+  if (zone) {
+    // Synthesise a real dragenter carrying a file, the way a browser does.
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="composer-dropzone"]')!;
+      const dt = new DataTransfer();
+      dt.items.add(new File(["x"], "team-sheet.pdf", { type: "application/pdf" }));
+      el.dispatchEvent(new DragEvent("dragenter", { bubbles: true, dataTransfer: dt }));
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    const overlay = await page.evaluate(() =>
+      !!document.querySelector('[data-testid="composer-drop-overlay"]'));
+    ok("dragging a file over it shows 'Drop to attach'", overlay);
+    await page.screenshot({ path: join(outDir, "drag-drop.png") });
+  }
+
+  // 🔴 Travis's actual complaint: type, leave the tab, come back, it's gone.
+  const composerSel = 'textarea';
+  await page.click(composerSel);
+  await page.type(composerSel, "Half-written note about the bus");
+  await new Promise((r) => setTimeout(r, 900));
+  await page.goto(`${BASE}/admin/registrations`, { waitUntil: "networkidle2", timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 2000));
+  await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 3500));
+  const restored = await page.evaluate(() => {
+    const ta = document.querySelector("textarea") as HTMLTextAreaElement | null;
+    return ta?.value ?? "";
+  });
+  ok("🔴 the draft is still there after switching tabs and coming back",
+     restored.includes("Half-written note about the bus"), JSON.stringify(restored.slice(0, 40)));
 
   // Mobile pass — this is a phone-first staff tool.
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
