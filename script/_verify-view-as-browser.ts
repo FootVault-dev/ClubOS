@@ -61,21 +61,48 @@ try {
 
   await page.click('[data-testid="button-open-view-as"]');
   await new Promise(r => setTimeout(r, 1800));
-  const picker = await page.evaluate(() => document.body.innerText);
-  ok("the picker opens and lists staff", /View ClubOS as/i.test(picker) && /Janine/.test(picker));
-  ok("it says what will happen (read-only, logged)", /read-only/i.test(picker) && /logged/i.test(picker));
+  const picker = await page.evaluate(() => {
+    const overlay = document.querySelector('[data-testid="overlay-view-as"]') as HTMLElement | null;
+    const card = overlay?.firstElementChild as HTMLElement | null;
+    const r = card?.getBoundingClientRect();
+    return {
+      text: document.body.innerText,
+      // 🔴 The bug: clipped to the 56px header strip by its backdrop-filter.
+      overlayHeight: overlay ? overlay.getBoundingClientRect().height : 0,
+      cardHeight: r ? r.height : 0,
+      cardTop: r ? r.top : 0,
+      viewport: window.innerHeight,
+    };
+  });
+  ok("the picker opens and lists staff", /Janine/.test(picker.text));
+  ok("it says what will happen (read-only, logged)", /read-only/i.test(picker.text) && /logged/i.test(picker.text));
+  ok("🔴 the overlay covers the whole viewport, not the header strip",
+     picker.overlayHeight > picker.viewport - 4, `${Math.round(picker.overlayHeight)}px of ${picker.viewport}px`);
+  ok("🔴 the dialog is a readable size, not a sliver",
+     picker.cardHeight > 160, `${Math.round(picker.cardHeight)}px tall, top ${Math.round(picker.cardTop)}px`);
   await page.screenshot({ path: join(outDir, "picker.png") });
 
   await page.click(`[data-testid="button-view-as-${staff.id}"]`);
   await new Promise(r => setTimeout(r, 4000));
 
-  const after = await page.evaluate(() => ({
-    text: document.body.innerText,
-    banner: !!document.querySelector('[data-testid="banner-view-as"]'),
-    exit: !!document.querySelector('[data-testid="button-stop-view-as"]'),
-  }));
-  ok("the amber banner is on screen", after.banner);
-  ok("it names who you're viewing", /Viewing as/i.test(after.text) && /Janine/.test(after.text));
+  const after = await page.evaluate(() => {
+    const pill = document.querySelector('[data-testid="banner-view-as"]') as HTMLElement | null;
+    const r = pill?.getBoundingClientRect();
+    return {
+      text: document.body.innerText,
+      banner: !!pill,
+      exit: !!document.querySelector('[data-testid="button-stop-view-as"]'),
+      pillWidth: r ? r.width : 0,
+      pillTop: r ? r.top : 999,
+      pillRight: r ? r.right : 0,
+    };
+  });
+  ok("the amber pill is on screen", after.banner);
+  ok("it names who you're viewing", /Janine/.test(after.text));
+  ok("the pill sits in the header, not a full-width bar",
+     after.pillWidth > 0 && after.pillWidth < 460, `${Math.round(after.pillWidth)}px wide`);
+  ok("and it's up in the top right", after.pillTop < 60 && after.pillRight > 900,
+     `top ${Math.round(after.pillTop)}px, right edge ${Math.round(after.pillRight)}px`);
   ok("and there is a visible way out", after.exit);
   await page.screenshot({ path: join(outDir, "viewing-as.png") });
 
