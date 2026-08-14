@@ -1743,6 +1743,44 @@ export async function registerRoutes(
     }
   });
 
+  // Every programme the Registrations filter should offer, for THIS workspace.
+  //
+  // Deliberately not /api/admin/camps, which hard-filters to holiday_camp — the
+  // Registrations page grew from a camps tool into the club-and-academy-wide
+  // booking list, so its filter was offering only camps while the list beneath
+  // it was full of academy and league registrations.
+  //
+  // 🔴 Carries `registrationCount` so the filter can hide programmes nobody has
+  // ever booked (a filter option that always yields an empty list is noise), and
+  // `type` so the client knows whether the camp-only day/session filters apply.
+  // Two live programmes share the name "FUNdamentals Holiday Camp" (April and
+  // the September/October one), so a date label rides along — the dropdown was
+  // showing the same words twice with no way to tell them apart.
+  app.get("/api/admin/registration-programmes", requireAuth, async (req, res) => {
+    try {
+      const org = await workspaceOrg(req);
+      const rows = await db.execute(sql`
+        SELECT p.id, p.name, p.type::text AS type, p.organization_id,
+               p.start_date, p.end_date,
+               count(r.id) AS registration_count
+        FROM programs p
+        LEFT JOIN registrations r ON r.program_id = p.id
+        ${org ? sql`WHERE p.organization_id = ${org.id}` : sql``}
+        GROUP BY p.id
+        ORDER BY p.type::text, p.name, p.start_date DESC NULLS LAST`);
+      res.json((rows.rows as any[]).map(r => ({
+        id: Number(r.id),
+        name: r.name,
+        type: r.type,
+        startDate: r.start_date ? String(r.start_date).slice(0, 10) : null,
+        endDate: r.end_date ? String(r.end_date).slice(0, 10) : null,
+        registrationCount: Number(r.registration_count) || 0,
+      })));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/admin/programs", requireAuth, async (req, res) => {
     try {
       const data = { ...req.body };

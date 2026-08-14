@@ -691,9 +691,34 @@ function itemsByChild(items: RegItem[]) {
   return [...map.values()];
 }
 
+type ProgrammeOption = {
+  id: number;
+  name: string;
+  type: string;
+  startDate: string | null;
+  endDate: string | null;
+  registrationCount: number;
+};
+
+/**
+ * Two live programmes are both called "FUNdamentals Holiday Camp" (April, and
+ * the September/October one). The dropdown showed the same words twice with no
+ * way to tell them apart, so a date rides along whenever there is one.
+ */
+function programmeLabel(p: ProgrammeOption): string {
+  if (!p.startDate) return p.name;
+  const d = new Date(p.startDate + "T00:00:00");
+  return `${p.name} · ${d.toLocaleDateString("en-NZ", { month: "short", year: "numeric" })}`;
+}
+
 export default function AdminRegistrations() {
   const { toast } = useToast();
-  const { data: camps } = useQuery<any[]>({ queryKey: ["/api/admin/camps"] });
+  // Every programme in this workspace, not just camps. /api/admin/camps filters
+  // to holiday_camp, which is why this page's filter offered camps while the
+  // list beneath it was full of academy and league registrations.
+  const { data: programmes } = useQuery<ProgrammeOption[]>({
+    queryKey: ["/api/admin/registration-programmes"],
+  });
   const [selectedCamp, setSelectedCamp] = useState<string>("");
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -702,6 +727,7 @@ export default function AdminRegistrations() {
   // "How did we take the money" and "who served them" — the two questions the
   // office asks when reconciling the till and the EFTPOS terminal.
   const [filterPayment, setFilterPayment] = useState<string>("");
+  const [filterRefund, setFilterRefund] = useState<string>("");
   const [filterServedBy, setFilterServedBy] = useState<string>("");
   const [showRegister, setShowRegister] = useState(false);
 
@@ -714,6 +740,33 @@ export default function AdminRegistrations() {
       return res.json();
     },
   });
+
+  // Only offer programmes somebody has actually booked — a filter option that
+  // can only ever yield an empty list is noise. Grouped by type so the office
+  // can find "the academy one" without knowing every programme name.
+  const programmeGroups = useMemo(() => {
+    const live = (programmes || []).filter(p => p.registrationCount > 0);
+    const groups: { label: string; items: ProgrammeOption[] }[] = [];
+    for (const [type, label] of [
+      ["holiday_camp", "Holiday camps"],
+      ["academy", "Academy & programmes"],
+      ["league_team", "Leagues"],
+    ] as const) {
+      const items = live.filter(p => p.type === type);
+      if (items.length) groups.push({ label, items });
+    }
+    const rest = live.filter(p => !["holiday_camp", "academy", "league_team"].includes(p.type));
+    if (rest.length) groups.push({ label: "Other", items: rest });
+    return groups;
+  }, [programmes]);
+
+  const selectedProgramme = useMemo(
+    () => (programmes || []).find(p => String(p.id) === selectedCamp) || null,
+    [programmes, selectedCamp],
+  );
+  // Days and sessions are camp vocabulary — a term enrolment has neither, so
+  // those two filters are hidden unless a camp is actually selected.
+  const campFiltersApply = selectedProgramme?.type === "holiday_camp";
 
   const allDates = useMemo(() => {
     if (!registrations) return [];
@@ -753,6 +806,18 @@ export default function AdminRegistrations() {
     if (filterSession) {
       const ft = filterSession.toUpperCase();
       list = list.filter(r => r.items?.some(item => item.productType.toUpperCase() === ft));
+    }
+
+    if (filterRefund) {
+      // Refunded money is what the office hunts for when reconciling. Read the
+      // amount, not only the status: a partial refund leaves the registration
+      // "confirmed" while real money has gone back.
+      list = list.filter(r => {
+        const cents = r.refundedAmountCents ?? 0;
+        const st = String(r.status || "").toLowerCase();
+        const refunded = cents > 0 || st === "refunded" || st === "partially_refunded";
+        return filterRefund === "refunded" ? refunded : !refunded;
+      });
     }
 
     if (filterPayment) {
@@ -856,34 +921,57 @@ export default function AdminRegistrations() {
       <div className="flex gap-3 flex-wrap animate-fade-in-up" style={{ animationDelay: '50ms', opacity: 0 }}>
         <select
           value={selectedCamp}
-          onChange={e => { setSelectedCamp(e.target.value); setFilterDay(""); }}
+          onChange={e => { setSelectedCamp(e.target.value); setFilterDay(""); setFilterSession(""); }}
           className="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[13px] text-white/70 focus:outline-none focus:border-blue-500/30 cursor-pointer"
           data-testid="select-camp-filter"
         >
-          <option value="">All Camps</option>
-          {camps?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          <option value="">All programmes</option>
+          {programmeGroups.map(g => (
+            <optgroup key={g.label} label={g.label}>
+              {g.items.map(p => (
+                <option key={p.id} value={p.id}>{programmeLabel(p)}</option>
+              ))}
+            </optgroup>
+          ))}
         </select>
 
-        <select
-          value={filterDay}
-          onChange={e => setFilterDay(e.target.value)}
-          className="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[13px] text-white/70 focus:outline-none focus:border-blue-500/30 cursor-pointer"
-          data-testid="select-day-filter"
-        >
-          <option value="">All Days</option>
-          {allDates.map(d => <option key={d.id} value={d.id}>{formatDate(d.date)}</option>)}
-        </select>
+        {/* Days and sessions only exist for a holiday camp. Showing them against
+            a term enrolment offered filters that could only ever empty the list. */}
+        {campFiltersApply && (
+          <>
+            <select
+              value={filterDay}
+              onChange={e => setFilterDay(e.target.value)}
+              className="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[13px] text-white/70 focus:outline-none focus:border-blue-500/30 cursor-pointer"
+              data-testid="select-day-filter"
+            >
+              <option value="">All days</option>
+              {allDates.map(d => <option key={d.id} value={d.id}>{formatDate(d.date)}</option>)}
+            </select>
+
+            <select
+              value={filterSession}
+              onChange={e => setFilterSession(e.target.value)}
+              className="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[13px] text-white/70 focus:outline-none focus:border-blue-500/30 cursor-pointer"
+              data-testid="select-session-filter"
+            >
+              <option value="">All sessions</option>
+              <option value="MORNING">Morning</option>
+              <option value="AFTERNOON">Afternoon</option>
+              <option value="FULL_DAY">Full Day</option>
+            </select>
+          </>
+        )}
 
         <select
-          value={filterSession}
-          onChange={e => setFilterSession(e.target.value)}
+          value={filterRefund}
+          onChange={e => setFilterRefund(e.target.value)}
           className="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[13px] text-white/70 focus:outline-none focus:border-blue-500/30 cursor-pointer"
-          data-testid="select-session-filter"
+          data-testid="select-refund-filter"
         >
-          <option value="">All Sessions</option>
-          <option value="MORNING">Morning</option>
-          <option value="AFTERNOON">Afternoon</option>
-          <option value="FULL_DAY">Full Day</option>
+          <option value="">Refunded or not</option>
+          <option value="refunded">Refunded</option>
+          <option value="not_refunded">Not refunded</option>
         </select>
 
         <select
