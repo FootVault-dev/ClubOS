@@ -20,6 +20,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 // then rejects.
 import { UPLOAD_MAX_BYTES } from "@shared/staff-chat";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
   DropdownMenuSeparator,
@@ -213,6 +214,7 @@ export default function StaffChat() {
         users={users}
         me={me}
         isLeadership={isLeadership}
+        onDeselect={() => { setActiveId(null); setMobilePane("list"); }}
         activeId={activeId}
         openChannel={openChannel}
         searchQ={searchQ}
@@ -270,9 +272,23 @@ function ChannelListPane(props: {
   channels: ChannelSummary[]; users: Person[]; me: number; isLeadership: boolean;
   activeId: number | null; openChannel: (id: number) => void;
   searchQ: string; setSearchQ: (s: string) => void; className?: string;
+  /** Close the open conversation — used when marking THAT one unread. */
+  onDeselect: () => void;
 }) {
   const { channels, users, me, isLeadership, activeId, openChannel, searchQ, setSearchQ } = props;
   const [filesOpen, setFilesOpen] = useState(false);
+
+  // Right-click a channel or DM → mark it unread without opening it.
+  // 🔴 If it's the conversation currently OPEN, close it as well: the reader's
+  // auto-mark-read fires whenever the newest message is on screen, so leaving it
+  // open would mark it read again a moment later and the menu would look broken.
+  const markUnread = async (c: ChannelSummary) => {
+    try {
+      await apiRequest("POST", `/api/admin/chat/channels/${c.id}/unread`);
+      if (activeId === c.id) props.onDeselect();
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/chat/sync"] });
+    } catch { /* the row keeps its current state — nothing is lost */ }
+  };
   const [showBrowse, setShowBrowse] = useState(false);
   const [newDmOpen, setNewDmOpen] = useState(false);
   const [newChannelOpen, setNewChannelOpen] = useState(false);
@@ -368,7 +384,7 @@ function ChannelListPane(props: {
           <>
             <SectionLabel>Channels</SectionLabel>
             {joinedChannels.map((c) => (
-              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} />
+              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} onMarkUnread={markUnread} />
             ))}
             {browsable.length > 0 && (
               <button
@@ -384,7 +400,7 @@ function ChannelListPane(props: {
 
             <SectionLabel className="mt-4">Direct messages</SectionLabel>
             {dms.map((c) => (
-              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} />
+              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} onMarkUnread={markUnread} />
             ))}
             {dms.length === 0 && (
               <p className="text-[12px] text-white/30 px-3 py-2 leading-relaxed">
@@ -417,11 +433,16 @@ function SectionLabel({ children, className = "" }: { children: React.ReactNode;
   );
 }
 
-export function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number; active: boolean; onClick: () => void }) {
+export function ChannelRow({ c, me, active, onClick, onMarkUnread }: {
+  c: ChannelSummary; me: number; active: boolean; onClick: () => void;
+  /** Right-click → mark unread, without having to open the conversation. */
+  onMarkUnread?: (c: ChannelSummary) => void;
+}) {
   const label = channelLabel(c, me);
   const important = c.kind === "dm" ? c.unread : c.mentions;
   const hasUnread = c.unread > 0;
-  return (
+
+  const row = (
     <button
       onClick={onClick}
       className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl transition-colors text-left ${
@@ -463,6 +484,25 @@ export function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: 
         <span className="w-1.5 h-1.5 rounded-full bg-white/50 shrink-0" />
       ) : null}
     </button>
+  );
+
+  // Without a handler the row behaves exactly as before — never an empty menu.
+  if (!onMarkUnread) return row;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem
+          onClick={() => onMarkUnread(c)}
+          disabled={c.unread > 0}
+          data-testid={`context-mark-unread-${c.id}`}
+        >
+          <MailQuestion className="w-3.5 h-3.5 mr-2" />
+          {c.unread > 0 ? "Already unread" : "Mark as unread"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
