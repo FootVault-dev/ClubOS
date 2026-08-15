@@ -118,6 +118,35 @@ async function breadcrumbs(nodeId: number | null): Promise<{ id: number; name: s
   return list.map((r: any) => ({ id: Number(r.id), name: String(r.name) }));
 }
 
+/**
+ * Folder paths for MANY nodes in one query.
+ *
+ * 🔴 The search results loop used to await breadcrumbs() per hit — up to 60
+ * sequential recursive queries, each a round trip to the database in Sydney,
+ * which made search take 5–7 SECONDS at real scale while the full-text query
+ * itself was 10ms. One recursive CTE seeded with every parent id answers the
+ * whole page at once.
+ */
+async function pathsFor(parentIds: (number | null)[]): Promise<Map<number, string[]>> {
+  const ids = Array.from(new Set(parentIds.filter((x): x is number => typeof x === "number")));
+  const map = new Map<number, string[]>();
+  if (!ids.length) return map;
+  const rows: any = await db.execute(sql`
+    WITH RECURSIVE up AS (
+      SELECT id AS start_id, id, parent_id, name, 0 AS depth
+      FROM drive_nodes WHERE id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+      UNION ALL
+      SELECT u.start_id, n.id, n.parent_id, n.name, u.depth + 1
+      FROM drive_nodes n JOIN up u ON n.id = u.parent_id
+    )
+    SELECT start_id, array_agg(name ORDER BY depth DESC) AS path
+    FROM up GROUP BY start_id
+  `);
+  const list = Array.isArray(rows) ? rows : rows.rows ?? [];
+  for (const r of list) map.set(Number(r.start_id), (r.path ?? []) as string[]);
+  return map;
+}
+
 /** The shape the client renders. Never leaks storage keys. */
 function present(node: any, gates: string[]) {
   return {
@@ -261,6 +290,9 @@ export function registerDriveRoutes(app: Express) {
       const list = Array.isArray(rows) ? rows : rows.rows ?? [];
       const gates = await gatesFor(list.map((r: any) => Number(r.id)));
 
+      // Resolve every result's path in ONE query before the loop.
+      const paths = await pathsFor(list.map((r: any) => (r.parent_id === null ? null : Number(r.parent_id))));
+
       const items = [] as any[];
       for (const r of list) {
         const id = Number(r.id);
@@ -279,7 +311,7 @@ export function registerDriveRoutes(app: Express) {
           const at = text.toLowerCase().indexOf(q.toLowerCase());
           if (at >= 0) p.snippet = (at > 60 ? "…" : "") + text.slice(Math.max(0, at - 60), at + 180).trim() + "…";
         }
-        p.path = (await breadcrumbs(node.parentId ? Number(node.parentId) : null)).map((b) => b.name);
+        p.path = node.parentId ? (paths.get(Number(node.parentId)) ?? []) : [];
         items.push(p);
       }
 
