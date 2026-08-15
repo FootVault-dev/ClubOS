@@ -10,6 +10,7 @@
 // Transport is react-query polling: sidebar sync 6s, open conversation 3.5s.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -19,6 +20,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 // then rejects.
 import { UPLOAD_MAX_BYTES } from "@shared/staff-chat";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
   DropdownMenuSeparator,
@@ -27,6 +29,7 @@ import {
   Hash, Lock, Megaphone, Plus, Search, Send, Paperclip, Mic, Square, X,
   ChevronLeft, ChevronDown, ChevronRight, Users, Bell, BellOff, Volume2,
   MoreHorizontal, Pencil, SmilePlus, CheckCheck, Check, ArchiveX,
+  MessageSquare, CornerUpRight, Paperclip as PaperclipIcon, Maximize2, Minimize2, Expand, MailQuestion,
   MessagesSquare, LogOut, FileText, Download, ShieldCheck, Loader2, UserPlus,
 } from "lucide-react";
 
@@ -49,6 +52,18 @@ interface ChatMessage {
   reactions: { emoji: string; userIds: number[] }[]; ackCount: number; ackedByMe: boolean;
   mentionedUserIds: number[];
   pending?: boolean; failed?: boolean;
+  // ── v2: threads + forwarding (2026-08-15) ──────────────────────────────────
+  // A reply keeps its place in the channel — that is the mitigation for the v1
+  // concern that threads make conversations vanish into side-rooms. The root
+  // carries the count that opens the panel.
+  parentMessageId?: number | null;
+  replyCount?: number;
+  lastReplyAt?: string | null;
+  forwardedFrom?: {
+    messageId: number; channelName: string | null; channelKind: string;
+    authorName: string; body: string; createdAt: string;
+    attachmentCount: number; deleted: boolean;
+  } | null;
 }
 interface HistoryResponse {
   channel: { id: number; kind: string; name: string | null; topic: string | null; isPrivate: boolean; isDefault: boolean; postPolicy: string; archived: boolean };
@@ -57,6 +72,9 @@ interface HistoryResponse {
   hasMore: boolean;
 }
 interface Bootstrap { viewer: { userId: number; isLeadership: boolean }; users: Person[]; channels: ChannelSummary[] }
+
+import { ThreadPanel, ForwardDialog, ForwardedQuote, FilesBrowser } from "@/components/chat-v2";
+import { ReactionBar } from "@/components/emoji-picker";
 
 const GOLD = "#c9a43e";
 const QUICK_EMOJIS = ["👍", "✅", "🔥", "😂", "🙏", "👀"];
@@ -196,6 +214,7 @@ export default function StaffChat() {
         users={users}
         me={me}
         isLeadership={isLeadership}
+        onDeselect={() => { setActiveId(null); setMobilePane("list"); }}
         activeId={activeId}
         openChannel={openChannel}
         searchQ={searchQ}
@@ -210,7 +229,9 @@ export default function StaffChat() {
             me={me}
             isLeadership={isLeadership}
             users={users}
+            allChannels={channels}
             onBack={() => setMobilePane("list")}
+            onDeselect={() => { setActiveId(null); setMobilePane("list"); }}
             toast={toast}
           />
         ) : (
@@ -251,8 +272,23 @@ function ChannelListPane(props: {
   channels: ChannelSummary[]; users: Person[]; me: number; isLeadership: boolean;
   activeId: number | null; openChannel: (id: number) => void;
   searchQ: string; setSearchQ: (s: string) => void; className?: string;
+  /** Close the open conversation — used when marking THAT one unread. */
+  onDeselect: () => void;
 }) {
   const { channels, users, me, isLeadership, activeId, openChannel, searchQ, setSearchQ } = props;
+  const [filesOpen, setFilesOpen] = useState(false);
+
+  // Right-click a channel or DM → mark it unread without opening it.
+  // 🔴 If it's the conversation currently OPEN, close it as well: the reader's
+  // auto-mark-read fires whenever the newest message is on screen, so leaving it
+  // open would mark it read again a moment later and the menu would look broken.
+  const markUnread = async (c: ChannelSummary) => {
+    try {
+      await apiRequest("POST", `/api/admin/chat/channels/${c.id}/unread`);
+      if (activeId === c.id) props.onDeselect();
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/chat/sync"] });
+    } catch { /* the row keeps its current state — nothing is lost */ }
+  };
   const [showBrowse, setShowBrowse] = useState(false);
   const [newDmOpen, setNewDmOpen] = useState(false);
   const [newChannelOpen, setNewChannelOpen] = useState(false);
@@ -275,6 +311,16 @@ function ChannelListPane(props: {
     <aside className={`w-full md:w-72 lg:w-80 shrink-0 flex-col border-r border-white/[0.06] bg-black/20 ${props.className ?? ""}`}>
       <div className="p-3 pb-2 flex items-center gap-2">
         <h1 className="text-[15px] font-bold tracking-tight flex-1 px-1">Chat</h1>
+        {/* Files & links — Travis's second ask: find that thing somebody shared
+            months ago without scrolling a channel to find it. */}
+        <button
+          onClick={() => setFilesOpen(true)}
+          title="Files & links"
+          data-testid="button-open-files"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/[0.06] transition-colors"
+        >
+          <PaperclipIcon className="w-4 h-4" />
+        </button>
         {isLeadership && (
           <button
             onClick={() => setNewChannelOpen(true)}
@@ -338,7 +384,7 @@ function ChannelListPane(props: {
           <>
             <SectionLabel>Channels</SectionLabel>
             {joinedChannels.map((c) => (
-              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} />
+              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} onMarkUnread={markUnread} />
             ))}
             {browsable.length > 0 && (
               <button
@@ -354,7 +400,7 @@ function ChannelListPane(props: {
 
             <SectionLabel className="mt-4">Direct messages</SectionLabel>
             {dms.map((c) => (
-              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} />
+              <ChannelRow key={c.id} c={c} me={me} active={activeId === c.id} onClick={() => openChannel(c.id)} onMarkUnread={markUnread} />
             ))}
             {dms.length === 0 && (
               <p className="text-[12px] text-white/30 px-3 py-2 leading-relaxed">
@@ -369,6 +415,12 @@ function ChannelListPane(props: {
       {isLeadership && (
         <NewChannelDialog open={newChannelOpen} onClose={() => setNewChannelOpen(false)} onCreated={openChannel} />
       )}
+      {filesOpen && (
+        <FilesBrowser
+          onClose={() => setFilesOpen(false)}
+          onOpenMessage={(channelId) => openChannel(channelId)}
+        />
+      )}
     </aside>
   );
 }
@@ -381,11 +433,16 @@ function SectionLabel({ children, className = "" }: { children: React.ReactNode;
   );
 }
 
-export function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: number; active: boolean; onClick: () => void }) {
+export function ChannelRow({ c, me, active, onClick, onMarkUnread }: {
+  c: ChannelSummary; me: number; active: boolean; onClick: () => void;
+  /** Right-click → mark unread, without having to open the conversation. */
+  onMarkUnread?: (c: ChannelSummary) => void;
+}) {
   const label = channelLabel(c, me);
   const important = c.kind === "dm" ? c.unread : c.mentions;
   const hasUnread = c.unread > 0;
-  return (
+
+  const row = (
     <button
       onClick={onClick}
       className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl transition-colors text-left ${
@@ -428,6 +485,25 @@ export function ChannelRow({ c, me, active, onClick }: { c: ChannelSummary; me: 
       ) : null}
     </button>
   );
+
+  // Without a handler the row behaves exactly as before — never an empty menu.
+  if (!onMarkUnread) return row;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem
+          onClick={() => onMarkUnread(c)}
+          disabled={c.unread > 0}
+          data-testid={`context-mark-unread-${c.id}`}
+        >
+          <MailQuestion className="w-3.5 h-3.5 mr-2" />
+          {c.unread > 0 ? "Already unread" : "Mark as unread"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 function BrowseRow({ c, onJoined }: { c: ChannelSummary; onJoined: () => void }) {
@@ -463,6 +539,10 @@ function BrowseRow({ c, onJoined }: { c: ChannelSummary; onJoined: () => void })
 function ConversationPane(props: {
   channel: ChannelSummary; me: number; isLeadership: boolean; users: Person[];
   onBack: () => void; toast: ReturnType<typeof useToast>["toast"];
+  /** Every conversation the viewer can post to — the forward dialog's targets. */
+  allChannels: ChannelSummary[];
+  /** Close the conversation entirely — used after marking it unread. */
+  onDeselect: () => void;
 }) {
   const { channel, me, isLeadership, users, onBack, toast } = props;
   const channelId = channel.id;
@@ -474,6 +554,68 @@ function ConversationPane(props: {
   const [membersOpen, setMembersOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  // v2: the thread panel and the forward dialog. Both portal to document.body.
+  // ── Drop a file ANYWHERE on the conversation (Daniel, 2026-08-15) ─────────
+  // The composer bar is thin and hard to hit. The whole screen is the target
+  // while a conversation is open.
+  //
+  // 🔴 A dragenter/dragleave COUNTER, not a boolean. Both fire again every time
+  // the pointer crosses into a child element, so a boolean flickers the overlay
+  // off as soon as the file passes over a message bubble. The counter only
+  // reaches zero when the drag has genuinely left the window.
+  const [dropDepth, setDropDepth] = useState(0);
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  const dragging = dropDepth > 0;
+
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types?.includes("Files");
+    const onEnter = (e: DragEvent) => { if (hasFiles(e)) { e.preventDefault(); setDropDepth((d) => d + 1); } };
+    // 🔴 dragover must preventDefault too, or the browser refuses the drop and
+    // navigates to the file instead — the app vanishes and the upload is lost.
+    const onOver = (e: DragEvent) => { if (hasFiles(e)) e.preventDefault(); };
+    const onLeave = (e: DragEvent) => { if (hasFiles(e)) setDropDepth((d) => Math.max(0, d - 1)); };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDropDepth(0);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length) setDroppedFiles(files);
+    };
+    // Dropping outside the window, or pressing Escape mid-drag, fires neither
+    // drop nor a balancing dragleave — without these the overlay would stick.
+    const reset = () => setDropDepth(0);
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onDrop);
+    window.addEventListener("dragend", reset);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onDrop);
+      window.removeEventListener("dragend", reset);
+      window.removeEventListener("blur", reset);
+    };
+  }, []);
+
+  const markUnread = async () => {
+    suppressRead.current = true;
+    try {
+      await apiRequest("POST", `/api/admin/chat/channels/${channelId}/unread`);
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/chat/sync"] });
+      // Leaving is part of the action, not a side effect: staying put re-reads it.
+      props.onDeselect();
+      toast({ title: "Marked as unread", description: "It'll show as unread in your list." });
+    } catch {
+      suppressRead.current = false;
+      toast({ title: "Couldn't mark it unread", variant: "destructive" });
+    }
+  };
+
+  const [threadRootId, setThreadRootId] = useState<number | null>(null);
+  const [forwardId, setForwardId] = useState<number | null>(null);
 
   const historyKey = [`/api/admin/chat/channels/${channelId}/messages`];
   const { data: hist } = useQuery<HistoryResponse>({
@@ -509,8 +651,13 @@ function ConversationPane(props: {
 
   // Mark read when the latest message is on screen and the tab has focus.
   const lastMarked = useRef<number>(0);
+  // 🔴 Set while marking UNREAD. Without it this effect fires on the very next
+  // render and marks the conversation read again — the button would appear to
+  // do nothing at all.
+  const suppressRead = useRef(false);
   useEffect(() => {
     const latest = messages.filter((m) => !m.pending).at(-1)?.id ?? 0;
+    if (suppressRead.current) return;
     if (latest > lastMarked.current && document.hasFocus()) {
       lastMarked.current = latest;
       apiRequest("POST", `/api/admin/chat/channels/${channelId}/read`)
@@ -658,11 +805,22 @@ function ConversationPane(props: {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="w-8 h-8 rounded-lg flex items-center justify-center text-white/45 hover:text-white/80 hover:bg-white/[0.06]">
+            <button
+              data-testid="button-channel-menu"
+              aria-label="Conversation options"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-white/45 hover:text-white/80 hover:bg-white/[0.06]"
+            >
               <MoreHorizontal className="w-4 h-4" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
+            {/* "I've seen this but I can't deal with it yet." 🔴 Marking unread
+                must LEAVE the conversation — the auto-read effect above would
+                otherwise mark it read again on the next render. */}
+            <DropdownMenuItem onClick={markUnread} data-testid="menu-mark-unread">
+              <MailQuestion className="w-3.5 h-3.5 mr-2" /> Mark as unread
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             {channel.kind === "channel" && isLeadership && (
               <>
                 <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
@@ -743,6 +901,8 @@ function ConversationPane(props: {
               setEditing={(on) => setEditingId(on ? msg.id : null)}
               historyKey={historyKey}
               retryFailed={retryFailed}
+              onOpenThread={setThreadRootId}
+              onForward={setForwardId}
               toast={toast}
             />
           </Fragment>
@@ -762,6 +922,8 @@ function ConversationPane(props: {
           isLeadership={isLeadership}
           onSend={(p) => sendMutation.mutate(p)}
           toast={toast}
+          droppedFiles={droppedFiles}
+          onDroppedHandled={() => setDroppedFiles(null)}
         />
       ) : (
         <div className="shrink-0 border-t border-white/[0.06] p-4 text-center text-[13px] text-white/40">
@@ -780,6 +942,47 @@ function ConversationPane(props: {
       />
       {isLeadership && (
         <ChannelSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} channel={channel} onBack={onBack} />
+      )}
+
+      {/* 🔴 Portalled to document.body: the ClubOS header carries a
+          backdrop-filter, which makes it a containing block for fixed children
+          and would clip this to a 56px strip. Same trap as View As. */}
+      {dragging && createPortal(
+        <div
+          className="fixed inset-0 z-[300] flex items-center justify-center pointer-events-none"
+          style={{ background: "rgba(3,6,12,0.72)", backdropFilter: "blur(2px)" }}
+          data-testid="chat-drop-overlay"
+        >
+          <div
+            className="rounded-3xl border-2 border-dashed px-10 py-9 text-center"
+            style={{ borderColor: GOLD, background: "rgba(201,164,62,0.07)" }}
+          >
+            <Paperclip className="w-9 h-9 mx-auto mb-3" style={{ color: GOLD }} />
+            <div className="text-[19px] font-bold text-white/90">Drop files anywhere</div>
+            <div className="text-[13px] text-white/45 mt-1.5">
+              They'll attach to your message in {channel.kind === "dm" ? "this conversation" : `#${channel.name}`}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {threadRootId !== null && (
+        <ThreadPanel
+          rootId={threadRootId}
+          me={me}
+          historyKey={historyKey}
+          members={members}
+          channels={props.allChannels}
+          onClose={() => setThreadRootId(null)}
+        />
+      )}
+      {forwardId !== null && (
+        <ForwardDialog
+          messageId={forwardId}
+          channels={props.allChannels}
+          onClose={() => setForwardId(null)}
+        />
       )}
     </>
   );
@@ -830,8 +1033,10 @@ function MessageRow(props: {
   editing: boolean; setEditing: (on: boolean) => void;
   historyKey: string[]; retryFailed: (m: ChatMessage) => void;
   toast: ReturnType<typeof useToast>["toast"];
+  onOpenThread: (rootId: number) => void;
+  onForward: (messageId: number) => void;
 }) {
-  const { msg, me, isLeadership, grouped, mentionNames, memberCount, editing, setEditing, historyKey, retryFailed, toast } = props;
+  const { msg, me, isLeadership, grouped, mentionNames, memberCount, editing, setEditing, historyKey, retryFailed, toast, onOpenThread, onForward } = props;
   const mine = msg.authorId === me;
   const mentionsMe = msg.mentionedUserIds.includes(me);
   const [editText, setEditText] = useState(msg.body);
@@ -943,6 +1148,33 @@ function MessageRow(props: {
           </>
         )}
 
+        {/* Provenance for a forwarded message — a forward that looks like an
+            original is how a quote gets misattributed to the wrong person. */}
+        {msg.forwardedFrom && <ForwardedQuote ref={msg.forwardedFrom} />}
+
+        {/* 🔴 A thread reply stays in the channel — this is the mitigation for
+            the v1 concern that threads hide conversations. The root gets an
+            affordance that opens the panel; the reply gets a quiet marker. */}
+        {!!msg.replyCount && msg.replyCount > 0 && (
+          <button
+            onClick={() => onOpenThread(msg.id)}
+            data-testid={`button-open-thread-${msg.id}`}
+            className="mt-1 text-[12px] font-semibold flex items-center gap-1.5 hover:underline"
+            style={{ color: GOLD }}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            {msg.replyCount} {msg.replyCount === 1 ? "reply" : "replies"}
+          </button>
+        )}
+        {!!msg.parentMessageId && (
+          <button
+            onClick={() => onOpenThread(msg.parentMessageId!)}
+            className="mt-0.5 text-[11px] text-white/30 hover:text-white/60 flex items-center gap-1"
+          >
+            <MessageSquare className="w-3 h-3" /> in thread
+          </button>
+        )}
+
         {/* Reactions */}
         {msg.reactions.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -995,25 +1227,39 @@ function MessageRow(props: {
         <div
           className={`absolute -top-3 right-2 ${reactOpen ? "flex" : "hidden group-hover:flex"} items-center gap-0.5 bg-[#16171a] border border-white/10 rounded-xl p-0.5 shadow-xl`}
         >
+          {/* Reply in thread — only on a ROOT message. A reply cannot itself be
+              replied to (one level only), so offering it there would dead-end. */}
+          {!msg.parentMessageId && (
+            <button
+              onClick={() => onOpenThread(msg.id)}
+              title="Reply in thread"
+              data-testid={`button-reply-thread-${msg.id}`}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            onClick={() => onForward(msg.id)}
+            title="Forward"
+            data-testid={`button-forward-${msg.id}`}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]"
+          >
+            <CornerUpRight className="w-3.5 h-3.5" />
+          </button>
           <Popover open={reactOpen} onOpenChange={setReactOpen}>
             <PopoverTrigger asChild>
               <button className="w-7 h-7 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/[0.07]" title="React">
                 <SmilePlus className="w-3.5 h-3.5" />
               </button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-1.5 flex gap-1" align="end">
-              {QUICK_EMOJIS.map((e) => (
-                <button
-                  key={e}
-                  onClick={() => {
-                    setReactOpen(false);
-                    react(e);
-                  }}
-                  className="w-8 h-8 text-[17px] rounded-lg hover:bg-white/[0.08]"
-                >
-                  {e}
-                </button>
-              ))}
+            <PopoverContent className="w-auto p-0" align="end">
+              {/* Quick six, then "+" for the full catalogue — WhatsApp's shape.
+                  Keeps the common case one click and the popover small. */}
+              <ReactionBar
+                quick={QUICK_EMOJIS}
+                onPick={(e) => { setReactOpen(false); react(e); }}
+              />
             </PopoverContent>
           </Popover>
           {canEdit && (
@@ -1097,18 +1343,98 @@ function readVCard(text: string): { name: string; phone?: string; email?: string
  */
 function AttachmentLightbox({ a, onClose }: { a: Attachment; onClose: () => void }) {
   const ct = (a.contentType || "").toLowerCase();
+  const isImage = ct.startsWith("image/");
+  const isVideo = ct.startsWith("video/");
+
+  // Full screen for attachments (Daniel, 2026-08-15): the dialog caps at 78vh
+  // inside a 5xl box, which leaves a screenshot of a screenshot unreadable —
+  // worst on a small device, which is where staff actually read these.
+  //
+  // 🔴 Two separate things, deliberately:
+  //   • "Fit"  — expand the dialog itself to the whole viewport. Always works.
+  //   • Native full screen — the OS one, via the Fullscreen API. Genuinely
+  //     better on a phone, but iOS Safari does not support it on arbitrary
+  //     elements, so it must never be the ONLY way to get a bigger view.
+  const [expanded, setExpanded] = useState(false);
+  const [native, setNative] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
+
+  const canNative = typeof document !== "undefined" && !!document.fullscreenEnabled;
+
+  const toggleNative = async () => {
+    const el = shellRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await el.requestFullscreen();
+    } catch {
+      // Refused (iOS Safari, or a permissions policy) — fall back to expanding
+      // the dialog, so the button always does something useful.
+      setExpanded((v) => !v);
+    }
+  };
+
+  // The user can leave full screen with Escape or the OS chrome, which fires no
+  // click of ours — track the real state rather than assuming our own.
+  useEffect(() => {
+    const onFs = () => setNative(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "f" || e.key === "F") { e.preventDefault(); setExpanded((v) => !v); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const big = expanded || native;
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-5xl w-[calc(100vw-2rem)] p-0 gap-0 bg-[#0e1116] border-white/10">
-        {/* pr-12 keeps the Download button clear of the Dialog's own absolutely
+      <DialogContent
+        className={
+          big
+            ? "max-w-none w-screen h-screen sm:rounded-none p-0 gap-0 bg-[#0e1116] border-0 translate-x-0 translate-y-0 left-0 top-0"
+            : "max-w-5xl w-[calc(100vw-2rem)] p-0 gap-0 bg-[#0e1116] border-white/10"
+        }
+        data-testid="attachment-lightbox"
+      >
+        {/* pr-12 keeps the buttons clear of the Dialog's own absolutely
             positioned close X (top-4 right-4) — without it the two overlap on a
             phone and the X lands on top of "Download". */}
-        <div className="flex items-center gap-3 px-4 py-3 pr-12 border-b border-white/[0.07] min-w-0">
+        <div className="flex items-center gap-2 px-4 py-3 pr-12 border-b border-white/[0.07] min-w-0">
           <FileText className="w-4 h-4 text-white/40 shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-semibold truncate">{a.name}</div>
             <div className="text-[11px] text-white/35">{fmtBytes(a.size)}</div>
           </div>
+
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? "Exit full screen (F)" : "Full screen (F)"}
+            aria-label={expanded ? "Exit full screen" : "Full screen"}
+            data-testid="button-toggle-expand"
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1.5 text-[12px] font-semibold transition-colors"
+          >
+            {expanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{expanded ? "Exit" : "Full screen"}</span>
+          </button>
+
+          {canNative && (
+            <button
+              onClick={toggleNative}
+              title={native ? "Leave device full screen" : "Device full screen"}
+              aria-label={native ? "Leave device full screen" : "Device full screen"}
+              data-testid="button-toggle-native-fullscreen"
+              className="shrink-0 inline-flex items-center justify-center rounded-lg border border-white/10 hover:border-white/25 w-8 h-8 transition-colors"
+            >
+              <Expand className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           <a
             href={a.url}
             download={a.name}
@@ -1116,17 +1442,29 @@ function AttachmentLightbox({ a, onClose }: { a: Attachment; onClose: () => void
             className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-white/10 hover:border-white/25 px-2.5 py-1.5 text-[12px] font-semibold transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
-            {/* Label hidden on the narrowest screens — the icon plus the aria
-                label carries it, and a wrapped two-line header looks broken. */}
             <span className="hidden sm:inline">Download</span>
           </a>
         </div>
+
         {/* Fixed viewport height so a tall PDF scrolls INSIDE the dialog rather
-            than growing it past the bottom of the screen. */}
-        <div className="bg-black/40 flex items-center justify-center" style={{ height: "min(78vh, 900px)" }}>
-          {ct.startsWith("image/") ? (
-            <img src={a.url} alt={a.name} className="max-w-full max-h-full object-contain" />
-          ) : ct.startsWith("video/") ? (
+            than growing it past the bottom of the screen. Expanded, it takes
+            everything left after the header. */}
+        <div
+          ref={shellRef}
+          className="bg-black/40 flex items-center justify-center overflow-auto"
+          style={big ? { height: "calc(100vh - 61px)" } : { height: "min(78vh, 900px)" }}
+        >
+          {isImage ? (
+            // Click the image itself to toggle — the obvious gesture, and the
+            // only comfortable one on a phone where the header buttons are small.
+            <img
+              src={a.url}
+              alt={a.name}
+              onClick={() => setExpanded((v) => !v)}
+              className="max-w-full max-h-full object-contain cursor-zoom-in"
+              data-testid="lightbox-image"
+            />
+          ) : isVideo ? (
             <video src={a.url} controls autoPlay className="max-w-full max-h-full" />
           ) : (
             <iframe src={a.url} title={a.name} className="w-full h-full bg-white" />
@@ -1261,11 +1599,21 @@ function Composer(props: {
   isLeadership: boolean;
   onSend: (p: { body: string; attachments: Attachment[]; mentionUserIds: number[]; requiresAck: boolean; clientMessageId: string }) => void;
   toast: ReturnType<typeof useToast>["toast"];
+  /** Files caught by the screen-wide drop zone in ConversationPane. */
+  droppedFiles?: File[] | null;
+  onDroppedHandled?: () => void;
 }) {
-  const { channel, members, me, isLeadership, onSend, toast } = props;
+  const { channel, members, me, isLeadership, onSend, toast, droppedFiles, onDroppedHandled } = props;
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState("");
+  // ── Drafts survive leaving the tab (Travis, 2026-08-15) ───────────────────
+  // He types a message, clicks another ClubOS tab, comes back and it's gone.
+  // The composer unmounts when the page does, so state alone can't survive it.
+  // Kept per channel: a half-written note to Dima must not reappear in #general.
+  const draftKey = `clubos_chat_draft_${channel.id}`;
+  const [text, setText] = useState<string>(() => {
+    try { return localStorage.getItem(draftKey) ?? ""; } catch { return ""; }
+  });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
   const [mentions, setMentions] = useState<{ id: number; name: string }[]>([]);
@@ -1275,6 +1623,15 @@ function Composer(props: {
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const recRef = useRef<{ recorder: MediaRecorder; chunks: Blob[]; timer: ReturnType<typeof setInterval>; start: number } | null>(null);
+
+  // Persist on every keystroke — the tab can be left at any moment, and there
+  // is no "closing" event we can rely on. Cheap: one small string per channel.
+  useEffect(() => {
+    try {
+      if (text.trim()) localStorage.setItem(draftKey, text);
+      else localStorage.removeItem(draftKey);
+    } catch { /* private mode / quota — a lost draft must never break the composer */ }
+  }, [text, draftKey]);
 
   const otherMembers = members.filter((m) => m.userId !== me);
   const mentionMatches =
@@ -1388,6 +1745,7 @@ function Composer(props: {
       clientMessageId: crypto.randomUUID(),
     });
     setText("");
+    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     setAttachments([]);
     setMentions([]);
     setRequiresAck(false);
@@ -1398,8 +1756,20 @@ function Composer(props: {
   const placeholder =
     channel.kind === "dm" ? "Message…" : channel.postPolicy === "leadership" ? `Post an announcement…` : `Message #${channel.name}`;
 
+  // Files dropped anywhere on the conversation land here — the drop target is
+  // the whole screen, not this thin bar. See ConversationPane's window-level
+  // listeners; the composer just receives what they caught.
+  useEffect(() => {
+    if (droppedFiles?.length) {
+      addFiles(droppedFiles);
+      onDroppedHandled?.();
+    }
+    // addFiles is recreated on every render, so the files themselves are the
+    // stable dependency to key on.
+  }, [droppedFiles]);
+
   return (
-    <div className="shrink-0 border-t border-white/[0.06] p-3 sm:p-4 relative">
+    <div className="shrink-0 border-t border-white/[0.06] p-3 sm:p-4 relative" data-testid="composer-dropzone">
       {/* Mention autocomplete */}
       {mentionMatches.length > 0 && (
         <div className="absolute bottom-full left-4 right-4 sm:right-auto sm:w-72 mb-1 rounded-xl border border-white/10 bg-[#16171a] shadow-2xl overflow-hidden z-10">
