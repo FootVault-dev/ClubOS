@@ -284,6 +284,38 @@ try {
       staleCopy: /Replies also appear in the channel/.test(document.body.innerText),
     }));
     ok("🔴 thread messages can be reacted to", acts.react);
+
+    // 🔴 Not just "the popover exists" — it opened BEHIND the panel (z-50 under
+    // z-[150]) and was invisible. Assert it is actually ON TOP.
+    const rb = await page.$('[data-testid^="thread-react-"]');
+    if (rb) {
+      // 🔴 The action bar is `hidden group-hover:flex` — pure CSS, so a
+      // dispatched mouseover doesn't reveal it and a real click can't land.
+      // Move the actual pointer over the row first.
+      const box = await (await page.$('[data-testid="panel-thread"] .group'))?.boundingBox();
+      if (box) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await new Promise((r) => setTimeout(r, 400));
+      await rb.click();
+      await new Promise((r) => setTimeout(r, 1200));
+      const vis = await page.evaluate(() => {
+        const bar = document.querySelector('[data-testid^="quick-emoji-"]') as HTMLElement | null;
+        if (!bar) return { open: false, onTop: false, z: 0 };
+        const r = bar.getBoundingClientRect();
+        // What the user's click would actually land on at that point.
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const content = bar.closest("[data-radix-popper-content-wrapper]") as HTMLElement | null;
+        return {
+          open: true,
+          onTop: !!hit && (bar === hit || bar.contains(hit) || hit.contains(bar)),
+          z: content ? Number(getComputedStyle(content).zIndex) || 0 : 0,
+        };
+      });
+      ok("🔴 and the emoji picker is VISIBLE, not behind the panel",
+         vis.open && vis.onTop, vis.open ? `clickable=${vis.onTop}` : "never opened");
+      await page.screenshot({ path: join(outDir, "thread-emoji.png") });
+      await page.keyboard.press("Escape");
+      await new Promise((r) => setTimeout(r, 600));
+    }
     ok("🔴 and forwarded", acts.forward);
     ok("the footnote no longer claims replies appear in the channel", !acts.staleCopy);
     await page.screenshot({ path: join(outDir, "thread-actions.png") });
