@@ -125,4 +125,46 @@ export function googleIsUnexportable(mime: string): boolean {
   return mime.startsWith("application/vnd.google-apps.") && mime !== GOOGLE_FOLDER_MIME && !GOOGLE_EXPORT[mime];
 }
 
+
+// ── The live Google file ─────────────────────────────────────────────────────
+// Every imported node keeps Google's `webViewLink`, and for a Doc, Sheet or
+// Slides that link opens the LIVE, EDITABLE document. The kind is derivable
+// from the URL itself, so this needs no extra column and no backfill:
+//
+//   docs.google.com/document/…      → Google Doc      (editable)
+//   docs.google.com/spreadsheets/…  → Google Sheet    (editable)
+//   docs.google.com/presentation/…  → Google Slides   (editable)
+//   drive.google.com/file/…         → an uploaded file, opens in Drive's viewer
+//
+// 🔴 For a Google-native file the copy WE hold is a SNAPSHOT taken at import
+// time, and it drifts the moment anyone edits the original. The UI has to say
+// so, or someone edits the download, saves it, and quietly loses the team's
+// work. The live link is the primary action; ours is the point-in-time copy.
+export type GoogleLinkKind = "doc" | "sheet" | "slides" | "drive" | null;
+
+export function googleLinkKind(url: string | null | undefined): GoogleLinkKind {
+  if (!url) return null;
+  if (url.includes("docs.google.com/document/")) return "doc";
+  if (url.includes("docs.google.com/spreadsheets/")) return "sheet";
+  if (url.includes("docs.google.com/presentation/")) return "slides";
+  if (url.includes("drive.google.com/")) return "drive";
+  return null;
+}
+
+/** True when Google holds the editable original and ours is only a snapshot. */
+export function googleIsLiveEditable(url: string | null | undefined): boolean {
+  const k = googleLinkKind(url);
+  return k === "doc" || k === "sheet" || k === "slides";
+}
+
+export function googleLinkLabel(url: string | null | undefined): string | null {
+  switch (googleLinkKind(url)) {
+    case "doc": return "Open in Google Docs";
+    case "sheet": return "Open in Google Sheets";
+    case "slides": return "Open in Google Slides";
+    case "drive": return "Open in Google Drive";
+    default: return null;
+  }
+}
+
 export type { Viewer };

@@ -25,6 +25,8 @@ import {
   driveCategory,
   driveGateLabel,
   driveIsExtractable,
+  googleIsLiveEditable,
+  googleLinkLabel,
   viewerCanReadDriveNode,
   type Viewer,
 } from "@shared/drive";
@@ -133,6 +135,11 @@ function present(node: any, gates: string[]) {
     description: node.description,
     source: node.source,
     sourceUrl: node.sourceUrl,
+    // 🔴 When Google holds the editable original, OUR file is a snapshot from
+    // import time. Say which is which, or someone edits the download and
+    // quietly loses the team's work.
+    liveEditable: googleIsLiveEditable(node.sourceUrl),
+    liveLabel: googleLinkLabel(node.sourceUrl),
     // Honest about the lock without naming what is behind it.
     restricted: gates.length > 0,
     restrictedLabel: driveGateLabel(gates),

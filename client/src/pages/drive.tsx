@@ -14,9 +14,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient, workspaceFetch } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
-  ChevronRight, Download, File as FileIcon, FileSpreadsheet, FileText, FileType2,
-  Film, Folder, FolderPlus, HardDrive, Home, Image as ImageIcon, Loader2, Lock,
-  Music, Package, Pencil, RotateCcw, Search, Trash2, Upload, X,
+  ChevronRight, Download, ExternalLink, File as FileIcon, FileSpreadsheet, FileText,
+  FileType2, Film, Folder, FolderPlus, HardDrive, Home, Image as ImageIcon, Loader2,
+  Lock, Music, Package, Pencil, RotateCcw, Search, Trash2, Upload, X,
 } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -32,6 +32,8 @@ interface Node {
   description: string | null;
   source: string;
   sourceUrl: string | null;
+  liveEditable?: boolean;
+  liveLabel?: string | null;
   restricted: boolean;
   restrictedLabel: string | null;
   hasText: boolean;
@@ -330,6 +332,11 @@ export default function Drive() {
                             <Lock className="h-3 w-3 shrink-0 text-amber-300/70" />
                           </span>
                         )}
+                        {n.liveEditable && (
+                          <span className="shrink-0 rounded bg-emerald-400/10 px-1.5 py-px text-[10px] font-medium text-emerald-300/90">
+                            live
+                          </span>
+                        )}
                       </div>
                       {n.snippet ? (
                         <p className="mt-0.5 truncate text-[11.5px] text-white/35">{n.snippet}</p>
@@ -356,8 +363,16 @@ export default function Drive() {
                       </button>
                     ) : (
                       <>
+                        {n.sourceUrl && (
+                          <a href={n.sourceUrl} target="_blank" rel="noreferrer"
+                            title={n.liveLabel ?? "Open in Google Drive"}
+                            onClick={(e) => e.stopPropagation()}
+                            className="rounded p-1.5 text-white/40 hover:bg-white/10 hover:text-emerald-300">
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
+                        )}
                         {n.kind === "file" && (
-                          <a href={`/api/admin/drive/file/${n.id}/download`} title="Download"
+                          <a href={`/api/admin/drive/file/${n.id}/download`} title="Download our copy"
                             className="rounded p-1.5 text-white/40 hover:bg-white/10 hover:text-white">
                             <Download className="h-4 w-4" />
                           </a>
@@ -436,16 +451,51 @@ function DetailSheet({ id, onClose }: { id: number; onClose: () => void }) {
               <Icon className={`h-10 w-10 ${TINT[data.category] ?? TINT.other}`} />
             </div>
 
-            <div className="mt-4 flex gap-2">
-              <a href={`/api/admin/drive/file/${id}/open`} target="_blank" rel="noreferrer"
-                className="flex-1 rounded-lg bg-amber-400 py-2 text-center text-[13px] font-semibold text-black hover:bg-amber-300">
-                Open
-              </a>
-              <a href={`/api/admin/drive/file/${id}/download`}
-                className="flex-1 rounded-lg border border-white/10 py-2 text-center text-[13px] text-white/80 hover:bg-white/5">
-                Download
-              </a>
-            </div>
+            {/* 🔴 When Google holds the editable original, THAT is the primary
+                action. Ours is a snapshot from import time and drifts the moment
+                anyone edits the real one — so it is labelled as a copy, not
+                offered as the document. */}
+            {data.liveEditable ? (
+              <>
+                <a href={data.sourceUrl} target="_blank" rel="noreferrer"
+                  className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-emerald-400 py-2.5 text-center text-[13px] font-semibold text-black hover:bg-emerald-300">
+                  <ExternalLink className="h-4 w-4" /> {data.liveLabel ?? "Open in Google"}
+                </a>
+                <p className="mt-2 text-[11.5px] leading-relaxed text-white/40">
+                  Google still holds the live document — edit it there and everyone sees the change.
+                  The copy below was taken when it was imported and won't reflect edits made since.
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <a href={`/api/admin/drive/file/${id}/open`} target="_blank" rel="noreferrer"
+                    className="flex-1 rounded-lg border border-white/10 py-2 text-center text-[13px] text-white/70 hover:bg-white/5">
+                    View our copy
+                  </a>
+                  <a href={`/api/admin/drive/file/${id}/download`}
+                    className="flex-1 rounded-lg border border-white/10 py-2 text-center text-[13px] text-white/70 hover:bg-white/5">
+                    Download copy
+                  </a>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-4 flex gap-2">
+                  <a href={`/api/admin/drive/file/${id}/open`} target="_blank" rel="noreferrer"
+                    className="flex-1 rounded-lg bg-amber-400 py-2 text-center text-[13px] font-semibold text-black hover:bg-amber-300">
+                    Open
+                  </a>
+                  <a href={`/api/admin/drive/file/${id}/download`}
+                    className="flex-1 rounded-lg border border-white/10 py-2 text-center text-[13px] text-white/80 hover:bg-white/5">
+                    Download
+                  </a>
+                </div>
+                {data.sourceUrl && (
+                  <a href={data.sourceUrl} target="_blank" rel="noreferrer"
+                    className="mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-white/10 py-2 text-center text-[12.5px] text-white/60 hover:bg-white/5 hover:text-white/90">
+                    <ExternalLink className="h-3.5 w-3.5" /> {data.liveLabel ?? "Open in Google Drive"}
+                  </a>
+                )}
+              </>
+            )}
 
             {data.restricted && (
               <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2.5">
