@@ -333,6 +333,52 @@ try {
        !(await page.evaluate(() => !!document.querySelector('[data-testid="composer-dropzone"]'))));
   }
 
+  // ── Right-click a row in the sidebar → mark unread ─────────────────────────
+  // Daniel's actual workflow: skim the list, spot the one you can't deal with,
+  // right click, move on — without opening it.
+  await pool.query(
+    `INSERT INTO staff_messages (channel_id, author_id, body) VALUES ($1,$2,$3)`,
+    [channelId, mateId, "And the corflutes for Saturday?"]);
+  await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 3000));
+  // Read it, so there is something to mark unread.
+  await fetch(`${BASE}/api/admin/chat/channels/${channelId}/read`, {
+    method: "POST", headers: { Cookie: cookie, "X-Workspace-Slug": "christchurch-united" } });
+  await new Promise((r) => setTimeout(r, 1500));
+
+  const rowBox = await page.evaluate((id: number) => {
+    const el = document.querySelector(`[data-testid="context-mark-unread-${id}"]`);
+    return !!el;
+  }, channelId);
+  ok("no context menu is open before right-clicking", !rowBox);
+
+  // A REAL right click — Radix's ContextMenu listens for contextmenu, and a
+  // synthetic click would never open it.
+  const rowHandle = await page.evaluateHandle((name: string) => {
+    const btns = Array.from(document.querySelectorAll("button"));
+    return btns.find((b) => (b.textContent || "").includes(name)) || null;
+  }, `zz-uiprobe`);
+  const el = rowHandle.asElement();
+  ok("the channel row is in the sidebar", !!el);
+  if (el) {
+    await el.click({ button: "right" });
+    await new Promise((r) => setTimeout(r, 1200));
+    const item = await page.$(`[data-testid="context-mark-unread-${channelId}"]`);
+    ok("🔴 right-clicking a channel offers 'Mark as unread'", !!item);
+    if (item) {
+      const beforeU = await (await fetch(`${BASE}/api/admin/chat/sync`, {
+        headers: { Cookie: cookie, "X-Workspace-Slug": "christchurch-united" } })).json();
+      const b = (beforeU.channels || []).find((c: any) => c.id === channelId)?.unread ?? 0;
+      await item.click();
+      await new Promise((r) => setTimeout(r, 3500));
+      const afterU = await (await fetch(`${BASE}/api/admin/chat/sync`, {
+        headers: { Cookie: cookie, "X-Workspace-Slug": "christchurch-united" } })).json();
+      const a2 = (afterU.channels || []).find((c: any) => c.id === channelId)?.unread ?? 0;
+      ok("🔴 and it marks it unread from the list", a2 > b || a2 > 0, `unread ${b} → ${a2}`);
+      await page.screenshot({ path: join(outDir, "context-mark-unread.png") });
+    }
+  }
+
   // Attachment full screen — the lightbox capped at 78vh and left a screenshot
   // of a screenshot unreadable.
   await page.goto(`${BASE}/admin/chat?c=${channelId}`, { waitUntil: "networkidle2", timeout: 60000 });
