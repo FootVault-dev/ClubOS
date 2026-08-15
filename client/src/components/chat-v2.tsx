@@ -133,8 +133,15 @@ export function ThreadPanel({ rootId, onClose, me, historyKey, members = [], cha
 
   const Row = ({ m, isRoot }: { m: any; isRoot?: boolean }) => (
     <div className={`group relative flex gap-2.5 ${isRoot ? "pb-3 mb-3 border-b border-white/[0.07]" : "py-2"}`}>
+      {/* 🔴 While the picker is open the action bar MUST stay mounted. If it
+          falls back to `hidden group-hover:flex`, moving the mouse into the
+          portalled popover stops `group-hover` matching, the trigger goes
+          display:none, Radix loses its anchor and dumps the popover at the
+          viewport's top-left corner — unclickable. This exact bug was found and
+          fixed in the main MessageRow on 2026-08-04; I rebuilt this row without
+          carrying the fix across. */}
       {!m.deleted && (
-        <div className="absolute -top-2 right-0 hidden group-hover:flex items-center gap-0.5 bg-[#16171a] border border-white/10 rounded-xl p-0.5 shadow-xl z-10">
+        <div className={`absolute -top-2 right-0 ${reactOpenFor === m.id ? "flex" : "hidden group-hover:flex"} items-center gap-0.5 bg-[#16171a] border border-white/10 rounded-xl p-0.5 shadow-xl z-10`}>
           <Popover open={reactOpenFor === m.id} onOpenChange={(o) => setReactOpenFor(o ? m.id : null)}>
             <PopoverTrigger asChild>
               <button title="React"
