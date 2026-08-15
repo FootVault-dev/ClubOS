@@ -1255,6 +1255,13 @@ export function registerStaffChatRoutes(app: Express) {
       // partial answer that reveals the thread exists.
       if (!all.length) return res.status(404).json({ message: "Message not found" });
 
+      // 🔴 Hydrate the same extras the channel feed gets. Without this a
+      // reaction added in a thread saved correctly and then rendered nowhere,
+      // because this shape simply had no `reactions` field — it looked like the
+      // click did nothing. Reuse hydrateMessages so the thread and the channel
+      // can never disagree about what a message carries.
+      const h = await hydrateMessages(all.map((r) => Number(r.id)), userId);
+
       const shape = (r: any) => ({
         id: Number(r.id),
         channelId: Number(r.channel_id),
@@ -1267,6 +1274,11 @@ export function registerStaffChatRoutes(app: Express) {
         editedAt: r.edited_at,
         deleted: !!r.deleted_at,
         parentMessageId: r.parent_message_id ? Number(r.parent_message_id) : null,
+        reactions: h.reactions.get(Number(r.id)) ?? [],
+        mentionedUserIds: h.mentionIds.get(Number(r.id)) ?? [],
+        requiresAck: !!r.requires_ack,
+        ackCount: h.ackCounts.get(Number(r.id)) ?? 0,
+        ackedByMe: h.myAcks.has(Number(r.id)),
       });
 
       const root = all.find((r) => Number(r.id) === rootId);

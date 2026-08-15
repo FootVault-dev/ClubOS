@@ -122,7 +122,12 @@ export function ThreadPanel({ rootId, onClose, me, historyKey, members = [], cha
   const react = useMutation({
     mutationFn: ({ id, emoji }: { id: number; emoji: string }) =>
       apiRequest("POST", `/api/admin/chat/messages/${id}/reactions`, { emoji }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: key }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: key });
+      // Reacting to the ROOT must also show in the channel, where that message
+      // still lives — the two views read different endpoints.
+      queryClient.invalidateQueries({ queryKey: historyKey });
+    },
   });
 
   useEffect(() => {
