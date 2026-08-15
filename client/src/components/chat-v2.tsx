@@ -143,7 +143,12 @@ export function ThreadPanel({ rootId, onClose, me, historyKey, members = [], cha
                 <SmilePlus className="w-3.5 h-3.5" />
               </button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
+            {/* 🔴 z-[250], above this panel's z-[150]. PopoverContent defaults to
+                z-50 and portals to document.body, so inside a panel stacked
+                higher than that it opens BEHIND the panel — the button looked
+                dead while the popover was rendering perfectly, just hidden.
+                Any overlay opened from inside another overlay needs this. */}
+            <PopoverContent className="w-auto p-0 z-[250]" align="end">
               <ReactionBar
                 quick={QUICK_EMOJIS}
                 onPick={(emoji) => { setReactOpenFor(null); react.mutate({ id: m.id, emoji }); }}
