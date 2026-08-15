@@ -454,12 +454,25 @@ async function runSearchDrive(viewer: Viewer, input: any): Promise<ToolResult> {
     return { text: `No files in Club Drive matched "${query}". Say plainly that nothing is filed under that and do NOT answer from general knowledge.` };
   }
 
-  const gateRaw: any = await db.execute(
-    sql`SELECT id, gates FROM drive_node_gates WHERE id IN (${sql.join(rows.map((r: any) => sql`${Number(r.id)}`), sql`, `)})`,
-  );
+  // Same upward walk as server/drive-routes.ts — see the note there on why the
+  // view is not queried directly.
+  const gateRaw: any = await db.execute(sql`
+    WITH RECURSIVE up AS (
+      SELECT id AS start_id, id, parent_id, required_tab, required_workspace
+      FROM drive_nodes
+      WHERE id IN (${sql.join(rows.map((r: any) => sql`${Number(r.id)}`), sql`, `)})
+      UNION ALL
+      SELECT u.start_id, n.id, n.parent_id, n.required_tab, n.required_workspace
+      FROM drive_nodes n JOIN up u ON n.id = u.parent_id
+    )
+    SELECT start_id,
+           coalesce(array_agg(required_tab || '@' || coalesce(required_workspace, ''))
+             FILTER (WHERE required_tab IS NOT NULL), '{}') AS gates
+    FROM up GROUP BY start_id
+  `);
   const gateRows = Array.isArray(gateRaw) ? gateRaw : gateRaw.rows ?? [];
   const gates = new Map<number, string[]>();
-  for (const g of gateRows) gates.set(Number(g.id), (g.gates ?? []) as string[]);
+  for (const g of gateRows) gates.set(Number(g.start_id), (g.gates ?? []) as string[]);
 
   const visible = rows.filter((r: any) => viewerCanReadDriveNode(viewer, gates.get(Number(r.id)) ?? []));
   if (!visible.length) {

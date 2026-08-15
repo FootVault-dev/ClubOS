@@ -8,8 +8,9 @@
 // returns true for EVERY tab when a member's role is admin or manager — Olga is
 // an admin of Christchurch United, so a tab-based gate would hand her every
 // employment contract in the building. Drive therefore judges each NODE against
-// the accumulated gates of its ancestors (the `drive_node_gates` view) using the
-// same decider the Knowledge Base and Rambo use. One rule, three surfaces.
+// the accumulated gates of its ancestors (see `gatesFor`, and the
+// `drive_node_gates` view for the readable definition of the same rule) using
+// the same decider the Knowledge Base and Rambo use. One rule, three surfaces.
 //
 // The viewer is rebuilt from the live database on every request — revoking
 // access has to bite on the next click, not the next login.
@@ -40,20 +41,45 @@ const clean = (v: unknown): string | undefined =>
 // ── Gates ────────────────────────────────────────────────────────────────────
 
 /**
- * The accumulated gates for a set of nodes, from the recursive view.
- *
- * Nodes with no gates anywhere up their chain are simply absent from the view's
- * useful rows, so a missing entry means "open" — but we default to `[]` rather
- * than assuming, because absence and openness must be an explicit decision.
+ * The accumulated gates for a set of nodes: every `required_tab` on the chain
+ * from each node up to its root. An empty list means open to all staff.
  */
 async function gatesFor(nodeIds: number[]): Promise<Map<number, string[]>> {
   const map = new Map<number, string[]>();
   if (!nodeIds.length) return map;
-  const rows: any[] = await db.execute(
-    sql`SELECT id, gates FROM drive_node_gates WHERE id IN (${sql.join(nodeIds.map((i) => sql`${i}`), sql`, `)})`,
-  ) as any;
+
+  // 🔴 Walk UP from the nodes asked about, never down from the roots. The
+  // `drive_node_gates` view is the readable definition of the rule, but a
+  // filter cannot be pushed into a recursive CTE — querying it makes Postgres
+  // expand the ENTIRE tree and then discard almost all of it, so the cost grows
+  // with the size of the drive rather than with the size of the page. With a
+  // few thousand files imported that is already slow enough to notice.
+  //
+  // Seeding the recursion with just these ids and climbing parent links is
+  // O(rows on screen × folder depth) — a handful of index lookups. The result
+  // is identical: every gate on the chain, accumulated, and a node with no
+  // gated ancestor gets an empty list.
+  const rows: any = await db.execute(sql`
+    WITH RECURSIVE up AS (
+      SELECT id AS start_id, id, parent_id, required_tab, required_workspace
+      FROM drive_nodes
+      WHERE id IN (${sql.join(nodeIds.map((i) => sql`${i}`), sql`, `)})
+      UNION ALL
+      SELECT u.start_id, n.id, n.parent_id, n.required_tab, n.required_workspace
+      FROM drive_nodes n JOIN up u ON n.id = u.parent_id
+    )
+    SELECT start_id,
+           coalesce(
+             array_agg(required_tab || '@' || coalesce(required_workspace, ''))
+               FILTER (WHERE required_tab IS NOT NULL),
+             '{}'
+           ) AS gates
+    FROM up GROUP BY start_id
+  `);
   const list = Array.isArray(rows) ? rows : (rows as any).rows ?? [];
-  for (const r of list) map.set(Number(r.id), (r.gates ?? []) as string[]);
+  for (const r of list) map.set(Number(r.start_id), (r.gates ?? []) as string[]);
+  // A node the query returned nothing for still needs an explicit answer.
+  for (const id of nodeIds) if (!map.has(id)) map.set(id, []);
   return map;
 }
 
