@@ -23,15 +23,22 @@ const flag = (n: string, d?: string) => {
 const LIMIT = Number(flag("limit", "0"));
 const INCLUDE_UNSUPPORTED = args.includes("--include-unsupported");
 const CONCURRENCY = Number(flag("concurrency", "6"));
+// Narrow to particular file types, so re-running for a newly supported format
+// doesn't re-download every image and video in the drive just to re-confirm
+// they have no text. e.g. --ext docx,pptx
+const EXTS = (flag("ext", "") || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
 const statuses = INCLUDE_UNSUPPORTED ? ["failed", "unsupported"] : ["failed"];
+const extClause = EXTS.length
+  ? ` AND (${EXTS.map((_, i) => `lower(name) LIKE $${i + 2}`).join(" OR ")})`
+  : "";
 const { rows } = await pool.query(
   `SELECT id, name, mime_type, storage_key FROM drive_nodes
-   WHERE kind='file' AND storage_key IS NOT NULL AND extract_status = ANY($1)
+   WHERE kind='file' AND storage_key IS NOT NULL AND extract_status = ANY($1)${extClause}
    ORDER BY id ${LIMIT ? "LIMIT " + LIMIT : ""}`,
-  [statuses],
+  [statuses, ...EXTS.map((e) => `%.${e}`)],
 );
 
 console.log(`\n${rows.length} file(s) to re-index\n`);
