@@ -63,11 +63,17 @@ const CANARIES: Canary[] = [
   // vault of written specifications becomes unreachable while the data sits
   // untouched in the database.
   { feature: "knowledge base",      path: "/api/admin/kb/articles",                 expect: [401] },
+  // Club Drive. Added after it was silently removed from prod within a day of
+  // shipping — the FOURTH feature lost this way. The tables and every uploaded
+  // file survive a bad deploy untouched; what disappears is the route, and a
+  // missing route is indistinguishable from one that never existed.
+  { feature: "club drive",          path: "/api/admin/drive/bootstrap",             expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
  *  still has it. Checked as plain text: the literal must appear in the file. */
 const SOURCE: Record<string, { file: string; needle: string }> = {
+  "/api/admin/drive/bootstrap":           { file: "server/drive-routes.ts",        needle: "/api/admin/drive/bootstrap" },
   "/api/public/parent/prefill":           { file: "server/parent-routes.ts",       needle: "/prefill" },
   "/api/public/parent/me":                { file: "server/parent-routes.ts",       needle: "/me" },
   "/api/admin/notifications/preferences": { file: "server/notification-routes.ts", needle: "/api/admin/notifications/preferences" },
