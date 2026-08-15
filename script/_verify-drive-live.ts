@@ -135,6 +135,20 @@ try {
   const afterTrash = await getAs(staff.cookie, `/api/admin/drive/search?q=${MARKER}`);
   const afterTrashJson = afterTrash.ok ? await afterTrash.json() : { items: [] };
   ok("a binned file drops out of search", !(afterTrashJson.items ?? []).some((i: any) => i.id === uploaded.id));
+
+  // 🔴 The version above passed even while search was broken, because its
+  // marker lived in the file's TEXT. `trashed_at IS NULL AND (fts) OR name
+  // LIKE …` parses as `(trashed AND fts) OR (name LIKE …)`, so a binned file
+  // came back on a NAME match. This is that case.
+  const { rows: [named] } = await pool.query(
+    `INSERT INTO drive_nodes (kind, name, trashed_at) VALUES ('file',$1, now()) RETURNING id`,
+    [`_verify binned ${MARKER}.txt`],
+  );
+  nodes.push(named.id);
+  const byName = await getAs(staff.cookie, `/api/admin/drive/search?q=${MARKER}`);
+  const byNameJson = byName.ok ? await byName.json() : { items: [] };
+  ok("a binned file does not come back on a NAME match either",
+    !(byNameJson.items ?? []).some((i: any) => i.id === named.id));
   const restored = await fetch(`${BASE}/api/admin/drive/node/${uploaded.id}/restore`, { method: "POST", headers: hdr(staff.cookie) });
   ok("and it can be restored", restored.status === 200, `HTTP ${restored.status}`);
 

@@ -266,24 +266,43 @@ export function registerDriveRoutes(app: Express) {
       const q = clean(req.query.q as string);
       if (!q) return res.json({ items: [], query: "" });
 
+      // 🔴 The three match branches MUST be parenthesised together. AND binds
+      // tighter than OR, so `trashed_at IS NULL AND (fts) OR name LIKE …` parses
+      // as `(trashed AND fts) OR (name LIKE …)` — and a file in the bin comes
+      // straight back out of search on a name match.
+      //
+      // 🔴 Never SELECT * here. extracted_text holds up to 400KB per row, so
+      // returning it for 60 hits shipped megabytes across the Tasman on every
+      // keystroke — that, not the query, is what made search take 5–7 seconds.
+      // The snippet is cut in SQL and only the columns the page renders come
+      // back.
+      const like = "%" + q.toLowerCase() + "%";
       const rows: any = await db.execute(sql`
-        SELECT *,
+        SELECT id, parent_id, kind, name, mime_type, size_bytes, brand, description,
+               source, source_url, extract_status, trashed_at, updated_at, created_at,
           ts_rank(
             setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
             setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
             setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C'),
             plainto_tsquery('english', ${q})
           ) AS rank,
-          similarity(lower(name), lower(${q})) AS name_sim
+          similarity(lower(name), lower(${q})) AS name_sim,
+          CASE WHEN position(lower(${q}) in lower(coalesce(extracted_text,''))) > 0
+               THEN substring(extracted_text
+                      from greatest(1, position(lower(${q}) in lower(extracted_text)) - 60)
+                      for 240)
+               ELSE NULL END AS snippet
         FROM drive_nodes
         WHERE trashed_at IS NULL
           AND (
-            setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
-            setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
-            setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C')
-          ) @@ plainto_tsquery('english', ${q})
-          OR lower(name) LIKE ${"%" + q.toLowerCase() + "%"}
-          OR similarity(lower(name), lower(${q})) > 0.3
+            (
+              setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
+              setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
+              setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C')
+            ) @@ plainto_tsquery('english', ${q})
+            OR lower(name) LIKE ${like}
+            OR similarity(lower(name), lower(${q})) > 0.3
+          )
         ORDER BY name_sim DESC, rank DESC, updated_at DESC
         LIMIT 60
       `);
@@ -305,12 +324,8 @@ export function registerDriveRoutes(app: Express) {
         };
         const p: any = present(node, gates.get(id) ?? []);
         // A snippet of WHERE it matched, so a hit on page 40 of a PDF is
-        // explicable rather than mysterious.
-        const text: string | null = r.extracted_text ?? null;
-        if (text) {
-          const at = text.toLowerCase().indexOf(q.toLowerCase());
-          if (at >= 0) p.snippet = (at > 60 ? "…" : "") + text.slice(Math.max(0, at - 60), at + 180).trim() + "…";
-        }
+        // explicable rather than mysterious. Cut in SQL — see the query above.
+        if (r.snippet) p.snippet = "…" + String(r.snippet).replace(/\s+/g, " ").trim() + "…";
         p.path = node.parentId ? (paths.get(Number(node.parentId)) ?? []) : [];
         items.push(p);
       }
