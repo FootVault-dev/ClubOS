@@ -19,7 +19,7 @@
 // the file is real and downloadable, and once to text/plain so its CONTENTS are
 // searchable — which is the entire point of moving it.
 // ─────────────────────────────────────────────────────────────────────────────
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { Pool } from "pg";
@@ -45,7 +45,19 @@ if (!ROOT_FOLDER) {
 
 // ── Google auth ──────────────────────────────────────────────────────────────
 const here = dirname(fileURLToPath(import.meta.url));
-const TOKEN_PATH = join(here, "..", "..", "..", "..", "scripts", "intel", "workspace_token.json");
+// Walk UP to find the workspace token rather than counting `..` — this script
+// runs from the main checkout AND from a deploy worktree, which sit at
+// different depths, and a hardcoded depth silently resolves to nothing.
+function findToken(): string {
+  let dir = here;
+  for (let i = 0; i < 8; i++) {
+    const candidate = join(dir, "scripts", "intel", "workspace_token.json");
+    if (existsSync(candidate)) return candidate;
+    dir = join(dir, "..");
+  }
+  throw new Error("Could not find scripts/intel/workspace_token.json above " + here);
+}
+const TOKEN_PATH = findToken();
 
 async function accessToken(): Promise<string> {
   let raw: any;
@@ -105,23 +117,48 @@ async function existing(sourceId: string): Promise<number | null> {
   return r.rows[0]?.id ?? null;
 }
 
+/**
+ * 🔴 Google Drive allows two files — or two folders — with the SAME NAME in the
+ * same parent, because it identifies them by id. Club Drive does not: sibling
+ * names are unique among live nodes, which is what makes a path meaningful and
+ * stops a move silently shadowing something. The club's own Drive really does
+ * carry duplicates (two "Youth and Academy — Paul…" folders at the top level).
+ *
+ * Neither is wrong, so neither file is dropped: the second one is stored as
+ * "name (2)". Losing a file to make an import finish is the one outcome worth
+ * avoiding here.
+ */
 async function insertNode(v: Record<string, any>): Promise<number> {
   const keys = Object.keys(v);
-  const r = await pool.query(
-    `INSERT INTO drive_nodes (${keys.join(",")}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(",")})
+  const sql = `INSERT INTO drive_nodes (${keys.join(",")}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(",")})
      ON CONFLICT (source, source_id) WHERE source_id IS NOT NULL DO UPDATE SET name = EXCLUDED.name
-     RETURNING id`,
-    keys.map((k) => v[k]),
-  );
-  return r.rows[0].id;
+     RETURNING id`;
+  const baseName: string = v.name;
+  for (let attempt = 1; attempt <= 25; attempt++) {
+    try {
+      const r = await pool.query(sql, keys.map((k) => v[k]));
+      return r.rows[0].id;
+    } catch (e: any) {
+      if (!String(e?.message ?? "").includes("drive_nodes_sibling_name") &&
+          !String(e?.message ?? "").includes("drive_nodes_root_name")) throw e;
+      // Insert the suffix BEFORE the extension so "report.pdf" becomes
+      // "report (2).pdf" and still opens in the right application.
+      const dot = baseName.lastIndexOf(".");
+      const stem = dot > 0 ? baseName.slice(0, dot) : baseName;
+      const ext = dot > 0 ? baseName.slice(dot) : "";
+      v.name = `${stem} (${attempt + 1})${ext}`;
+      stats.renamed++;
+    }
+  }
+  throw new Error(`could not find a free name for "${baseName}"`);
 }
 
 // ── Walk ─────────────────────────────────────────────────────────────────────
 interface Stats {
   folders: number; files: number; skippedBig: number; skippedType: number;
-  failed: number; bytes: number; alreadyHere: number; textIndexed: number;
+  failed: number; bytes: number; alreadyHere: number; textIndexed: number; renamed: number;
 }
-const stats: Stats = { folders: 0, files: 0, skippedBig: 0, skippedType: 0, failed: 0, bytes: 0, alreadyHere: 0, textIndexed: 0 };
+const stats: Stats = { folders: 0, files: 0, skippedBig: 0, skippedType: 0, failed: 0, bytes: 0, alreadyHere: 0, textIndexed: 0, renamed: 0 };
 const skippedBigList: { name: string; mb: number; path: string }[] = [];
 const failedList: { name: string; why: string }[] = [];
 
@@ -142,14 +179,34 @@ async function listChildren(folderId: string): Promise<any[]> {
   return out;
 }
 
+// Files are network-bound end to end — download from Google, upload to storage,
+// then parse. Done one at a time the whole import takes the better part of a
+// day; a small pool cuts it to a couple of hours. Folders stay STRICTLY
+// sequential because a child row needs its parent's id to exist first.
+const FILE_CONCURRENCY = Number(flag("concurrency", "6"));
+
+async function pool_map<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function walk(googleFolderId: string, parentNodeId: number | null, path: string, depth = 0): Promise<void> {
   if (LIMIT && stats.files >= LIMIT) return;
   const children = await listChildren(googleFolderId);
+  const fileChildren = children.filter((c: any) => c.mimeType !== GOOGLE_FOLDER_MIME);
+  await pool_map(fileChildren, FILE_CONCURRENCY, (f: any) => handleFile(f, parentNodeId, `${path}/${f.name}`, depth));
 
   for (const f of children) {
     if (LIMIT && stats.files >= LIMIT) return;
     const isFolder = f.mimeType === GOOGLE_FOLDER_MIME;
     const childPath = `${path}/${f.name}`;
+    if (!isFolder) continue;   // already handled by the pool above
 
     if (isFolder) {
       stats.folders++;
@@ -181,12 +238,25 @@ async function walk(googleFolderId: string, parentNodeId: number | null, path: s
         }
       }
       console.log(`${"  ".repeat(depth)}📁 ${f.name}`);
-      await walk(f.id, nodeId, childPath, depth + 1);
+      try {
+        await walk(f.id, nodeId, childPath, depth + 1);
+      } catch (e: any) {
+        // One unreadable subtree must not abandon the other 800 folders.
+        stats.failed++;
+        failedList.push({ name: childPath, why: String(e?.message ?? e).slice(0, 160) });
+        console.log(`${"  ".repeat(depth)}✗  ${f.name} — ${e.message}`);
+      }
       continue;
     }
 
+  }
+}
+
+async function handleFile(f: any, parentNodeId: number | null, childPath: string, depth: number): Promise<void> {
+  {
+    if (LIMIT && stats.files >= LIMIT) return;
     // ── A file ──────────────────────────────────────────────────────────────
-    if (!DRY_RUN && (await existing(f.id))) { stats.alreadyHere++; continue; }
+    if (!DRY_RUN && (await existing(f.id))) { stats.alreadyHere++; return; }
 
     if (googleIsUnexportable(f.mimeType)) {
       // Forms, Sites, Jamboards. Recorded as a LINK rather than an empty file —
@@ -201,7 +271,7 @@ async function walk(googleFolderId: string, parentNodeId: number | null, path: s
           description: "Lives in Google — this type has no downloadable file.",
         });
       }
-      continue;
+      return;
     }
 
     const exp = GOOGLE_EXPORT[f.mimeType];
@@ -209,14 +279,14 @@ async function walk(googleFolderId: string, parentNodeId: number | null, path: s
     if (!exp && size > MAX_BYTES) {
       stats.skippedBig++;
       skippedBigList.push({ name: f.name, mb: Math.round(size / 1024 / 1024), path: childPath });
-      continue;
+      return;
     }
 
     if (DRY_RUN) {
       stats.files++;
       stats.bytes += size;
       console.log(`${"  ".repeat(depth)}📄 ${f.name}${size ? ` (${Math.round(size / 1024)} KB)` : ""}`);
-      continue;
+      return;
     }
 
     try {
@@ -289,6 +359,7 @@ try {
   console.log(`  already here           ${stats.alreadyHere}`);
   console.log(`  skipped — too big      ${stats.skippedBig}`);
   console.log(`  skipped — Google-only  ${stats.skippedType}`);
+  console.log(`  renamed (dup name)     ${stats.renamed}`);
   console.log(`  failed                 ${stats.failed}`);
   console.log(`  total size             ${(stats.bytes / 1024 / 1024).toFixed(1)} MB`);
 
