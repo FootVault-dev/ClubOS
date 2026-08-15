@@ -312,6 +312,30 @@ try {
       });
       ok("🔴 and the emoji picker is VISIBLE, not behind the panel",
          vis.open && vis.onTop, vis.open ? `clickable=${vis.onTop}` : "never opened");
+
+      // 🔴 THE REAL FAILURE MODE: move the mouse INTO the popover. That stops
+      // `group-hover` matching on the action bar; if the bar unmounts, Radix
+      // loses its anchor and dumps the popover at the viewport's top-left where
+      // it cannot be clicked. Hovering the trigger alone never reproduces it.
+      const q = await page.$('[data-testid^="quick-emoji-"]');
+      const qb = await q?.boundingBox();
+      if (qb) {
+        await page.mouse.move(qb.x + qb.width / 2, qb.y + qb.height / 2);
+        await new Promise((r) => setTimeout(r, 700));
+        const after = await page.evaluate(() => {
+          const el = document.querySelector('[data-testid^="quick-emoji-"]') as HTMLElement | null;
+          if (!el) return { gone: true, x: 0, y: 0, clickable: false };
+          const r = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return {
+            gone: false, x: Math.round(r.left), y: Math.round(r.top),
+            clickable: !!hit && (el === hit || el.contains(hit) || hit.contains(el)),
+          };
+        });
+        ok("🔴 moving the mouse into the picker doesn't fling it to the corner",
+           !after.gone && after.clickable && (after.x > 60 || after.y > 60),
+           after.gone ? "picker vanished" : `at ${after.x},${after.y} clickable=${after.clickable}`);
+      }
       await page.screenshot({ path: join(outDir, "thread-emoji.png") });
       await page.keyboard.press("Escape");
       await new Promise((r) => setTimeout(r, 600));
