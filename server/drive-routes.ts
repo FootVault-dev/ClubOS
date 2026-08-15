@@ -280,12 +280,7 @@ export function registerDriveRoutes(app: Express) {
       const rows: any = await db.execute(sql`
         SELECT id, parent_id, kind, name, mime_type, size_bytes, brand, description,
                source, source_url, extract_status, trashed_at, updated_at, created_at,
-          ts_rank(
-            setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
-            setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
-            setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C'),
-            plainto_tsquery('english', ${q})
-          ) AS rank,
+          ts_rank(search_vec, plainto_tsquery('english', ${q})) AS rank,
           similarity(lower(name), lower(${q})) AS name_sim,
           CASE WHEN position(lower(${q}) in lower(coalesce(extracted_text,''))) > 0
                THEN substring(extracted_text
@@ -295,13 +290,16 @@ export function registerDriveRoutes(app: Express) {
         FROM drive_nodes
         WHERE trashed_at IS NULL
           AND (
-            (
-              setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
-              setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
-              setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C')
-            ) @@ plainto_tsquery('english', ${q})
+            -- 🔴 All three branches must be servable by an index, or one OR
+            -- drags the whole query into a sequential scan that re-tokenises
+            -- every file's text (measured: 6.5s at 4,900 files).
+            --   search_vec  → GIN, computed once at write time
+            --   LIKE / %    → the trigram index on lower(name); the % here is
+            --                 the similarity OPERATOR; similarity() as a
+            --                 FUNCTION cannot use an index.
+            search_vec @@ plainto_tsquery('english', ${q})
             OR lower(name) LIKE ${like}
-            OR similarity(lower(name), lower(${q})) > 0.3
+            OR lower(name) % lower(${q})
           )
         ORDER BY name_sim DESC, rank DESC, updated_at DESC
         LIMIT 60

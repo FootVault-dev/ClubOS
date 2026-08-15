@@ -429,22 +429,14 @@ async function runSearchDrive(viewer: Viewer, input: any): Promise<ToolResult> {
 
   const raw: any = await db.execute(sql`
     SELECT id, parent_id, name, mime_type, size_bytes, description, extracted_text, updated_at,
-      ts_rank(
-        setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
-        setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
-        setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C'),
-        plainto_tsquery('english', ${query})
-      ) AS rank
+      ts_rank(search_vec, plainto_tsquery('english', ${query})) AS rank
     FROM drive_nodes
     WHERE trashed_at IS NULL AND kind = 'file'
       AND (
-        (
-          setweight(to_tsvector('english', coalesce(name,'')), 'A') ||
-          setweight(to_tsvector('english', coalesce(description,'')), 'B') ||
-          setweight(to_tsvector('english', coalesce(extracted_text,'')), 'C')
-        ) @@ plainto_tsquery('english', ${query})
+        -- Index-servable branches only — see server/drive-routes.ts.
+        search_vec @@ plainto_tsquery('english', ${query})
         OR lower(name) LIKE ${"%" + query.toLowerCase() + "%"}
-        OR similarity(lower(name), lower(${query})) > 0.3
+        OR lower(name) % lower(${query})
       )
     ORDER BY rank DESC, updated_at DESC
     LIMIT 25
