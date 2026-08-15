@@ -335,6 +335,21 @@ try {
         ok("🔴 moving the mouse into the picker doesn't fling it to the corner",
            !after.gone && after.clickable && (after.x > 60 || after.y > 60),
            after.gone ? "picker vanished" : `at ${after.x},${after.y} clickable=${after.clickable}`);
+
+        // 🔴 The point of the whole feature: actually CLICK an emoji and check
+        // it renders under the message. The reaction was saving fine and
+        // rendering nowhere, because the thread endpoint returned no
+        // `reactions` field at all.
+        if (!after.gone && after.clickable) {
+          await page.mouse.click(qb.x + qb.width / 2, qb.y + qb.height / 2);
+          await new Promise((r) => setTimeout(r, 4000));
+          const landed = await page.evaluate(() => {
+            const panel = document.querySelector('[data-testid="panel-thread"]') as HTMLElement | null;
+            return /👍/.test(panel?.innerText || "");
+          });
+          ok("🔴 and clicking an emoji shows the reaction under the message", landed);
+          await page.screenshot({ path: join(outDir, "thread-reaction.png") });
+        }
       }
       await page.screenshot({ path: join(outDir, "thread-emoji.png") });
       await page.keyboard.press("Escape");
