@@ -25355,13 +25355,80 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
 
   const childIds = [...new Set(items.map(i => i.childId))];
   const childrenNames: string[] = [];
+  const childNameById = new Map<number, string>();
   for (const childId of childIds) {
+    if (childId == null) continue;
     const child = await storage.getChild(childId);
-    if (child) childrenNames.push(`${child.firstName} ${child.lastName}`);
+    if (child) {
+      const name = `${child.firstName} ${child.lastName}`;
+      childrenNames.push(name);
+      childNameById.set(childId, name);
+    }
   }
 
   const dates = await storage.getCampDates(program.id);
-  const dateLabels = dates.map(d => new Date(d.date + 'T12:00:00').toLocaleDateString('en-NZ', { weekday: 'short', day: 'numeric', month: 'short' }));
+  const dateById = new Map(dates.map(d => [d.id, d]));
+
+  /**
+   * 🔴 The dates on a confirmation are the days THIS family bought — read from
+   * their own registration_items, NEVER from the camp's calendar.
+   *
+   * Until 2026-08-17 this listed every date the camp runs. Damian Goodwin paid
+   * $500 for two children across five days and was told he had booked all ten,
+   * which is both alarming and unactionable — he cannot tell which mornings to
+   * turn up to. The items were already loaded two lines above for the child
+   * names; only the dates ignored them.
+   *
+   * Session type is included for the same reason: "Mon, 28 Sep" alone does not
+   * tell a parent whether to arrive at 9am or midday.
+   */
+  const SESSION_LABEL: Record<string, string> = {
+    FULL_DAY: "full day",
+    MORNING: "morning",
+    AFTERNOON: "afternoon",
+  };
+  // camp_dates.date is a Drizzle `date()` — a plain "2026-09-28" string. Noon
+  // keeps it on its own calendar day; `new Date("2026-09-28")` is UTC midnight
+  // and renders as the 27th in NZ.
+  const fmtDay = (iso: string) =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-NZ', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  const bookedDayLabels = (forChildId: number | null): string[] =>
+    items
+      .filter(i => i.campDateId != null && (forChildId == null || i.childId === forChildId))
+      .map(i => ({ row: dateById.get(i.campDateId!), type: i.productType }))
+      .filter((r): r is { row: NonNullable<typeof r.row>; type: string } => !!r.row)
+      .sort((a, b) => a.row.date.localeCompare(b.row.date))
+      .map(r => {
+        const session = SESSION_LABEL[r.type];
+        return session ? `${fmtDay(r.row.date)} (${session})` : fmtDay(r.row.date);
+      });
+
+  const perChild = childIds
+    .filter((id): id is number => id != null)
+    .map(id => ({ id, labels: bookedDayLabels(id) }));
+  const sameForEveryone =
+    perChild.length > 0 && perChild.every(c => c.labels.join("|") === perChild[0].labels.join("|"));
+
+  let campDatesLabel: string;
+  if (perChild.length === 0 || perChild[0].labels.length === 0) {
+    // No dated line items, so we genuinely do not know which days were bought.
+    // Fall back to the camp's own window — NEVER to the full list of dates,
+    // which is the bug this replaced.
+    campDatesLabel =
+      program.startDate && program.endDate
+        ? `Camp runs ${fmtDay(program.startDate)} – ${fmtDay(program.endDate)}`
+        : "See your booking details";
+    console.warn("[Post-payment] Registration", registrationId, "has no dated items — sent the camp window instead of booked days");
+  } else if (sameForEveryone) {
+    campDatesLabel = perChild[0].labels.join(", ");
+  } else {
+    // Siblings booked different days. Say whose is whose rather than merging
+    // them into one list nobody can act on.
+    campDatesLabel = perChild
+      .map(c => `${childNameById.get(c.id) ?? "Child"}: ${c.labels.join(", ")}`)
+      .join("<br>");
+  }
 
   sendConfirmationEmail({
     registrationId,
@@ -25370,7 +25437,7 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
     parentName: `${contact.firstName} ${contact.lastName}`,
     childrenNames,
     campName: program.name,
-    campDates: dateLabels.join(", "),
+    campDates: campDatesLabel,
     location: program.location || "TBD",
     totalPaid: `$${((reg.totalCents || 0) / 100).toFixed(2)} NZD`,
   }).catch(e => console.error("[Post-payment] Email error:", e));
