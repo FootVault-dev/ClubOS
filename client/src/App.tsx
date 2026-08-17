@@ -220,6 +220,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
 import { CommandPalette } from "@/components/command-palette";
 import { ViewAsBar } from "@/components/view-as-bar";
+import { VoiceProvider } from "@/components/voice/voice-provider";
+import { VoiceOverlays } from "@/components/voice/call-ui";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading, error } = useQuery({
@@ -655,9 +657,14 @@ function AdminLayout() {
     "--sidebar-width": "15rem",
     "--sidebar-width-icon": "3rem",
   };
+  // Staff Voice needs to know who you are, and needs to live ABOVE the router:
+  // a call must survive clicking from Chat through to Registrations. Mounted
+  // here rather than in the chat page for exactly that reason.
+  const { data: voiceMe } = useQuery<any>({ queryKey: ["/api/auth/me"] });
 
   return (
     <AuthGuard>
+      <VoiceProvider meId={voiceMe?.id ?? null}>
       <SidebarProvider style={style as React.CSSProperties}>
         <div className="flex h-screen w-full overflow-hidden bg-background">
           <AppSidebar />
@@ -690,7 +697,11 @@ function AdminLayout() {
           </div>
         </div>
         <CommandPalette />
+        {/* The call dock and the incoming-call sheet. Portalled to body, so
+            they sit above every page and survive navigation. */}
+        <VoiceOverlays />
       </SidebarProvider>
+      </VoiceProvider>
     </AuthGuard>
   );
 }

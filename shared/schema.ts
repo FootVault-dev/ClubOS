@@ -3965,6 +3965,12 @@ export const devicePushTokens = pgTable("device_push_tokens", {
   // possible at all. Cascade: a deleted user's token must be unreachable.
   userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
   platform: text("platform").notNull().default("unknown"), // "ios" | "android" | "unknown"
+  // 🔴 An iOS PushKit token is NOT the APNs token above — it is a second,
+  // different token for the same device, and a VoIP push sent to the ordinary
+  // token silently does nothing. This is what makes an incoming call ring
+  // through CallKit when the app is closed. NULL on Android and on every row
+  // that predates Staff Voice.
+  voipToken: text("voip_token"),
   deviceName: text("device_name"),
   disabled: boolean("disabled").notNull().default(false),
   failureCount: integer("failure_count").notNull().default(0),
@@ -7136,6 +7142,10 @@ export const staffChannels = pgTable(
     // DMs only: sorted participant ids "4:17:23". Same people → same DM
     // (partial unique index in the migration).
     dmKey: text("dm_key"),
+    // An always-on voice room on this channel. Opt-in and off by default —
+    // turning every channel into a voice room puts a "join voice" button on
+    // #announcements. Leadership-gated, same as creating a channel.
+    voiceEnabled: boolean("voice_enabled").notNull().default(false),
     createdBy: integer("created_by"),
     archivedAt: timestamp("archived_at"), // archive, never delete — history survives
     lastMessageAt: timestamp("last_message_at"),
@@ -7274,6 +7284,94 @@ export type StaffMessage = typeof staffMessages.$inferSelect;
 export type StaffMessageMention = typeof staffMessageMentions.$inferSelect;
 export type StaffMessageReaction = typeof staffMessageReactions.$inferSelect;
 export type StaffMessageAck = typeof staffMessageAcks.$inferSelect;
+
+// ═══════════════════════ Staff Voice — calls inside Staff Chat ═══════════════════════
+// 1:1 calls, group calls, always-on voice channels and meetings are ONE engine
+// with a `mode`, not four features. Media runs on LiveKit; these tables are our
+// record of who was invited, who actually joined, and when.
+//
+// Almost nothing is stored: live/ringing/missed/present are all DERIVED. The
+// reasoning is in migrations/2026-08-17_staff_voice.sql — briefly, a status
+// column has to be un-set by something, and here that something is a phone that
+// may have just gone into a tunnel. Pure logic in shared/staff-voice.ts.
+
+export const staffCalls = pgTable(
+  "staff_calls",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    // 'direct' | 'group' | 'channel' | 'meeting' — validated in the app, never a
+    // pg enum or CHECK (a stale CHECK is how the MFL checkout 500'd).
+    mode: text("mode").notNull().default("direct"),
+    // NULL only for an ad-hoc meeting belonging to no channel.
+    channelId: integer("channel_id").references(() => staffChannels.id, { onDelete: "cascade" }),
+    // 🔴 Server-generated and unguessable. The room name IS the access boundary
+    // at the media server — it checks the grant in the token and nothing else.
+    roomName: text("room_name").notNull().unique(),
+    title: text("title"),
+    // RESTRICT: deleting a staff account must never erase that a call happened.
+    startedBy: integer("started_by").notNull().references(() => users.id, { onDelete: "restrict" }),
+    // Retry-safe start — a double-tapped call button returns the same call
+    // instead of opening a second room and ringing everyone twice.
+    clientCallId: text("client_call_id"),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    // NULL = live. There is deliberately no is_live column.
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    // 'host' | 'empty' | 'unanswered' | 'system'
+    endedReason: text("ended_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("staff_calls_channel_idx").on(t.channelId, t.startedAt),
+  ],
+);
+
+export const staffCallParticipants = pgTable(
+  "staff_call_participants",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    callId: integer("call_id").notNull().references(() => staffCalls.id, { onDelete: "cascade" }),
+    // RESTRICT: "who was on that call" is a question an employment dispute may
+    // ask a year later.
+    userId: integer("user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+    // Set = we rang them. Somebody who walks into a voice channel uninvited has
+    // invitedAt NULL and joinedAt set, which is a real and different thing.
+    invitedAt: timestamp("invited_at", { withTimezone: true }),
+    joinedAt: timestamp("joined_at", { withTimezone: true }),
+    leftAt: timestamp("left_at", { withTimezone: true }),
+    declinedAt: timestamp("declined_at", { withTimezone: true }),
+    // Written from the media server's webhook, never trusted from the client —
+    // a phone that dies mid-call never sends "I left".
+    leftReason: text("left_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("staff_call_participants_unq").on(t.callId, t.userId),
+    index("staff_call_participants_user_idx").on(t.userId, t.createdAt),
+  ],
+);
+
+// Append-only. Voice fails in ways a screenshot cannot capture — one side hears
+// nothing, a phone rings for four seconds, a call ends by itself. Without a log
+// of what the server actually did, every one of those is unfalsifiable.
+export const staffCallEvents = pgTable(
+  "staff_call_events",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    callId: integer("call_id").notNull().references(() => staffCalls.id, { onDelete: "cascade" }),
+    // NULL for events the server generated with nobody acting.
+    userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+    kind: text("kind").notNull(),
+    detail: jsonb("detail"),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("staff_call_events_call_idx").on(t.callId, t.at)],
+);
+
+export type StaffCall = typeof staffCalls.$inferSelect;
+export type StaffCallParticipant = typeof staffCallParticipants.$inferSelect;
+export type StaffCallEvent = typeof staffCallEvents.$inferSelect;
+
 // ═══════════════ Sporty / NZ Football NRS — outbound registration push ═══════════════
 // ClubOS pushes player registrations INTO NZ Football's National Registration System
 // (Sporty Football API) — the same third-party pathway Friendly Manager and Club Hub

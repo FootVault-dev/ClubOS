@@ -74,6 +74,7 @@ interface HistoryResponse {
 interface Bootstrap { viewer: { userId: number; isLeadership: boolean }; users: Person[]; channels: ChannelSummary[] }
 
 import { ThreadPanel, ForwardDialog, ForwardedQuote, FilesBrowser } from "@/components/chat-v2";
+import { CallButton } from "@/components/voice/call-ui";
 import { ReactionBar } from "@/components/emoji-picker";
 
 const GOLD = "#c9a43e";
@@ -800,6 +801,8 @@ function ConversationPane(props: {
             <span className="text-[12px] font-semibold">{members.length}</span>
           </button>
         )}
+
+        <CallButton channel={channel} />
 
         <NotifyMenu channel={channel} />
 

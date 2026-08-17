@@ -156,6 +156,14 @@ app.use(attributionCookieMiddleware);
   const { registerStaffChatRoutes } = await import("./staff-chat-routes");
   registerStaffChatRoutes(app);
 
+  // Staff Voice — calls, group calls, voice channels and meetings, riding on
+  // Staff Chat's membership (voiceAccess() is the one decider). Media is
+  // LiveKit; this server only decides who may enter a room and keeps the
+  // record. Inert until LIVEKIT_* are set — /voice/config says so honestly.
+  // See migrations/2026-08-17_staff_voice.sql + shared/staff-voice.ts.
+  const { registerStaffVoiceRoutes } = await import("./staff-voice-routes");
+  registerStaffVoiceRoutes(app);
+
   // Notification preferences + staff push-device registration. Universal
   // (requireAuth only) because settings belong to a PERSON, not a workspace —
   // they must answer identically on web and phone, in any workspace.

@@ -68,7 +68,9 @@ const CHAT_APP_URL = (process.env.APP_URL || "https://app.usg.co.nz").replace(/\
 
 // Leadership = super_admin globally, OR admin/manager in any workspace.
 // Mirrors the Feedback board / global-search "isLeadership" notion.
-async function isLeadershipUser(userId: number): Promise<boolean> {
+// Exported because Staff Voice gates on exactly this — a second copy of the
+// rule is a second thing to forget to change.
+export async function isLeadershipUser(userId: number): Promise<boolean> {
   const user = await storage.getUser(userId);
   if (!user) return false;
   if (user.role === "super_admin") return true;
@@ -89,7 +91,10 @@ async function heartbeat(userId: number): Promise<void> {
 
 type MembershipRow = typeof staffChannelMembers.$inferSelect;
 
-async function activeMembership(channelId: number, userId: number): Promise<MembershipRow | undefined> {
+// Exported: voice inherits chat's membership exactly. Being able to talk in a
+// room is the same question as being able to read it, and answering it twice is
+// how the two drift apart.
+export async function activeMembership(channelId: number, userId: number): Promise<MembershipRow | undefined> {
   const [m] = await db
     .select()
     .from(staffChannelMembers)
