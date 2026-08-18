@@ -450,7 +450,13 @@ export default function GroupVehicles() {
 
   const chips = summary
     ? ([
-        { key: "all" as const, label: "Total", value: summary.total, color: "#3b82f6" },
+        // Counts what the list can actually show. `summary.total` includes
+        // disposed vehicles and every OTHER tile deliberately excludes them, so
+        // with a retired vehicle on file the tile read 8 above a list of 6 and
+        // invited "where are the other two?". Harmless until the fleet had its
+        // first archived vehicle (Aug 2026), which is when it stopped being
+        // theoretical.
+        { key: "all" as const, label: "Total", value: showDisposed ? summary.total : summary.active, color: "#3b82f6" },
         { key: "expired" as const, label: "Needs attention", value: summary.expired, color: STATUS_STYLES.expired.color },
         { key: "due_soon" as const, label: "Due soon", value: summary.dueSoon, color: STATUS_STYLES.due_soon.color },
         { key: "unknown" as const, label: "Missing info", value: summary.unknown, color: STATUS_STYLES.unknown.color },

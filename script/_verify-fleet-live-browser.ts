@@ -49,9 +49,18 @@ try {
   ok("GET /api/admin/vehicles serves 200", api.status === 200, `HTTP ${api.status}`);
   const body: any = await api.json();
   const list: any[] = Array.isArray(body) ? body : (body.vehicles ?? []);
-  ok("all six vehicles come back", list.length === 6, `${list.length} returned`);
-  const plates = list.map((v: any) => v.plate).sort().join(",");
-  ok("and they are the right six", plates === "FWC150,MML178,NCN360,PRK235,QLP12,RPN394", plates);
+  const live = list.filter((v: any) => v.status !== "disposed");
+  const archived = list.filter((v: any) => v.status === "disposed");
+  ok("six vehicles are in the current fleet", live.length === 6, `${live.length}`);
+  ok("and they are the right six",
+     live.map((v: any) => v.plate).sort().join(",") === "FWC150,MML178,NCN360,PRK235,QLP12,RPN394",
+     live.map((v: any) => v.plate).sort().join(","));
+  ok("the two 2024 vehicles are archived, not in the fleet",
+     archived.map((v: any) => v.plate).sort().join(",") === "FKW617,LDL505",
+     archived.map((v: any) => v.plate).sort().join(","));
+  const aqua = list.find((v: any) => v.plate === "QLP12");
+  ok("QLP12 now reports its EXPIRED insurance rather than 'unknown'",
+     aqua?.compliance?.insurance === "expired", String(aqua?.compliance?.insurance));
   const van = list.find((v: any) => v.plate === "MML178");
   ok("the club van reports its expired WOF", van?.compliance?.compliance === "expired",
      String(van?.compliance?.compliance));
@@ -78,6 +87,10 @@ try {
        ["QLP12", "PRK235", "MML178", "FWC150", "NCN360", "RPN394"].every((p) => seen.text.includes(p)));
     ok(`${label}: drivers are shown`, /Travis Graham/.test(seen.text) && /Ryan Edwards/.test(seen.text));
     ok(`${label}: no horizontal overflow`, seen.overflow <= 1, `${seen.overflow}px`);
+    // A retired vehicle must not clutter the working list — it sits behind
+    // "Show disposed", which is off by default.
+    ok(`${label}: archived vehicles are hidden until asked for`,
+       !seen.text.includes("FKW617") && !seen.text.includes("LDL505"));
     await page.screenshot({ path: join(outDir, `vehicles-${label}.png`), fullPage: true });
     await page.close();
   }
