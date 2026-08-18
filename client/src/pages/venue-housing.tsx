@@ -1,11 +1,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// HOUSING — the "Housing" tab in the venue workspace of ClubOS.
+// ACCOMMODATION — the "Accommodation" tab in the United Sports Group workspace.
 //
-// Tracks the on-site residency houses: which rooms have a tenant and which are
-// free, whether rent is being paid on time, and whether the power/wifi bills
-// are getting paid. Four tabs: Overview (the "is anything on fire" screen),
-// Houses & rooms (who lives where, at a glance), Tenants (the rent roll), and
-// Utilities (the bills).
+// The CUFC residency at 482A Yaldhurst Road: which rooms have somebody in them
+// and which are free, what each occupant owes and whether it has been paid, and
+// what still has to be sorted out before any of it is contractually sound.
+//
+// Seven views: Overview (is anything on fire), Properties (the room directory),
+// Occupancy (every stay, past and present), Invoicing (what is owed, by term),
+// Roster (everyone including the players living off site), Actions (the
+// compliance list and the recorded data conflicts) and Utilities (the bills the
+// club itself pays).
+//
+// 🔴 Every figure on this page is DERIVED by the server from a rate and a pair
+// of dates. Nothing renders a stored total. The spreadsheet this replaced
+// carried four different totals for one term, and that is the failure this page
+// exists to make impossible — where the club's own record disagrees with the
+// arithmetic, the page shows both and names the gap rather than picking one.
+//
+// (The tab slug is still `housing`, which is what requireTab and every access
+// grant key on. The route and the label are what a human sees.)
 //
 // House style follows venue-addons.tsx / venue-facilities.tsx (dark-glass
 // cards, rounded-2xl, white/10 borders) and group-hiring.tsx (react-query +
@@ -39,25 +52,68 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Home, Plus, Pencil, Trash2, Check, X, Search, DoorOpen, DoorClosed,
   AlertTriangle, CheckCircle2, Users, Zap, Wallet, UserPlus, LogOut,
-  Receipt, Undo2, Ban, type LucideIcon,
+  Receipt, Undo2, Ban, ClipboardList, KeyRound, Eye, EyeOff, HelpCircle,
+  FileWarning, Scale, CalendarRange, type LucideIcon,
 } from "lucide-react";
 import {
   ROOM_TYPES, RENT_FREQUENCIES, RENT_FREQUENCY_LABELS,
   UTILITY_KINDS, UTILITY_KIND_LABELS, PAYMENT_STATE_LABELS,
   parseIso,
+  AGREEMENT_TYPES, AGREEMENT_TYPE_LABELS,
+  OCCUPANT_CATEGORY_LABELS, CONDITION_STATUS_LABELS, CONDITION_REPORT_LABELS,
+  ACTION_STATUSES, ACTION_STATUS_LABELS, ACCOMMODATION_STATUS_LABELS,
+  CHARGE_KIND_LABELS,
   type PaymentState, type RoomType, type RentFrequency, type UtilityKind,
   type PaymentMethod, type TenancyState,
+  type AgreementType, type OccupantCategory, type ConditionStatus,
+  type ConditionReport, type ActionStatus, type ActionPriority,
+  type AccommodationStatus, type ChargeKind,
 } from "@shared/housing";
 
 // ── Types — client-local mirrors of the /api/admin/housing/* JSON shapes ────
 
+interface AccommodationCompliance {
+  roomUnconfirmed: number;
+  agreementUndecided: number;
+  conditionReportPending: number;
+  keyNotIssued: number;
+  legalNameUnverified: number;
+  missingEmail: number;
+  missingPhone: number;
+  missingEmergencyContact: number;
+  roomsNeverInspected: number;
+  personOverlaps: number;
+}
+
 interface OverviewData {
   today: string;
-  occupancy: { rooms: number; occupied: number; vacant: number; occupancyPct: number };
+  occupancy: { rooms: number; occupied: number; vacant: number; occupancyPct: number; reserveRooms: number; reserveOccupied: number };
   activeTenants: number;
   annualRentCents: number;
+  compliance: AccommodationCompliance;
+  actions: { open: number; high: number; conflicts: number };
+  variance: { rows: number; cents: number; underBilledCents: number; overBilledCents: number };
+  weekly: { rentCents: number; utilitiesCents: number; remunerationRooms: number };
   rent: { overdueCount: number; overdueCents: number; dueSoonCount: number; dueSoonCents: number };
   utilities: { accounts: number; overdueCount: number; overdueCents: number; dueSoonCount: number; dueSoonCents: number };
+}
+
+/** Door codes are real security. They are shown only when someone asks, so a
+ *  shoulder-surfer or a screen-share does not hand over every key in the
+ *  residency at once. */
+function KeyCode({ code }: { code: string }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); setShown(v => !v); }}
+      className="inline-flex items-center gap-1 text-[10px] text-white/35 hover:text-white/70 font-mono"
+      title={shown ? "Hide the key code" : "Show the key code"}
+      data-testid="button-toggle-keycode"
+    >
+      {shown ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+      {shown ? code : "••••••••"}
+    </button>
+  );
 }
 
 interface RoomTenant {
@@ -79,6 +135,15 @@ interface RoomRow {
   roomType: RoomType;
   defaultRentCents: number;
   defaultRentFrequency: RentFrequency;
+  defaultUtilitiesCents: number;
+  bedConfig: string | null;
+  occupantType: string | null;
+  keyCode: string | null;
+  conditionStatus: ConditionStatus | null;
+  conditionCheckedOn: string | null;
+  propertyLead: string | null;
+  isReserve: boolean;
+  sourceStatus: string | null;
   notes: string | null;
   tenant: RoomTenant | null;
 }
@@ -97,20 +162,41 @@ interface HouseWithRooms {
 
 interface TenancyRow {
   id: number;
-  roomId: number;
+  /** 🔴 Null when the club's records place two people in this room at once. */
+  roomId: number | null;
   contactId: number;
   rentCents: number;
   rentFrequency: RentFrequency;
+  utilitiesCents: number;
+  utilitiesIncluded: boolean;
+  agreementType: AgreementType | null;
+  occupantCategory: OccupantCategory | null;
+  isRemuneration: boolean;
+  holidayWeeks: number;
+  keyIssued: boolean;
+  conditionReport: ConditionReport | null;
+  statedTotalCents: number | null;
+  sourceRef: string | null;
+  roomConflictNote: string | null;
   startDate: string;
   endDate: string | null;
   bondCents: number;
   bondReturnedOn: string | null;
   notes: string | null;
   state: TenancyState;
+  roomConfirmed: boolean;
+  personOverlap: boolean;
+  variance: number | null;
+  hasVariance: boolean;
+  money: {
+    days: number; weeks: number; weeklyRentCents: number; weeklyUtilitiesCents: number;
+    rentCents: number; utilitiesCents: number; totalCents: number; openEnded: boolean;
+  } | null;
   tenant: { id: number; name: string; email: string | null; phone: string | null };
-  room: { id: number; name: string; roomType: RoomType };
-  house: { id: number; name: string };
-  charges: { total: number; overdue: number; overdueCents: number };
+  room: { id: number; name: string; roomType: RoomType; isReserve: boolean } | null;
+  house: { id: number; name: string; inferred: boolean } | null;
+  period: { id: number; name: string } | null;
+  charges: { total: number; overdue: number; overdueCents: number; billedCents: number; paidCents: number };
 }
 
 interface ChargeRow {
@@ -204,6 +290,9 @@ const HOUSING_KEYS: string[][] = [
   ["/api/admin/housing/charges"],
   ["/api/admin/housing/utilities"],
   ["/api/admin/housing/bills"],
+  ["/api/admin/housing/periods"],
+  ["/api/admin/housing/roster"],
+  ["/api/admin/housing/actions"],
 ];
 
 /** Every mutation on this page touches at least two of these aggregates
@@ -212,6 +301,13 @@ const HOUSING_KEYS: string[][] = [
  *  rather than trying to track which ones apply to which action. */
 function invalidateHousing() {
   for (const key of HOUSING_KEYS) queryClient.invalidateQueries({ queryKey: key });
+  // 🔴 The invoicing view keys on a URL that carries a query string
+  // (`…/invoicing?periodId=2`), and react-query prefix-matches on the key ARRAY,
+  // not on the string inside it — so the loop above would never touch it and a
+  // payment recorded elsewhere would leave the matrix showing the old figure.
+  queryClient.invalidateQueries({
+    predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/admin/housing/invoicing"),
+  });
 }
 
 /** Best-effort extraction of the server's JSON `message` out of an apiRequest
@@ -263,6 +359,14 @@ function findRoom(houses: HouseWithRooms[], roomId: string): { house: HouseWithR
 }
 
 const inputCls = "w-full rounded-lg bg-white/[0.03] border border-white/10 px-3 py-2 text-sm text-white/90 placeholder:text-white/25 focus:outline-none focus:border-blue-500/50 disabled:opacity-40 disabled:cursor-not-allowed";
+
+/** An inline control that sits BESIDE content instead of owning its own row.
+ *
+ *  🔴 Deliberately not `${inputCls} w-auto`. Both width utilities end up in the
+ *  class list and the generated stylesheet decides which wins — `w-full` did,
+ *  so a status dropdown expanded to the full card and squeezed the text next to
+ *  it into a one-word-per-line column. Caught by screenshotting the real page. */
+const compactSelectCls = "rounded-lg bg-white/[0.03] border border-white/10 px-2.5 py-1.5 text-[11px] text-white/90 focus:outline-none focus:border-blue-500/50 disabled:opacity-40 disabled:cursor-not-allowed";
 
 // ── Shared small components ──────────────────────────────────────────────────
 
@@ -368,6 +472,89 @@ function OverviewSkeleton() {
   );
 }
 
+/**
+ * The honesty panel. Everything the residency record cannot yet stand behind,
+ * counted live from the data rather than from a list somebody has to keep.
+ *
+ * It sits directly under the headline numbers deliberately: a 100%-occupancy
+ * figure means very little while four of the rooms behind it are disputed.
+ */
+function ComplianceStrip({ overview }: { overview: OverviewData }) {
+  const c = overview.compliance;
+  const items: { label: string; count: number; hint: string }[] = [
+    { label: "rooms not confirmed", count: c.roomUnconfirmed, hint: "Recorded as holding two people at once, so the room was left blank rather than guessed." },
+    { label: "one person, two rooms", count: c.personOverlaps, hint: "The same person is recorded in two places over the same dates." },
+    { label: "legal names unchecked", count: c.legalNameUnverified, hint: "An agreement signed in an unverified name is not binding." },
+    { label: "agreements undecided", count: c.agreementUndecided, hint: "Licence to occupy, boarding agreement or residential tenancy — still open with Harcourts." },
+    { label: "condition reports outstanding", count: c.conditionReportPending, hint: "Nothing to point at if a room is damaged." },
+    { label: "no phone number", count: c.missingPhone, hint: "The thing that matters at 2am. No phone number appears anywhere in the source documents." },
+    { label: "no emergency contact", count: c.missingEmergencyContact, hint: "The run sheet says these are on file, but none of them are written down." },
+    { label: "rooms never inspected", count: c.roomsNeverInspected, hint: "Not inspected is not the same as fine." },
+    { label: "keys not issued", count: c.keyNotIssued, hint: "" },
+    { label: "no email address", count: c.missingEmail, hint: "" },
+  ].filter(i => i.count > 0);
+
+  const money = overview.variance;
+
+  if (items.length === 0 && money.rows === 0 && overview.actions.open === 0) {
+    return (
+      <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.05] p-4 flex items-center gap-2.5 text-[12px] text-emerald-200/80">
+        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+        Nothing outstanding — every room, agreement and contact detail is on file.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-4" data-testid="compliance-strip">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-[13px] font-semibold text-white/80 flex items-center gap-2">
+          <ClipboardList className="w-4 h-4 text-white/35" />
+          Still to sort out
+        </h3>
+        {overview.actions.open > 0 && (
+          <span className="text-[11px] text-white/40">
+            {overview.actions.open} open item{overview.actions.open === 1 ? "" : "s"}
+            {overview.actions.high > 0 && <span className="text-red-300/80"> · {overview.actions.high} high priority</span>}
+            {overview.actions.conflicts > 0 && <span className="text-amber-300/80"> · {overview.actions.conflicts} data conflicts</span>}
+          </span>
+        )}
+      </div>
+
+      {items.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {items.map(i => (
+            <span
+              key={i.label}
+              title={i.hint}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-white/60"
+              data-testid={`compliance-${i.label.replace(/[^a-z]+/gi, "-")}`}
+            >
+              <span className="font-semibold text-amber-300">{i.count}</span>
+              {i.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {money.rows > 0 && (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-3 text-[12px] leading-relaxed text-amber-100/80 flex items-start gap-2">
+          <Scale className="w-4 h-4 mt-0.5 shrink-0 text-amber-300" />
+          <div>
+            <span className="font-semibold text-amber-200">
+              {money.rows} stay{money.rows === 1 ? "" : "s"} price differently from what the club recorded.
+            </span>{" "}
+            {money.underBilledCents > 0 && <>Working from the rates and dates on file, {formatCurrency(money.underBilledCents, { fromCents: true })} more was due than was written down</>}
+            {money.underBilledCents > 0 && money.overBilledCents < 0 && ", and "}
+            {money.overBilledCents < 0 && <>{formatCurrency(Math.abs(money.overBilledCents), { fromCents: true })} less</>}
+            . See the Invoicing view for which ones and why.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OverviewTab() {
   const { toast } = useToast();
   const { data: overview, isLoading: loadingOverview } = useQuery<OverviewData>({ queryKey: ["/api/admin/housing/overview"] });
@@ -418,16 +605,19 @@ function OverviewTab() {
     <div className="space-y-6">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard
-          label="Occupancy"
+          label="Rooms let"
           value={`${overview.occupancy.occupied}/${overview.occupancy.rooms}`}
-          sub={`${overview.occupancy.occupancyPct}% full`}
+          /* Reserve beds are excluded from the count on purpose — every lettable
+             room can be full while two sick rooms sit empty, and folding those in
+             invents spare capacity that cannot be sold. */
+          sub={`${overview.occupancy.occupancyPct}% full${overview.occupancy.reserveRooms > 0 ? ` · ${overview.occupancy.reserveRooms} reserve beds aside` : ""}`}
           icon={DoorOpen}
           color="#3b82f6"
         />
         <StatCard
-          label="Active tenants"
+          label="Living on site"
           value={String(overview.activeTenants)}
-          sub={`${formatCurrency(overview.annualRentCents, { fromCents: true })}/yr rent roll`}
+          sub={`${formatCurrency(overview.weekly.rentCents + overview.weekly.utilitiesCents, { fromCents: true })}/wk coming in${overview.weekly.remunerationRooms > 0 ? ` · ${overview.weekly.remunerationRooms} rooms in contracts` : ""}`}
           icon={Users}
           color="#8b5cf6"
         />
@@ -446,6 +636,12 @@ function OverviewTab() {
           color={overview.utilities.overdueCount > 0 ? "#ef4444" : "#22c55e"}
         />
       </div>
+
+      {/* ── What the numbers cannot be trusted on yet ─────────────────────────
+          Every count here is derived on each read, so an item disappears the
+          moment somebody actually fixes it — there is no checklist to maintain
+          and nothing that can quietly go stale. */}
+      <ComplianceStrip overview={overview} />
 
       <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
         <div className="px-4 py-3 border-b border-white/[0.06] flex items-center gap-2">
@@ -514,8 +710,16 @@ function RoomTile({ room, onEdit, onDelete, onAssign }: {
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-[13px] font-medium text-white/85 truncate">{room.name}</div>
-          <div className="text-[10px] text-white/35">{ROOM_TYPE_LABELS[room.roomType]}</div>
+          <div className="text-[13px] font-medium text-white/85 truncate flex items-center gap-1.5">
+            {room.name}
+            {room.isReserve && (
+              <span className="text-[9px] uppercase tracking-wide text-violet-300/80 border border-violet-400/25 rounded px-1 py-px" title="Sick / quarantine / overflow bed. Not counted as lettable stock.">
+                reserve
+              </span>
+            )}
+          </div>
+          <div className="text-[10px] text-white/35 truncate">{room.bedConfig || ROOM_TYPE_LABELS[room.roomType]}</div>
+          {room.occupantType && <div className="text-[10px] text-white/25 truncate">{room.occupantType}</div>}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <button onClick={onEdit} className="w-7 h-7 rounded-md flex items-center justify-center text-white/25 hover:text-white/60 hover:bg-white/5" title="Edit room" data-testid={`button-edit-room-${room.id}`}>
@@ -545,10 +749,27 @@ function RoomTile({ room, onEdit, onDelete, onAssign }: {
             {formatCurrency(room.defaultRentCents, { fromCents: true })} {RENT_FREQUENCY_LABELS[room.defaultRentFrequency].toLowerCase()} default
           </div>
           <button onClick={onAssign} className="inline-flex items-center gap-1 text-[11px] text-emerald-300 hover:text-emerald-200 font-medium min-h-[32px]" data-testid={`button-assign-room-${room.id}`}>
-            <UserPlus className="w-3.5 h-3.5" /> Assign tenant
+            <UserPlus className="w-3.5 h-3.5" /> Move someone in
           </button>
         </div>
       )}
+
+      <div className="pt-2 mt-auto border-t border-white/[0.06] flex flex-wrap items-center gap-x-3 gap-y-1">
+        {/* 🔴 "Not inspected" is its own state, and it is not the same as fine.
+            A room nobody has looked at nags rather than sitting silent. */}
+        <span
+          className={`text-[10px] ${room.conditionStatus && room.conditionStatus !== "unknown" ? "text-white/40" : "text-amber-300/70"}`}
+          title={room.conditionCheckedOn ? `Last checked ${fmtNZDate(room.conditionCheckedOn)}` : "No inspection recorded"}
+        >
+          {room.conditionStatus ? CONDITION_STATUS_LABELS[room.conditionStatus] : CONDITION_STATUS_LABELS.unknown}
+        </span>
+        {room.defaultUtilitiesCents > 0 && (
+          <span className="text-[10px] text-white/30" title="Weekly power contribution">
+            +{formatCurrency(room.defaultUtilitiesCents, { fromCents: true })} power
+          </span>
+        )}
+        {room.keyCode && <KeyCode code={room.keyCode} />}
+      </div>
     </div>
   );
 }
@@ -1117,7 +1338,7 @@ function EditTenancyDialog({ tenancy, onClose }: { tenancy: TenancyRow; onClose:
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-md bg-[#0a0f1a] border border-white/10 text-white/90 max-h-[85vh] overflow-y-auto">
         <h2 className="text-base font-semibold mb-1">Edit tenancy</h2>
-        <p className="text-[12px] text-white/40 mb-3">{tenancy.tenant.name} — {tenancy.house.name} · {tenancy.room.name}</p>
+        <p className="text-[12px] text-white/40 mb-3">{tenancy.tenant.name} — {tenancy.room && tenancy.house ? `${tenancy.house.name} · ${tenancy.room.name}` : "room unconfirmed"}</p>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -1186,7 +1407,7 @@ function EndTenancyDialog({ tenancy, onClose }: { tenancy: TenancyRow; onClose: 
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-sm bg-[#0a0f1a] border border-white/10 text-white/90">
         <h2 className="text-base font-semibold mb-1 flex items-center gap-2"><LogOut className="w-4 h-4 text-amber-400" /> End tenancy</h2>
-        <p className="text-[12px] text-white/40 mb-3">{tenancy.tenant.name} — {tenancy.house.name} · {tenancy.room.name}</p>
+        <p className="text-[12px] text-white/40 mb-3">{tenancy.tenant.name} — {tenancy.room && tenancy.house ? `${tenancy.house.name} · ${tenancy.room.name}` : "room unconfirmed"}</p>
         <label className="text-[11px] text-white/40 mb-1 block">Last night (end date)</label>
         <DatePickerInput value={endDate} onChange={(e) => setEndDate(e.target.value)} min={tenancy.startDate} data-testid="input-end-tenancy-date" />
         <div className="flex justify-end gap-2 mt-4">
@@ -1293,10 +1514,39 @@ function TenantsTab() {
               {filtered.map((t) => (
                 <tr key={t.id} data-testid={`row-tenancy-${t.id}`}>
                   <td className="px-4 py-3">
-                    <div className="text-white/85 font-medium">{t.tenant.name}</div>
+                    <div className="text-white/85 font-medium flex items-center gap-1.5">
+                      {t.tenant.name}
+                      {t.personOverlap && (
+                        <span title="This person is recorded in two places over the same dates." data-testid={`overlap-${t.id}`}>
+                          <AlertTriangle className="w-3 h-3 text-amber-400/80" />
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] text-white/35">{t.tenant.phone || "—"}</div>
                   </td>
-                  <td className="px-4 py-3 text-white/70">{t.house.name} · {t.room.name}</td>
+                  <td className="px-4 py-3">
+                    {/* 🔴 A stay whose room the club's own records contradict is
+                        shown as unconfirmed, never quietly placed somewhere. */}
+                    {t.room && t.house ? (
+                      <span className="text-white/70">{t.house.name} · {t.room.name}</span>
+                    ) : (
+                      <span
+                        className="inline-flex items-center gap-1 text-amber-300/80"
+                        title={t.roomConflictNote ?? "No room recorded for this stay."}
+                        data-testid={`room-unconfirmed-${t.id}`}
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        {t.house ? `${t.house.name} · room unconfirmed` : "Room unconfirmed"}
+                      </span>
+                    )}
+                    <div className="text-[10px] text-white/30 flex flex-wrap items-center gap-x-2">
+                      {t.agreementType && <span>{AGREEMENT_TYPE_LABELS[t.agreementType]}</span>}
+                      {/* Zero rent is not "pays nothing" — it is a room inside a
+                          playing contract, and the two must never read alike. */}
+                      {t.isRemuneration && <span className="text-sky-300/70">room in contract</span>}
+                      {t.period && <span>{t.period.name}</span>}
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-white/70">
                     {formatCurrency(t.rentCents, { fromCents: true })} <span className="text-white/35">{RENT_FREQUENCY_LABELS[t.rentFrequency]}</span>
                   </td>
@@ -1725,6 +1975,446 @@ function UtilitiesTab() {
   );
 }
 
+// ═══ ACCOMMODATION — invoicing, roster and actions ════════════════════════════
+
+interface InvoicingLine {
+  tenancyId: number;
+  sourceRef: string | null;
+  period: { id: number; name: string } | null;
+  tenant: { id: number; name: string; email: string | null };
+  location: string;
+  roomConfirmed: boolean;
+  startDate: string;
+  endDate: string | null;
+  agreementType: AgreementType | null;
+  isRemuneration: boolean;
+  weeklyRentCents: number;
+  weeklyUtilitiesCents: number;
+  weeks: number;
+  holidayWeeks: number;
+  computedCents: number;
+  statedTotalCents: number | null;
+  varianceCents: number | null;
+  hasVariance: boolean;
+  sourcePaymentStatus: string | null;
+  billedCents: number;
+  paidCents: number;
+  outstandingCents: number;
+  unbilledCents: number;
+  chargeCount: number;
+}
+
+interface InvoicingData {
+  today: string;
+  lines: InvoicingLine[];
+  totals: {
+    tenancies: number; computedCents: number; statedCents: number;
+    billedCents: number; paidCents: number; outstandingCents: number;
+    unbilledCents: number; varianceCents: number; varianceRows: number;
+  };
+}
+
+interface PeriodRow {
+  id: number; name: string; startDate: string; endDate: string;
+  statedTotalCents: number | null; statedTotalNote: string | null;
+  closedAt: string | null; notes: string | null;
+  tenancies: number; computedCents: number; billedCents: number;
+  paidCents: number; outstandingCents: number; statedVarianceCents: number | null;
+}
+
+interface RosterRow {
+  id: number;
+  contact: { id: number; name: string; email: string | null; phone: string | null; type: string };
+  roleLabel: string | null;
+  legalName: string | null;
+  legalNameVerified: boolean;
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
+  notes: string | null;
+  status: AccommodationStatus;
+  currentLocation: string | null;
+  tenancies: number;
+  contactable: boolean;
+}
+
+interface ActionRow {
+  id: number; kind: "action" | "conflict"; ref: string | null;
+  priority: ActionPriority; category: string | null; title: string; detail: string | null;
+  ownerLabel: string | null; status: ActionStatus; targetDate: string | null;
+  resolutionNotes: string | null; completedOn: string | null;
+  open: boolean; overdue: boolean;
+  assignedTo: { id: number; name: string } | null;
+  related: { affects?: string[] } | null;
+}
+
+/** A signed money figure. Red when the club appears to have under-billed. */
+function Variance({ cents }: { cents: number | null }) {
+  if (cents === null || cents === 0) return <span className="text-white/25">—</span>;
+  const under = cents > 0;
+  return (
+    <span className={under ? "text-amber-300" : "text-sky-300"}>
+      {under ? "+" : "−"}{formatCurrency(Math.abs(cents), { fromCents: true })}
+    </span>
+  );
+}
+
+const PRIORITY_COLOR: Record<ActionPriority, string> = {
+  high: "#f87171", medium: "#fbbf24", low: "#64748b",
+};
+
+const ACCOMMODATION_STATUS_COLOR: Record<AccommodationStatus, string> = {
+  resident: "#22c55e", arriving: "#3b82f6", former: "#64748b", non_resident: "#a78bfa",
+};
+
+// ── Invoicing ────────────────────────────────────────────────────────────────
+
+function InvoicingTab() {
+  const [periodId, setPeriodId] = useState<string>("");
+  const { data: periods } = useQuery<PeriodRow[]>({ queryKey: ["/api/admin/housing/periods"] });
+  const { data, isLoading } = useQuery<InvoicingData>({
+    queryKey: periodId
+      ? [`/api/admin/housing/invoicing?periodId=${periodId}`]
+      : ["/api/admin/housing/invoicing"],
+  });
+
+  if (isLoading || !data) return <div className="space-y-3">{[1, 2, 3].map(i => <Skeleton key={i} className="h-16 rounded-xl bg-white/[0.04]" />)}</div>;
+
+  const t = data.totals;
+
+  return (
+    <div className="space-y-6">
+      {/* Per-term reconciliation. This is the screen the spreadsheet could not
+          produce: what the term costs, what was invoiced, what came in — and
+          what the club's own document claimed, side by side. */}
+      {(periods ?? []).length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(periods ?? []).map(p => (
+            <div key={p.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4" data-testid={`period-card-${p.id}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[15px] font-semibold text-white">{p.name}</div>
+                  <div className="text-[11px] text-white/40">{fmtNZDate(p.startDate)} – {fmtNZDate(p.endDate)} · {p.tenancies} stay{p.tenancies === 1 ? "" : "s"}</div>
+                </div>
+                {p.closedAt && <span className="text-[10px] uppercase tracking-wide text-white/40 border border-white/15 rounded px-1.5 py-0.5">Closed</span>}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
+                <span className="text-white/40">Works out at</span>
+                <span className="text-right font-semibold text-white/90">{formatCurrency(p.computedCents, { fromCents: true })}</span>
+                <span className="text-white/40">Invoiced</span>
+                <span className="text-right text-white/70">{formatCurrency(p.billedCents, { fromCents: true })}</span>
+                <span className="text-white/40">Received</span>
+                <span className="text-right text-emerald-300">{formatCurrency(p.paidCents, { fromCents: true })}</span>
+                <span className="text-white/40">Still owing</span>
+                <span className={`text-right font-semibold ${p.outstandingCents > 0 ? "text-amber-300" : "text-white/40"}`}>{formatCurrency(p.outstandingCents, { fromCents: true })}</span>
+              </div>
+              {p.statedTotalCents !== null && (
+                <div className="mt-3 pt-3 border-t border-white/[0.06] text-[11px] leading-relaxed">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-white/40">The club's own record said</span>
+                    <span className="text-white/60">{formatCurrency(p.statedTotalCents, { fromCents: true })}</span>
+                  </div>
+                  {p.statedVarianceCents !== null && Math.abs(p.statedVarianceCents) > 1 && (
+                    <div className="mt-1.5 flex items-start gap-1.5 text-amber-300/90">
+                      <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                      <span>Differs by {formatCurrency(Math.abs(p.statedVarianceCents), { fromCents: true })}. {p.statedTotalNote}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-white/[0.06]">
+          <h3 className="text-[13px] font-semibold text-white/80">Every stay, priced from its rate and dates</h3>
+          <select
+            value={periodId}
+            onChange={(e) => setPeriodId(e.target.value)}
+            className={`${compactSelectCls} min-w-[150px] text-[12px] py-2`}
+            data-testid="select-invoicing-period"
+          >
+            <option value="">All terms</option>
+            {(periods ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+
+        {data.lines.length === 0 ? (
+          <EmptyState icon={Receipt} title="Nothing to invoice yet" />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px] min-w-[900px]">
+              <thead>
+                <tr className="text-left text-white/35 border-b border-white/[0.06]">
+                  <th className="px-4 py-2 font-medium">Occupant</th>
+                  <th className="px-3 py-2 font-medium">Room</th>
+                  <th className="px-3 py-2 font-medium">Dates</th>
+                  <th className="px-3 py-2 font-medium text-right">Per week</th>
+                  <th className="px-3 py-2 font-medium text-right">Weeks</th>
+                  <th className="px-3 py-2 font-medium text-right">Works out at</th>
+                  <th className="px-3 py-2 font-medium text-right">Club said</th>
+                  <th className="px-3 py-2 font-medium text-right">Difference</th>
+                  <th className="px-3 py-2 font-medium text-right">Received</th>
+                  <th className="px-4 py-2 font-medium text-right">Owing</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.lines.map(l => (
+                  <tr key={l.tenancyId} className="border-b border-white/[0.04] last:border-0" data-testid={`invoicing-row-${l.tenancyId}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="text-white/90 font-medium">{l.tenant.name}</div>
+                      <div className="text-[10px] text-white/35 flex items-center gap-1.5">
+                        {l.sourceRef && <span>{l.sourceRef}</span>}
+                        {l.isRemuneration && <span className="text-sky-300/80">rent in contract</span>}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {l.roomConfirmed
+                        ? <span className="text-white/60">{l.location}</span>
+                        : <span className="inline-flex items-center gap-1 text-amber-300/80"><HelpCircle className="w-3 h-3" />Not confirmed</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-white/50 whitespace-nowrap">{fmtNZDate(l.startDate)} – {l.endDate ? fmtNZDate(l.endDate) : "ongoing"}</td>
+                    <td className="px-3 py-2.5 text-right text-white/70 whitespace-nowrap">
+                      {formatCurrency(l.weeklyRentCents, { fromCents: true })}
+                      {l.weeklyUtilitiesCents > 0 && <span className="text-white/35"> + {formatCurrency(l.weeklyUtilitiesCents, { fromCents: true })}</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-white/50">
+                      {l.weeks.toFixed(2).replace(/\.00$/, "")}
+                      {l.holidayWeeks > 0 && <span className="text-white/30" title={`${l.holidayWeeks} week(s) deducted for time away`}> ({l.holidayWeeks} off)</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-semibold text-white/90">{formatCurrency(l.computedCents, { fromCents: true })}</td>
+                    <td className="px-3 py-2.5 text-right text-white/45">{l.statedTotalCents === null ? "—" : formatCurrency(l.statedTotalCents, { fromCents: true })}</td>
+                    <td className="px-3 py-2.5 text-right"><Variance cents={l.hasVariance ? l.varianceCents : null} /></td>
+                    <td className="px-3 py-2.5 text-right text-emerald-300/80">{formatCurrency(l.paidCents, { fromCents: true })}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className={l.outstandingCents > 0 ? "text-amber-300 font-semibold" : "text-white/30"}>
+                        {formatCurrency(l.outstandingCents, { fromCents: true })}
+                      </span>
+                      {l.unbilledCents > 0 && (
+                        <div className="text-[10px] text-white/35" title="Worked out as due, but no invoice has been raised for it">
+                          +{formatCurrency(l.unbilledCents, { fromCents: true })} not yet invoiced
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-white/10 bg-white/[0.02] font-semibold">
+                  <td className="px-4 py-3 text-white/70" colSpan={5}>{t.tenancies} stays</td>
+                  <td className="px-3 py-3 text-right text-white">{formatCurrency(t.computedCents, { fromCents: true })}</td>
+                  <td className="px-3 py-3 text-right text-white/45">{formatCurrency(t.statedCents, { fromCents: true })}</td>
+                  <td className="px-3 py-3 text-right"><Variance cents={t.varianceCents} /></td>
+                  <td className="px-3 py-3 text-right text-emerald-300">{formatCurrency(t.paidCents, { fromCents: true })}</td>
+                  <td className="px-4 py-3 text-right text-amber-300">{formatCurrency(t.outstandingCents, { fromCents: true })}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {t.unbilledCents > 0 && (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-4 text-[12px] text-amber-100/80 leading-relaxed">
+          <div className="flex items-start gap-2">
+            <FileWarning className="w-4 h-4 mt-0.5 shrink-0 text-amber-300" />
+            <div>
+              <span className="font-semibold text-amber-200">{formatCurrency(t.unbilledCents, { fromCents: true })} has been worked out as due but never invoiced.</span>{" "}
+              Nobody owes money on an invoice that was never raised, so this is not counted as arrears — it is a billing gap, and it is the difference between what the rates and dates produce and what was actually charged.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Roster ───────────────────────────────────────────────────────────────────
+
+const ROSTER_FILTERS = ["all", "resident", "non_resident", "former"] as const;
+type RosterFilter = (typeof ROSTER_FILTERS)[number];
+const ROSTER_FILTER_LABELS: Record<RosterFilter, string> = {
+  all: "Everyone", resident: "Living on site", non_resident: "Off site", former: "Previously housed",
+};
+
+function RosterTab() {
+  const { toast } = useToast();
+  const [filter, setFilter] = useState<RosterFilter>("all");
+  const { data: roster, isLoading } = useQuery<RosterRow[]>({ queryKey: ["/api/admin/housing/roster"] });
+
+  const verify = useMutation({
+    mutationFn: ({ id, verified }: { id: number; verified: boolean }) =>
+      apiRequest("PATCH", `/api/admin/housing/roster/${id}`, { legalNameVerified: verified }),
+    onSuccess: () => { invalidateHousing(); toast({ title: "Updated" }); },
+    onError: (e: unknown) => toast({ title: "Couldn't update", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  if (isLoading || !roster) return <div className="space-y-3">{[1, 2, 3].map(i => <Skeleton key={i} className="h-14 rounded-xl bg-white/[0.04]" />)}</div>;
+
+  const shown = filter === "all" ? roster : roster.filter(r => r.status === filter);
+  const unverified = roster.filter(r => !r.legalNameVerified).length;
+
+  return (
+    <div className="space-y-4">
+      {unverified > 0 && (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-4 text-[12px] text-amber-100/80 leading-relaxed flex items-start gap-2">
+          <Scale className="w-4 h-4 mt-0.5 shrink-0 text-amber-300" />
+          <div>
+            <span className="font-semibold text-amber-200">{unverified} of {roster.length} legal names have not been confirmed against a document.</span>{" "}
+            A signature page in the wrong name is not binding, so an agreement should not be issued until the name on it has been checked. Tick a person once you have seen their ID — the tick is the record that somebody checked.
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-1.5">
+        {ROSTER_FILTERS.map(f => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`rounded-lg px-3 py-2 text-[12px] font-medium transition-colors min-h-[44px] sm:min-h-0 ${filter === f ? "bg-white/[0.12] text-white" : "bg-white/[0.03] text-white/50 hover:text-white/80"}`}
+            data-testid={`filter-roster-${f}`}
+          >
+            {ROSTER_FILTER_LABELS[f]}
+            <span className="ml-1.5 text-white/30">{f === "all" ? roster.length : roster.filter(r => r.status === f).length}</span>
+          </button>
+        ))}
+      </div>
+
+      {shown.length === 0 ? (
+        <EmptyState icon={Users} title="Nobody here yet" />
+      ) : (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px] min-w-[720px]">
+              <thead>
+                <tr className="text-left text-white/35 border-b border-white/[0.06]">
+                  <th className="px-4 py-2 font-medium">Person</th>
+                  <th className="px-3 py-2 font-medium">Role</th>
+                  <th className="px-3 py-2 font-medium">Where</th>
+                  <th className="px-3 py-2 font-medium">Reachable</th>
+                  <th className="px-4 py-2 font-medium">Legal name</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map(r => (
+                  <tr key={r.id} className="border-b border-white/[0.04] last:border-0" data-testid={`roster-row-${r.id}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="text-white/90 font-medium">{r.contact.name}</div>
+                      <div className="text-[10px] text-white/35">{r.contact.email ?? "no email on file"}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-white/55">{r.roleLabel ?? "—"}</td>
+                    <td className="px-3 py-2.5">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: ACCOMMODATION_STATUS_COLOR[r.status] }} />
+                        <span className="text-white/70">{r.currentLocation ?? ACCOMMODATION_STATUS_LABELS[r.status]}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {/* 🔴 A phone number is the thing that matters at 2am, and
+                          nobody in this residency has one on file. */}
+                      {r.contact.phone
+                        ? <span className="text-white/70">{r.contact.phone}</span>
+                        : <span className="inline-flex items-center gap-1 text-amber-300/70"><AlertTriangle className="w-3 h-3" />no phone</span>}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <button
+                        onClick={() => verify.mutate({ id: r.id, verified: !r.legalNameVerified })}
+                        disabled={verify.isPending}
+                        className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-medium transition-colors min-h-[44px] sm:min-h-0 disabled:opacity-50 ${
+                          r.legalNameVerified
+                            ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                            : "bg-white/[0.04] border border-white/10 text-white/45 hover:text-white/80"}`}
+                        data-testid={`button-verify-name-${r.id}`}
+                      >
+                        {r.legalNameVerified ? <><CheckCircle2 className="w-3.5 h-3.5" /> Confirmed</> : <><HelpCircle className="w-3.5 h-3.5" /> Not confirmed</>}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Actions and conflicts ────────────────────────────────────────────────────
+
+function ActionsTab() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<{ today: string; items: ActionRow[] }>({ queryKey: ["/api/admin/housing/actions"] });
+
+  const setStatus = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: ActionStatus }) =>
+      apiRequest("PATCH", `/api/admin/housing/actions/${id}`, { status }),
+    onSuccess: () => { invalidateHousing(); toast({ title: "Updated" }); },
+    onError: (e: unknown) => toast({ title: "Couldn't update", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  if (isLoading || !data) return <div className="space-y-3">{[1, 2, 3].map(i => <Skeleton key={i} className="h-20 rounded-xl bg-white/[0.04]" />)}</div>;
+
+  const actions = data.items.filter(i => i.kind === "action");
+  const conflicts = data.items.filter(i => i.kind === "conflict");
+
+  const Card = ({ i }: { i: ActionRow }) => (
+    <div
+      className={`rounded-xl border p-4 ${i.open ? "border-white/10 bg-white/[0.03]" : "border-white/[0.06] bg-white/[0.015] opacity-60"}`}
+      data-testid={`action-${i.id}`}
+    >
+      <div className="flex flex-col sm:flex-row items-start gap-3">
+        <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 hidden sm:block" style={{ background: PRIORITY_COLOR[i.priority] }} />
+        <div className="min-w-0 flex-1 w-full">
+          <div className="flex flex-wrap items-center gap-2">
+            {i.ref && <span className="text-[10px] font-mono text-white/30">{i.ref}</span>}
+            {i.category && <span className="text-[10px] uppercase tracking-wide text-white/30">{i.category}</span>}
+            {i.overdue && <span className="text-[10px] text-red-300">overdue</span>}
+          </div>
+          <div className={`text-[13px] font-medium mt-0.5 ${i.open ? "text-white/90" : "text-white/50 line-through"}`}>{i.title}</div>
+          {i.detail && <p className="text-[11px] text-white/45 mt-1.5 leading-relaxed">{i.detail}</p>}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[10px] text-white/30">
+            {i.ownerLabel && <span>{i.ownerLabel}</span>}
+            {i.targetDate && <span>by {fmtNZDate(i.targetDate)}</span>}
+            {i.resolutionNotes && <span className="text-white/40">{i.resolutionNotes}</span>}
+          </div>
+        </div>
+        <select
+          value={i.status}
+          onChange={(e) => setStatus.mutate({ id: i.id, status: e.target.value as ActionStatus })}
+          disabled={setStatus.isPending}
+          className={`${compactSelectCls} shrink-0`}
+          data-testid={`select-action-status-${i.id}`}
+        >
+          {ACTION_STATUSES.map(st => <option key={st} value={st}>{ACTION_STATUS_LABELS[st]}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-[13px] font-semibold text-white/80 mb-1">Before this is contractually sound</h3>
+        <p className="text-[11px] text-white/40 mb-3">The compliance list from the club's run sheet. Each one blocks something real.</p>
+        <div className="space-y-2">{actions.map(i => <Card key={i.id} i={i} />)}</div>
+      </div>
+
+      <div>
+        <h3 className="text-[13px] font-semibold text-white/80 mb-1">Where the source documents disagree</h3>
+        {/* 🔴 These are recorded, not resolved. Choosing between four stated
+            totals for one term is a finance decision, and an import that quietly
+            picked one would have buried it. */}
+        <p className="text-[11px] text-white/40 mb-3 leading-relaxed">
+          Found while importing the five spreadsheets, and deliberately left as they were found. Nothing here was silently corrected — where two documents disagreed, both readings are kept and the question is put to a person.
+        </p>
+        <div className="space-y-2">{conflicts.map(i => <Card key={i.id} i={i} />)}</div>
+      </div>
+    </div>
+  );
+}
+
 // ═══ PAGE SHELL ═══════════════════════════════════════════════════════════════
 
 export default function VenueHousing() {
@@ -1733,27 +2423,33 @@ export default function VenueHousing() {
       <div className="flex items-center gap-3">
         <Home className="w-6 h-6 text-white/40" />
         <div>
-          <h1 className="text-2xl font-bold text-white" data-testid="text-venue-housing-title">Housing</h1>
-          <p className="text-sm text-white/40">Rooms, tenants, rent and utility bills for the residency houses</p>
+          <h1 className="text-2xl font-bold text-white" data-testid="text-venue-housing-title">Accommodation</h1>
+          <p className="text-sm text-white/40">The residency at 482A Yaldhurst Road — rooms, occupants, what is owed, and what still needs sorting</p>
         </div>
       </div>
 
       <Tabs defaultValue="overview" className="w-full">
-        {/* Four labels do not fit on a 390px phone in one row — the fourth was
-            being clipped at the screen edge with no hint that it was there. Two
-            rows on a phone, one row from `sm` up. */}
+        {/* Seven labels never fit one phone row. Two columns on a phone, wrapping
+            inline from `sm` up — a clipped tab with nothing hinting it is there
+            is how a whole view goes unnoticed. */}
         <TabsList
-          className="grid h-auto w-full grid-cols-2 gap-1 sm:inline-flex sm:h-10 sm:w-auto sm:justify-start sm:gap-0"
+          className="grid h-auto w-full grid-cols-2 gap-1 sm:inline-flex sm:h-auto sm:w-auto sm:flex-wrap sm:justify-start sm:gap-0"
           data-testid="housing-tabs"
         >
           <TabsTrigger value="overview" className="min-h-[44px] sm:min-h-0" data-testid="tab-overview">Overview</TabsTrigger>
-          <TabsTrigger value="houses" className="min-h-[44px] sm:min-h-0" data-testid="tab-houses">Houses &amp; rooms</TabsTrigger>
-          <TabsTrigger value="tenants" className="min-h-[44px] sm:min-h-0" data-testid="tab-tenants">Tenants</TabsTrigger>
+          <TabsTrigger value="houses" className="min-h-[44px] sm:min-h-0" data-testid="tab-houses">Properties</TabsTrigger>
+          <TabsTrigger value="tenants" className="min-h-[44px] sm:min-h-0" data-testid="tab-tenants">Occupancy</TabsTrigger>
+          <TabsTrigger value="invoicing" className="min-h-[44px] sm:min-h-0" data-testid="tab-invoicing">Invoicing</TabsTrigger>
+          <TabsTrigger value="roster" className="min-h-[44px] sm:min-h-0" data-testid="tab-roster">Roster</TabsTrigger>
+          <TabsTrigger value="actions" className="min-h-[44px] sm:min-h-0" data-testid="tab-actions">Actions</TabsTrigger>
           <TabsTrigger value="utilities" className="min-h-[44px] sm:min-h-0" data-testid="tab-utilities">Utilities</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewTab /></TabsContent>
         <TabsContent value="houses"><HousesTab /></TabsContent>
         <TabsContent value="tenants"><TenantsTab /></TabsContent>
+        <TabsContent value="invoicing"><InvoicingTab /></TabsContent>
+        <TabsContent value="roster"><RosterTab /></TabsContent>
+        <TabsContent value="actions"><ActionsTab /></TabsContent>
         <TabsContent value="utilities"><UtilitiesTab /></TabsContent>
       </Tabs>
     </div>

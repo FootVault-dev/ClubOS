@@ -6575,6 +6575,30 @@ export type FleetCost = typeof fleetCosts.$inferSelect;
 // Kinds/frequencies are validated TEXT (shared/housing.ts), never pg enums.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// The residency is let by TERM, not by calendar month: "Jan-May 2026" then
+// "May-Sep 2026". Every invoice, subtotal and reconciliation in the club's own
+// workbook is per term, so the term is a real object rather than a date range
+// somebody has to re-derive each time.
+export const housingPeriods = pgTable("housing_periods", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  startDate: date("start_date").notNull(),
+  /** INCLUSIVE, as everywhere else in this module. */
+  endDate: date("end_date").notNull(),
+  /** What the source document claimed this term totalled. Kept ONLY so the tab
+   *  can show the club's historic figure beside the recomputed one and name the
+   *  variance. Never an amount owed by anybody. */
+  statedTotalCents: integer("stated_total_cents"),
+  statedTotalNote: text("stated_total_note"),
+  notes: text("notes"),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("housing_periods_org_idx").on(t.organizationId),
+}));
+
 export const housingHouses = pgTable("housing_houses", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -6599,6 +6623,20 @@ export const housingRooms = pgTable("housing_rooms", {
   // later price rise never rewrites what a sitting tenant owes.
   defaultRentCents: integer("default_rent_cents").notNull().default(0),
   defaultRentFrequency: text("default_rent_frequency").notNull().default("weekly"),
+  /** What an occupant contributes toward power, kept APART from rent — the two
+   *  are billed differently from one term to the next. */
+  defaultUtilitiesCents: integer("default_utilities_cents").notNull().default(0),
+  bedConfig: text("bed_config"),                 // "Single / Twin"
+  occupantType: text("occupant_type"),           // who this room is meant for
+  keyCode: text("key_code"),                     // MH-KEY-01 — masked in the UI
+  conditionStatus: text("condition_status"),     // see CONDITION_STATUSES
+  conditionCheckedOn: date("condition_checked_on"),
+  propertyLead: text("property_lead"),
+  /** A sick / quarantine / overflow bed. Never counted as lettable stock. */
+  isReserve: boolean("is_reserve").notNull().default(false),
+  /** The status word the source document used, kept for audit. Never read as
+   *  truth — occupancy is always derived from live tenancies. */
+  sourceStatus: text("source_status"),
   notes: text("notes"),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -6610,12 +6648,43 @@ export const housingRooms = pgTable("housing_rooms", {
 
 export const housingTenancies = pgTable("housing_tenancies", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
-  roomId: integer("room_id").notNull().references(() => housingRooms.id, { onDelete: "cascade" }),
+  /** NULLABLE. The club's records place two people in one room on four separate
+   *  occasions; the exclusion constraint rightly refuses the second of each
+   *  pair, so those tenancies are kept with the room blank and flagged rather
+   *  than guessed into a room nobody has said they were in. */
+  roomId: integer("room_id").references(() => housingRooms.id, { onDelete: "cascade" }),
   organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   // RESTRICT: deleting a person must never silently erase the rent they owed.
   contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+  periodId: integer("period_id").references(() => housingPeriods.id, { onDelete: "set null" }),
   rentCents: integer("rent_cents").notNull().default(0),
   rentFrequency: text("rent_frequency").notNull().default("weekly"),
+  /** Power, charged alongside rent. Zero AND `utilitiesIncluded` are different
+   *  facts: included means the rent already covers it. */
+  utilitiesCents: integer("utilities_cents").notNull().default(0),
+  utilitiesIncluded: boolean("utilities_included").notNull().default(false),
+  agreementType: text("agreement_type"),         // see AGREEMENT_TYPES
+  occupantCategory: text("occupant_category"),
+  /** 🔴 Rent of 0 does NOT mean nobody is paying — for a contracted player the
+   *  room is part of their remuneration. Without this flag the rent roll reads
+   *  eight senior players as owing nothing. */
+  isRemuneration: boolean("is_remuneration").notNull().default(false),
+  /** Whole weeks the occupant was away and was not charged. */
+  holidayWeeks: numeric("holiday_weeks", { precision: 5, scale: 2 }).notNull().default("0"),
+  keyIssued: boolean("key_issued").notNull().default(false),
+  keyReturnedOn: date("key_returned_on"),
+  conditionReport: text("condition_report"),     // signed | pending | returned | none
+  agreementSignedOn: date("agreement_signed_on"),
+  /** What the source document claimed. Shown beside the recomputed figure so a
+   *  variance is visible; never used as an amount owed. */
+  statedTotalCents: integer("stated_total_cents"),
+  sourceatusPayment: text("source_payment_status"),
+  /** Natural key from the club's workbook — makes the import idempotent. */
+  sourceRef: text("source_ref"),
+  /** Consulted ONLY when roomId is null, so a disputed tenancy still attaches
+   *  its money to the right house. When a room is set the house comes from it. */
+  unconfirmedHouseId: integer("unconfirmed_house_id").references(() => housingHouses.id, { onDelete: "set null" }),
+  roomConflictNote: text("room_conflict_note"),
   startDate: date("start_date").notNull(),
   /** NULL = ongoing. INCLUSIVE — the tenant's last night. */
   endDate: date("end_date"),
@@ -6647,6 +6716,12 @@ export const housingRentCharges = pgTable("housing_rent_charges", {
   reference: text("reference"),
   waived: boolean("waived").notNull().default(false),
   notes: text("notes"),
+  periodId: integer("period_id").references(() => housingPeriods.id, { onDelete: "set null" }),
+  /** rent | utilities | combined — a term that bills power inside the rent
+   *  produces one `combined` charge; a term that bills it separately produces
+   *  two, so each can be chased and paid on its own. */
+  kind: text("kind").notNull().default("rent"),
+  sourceRef: text("source_ref"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -6698,8 +6773,74 @@ export type HousingHouse = typeof housingHouses.$inferSelect;
 export type HousingRoom = typeof housingRooms.$inferSelect;
 export type HousingTenancy = typeof housingTenancies.$inferSelect;
 export type HousingRentCharge = typeof housingRentCharges.$inferSelect;
+// Everyone the accommodation manager tracks, INCLUDING squad players living
+// off site. They have no tenancy by definition, so a tenancy-only view cannot
+// show them — and "who still needs housing" is the question this list answers.
+//
+// Their accommodation status is DERIVED (see accommodationStatus) and has no
+// column here: a stored status is wrong the moment a tenancy ends.
+export const housingRoster = pgTable("housing_roster", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // RESTRICT, as with tenancies: deleting a person must not quietly remove them
+  // from the housing record.
+  contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "restrict" }),
+  roleLabel: text("role_label"),
+  /** 🔴 A separate fact from the name people use. Two occupants cannot be issued
+   *  an agreement until theirs is confirmed, and a signature page in the wrong
+   *  name is not binding. Nothing infers a legal name from a display name. */
+  legalName: text("legal_name"),
+  legalNameVerified: boolean("legal_name_verified").notNull().default(false),
+  emergencyContactName: text("emergency_contact_name"),
+  emergencyContactPhone: text("emergency_contact_phone"),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgContactUnq: uniqueIndex("housing_roster_org_contact_unq").on(t.organizationId, t.contactId),
+}));
+
+// Compliance actions AND recorded data conflicts, in one table because they are
+// the same object to whoever works the list: something needing a decision
+// before this system can be trusted. `kind='conflict'` rows record where the
+// source documents disagree — kept visible rather than silently resolved,
+// because choosing between four stated totals for one term is a finance
+// decision, not an import decision.
+//
+// Deliberately small, and deliberately NOT a fourth project-management system:
+// real project work belongs in the Task Tracker. This is the compliance list
+// that has to sit beside the data it blocks.
+export const housingActionItems = pgTable("housing_action_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull().default("action"),   // action | conflict
+  ref: text("ref"),                                 // ACT-001, CONF-006
+  priority: text("priority").notNull().default("medium"),
+  category: text("category"),
+  title: text("title").notNull(),
+  detail: text("detail"),
+  /** A role ("Head of Football Ops"), not a login — most of these owners have
+   *  no ClubOS account. `assignedUserId` is for when one does. */
+  ownerLabel: text("owner_label"),
+  assignedUserId: integer("assigned_user_id").references(() => users.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("open"),
+  targetDate: date("target_date"),
+  resolutionNotes: text("resolution_notes"),
+  completedOn: date("completed_on"),
+  /** Which rows this concerns, so a tenancy can show its own flags. */
+  related: jsonb("related").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgStatusIdx: index("housing_action_items_org_status_idx").on(t.organizationId, t.status),
+}));
+
 export type HousingUtilityAccount = typeof housingUtilityAccounts.$inferSelect;
 export type HousingUtilityBill = typeof housingUtilityBills.$inferSelect;
+export type HousingPeriod = typeof housingPeriods.$inferSelect;
+export type HousingRosterEntry = typeof housingRoster.$inferSelect;
+export type HousingActionItem = typeof housingActionItems.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAINTENANCE — cleaning/consumable supplies + machines & equipment (USC, org 4).

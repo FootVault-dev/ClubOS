@@ -99,8 +99,6 @@ const venueTabs: TabDef[] = [
   { slug: "analytics", title: "Analytics", url: "/admin/analytics" },
   { slug: "facilities", title: "Facilities", url: "/admin/facilities" },
   { slug: "addons", title: "Add-ons", url: "/admin/addons" },
-  // The residency houses: rooms, tenants, rent and the power/wifi bills.
-  { slug: "housing", title: "Housing", url: "/admin/housing" },
   // Cleaning/consumable supplies + machines & equipment. NOT super-admin-only —
   // Riley (grounds staff) needs it once ticked for him in Team.
   { slug: "maintenance", title: "Maintenance", url: "/admin/maintenance" },
@@ -232,6 +230,17 @@ const groupTabs: TabDef[] = [
   // and the termly count. Locked like Vehicles (see SUPER_ADMIN_ONLY_TABS) and
   // opened to Ryan and Travis individually.
   { slug: "equipment", title: "Equipment", url: "/admin/equipment" },
+  // The residency at 482A Yaldhurst Rd: rooms, who lives in each, what they owe,
+  // and the compliance actions still open on it. Moved here from the venue
+  // workspace on 2026-08-18 — these are the club's houses, not the sports
+  // centre's hireable facilities, and the group workspace is where the other
+  // asset registers (vehicles, invoices, budget) already live.
+  //
+  // 🔴 The slug stays `housing`. It is what requireTab(), the deploy canary and
+  // any per-person unlocked_tabs grant key on; renaming a slug to match a UI
+  // label silently revokes access. The URL and the title are the parts a human
+  // reads, so those are what changed.
+  { slug: "housing", title: "Accommodation", url: "/admin/accommodation" },
   // How much website traffic we send sponsors via tracked /s/{code} redirects,
   // plus a sponsor-site health check. Launched dark (SUPER_ADMIN_ONLY_TABS)
   // while Daniel shapes it.
@@ -372,11 +381,12 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // sales-training ground — launched dark while he shapes it. Remove this
   // line to open Sales to the Print workspace's admins/managers.
   "sales",
-  // Residency housing: tenants' names, phone numbers, rent arrears and bond.
-  // Without this lock, every *admin* of the venue workspace (socials@, info@cugc,
-  // grassroots@, support@) would see it — the tabs whitelist does not restrain a
-  // workspace admin. Same class of data as budget/cashflow. Remove this line to
-  // open Housing to venue admins and managers.
+  // Accommodation (slug `housing`): occupants' names and emails, what each owes,
+  // bond, key codes for every room, and which players are still unverified.
+  // Without this lock every *admin* of the group workspace would see it — the
+  // tabs whitelist does not restrain a workspace admin. Same class of data as
+  // budget/cashflow, plus door codes. Grant an individual with
+  // script/grant-unlocked-tab.ts rather than removing this line.
   "housing",
   // Sponsor Traffic — launched dark while Daniel shapes it, matching how
   // vehicles/housing/market-research were launched. Remove this line to open

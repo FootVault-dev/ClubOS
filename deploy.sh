@@ -129,6 +129,8 @@ if [ -n "$_LIVE_JS_PATH" ]; then
     "Task Tracker|client/src/components/app-sidebar.tsx|Task Tracker universal tab" \
     "First name can't be blank|client/src/components/profile-dialog.tsx|Staff profile name + photo" \
     "Notification settings|client/src/components/app-sidebar.tsx|Notification settings universal tab" \
+    "/admin/equipment|client/src/components/app-sidebar.tsx|Equipment Register tab" \
+    "/admin/accommodation|client/src/components/app-sidebar.tsx|Accommodation tab" \
   | while IFS='|' read -r _marker _file _label; do
       [ -z "$_marker" ] && continue
       if printf '%s' "$_LIVE_JS" | grep -q -- "$_marker"; then

@@ -74,6 +74,12 @@ const CANARIES: Canary[] = [
   // is the failure nobody here would notice.
   { feature: "equipment register",  path: "/api/admin/equipment/overview",          expect: [401] },
   { feature: "equipment holders",   path: "/api/public/equipment/me",               expect: [401] },
+  // Accommodation — the residency at 482A Yaldhurst Rd. `/overview` has been
+  // live since July; `/invoicing` only exists in the 2026-08-18 build, so the
+  // pair distinguishes "the tab is there" from "the tab is there but the money
+  // view has been deployed away from under it".
+  { feature: "accommodation",       path: "/api/admin/housing/overview",            expect: [401] },
+  { feature: "accommodation money", path: "/api/admin/housing/invoicing",           expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
