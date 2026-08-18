@@ -10,6 +10,9 @@ type Org = {
   // Tab whitelist for the current user in this workspace.
   // null = full access (legacy default). Array = explicit whitelist.
   userTabs: string[] | null;
+  // Locked tabs (SUPER_ADMIN_ONLY_TABS) granted to this person by name.
+  // null/[] = none. Separate from userTabs on purpose — see shared/tabs.ts.
+  userUnlockedTabs: string[] | null;
 };
 
 // Sub-view inside the CIC (tournament) workspace — toggles between the youth

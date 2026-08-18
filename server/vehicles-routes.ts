@@ -14,11 +14,17 @@
 //
 // Access. Every route is `requireAuth` + `requireTab("vehicles")`, and
 // "vehicles" is listed in SUPER_ADMIN_ONLY_TABS — which `canAccessTab` checks
-// FIRST, before the usual admin/manager escalation. So the tab is genuinely
-// Daniel-only at the API, not merely hidden in the sidebar. Deliberately NOT
-// also wrapped in `requireSuperAdmin`: the documented way to open a locked tab
-// up is to remove its slug from that set, and a second hard-coded gate would
-// silently make that a lie.
+// FIRST, before the usual admin/manager escalation. So the tab is locked at the
+// API, not merely hidden in the sidebar. Deliberately NOT also wrapped in
+// `requireSuperAdmin`: the documented way past that set is a per-person grant,
+// and a second hard-coded gate would silently make that a lie.
+//
+// It is no longer Daniel-only. A named person can be let in through
+// `user_organizations.unlocked_tabs` — a column no ROLE ever writes to, and
+// deliberately not the `tabs` whitelist, which a workspace admin bypasses
+// entirely. As at 2026-08-18: Daniel (super admin), Ryan Edwards and Travis
+// Graham. The register carries staff licence numbers and a home address, so
+// widening it is a decision, not a default.
 //
 // Org scoping. `organizationId` is always taken from the X-Workspace-Slug
 // header via `workspaceOrg`, never from the request body. A child row is

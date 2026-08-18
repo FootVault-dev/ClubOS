@@ -134,6 +134,7 @@ type Org = {
   active: boolean;
   userRole: string;
   userTabs: string[] | null;
+  userUnlockedTabs: string[] | null;
 };
 
 // Each nav item carries a `tab` slug matching shared/tabs.ts. The sidebar
@@ -635,6 +636,7 @@ export function AppSidebar() {
     globalRole: user?.role,
     membershipRole: currentOrg?.userRole,
     membershipTabs: currentOrg?.userTabs,
+    membershipUnlockedTabs: currentOrg?.userUnlockedTabs,
     tabSlug: item.tab,
   });
   const mainNav = allMainNav.filter(navFilter);

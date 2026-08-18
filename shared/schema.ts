@@ -43,6 +43,12 @@ export const userOrganizations = pgTable("user_organizations", {
   // ["mfl","cic"] = only those; [] = none, so the tab opens empty rather than
   // full. Enforced server-side in server/hiring-routes.ts, not in the client.
   hiringBrands: jsonb("hiring_brands").$type<string[] | null>(),
+  // Locked tabs (SUPER_ADMIN_ONLY_TABS) this person may reach in this
+  // workspace. null/[] = none, which is what every membership means by
+  // default. Deliberately NOT the `tabs` column above: a workspace admin
+  // bypasses that whitelist entirely, so granting a locked tab through it
+  // would grant it to every admin in the workspace. See shared/tabs.ts.
+  unlockedTabs: jsonb("unlocked_tabs").$type<string[] | null>(),
 });
 
 export const users = pgTable("users", {

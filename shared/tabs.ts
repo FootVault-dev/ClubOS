@@ -348,7 +348,13 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // "payouts" UNLOCKED 2026-07-23 (Daniel): the tab now follows the normal
   // permission system — workspace role + the per-member tabs whitelist set in
   // Team (first grant: Olga, USG team_member with tabs:["payouts"]).
-  "vehicles", // Fleet — names a staff member against an insurance policy and an FBT private-use position. Daniel only. Remove to open to admins/managers.
+  // Fleet — names a staff member against a licence number, a home address and
+  // an FBT private-use position. STAYS LOCKED. Ryan Edwards and Travis Graham
+  // were let in individually (2026-08-18) via user_organizations.unlocked_tabs,
+  // because deleting this line would also hand it to the other six United
+  // Sports Group admins — a workspace admin bypasses the tabs whitelist.
+  // Grant the next person with script/grant-unlocked-tab.ts; no deploy needed.
+  "vehicles",
   // The United Print prospect database + sales pipeline: 400+ researched
   // companies with contact details, call notes and deal values. Daniel's
   // sales-training ground — launched dark while he shapes it. Remove this
@@ -375,24 +381,42 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
 /**
  * Whether a user should see/access a given tab in a workspace.
  * Rules:
- *   - Locked tabs (SUPER_ADMIN_ONLY_TABS) → only super_admin
+ *   - Locked tabs (SUPER_ADMIN_ONLY_TABS) → super_admin, or a person named in
+ *     that membership's `unlockedTabs`. A ROLE never opens a locked tab.
  *   - super_admin always sees everything
  *   - admin or manager role → all tabs (full access regardless of tabs column)
  *   - tabs == null → all tabs (legacy default; treat as full access)
  *   - tabs is array → whitelist match
+ *
+ * 🔴 `membershipUnlockedTabs` is the ONLY way past the lock other than being a
+ * super admin, and it is deliberately a separate column from `membershipTabs`.
+ * The whitelist is bypassed entirely for an admin/manager membership (see the
+ * third rule), so a locked tab granted through it would be granted to every
+ * admin in the workspace — which is the whole thing the lock exists to stop.
+ * It also has to be a column no other feature writes: Dima's group membership
+ * carries tabs = ["budget"] from an old grant, inert only because "budget" is
+ * locked, and honouring `tabs` here would have handed him the salary data.
+ *
+ * Omitting the argument fails CLOSED — a caller that has not been taught about
+ * locked-tab grants denies access rather than leaking one.
  */
 export function canAccessTab({
   globalRole,
   membershipRole,
   membershipTabs,
+  membershipUnlockedTabs,
   tabSlug,
 }: {
   globalRole?: string | null;
   membershipRole?: string | null;
   membershipTabs?: string[] | null;
+  membershipUnlockedTabs?: string[] | null;
   tabSlug: string;
 }): boolean {
-  if (SUPER_ADMIN_ONLY_TABS.has(tabSlug)) return globalRole === "super_admin";
+  if (SUPER_ADMIN_ONLY_TABS.has(tabSlug)) {
+    if (globalRole === "super_admin") return true;
+    return Array.isArray(membershipUnlockedTabs) && membershipUnlockedTabs.includes(tabSlug);
+  }
   if (globalRole === "super_admin") return true;
   if (membershipRole === "admin" || membershipRole === "manager") return true;
   if (membershipTabs == null) return true;

@@ -268,7 +268,7 @@ export interface IStorage {
   getProgramDiscounts(programId: number): Promise<ProgramDiscount[]>;
   setProgramDiscounts(programId: number, discounts: { minBookings: number; discountPercent: string }[]): Promise<ProgramDiscount[]>;
 
-  getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null; userHiringBrands: string[] | null })[]>;
+  getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null; userHiringBrands: string[] | null; userUnlockedTabs: string[] | null })[]>;
 
   getFacilities(orgId: number): Promise<Facility[]>;
   getFacility(id: number): Promise<Facility | undefined>;
@@ -746,12 +746,13 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(userOrganizations.userId, userId), eq(userOrganizations.organizationId, organizationId)));
   }
 
-  async getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null; userHiringBrands: string[] | null })[]> {
+  async getUserOrganizations(userId: number): Promise<(Organization & { userRole: string; userTabs: string[] | null; userHiringBrands: string[] | null; userUnlockedTabs: string[] | null })[]> {
     const rows = await db.select({
       org: organizations,
       userRole: userOrganizations.role,
       userTabs: userOrganizations.tabs,
       userHiringBrands: userOrganizations.hiringBrands,
+      userUnlockedTabs: userOrganizations.unlockedTabs,
     }).from(userOrganizations)
       .innerJoin(organizations, eq(userOrganizations.organizationId, organizations.id))
       .where(eq(userOrganizations.userId, userId))
@@ -763,6 +764,10 @@ export class DatabaseStorage implements IStorage {
       // `?? null` would be wrong here only if [] were meant to mean "all" — it
       // isn't. [] means no brands, and it must survive the round trip.
       userHiringBrands: Array.isArray(r.userHiringBrands) ? (r.userHiringBrands as string[]) : null,
+      // Locked-tab grants. Anything that isn't an array reads as "none", so a
+      // null column, a legacy row and a malformed value all deny rather than
+      // open — the safe direction for the one field that bypasses a lock.
+      userUnlockedTabs: Array.isArray(r.userUnlockedTabs) ? (r.userUnlockedTabs as string[]) : null,
     }));
   }
 
