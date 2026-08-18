@@ -44,8 +44,13 @@ try {
      VALUES ($1,'Accom','Probe',$2,'super_admin',true) RETURNING id`,
     [email, await bcrypt.hash(password, 10)]);
   const id = r.rows[0].id; made.push(id);
+  // Org 7 = United Sports Group (where the tab now lives), org 4 = United Sports
+  // Centre (where it used to). The probe needs BOTH so the workspace switcher
+  // actually offers the venue — otherwise the "it is gone from the venue" check
+  // cannot run at all.
   await pool.query(
-    `INSERT INTO user_organizations (user_id, organization_id, role, tabs) VALUES ($1,7,'admin',NULL)`, [id]);
+    `INSERT INTO user_organizations (user_id, organization_id, role, tabs)
+     VALUES ($1,7,'admin',NULL), ($1,4,'admin',NULL)`, [id]);
 
   const lr = await fetch(`${BASE}/api/auth/login`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -78,10 +83,29 @@ try {
     // tab from venueTabs left a live link in the venue sidebar pointing at a
     // route that workspace does not have, and added none to the group sidebar.
     // The first version of this script navigated by URL and shipped that.
-    const sidebarHref = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('a[href]'))
-        .some(a => a.getAttribute("href") === "/admin/accommodation"));
-    ok(`${label}: the group sidebar actually links to Accommodation`, sidebarHref);
+    if (label === "desktop") {
+      const sidebarHref = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('a[href]'))
+          .some(a => a.getAttribute("href") === "/admin/accommodation"));
+      ok(`${label}: the group sidebar actually links to Accommodation`, sidebarHref);
+
+      // The whole journey Daniel took: find it in the sidebar, click it, arrive.
+      // Asserting the href exists is not the same as asserting it works.
+      if (sidebarHref) {
+        await page.goto(`${BASE}/admin`, { waitUntil: "networkidle2", timeout: 60000 });
+        await new Promise((res) => setTimeout(res, 2000));
+        await page.click('a[href="/admin/accommodation"]');
+        await new Promise((res) => setTimeout(res, 3000));
+        const landed = await page.evaluate(() => ({
+          url: location.pathname,
+          notFound: /Page Not Found|This page doesn't exist/i.test(document.body.innerText),
+          title: document.querySelector('[data-testid="text-venue-housing-title"]')?.textContent?.trim() ?? "",
+        }));
+        ok(`${label}: clicking the sidebar link lands on Accommodation`,
+          landed.url === "/admin/accommodation" && !landed.notFound && landed.title === "Accommodation",
+          `${landed.url} · title "${landed.title}"${landed.notFound ? " · 404" : ""}`);
+      }
+    }
 
     for (const v of VIEWS) {
       // 🔴 A synthetic el.click() does NOT switch a Radix tab — it activates on
@@ -150,15 +174,28 @@ try {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
     await page.setCookie({ name: cname, value: cvalue, domain: "app.usg.co.nz", path: "/", httpOnly: true, secure: true });
     await page.goto(`${BASE}/admin`, { waitUntil: "networkidle2", timeout: 60000 });
-    await page.evaluate(() => localStorage.setItem("clubos_workspace", "united-sports-centre"));
-    await page.goto(`${BASE}/admin`, { waitUntil: "networkidle2", timeout: 60000 });
-    await new Promise((res) => setTimeout(res, 3500));
+    await new Promise((res) => setTimeout(res, 3000));
+
+    // Through the switcher, the way a person does it. Setting localStorage and
+    // reloading raced the workspace context's own write-back and silently left
+    // the check in the group workspace.
+    await page.click('[data-testid="button-workspace-switcher"]');
+    await new Promise((res) => setTimeout(res, 800));
+    await page.click('[data-testid="button-workspace-united-sports-centre"]');
+    await new Promise((res) => setTimeout(res, 3000));
+
     const venue = await page.evaluate(() => ({
-      inWorkspace: document.body.innerText.includes("United Sports Centre"),
+      // The switcher's OWN label, not the whole page — "United Sports Centre"
+      // also appears in the group dashboard's list of workspaces, which is how
+      // the first version of this guard passed while never leaving the group.
+      current: document.querySelector('[data-testid="text-workspace-name"]')?.textContent?.trim() ?? "",
       hasLink: Array.from(document.querySelectorAll('a[href]'))
         .some(a => a.getAttribute("href") === "/admin/accommodation"),
+      hasFacilities: Array.from(document.querySelectorAll('a[href]'))
+        .some(a => a.getAttribute("href") === "/admin/facilities"),
     }));
-    ok("the venue workspace loaded (so this check means something)", venue.inWorkspace);
+    ok("switched into the venue workspace", venue.current === "United Sports Centre", `switcher reads "${venue.current}"`);
+    ok("and it really is the venue sidebar (Facilities is present)", venue.hasFacilities);
     ok("the venue sidebar no longer offers Accommodation", !venue.hasLink);
     await page.screenshot({ path: join(outDir, "venue-sidebar.png"), fullPage: false });
     await page.close();
