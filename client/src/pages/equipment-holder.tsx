@@ -67,6 +67,8 @@ export default function EquipmentHolderPage() {
   const [data, setData] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Set when somebody who has already submitted taps "change my numbers".
+  const [reopened, setReopened] = useState(false);
 
   const call = useCallback(
     async (path: string, method = "GET", body?: unknown) => {
@@ -120,8 +122,15 @@ export default function EquipmentHolderPage() {
     );
   }
 
+  // Whether the counting form is on screen. Lifted out of AuditCard because two
+  // other things depend on it: the sticky submit bar needs room reserved at the
+  // bottom of the page, and the equipment list below collapses while counting
+  // so the same six items aren't listed twice on one phone screen.
+  const countOpen = !!data.audit && (data.audit.status !== "submitted" || reopened);
+  const stickySubmit = countOpen && data.items.length > 0;
+
   return (
-    <Shell>
+    <Shell padForStickyBar={stickySubmit}>
       <header className="mb-6">
         <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-white/35">
           <Boxes className="h-4 w-4" /> Equipment
@@ -132,23 +141,44 @@ export default function EquipmentHolderPage() {
         </p>
       </header>
 
-      {data.audit ? <AuditCard data={data} call={call} refresh={refresh} /> : null}
+      {data.audit ? (
+        <AuditCard
+          data={data}
+          call={call}
+          refresh={refresh}
+          open={countOpen}
+          onReopen={() => setReopened(true)}
+          onSubmitted={() => setReopened(false)}
+        />
+      ) : null}
 
-      <ItemList data={data} call={call} refresh={refresh} />
+      <ItemList data={data} call={call} refresh={refresh} startCollapsed={countOpen} />
     </Shell>
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children, padForStickyBar }: { children: React.ReactNode; padForStickyBar?: boolean }) {
   return (
     <div className="min-h-screen bg-[#0b0b0c] px-4 py-8 sm:px-6">
-      <div className="mx-auto max-w-lg">{children}</div>
+      {/* Reserve room so the last row can always scroll clear of the fixed bar,
+          including past the home indicator on an iPhone. */}
+      <div
+        className="mx-auto max-w-lg"
+        style={padForStickyBar ? { paddingBottom: "calc(6.5rem + env(safe-area-inset-bottom))" } : undefined}
+      >
+        {children}
+      </div>
     </div>
   );
 }
 
 // ── The termly count ─────────────────────────────────────────────────────────
-function AuditCard({ data, call, refresh }: { data: Me; call: any; refresh: () => Promise<void> }) {
+function AuditCard({
+  data, call, refresh, open, onReopen, onSubmitted,
+}: {
+  data: Me; call: any; refresh: () => Promise<void>;
+  open: boolean; onReopen: () => void; onSubmitted: () => void;
+}) {
   const audit = data.audit!;
   // 🔴 Empty string means "not counted". It is never seeded from item.quantity —
   // see the file header. A previous submission IS restored, because that is a
@@ -161,7 +191,6 @@ function AuditCard({ data, call, refresh }: { data: Me; call: any; refresh: () =
   const [notes, setNotes] = useState(audit.notes ?? "");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [open, setOpen] = useState(audit.status !== "submitted");
 
   const filled = data.items.filter(i => (counts[i.id] ?? "").trim() !== "").length;
 
@@ -177,7 +206,7 @@ function AuditCard({ data, call, refresh }: { data: Me; call: any; refresh: () =
         }),
       });
       await refresh();
-      setOpen(false);
+      onSubmitted();
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -185,7 +214,7 @@ function AuditCard({ data, call, refresh }: { data: Me; call: any; refresh: () =
     }
   };
 
-  if (audit.status === "submitted" && !open) {
+  if (!open) {
     return (
       <div className="mb-6 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.07] p-5">
         <div className="flex items-center gap-2 text-emerald-200">
@@ -195,7 +224,7 @@ function AuditCard({ data, call, refresh }: { data: Me; call: any; refresh: () =
         <p className="mt-1.5 text-sm text-emerald-200/60">
           Thanks — that's you done for this term. Add anything new below as it arrives.
         </p>
-        <button onClick={() => setOpen(true)} className="mt-3 text-sm text-emerald-200/80 underline">
+        <button onClick={onReopen} className="mt-3 text-sm text-emerald-200/80 underline">
           Change my numbers
         </button>
       </div>
@@ -248,30 +277,49 @@ function AuditCard({ data, call, refresh }: { data: Me; call: any; refresh: () =
           />
 
           {err ? <p className="mt-3 text-sm text-rose-300">{err}</p> : null}
-
-          <button
-            onClick={submit}
-            disabled={saving}
-            className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white text-base font-medium text-black hover:bg-white/90 disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />}
-            {saving ? "Sending…" : `Submit ${filled} of ${data.items.length}`}
-          </button>
-          {filled < data.items.length ? (
-            <p className="mt-2 text-center text-xs text-white/30">
-              You can submit now and come back — the blanks stay blank.
-            </p>
-          ) : null}
         </>
       )}
+
+      {/* The submit is FIXED rather than sitting at the end of the list. On a
+          16:9 laptop it was below the fold before a single number was typed,
+          and on a phone with twenty items it is a long way from wherever you
+          are looking. It doubles as the progress counter. */}
+      {data.items.length > 0 ? (
+        <div
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#0b0b0c]/95 px-4 pt-3 backdrop-blur"
+          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
+        >
+          <div className="mx-auto max-w-lg">
+            <button
+              onClick={submit}
+              disabled={saving}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white text-base font-medium text-black hover:bg-white/90 disabled:opacity-50"
+            >
+              {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />}
+              {saving ? "Sending…" : `Submit ${filled} of ${data.items.length}`}
+            </button>
+            {filled < data.items.length ? (
+              <p className="mt-1.5 text-center text-xs text-white/30">
+                You can submit now and come back — the blanks stay blank.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 // ── The list ─────────────────────────────────────────────────────────────────
-function ItemList({ data, call, refresh }: { data: Me; call: any; refresh: () => Promise<void> }) {
+function ItemList({
+  data, call, refresh, startCollapsed,
+}: { data: Me; call: any; refresh: () => Promise<void>; startCollapsed?: boolean }) {
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
+  // While the count is open the card above already lists every item, so showing
+  // the same names again underneath just doubles the scroll. Collapsed, not
+  // hidden — the quantities and the delete buttons only live here.
+  const [collapsed, setCollapsed] = useState(!!startCollapsed);
 
   const remove = async (id: number) => {
     setBusy(id);
@@ -285,14 +333,19 @@ function ItemList({ data, call, refresh }: { data: Me; call: any; refresh: () =>
 
   return (
     <section>
-      <div className="mb-3 flex items-end justify-between">
+      <div className="mb-3 flex items-end justify-between gap-3">
         <div>
           <h2 className="text-sm font-medium text-white/80">Your equipment</h2>
           <p className="text-xs text-white/35">{data.totals.quantity} items across {data.totals.lines} lines</p>
         </div>
+        {data.items.length > 0 ? (
+          <button onClick={() => setCollapsed(c => !c)} className="shrink-0 text-xs text-white/45 underline hover:text-white/70">
+            {collapsed ? "Show list" : "Hide list"}
+          </button>
+        ) : null}
       </div>
 
-      {data.items.length === 0 && !adding ? (
+      {collapsed && data.items.length > 0 ? null : data.items.length === 0 && !adding ? (
         <p className="rounded-xl border border-dashed border-white/12 px-4 py-8 text-center text-sm text-white/40">
           Nothing on your list yet. Add what you were given.
         </p>
