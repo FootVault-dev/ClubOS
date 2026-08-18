@@ -72,6 +72,17 @@ try {
     const first = await page.evaluate(() => document.body.innerText);
     ok(`${label}: /admin/accommodation resolves (not a 404 page)`, !/Page Not Found|404/i.test(first));
 
+    // 🔴 Reaching the page by typing its URL proves nothing about whether anyone
+    // can FIND it. The sidebar keeps its OWN per-workspace nav arrays in
+    // app-sidebar.tsx, entirely separate from shared/tabs.ts — so dropping the
+    // tab from venueTabs left a live link in the venue sidebar pointing at a
+    // route that workspace does not have, and added none to the group sidebar.
+    // The first version of this script navigated by URL and shipped that.
+    const sidebarHref = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('a[href]'))
+        .some(a => a.getAttribute("href") === "/admin/accommodation"));
+    ok(`${label}: the group sidebar actually links to Accommodation`, sidebarHref);
+
     for (const v of VIEWS) {
       // 🔴 A synthetic el.click() does NOT switch a Radix tab — it activates on
       // real pointer events, so the element "clicks", nothing changes, and every
@@ -132,6 +143,27 @@ try {
 
     await page.close();
   }
+  // And the venue workspace must NOT still offer it — the tab moved, and a link
+  // left behind there lands on a 404 for whoever clicks it.
+  {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
+    await page.setCookie({ name: cname, value: cvalue, domain: "app.usg.co.nz", path: "/", httpOnly: true, secure: true });
+    await page.goto(`${BASE}/admin`, { waitUntil: "networkidle2", timeout: 60000 });
+    await page.evaluate(() => localStorage.setItem("clubos_workspace", "united-sports-centre"));
+    await page.goto(`${BASE}/admin`, { waitUntil: "networkidle2", timeout: 60000 });
+    await new Promise((res) => setTimeout(res, 3500));
+    const venue = await page.evaluate(() => ({
+      inWorkspace: document.body.innerText.includes("United Sports Centre"),
+      hasLink: Array.from(document.querySelectorAll('a[href]'))
+        .some(a => a.getAttribute("href") === "/admin/accommodation"),
+    }));
+    ok("the venue workspace loaded (so this check means something)", venue.inWorkspace);
+    ok("the venue sidebar no longer offers Accommodation", !venue.hasLink);
+    await page.screenshot({ path: join(outDir, "venue-sidebar.png"), fullPage: false });
+    await page.close();
+  }
+
   console.log(`\n  screenshots → outputs/ui-preflight/clubos-accommodation/`);
 } finally {
   if (browser) await browser.close();
