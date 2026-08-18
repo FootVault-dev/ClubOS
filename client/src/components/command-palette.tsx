@@ -101,7 +101,7 @@ export function CommandPalette() {
     if (!currentOrg) return [];
     const q = query.trim().toLowerCase();
     return tabsForOrgSlug(currentOrg.slug)
-      .filter(t => canAccessTab({ globalRole: me?.role, membershipRole: currentOrg.userRole, membershipTabs: currentOrg.userTabs, tabSlug: t.slug }))
+      .filter(t => canAccessTab({ globalRole: me?.role, membershipRole: currentOrg.userRole, membershipTabs: currentOrg.userTabs, membershipUnlockedTabs: currentOrg.userUnlockedTabs, tabSlug: t.slug }))
       .filter(t => !q || t.title.toLowerCase().includes(q))
       .map(t => ({ title: t.title, url: t.url }));
   }, [currentOrg, me?.role, query]);

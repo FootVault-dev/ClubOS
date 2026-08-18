@@ -81,6 +81,7 @@ export async function buildViewer(userId: number): Promise<Viewer | null> {
       orgName: o.name,
       role: o.userRole ?? null,
       tabs: (o.userTabs as string[] | null) ?? null,
+      unlockedTabs: (o.userUnlockedTabs as string[] | null) ?? null,
     })),
   };
 }

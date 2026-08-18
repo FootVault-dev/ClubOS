@@ -81,6 +81,9 @@ export interface ViewerMembership {
   role: string | null;
   /** Per-member tab whitelist. null = every tab in the workspace (legacy default). */
   tabs: string[] | null;
+  /** Locked tabs (SUPER_ADMIN_ONLY_TABS) granted to this person by name.
+   *  null/[] = none. A role never puts a slug in here. */
+  unlockedTabs?: string[] | null;
 }
 
 export interface Viewer {
@@ -111,9 +114,23 @@ export function viewerCanReachTab(
   orgSlug?: string,
 ): { allowed: boolean; via?: ViewerMembership } {
   // Super-admin-only tabs (budget, cashflow, housing, vehicles…): the global
-  // role is the only key. No workspace role opens these, by design.
+  // role is the only key, or an explicit per-person grant on the membership.
+  // No workspace ROLE opens these, by design — which is why this checks
+  // `unlockedTabs` and never `tabs`.
   if (SUPER_ADMIN_ONLY_TABS.has(tabSlug)) {
-    return { allowed: viewer.globalRole === "super_admin" };
+    if (viewer.globalRole === "super_admin") return { allowed: true };
+    const candidates = orgSlug
+      ? viewer.memberships.filter((m) => m.orgSlug === orgSlug)
+      : viewer.memberships;
+    // The tab must still LIVE in the workspace granting it — the same cold-ask
+    // trap this function exists to close applies to a grant as much as a role.
+    const via = candidates.find(
+      (m) =>
+        Array.isArray(m.unlockedTabs) &&
+        m.unlockedTabs.includes(tabSlug) &&
+        tabsForOrgSlug(m.orgSlug).some((t) => t.slug === tabSlug),
+    );
+    return via ? { allowed: true, via } : { allowed: false };
   }
   if (viewer.globalRole === "super_admin") return { allowed: true };
 

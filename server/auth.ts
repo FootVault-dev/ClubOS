@@ -115,6 +115,7 @@ export function requireTab(tabSlug: string) {
         globalRole: user.role,
         membershipRole: membership.userRole,
         membershipTabs: membership.userTabs,
+        membershipUnlockedTabs: membership.userUnlockedTabs,
         tabSlug,
       });
       if (!allowed) {

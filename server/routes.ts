@@ -14111,6 +14111,7 @@ export async function registerRoutes(
       globalRole: user.role,
       membershipRole: membership.userRole,
       membershipTabs: membership.userTabs,
+      membershipUnlockedTabs: membership.userUnlockedTabs,
       tabSlug: "skills-challenge",
     });
   }
