@@ -360,6 +360,14 @@ function findRoom(houses: HouseWithRooms[], roomId: string): { house: HouseWithR
 
 const inputCls = "w-full rounded-lg bg-white/[0.03] border border-white/10 px-3 py-2 text-sm text-white/90 placeholder:text-white/25 focus:outline-none focus:border-blue-500/50 disabled:opacity-40 disabled:cursor-not-allowed";
 
+/** An inline control that sits BESIDE content instead of owning its own row.
+ *
+ *  🔴 Deliberately not `${inputCls} w-auto`. Both width utilities end up in the
+ *  class list and the generated stylesheet decides which wins — `w-full` did,
+ *  so a status dropdown expanded to the full card and squeezed the text next to
+ *  it into a one-word-per-line column. Caught by screenshotting the real page. */
+const compactSelectCls = "rounded-lg bg-white/[0.03] border border-white/10 px-2.5 py-1.5 text-[11px] text-white/90 focus:outline-none focus:border-blue-500/50 disabled:opacity-40 disabled:cursor-not-allowed";
+
 // ── Shared small components ──────────────────────────────────────────────────
 
 function PaymentStatePill({ state }: { state: PaymentState }) {
@@ -2124,7 +2132,7 @@ function InvoicingTab() {
           <select
             value={periodId}
             onChange={(e) => setPeriodId(e.target.value)}
-            className={`${inputCls} w-auto min-w-[160px]`}
+            className={`${compactSelectCls} min-w-[150px] text-[12px] py-2`}
             data-testid="select-invoicing-period"
           >
             <option value="">All terms</option>
@@ -2356,9 +2364,9 @@ function ActionsTab() {
       className={`rounded-xl border p-4 ${i.open ? "border-white/10 bg-white/[0.03]" : "border-white/[0.06] bg-white/[0.015] opacity-60"}`}
       data-testid={`action-${i.id}`}
     >
-      <div className="flex items-start gap-3">
-        <span className="mt-1 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: PRIORITY_COLOR[i.priority] }} />
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-col sm:flex-row items-start gap-3">
+        <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 hidden sm:block" style={{ background: PRIORITY_COLOR[i.priority] }} />
+        <div className="min-w-0 flex-1 w-full">
           <div className="flex flex-wrap items-center gap-2">
             {i.ref && <span className="text-[10px] font-mono text-white/30">{i.ref}</span>}
             {i.category && <span className="text-[10px] uppercase tracking-wide text-white/30">{i.category}</span>}
@@ -2376,7 +2384,7 @@ function ActionsTab() {
           value={i.status}
           onChange={(e) => setStatus.mutate({ id: i.id, status: e.target.value as ActionStatus })}
           disabled={setStatus.isPending}
-          className={`${inputCls} w-auto text-[11px] py-1.5 shrink-0`}
+          className={`${compactSelectCls} shrink-0`}
           data-testid={`select-action-status-${i.id}`}
         >
           {ACTION_STATUSES.map(st => <option key={st} value={st}>{ACTION_STATUS_LABELS[st]}</option>)}

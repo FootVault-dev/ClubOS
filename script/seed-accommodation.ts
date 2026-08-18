@@ -325,6 +325,23 @@ try {
          { kind: "utilities", due: (() => { const d = new Date(Date.UTC(...t.checkIn.split("-").map((x: string, i: number) => i === 1 ? +x - 1 : +x) as [number, number, number])); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })(), amt: m.utilitiesCents }]
       : [{ kind: t.utilitiesIncluded ? "combined" : "rent", due: t.checkIn, amt: m.totalCents }];
 
+    // 🔴 Idempotent on (tenancy_id, due_on) is not enough on its own. When a
+    // stay's billing SHAPE changes — one combined charge becoming a rent line
+    // plus a power line — the old row keys on a different due date, survives the
+    // upsert and quietly double-bills. It happened: moving three Jan–May stays
+    // from "rent, power included" to "no rent, power separate" left the term
+    // reading $40,561.43 invoiced against $38,701.43 actually owed.
+    //
+    // So the seed removes its OWN superseded rows first. It only ever touches
+    // charges carrying a source_ref it wrote; anything a human entered by hand
+    // has no source_ref and is never in scope.
+    const keepRefs = lines.filter(l => l.amt > 0).map(l => `${t.ref}-${l.kind}`);
+    await c.query(
+      `DELETE FROM housing_rent_charges
+        WHERE tenancy_id = $1 AND source_ref IS NOT NULL
+          AND source_ref LIKE $2 AND NOT (source_ref = ANY($3::text[]))`,
+      [tid, `${t.ref}-%`, keepRefs]);
+
     for (const l of lines) {
       if (l.amt <= 0) continue;
       await c.query(
@@ -429,6 +446,22 @@ try {
   check(matched === 20, `${matched} tenancies price exactly as the club recorded them`);
   check(variances.length === 2, `${variances.length} price differently — and both are known findings`);
   if (variances.length) console.log(variances.join("\n"));
+
+  // Invoiced must equal what the stays actually work out at. A gap here means a
+  // superseded charge survived a re-run and somebody is being billed twice.
+  const shape = await one(
+    `SELECT sum(rc.amount_cents) FILTER (WHERE NOT rc.waived) billed
+       FROM housing_rent_charges rc WHERE rc.organization_id = $1`, [org.id]);
+  const computedAll = stored.reduce((sum: number, row: any) => {
+    const m = tenancyMoney({
+      startDate: row.start_date, endDate: row.end_date,
+      rentCents: row.rent_cents, utilitiesCents: row.utilities_cents,
+      utilitiesIncluded: row.utilities_included, holidayWeeks: Number(row.holiday_weeks),
+    });
+    return sum + (m?.totalCents ?? 0);
+  }, 0);
+  check(+shape.billed === computedAll,
+    `invoiced ${money(+shape.billed)} equals what the stays work out at ${money(computedAll)} — no double-billing`);
 
   const totals = await one(
     `SELECT p.name,
