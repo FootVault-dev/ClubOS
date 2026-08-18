@@ -78,6 +78,7 @@ import {
   Warehouse,
   Receipt,
   Car,
+  Boxes,
   PhoneCall,
   Share2,
   History as HistoryIcon,
@@ -323,6 +324,7 @@ const groupNav = [
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
   // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
   { tab: "vehicles", title: "Vehicles", url: "/admin/vehicles", icon: Car },
+  { tab: "equipment", title: "Equipment", url: "/admin/equipment", icon: Boxes },
   { tab: "sponsor-traffic", title: "Sponsor Traffic", url: "/admin/sponsor-traffic", icon: Share2 },
   // `Video`, not `Clapperboard` — Content owns Clapperboard in this nav.
   { tab: "videos", title: "Videos", url: "/admin/videos", icon: Video },

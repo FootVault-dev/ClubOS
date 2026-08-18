@@ -67,6 +67,8 @@ import GroupProjects from "@/pages/group-projects";
 import GroupContent from "@/pages/group-content";
 import GroupHiring from "@/pages/group-hiring";
 import GroupVehicles from "@/pages/group-vehicles";
+import GroupEquipment from "@/pages/group-equipment";
+import EquipmentHolder from "@/pages/equipment-holder";
 import GroupSponsors from "@/pages/group-sponsors";
 import GroupVideos from "@/pages/group-videos";
 import GroupVideoRecord from "@/pages/group-video-record";
@@ -373,6 +375,9 @@ function AdminRouter() {
         <Route path="/admin/budget" component={GroupBudget} />
         <Route path="/admin/cashflow" component={GroupCashflow} />
         <Route path="/admin/vehicles" component={GroupVehicles} />
+        <Route path="/admin/equipment/rounds/:id" component={GroupEquipment} />
+        <Route path="/admin/equipment/:id" component={GroupEquipment} />
+        <Route path="/admin/equipment" component={GroupEquipment} />
         <Route path="/admin/sponsor-traffic" component={GroupSponsors} />
         <Route path="/admin/videos/record" component={GroupVideoRecord} />
         <Route path="/admin/videos/:id" component={GroupVideoDetail} />
@@ -766,6 +771,9 @@ function App() {
             {/* Staff Videos — the in-house Loom's public share pages. Random
                 non-enumerable tokens; visibility enforced by the public API. */}
             <Route path="/v/:token" component={VideoShare} />
+            {/* The equipment holder's own page. A signed link, never a login —
+                see server/equipment-routes.ts for why. */}
+            <Route path="/equipment/:token" component={EquipmentHolder} />
             <Route path="/studio-preview" component={StudioPreviewPage} />
             {/* CIC referee scoring — the mobile app referees use to score their
                 games. Referee token-auth (never a staff session); same-origin.

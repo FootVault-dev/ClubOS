@@ -68,12 +68,20 @@ const CANARIES: Canary[] = [
   // file survive a bad deploy untouched; what disappears is the route, and a
   // missing route is indistinguishable from one that never existed.
   { feature: "club drive",          path: "/api/admin/drive/bootstrap",             expect: [401] },
+  // Equipment Register (2026-08-18). Both halves are canaried, because they can
+  // be lost independently: the staff tab is an admin route, while the holders'
+  // own page is a PUBLIC one, and a coach standing in a shed with a dead link
+  // is the failure nobody here would notice.
+  { feature: "equipment register",  path: "/api/admin/equipment/overview",          expect: [401] },
+  { feature: "equipment holders",   path: "/api/public/equipment/me",               expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
  *  still has it. Checked as plain text: the literal must appear in the file. */
 const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/drive/bootstrap":           { file: "server/drive-routes.ts",        needle: "/api/admin/drive/bootstrap" },
+  "/api/admin/equipment/overview":        { file: "server/equipment-routes.ts",    needle: "/api/admin/equipment/overview" },
+  "/api/public/equipment/me":             { file: "server/equipment-routes.ts",    needle: "/api/public/equipment/me" },
   "/api/public/parent/prefill":           { file: "server/parent-routes.ts",       needle: "/prefill" },
   "/api/public/parent/me":                { file: "server/parent-routes.ts",       needle: "/me" },
   "/api/admin/notifications/preferences": { file: "server/notification-routes.ts", needle: "/api/admin/notifications/preferences" },

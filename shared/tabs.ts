@@ -228,6 +228,10 @@ const groupTabs: TabDef[] = [
   { slug: "budget", title: "Budget", url: "/admin/budget" },
   { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
   { slug: "vehicles", title: "Vehicles", url: "/admin/vehicles" },
+  // Equipment Register — one responsible person per team, the gear they hold,
+  // and the termly count. Locked like Vehicles (see SUPER_ADMIN_ONLY_TABS) and
+  // opened to Ryan and Travis individually.
+  { slug: "equipment", title: "Equipment", url: "/admin/equipment" },
   // How much website traffic we send sponsors via tracked /s/{code} redirects,
   // plus a sponsor-site health check. Launched dark (SUPER_ADMIN_ONLY_TABS)
   // while Daniel shapes it.
@@ -355,6 +359,14 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // Sports Group admins — a workspace admin bypasses the tabs whitelist.
   // Grant the next person with script/grant-unlocked-tab.ts; no deploy needed.
   "vehicles",
+  // Equipment Register — carries every coordinator's name, personal email and
+  // mobile, and a per-team judgement of whether gear went missing on their
+  // watch. Same reasoning as Vehicles: removing this line would hand it to all
+  // eight United Sports Group admins, because a workspace admin bypasses the
+  // tabs whitelist. Ryan Edwards and Travis Graham were let in individually
+  // (2026-08-18) via user_organizations.unlocked_tabs. Grant the next person
+  // with script/grant-unlocked-tab.ts; no deploy needed.
+  "equipment",
   // The United Print prospect database + sales pipeline: 400+ researched
   // companies with contact details, call notes and deal values. Daniel's
   // sales-training ground — launched dark while he shapes it. Remove this

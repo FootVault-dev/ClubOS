@@ -8185,3 +8185,150 @@ export const driveAccessLog = pgTable("drive_access_log", {
   nodeIdx: index("drive_access_log_node_idx2").on(t.nodeId, t.createdAt),
 }));
 export type DriveAccessLog = typeof driveAccessLog.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EQUIPMENT REGISTER — one responsible person per team, their gear, and their
+// termly declaration of it. USG workspace (org 7), locked tab.
+//
+// See migrations/2026-08-18_equipment_register.sql for the full reasoning. The
+// three things deliberately absent as columns, because they are DERIVED on
+// read (shared/equipment.ts):
+//   * a holder's audit status  (a return row exists; the due date has passed)
+//   * whether a return was late (submitted_at compared with the round's due_on)
+//   * variance                 (counted_quantity against the frozen quantity_before)
+//
+// And the one thing deliberately PRESENT that looks redundant:
+// `equipment_audit_counts.quantity_before`. Submitting a return writes the
+// counted numbers back onto the items, so variance recomputed later against
+// `equipment_items.quantity` would be zero for every line forever.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const equipmentHolders = pgTable("equipment_holders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  teamName: text("team_name").notNull(),
+  programme: text("programme"),
+
+  // Nullable on purpose — link to the club's contact record where one exists,
+  // never mint a person from a gear form. RESTRICT: deleting a staff member
+  // must not erase who was holding the gear.
+  contactId: integer("contact_id").references(() => contacts.id, { onDelete: "restrict" }),
+  personName: text("person_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+
+  storageLocation: text("storage_location"),
+  status: text("status").notNull().default("active"),      // active|inactive (validated app-side)
+
+  // Bump to invalidate every link previously issued to THIS holder only.
+  linkVersion: integer("link_version").notNull().default(1),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("equipment_holders_org_idx").on(t.organizationId, t.status),
+  contactIdx: index("equipment_holders_contact_idx").on(t.contactId),
+}));
+export type EquipmentHolder = typeof equipmentHolders.$inferSelect;
+
+export const equipmentItems = pgTable("equipment_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  holderId: integer("holder_id").notNull().references(() => equipmentHolders.id, { onDelete: "cascade" }),
+
+  category: text("category").notNull().default("other"),
+  name: text("name").notNull(),
+  quantity: integer("quantity").notNull().default(0),
+  condition: text("condition"),
+  storageLocation: text("storage_location"),
+  source: text("source").notNull().default("unknown"),
+  acquiredOn: date("acquired_on"),
+
+  // staff|holder — whether the responsible person is actually maintaining
+  // their own list is the measure of whether this worked.
+  addedVia: text("added_via").notNull().default("staff"),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  holderIdx: index("equipment_items_holder_idx").on(t.holderId, t.category),
+  orgCatIdx: index("equipment_items_org_cat_idx").on(t.organizationId, t.category),
+}));
+export type EquipmentItem = typeof equipmentItems.$inferSelect;
+
+export const equipmentAuditRounds = pgTable("equipment_audit_rounds", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  year: integer("year").notNull(),
+  termNumber: integer("term_number").notNull(),
+  label: text("label").notNull(),
+  opensOn: date("opens_on"),
+  dueOn: date("due_on"),
+  status: text("status").notNull().default("open"),        // open|closed
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type EquipmentAuditRound = typeof equipmentAuditRounds.$inferSelect;
+
+export const equipmentAuditReturns = pgTable("equipment_audit_returns", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  roundId: integer("round_id").notNull().references(() => equipmentAuditRounds.id, { onDelete: "cascade" }),
+  // RESTRICT — a submitted count is a statement somebody made on a date.
+  holderId: integer("holder_id").notNull().references(() => equipmentHolders.id, { onDelete: "restrict" }),
+
+  submittedAt: timestamp("submitted_at"),
+  submittedByName: text("submitted_by_name"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  holderIdx: index("equipment_returns_holder_idx").on(t.holderId),
+}));
+export type EquipmentAuditReturn = typeof equipmentAuditReturns.$inferSelect;
+
+export const equipmentAuditCounts = pgTable("equipment_audit_counts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  returnId: integer("return_id").notNull().references(() => equipmentAuditReturns.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").references(() => equipmentItems.id, { onDelete: "set null" }),
+
+  itemName: text("item_name").notNull(),
+  category: text("category").notNull().default("other"),
+  quantityBefore: integer("quantity_before"),
+  // 🔴 NULL means NOT COUNTED. It does not mean zero.
+  countedQuantity: integer("counted_quantity"),
+  condition: text("condition"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  returnIdx: index("equipment_counts_return_idx").on(t.returnId),
+  itemIdx: index("equipment_counts_item_idx").on(t.itemId),
+}));
+export type EquipmentAuditCount = typeof equipmentAuditCounts.$inferSelect;
+
+export const equipmentAuditReminders = pgTable("equipment_audit_reminders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  roundId: integer("round_id").notNull().references(() => equipmentAuditRounds.id, { onDelete: "cascade" }),
+  holderId: integer("holder_id").notNull().references(() => equipmentHolders.id, { onDelete: "cascade" }),
+
+  sentAt: timestamp("sent_at").defaultNow().notNull(),
+  sentToEmail: text("sent_to_email").notNull(),
+  sentByUserId: integer("sent_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  channel: text("channel").notNull().default("email"),
+  delivered: boolean("delivered").notNull().default(true),
+  error: text("error"),
+}, (t) => ({
+  roundIdx: index("equipment_reminders_round_idx").on(t.roundId, t.holderId),
+}));
+export type EquipmentAuditReminder = typeof equipmentAuditReminders.$inferSelect;

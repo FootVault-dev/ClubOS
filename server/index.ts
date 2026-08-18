@@ -248,6 +248,17 @@ app.use(attributionCookieMiddleware);
   const { registerMaintenanceRoutes } = await import("./maintenance-routes");
   registerMaintenanceRoutes(app);
 
+  // Equipment Register — one responsible person per team, the gear they hold,
+  // and their termly declaration of it. USG workspace, gated by
+  // requireTab("equipment"), which is locked in SUPER_ADMIN_ONLY_TABS.
+  //
+  // It DOES have a public surface, and deliberately so: the person responsible
+  // maintains their own list through a signed "eqh:" link rather than a ClubOS
+  // account, because handing twenty-five part-time coaches accounts would be a
+  // far larger access change than a gear register warrants.
+  const { registerEquipmentRoutes } = await import("./equipment-routes");
+  registerEquipmentRoutes(app);
+
   // Open Trainings — free open-training requests from cufc.co.nz. The
   // invite-only funnel for U9–U20 academy programmes (2026-07-21): public
   // POST + the CUFC workspace tab where staff approve/decline each request.
