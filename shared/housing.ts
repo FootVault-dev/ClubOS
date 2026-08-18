@@ -319,3 +319,362 @@ export function dollarsToCents(input: unknown): number | null {
   if (!/^-?\d+(\.\d{1,2})?$/.test(raw)) return null;
   return Math.round(Number(raw) * 100);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCOMMODATION (2026-08-18) — the CUFC residency at 482A Yaldhurst Road.
+//
+// Everything below exists because the club's real run sheet needs it and the
+// original housing model could not express it: an occupant whose rent is paid
+// by their playing contract, a power contribution billed separately from rent,
+// a term that bills as one invoice rather than 20 weekly ones, and weeks the
+// occupant was away and not charged.
+//
+// 🔴 THE ONE RULE: what somebody owes is DERIVED here, from their rate, their
+// dates and their holiday deduction — never read from a stored total. The
+// source workbook stores its totals, and it states four different figures for
+// the same term, three of which disagree with its own rows. `statedTotalCents`
+// is kept only so the tab can show the club's own historic number beside the
+// recomputed one and name the difference out loud.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Vocabularies ─────────────────────────────────────────────────────────────
+// TEXT in the database, validated here. `undecided` is a real value, not a
+// blank: which agreement these occupancies actually are is an open legal
+// question (ACT-005, with Harcourts), and a system that forces a choice would
+// be recording a legal position nobody has taken.
+export const AGREEMENT_TYPES = [
+  "licence_to_occupy", "boarding_agreement", "short_term_rental",
+  "club_remuneration", "residential_tenancy", "undecided",
+] as const;
+export type AgreementType = (typeof AGREEMENT_TYPES)[number];
+
+export const AGREEMENT_TYPE_LABELS: Record<AgreementType, string> = {
+  licence_to_occupy: "Licence to occupy",
+  boarding_agreement: "Boarding agreement",
+  short_term_rental: "Short-term rental",
+  club_remuneration: "Club remuneration",
+  residential_tenancy: "Residential tenancy",
+  undecided: "Not yet decided",
+};
+
+export const OCCUPANT_CATEGORIES = [
+  "senior_squad", "academy", "international", "staff", "trialist", "other",
+] as const;
+export type OccupantCategory = (typeof OCCUPANT_CATEGORIES)[number];
+
+export const OCCUPANT_CATEGORY_LABELS: Record<OccupantCategory, string> = {
+  senior_squad: "Senior squad",
+  academy: "Academy",
+  international: "International",
+  staff: "Staff",
+  trialist: "Trialist",
+  other: "Other",
+};
+
+/** The state of the room itself, not of anyone in it. `unknown` is the default
+ *  and reads as "nobody has inspected this", which is not the same as fine. */
+export const CONDITION_STATUSES = [
+  "inspected_good", "clean_ready", "ready_for_use",
+  "pending_checkout", "needs_attention", "unknown",
+] as const;
+export type ConditionStatus = (typeof CONDITION_STATUSES)[number];
+
+export const CONDITION_STATUS_LABELS: Record<ConditionStatus, string> = {
+  inspected_good: "Inspected — good",
+  clean_ready: "Clean & ready",
+  ready_for_use: "Ready for use",
+  pending_checkout: "Pending check-out",
+  needs_attention: "Needs attention",
+  unknown: "Not inspected",
+};
+
+/** Whether the occupant's own condition report has been signed. */
+export const CONDITION_REPORTS = ["signed", "pending", "returned", "none"] as const;
+export type ConditionReport = (typeof CONDITION_REPORTS)[number];
+
+export const CONDITION_REPORT_LABELS: Record<ConditionReport, string> = {
+  signed: "Signed", pending: "Pending", returned: "Returned", none: "Not started",
+};
+
+export const ACTION_KINDS = ["action", "conflict"] as const;
+export type ActionKind = (typeof ACTION_KINDS)[number];
+
+export const ACTION_PRIORITIES = ["high", "medium", "low"] as const;
+export type ActionPriority = (typeof ACTION_PRIORITIES)[number];
+
+export const ACTION_STATUSES = [
+  "open", "in_progress", "under_review", "pending", "completed", "dismissed",
+] as const;
+export type ActionStatus = (typeof ACTION_STATUSES)[number];
+
+export const ACTION_STATUS_LABELS: Record<ActionStatus, string> = {
+  open: "Open", in_progress: "In progress", under_review: "Under review",
+  pending: "Pending", completed: "Completed", dismissed: "Dismissed",
+};
+
+/** An action still needing someone. Completed and dismissed are both finished —
+ *  dismissed means "we looked and decided no", which is a decision, not a gap. */
+export function isActionOpen(status: string): boolean {
+  return status !== "completed" && status !== "dismissed";
+}
+
+export const CHARGE_KINDS = ["rent", "utilities", "combined"] as const;
+export type ChargeKind = (typeof CHARGE_KINDS)[number];
+
+export const CHARGE_KIND_LABELS: Record<ChargeKind, string> = {
+  rent: "Rent", utilities: "Power / utilities", combined: "Rent & power",
+};
+
+export const isAgreementType = (v: any): v is AgreementType => AGREEMENT_TYPES.includes(v);
+export const isOccupantCategory = (v: any): v is OccupantCategory => OCCUPANT_CATEGORIES.includes(v);
+export const isConditionStatus = (v: any): v is ConditionStatus => CONDITION_STATUSES.includes(v);
+export const isConditionReport = (v: any): v is ConditionReport => CONDITION_REPORTS.includes(v);
+export const isActionKind = (v: any): v is ActionKind => ACTION_KINDS.includes(v);
+export const isActionPriority = (v: any): v is ActionPriority => ACTION_PRIORITIES.includes(v);
+export const isActionStatus = (v: any): v is ActionStatus => ACTION_STATUSES.includes(v);
+export const isChargeKind = (v: any): v is ChargeKind => CHARGE_KINDS.includes(v);
+
+// ── Duration ─────────────────────────────────────────────────────────────────
+
+/** Nights occupied, from `startDate` to `endDate` INCLUSIVE — the convention the
+ *  tenancy table uses, where `end_date` is the tenant's last night.
+ *
+ *  ⚠ The club's run sheet writes the CHECK-OUT day instead, which is the day
+ *  after. `checkOutToLastNight()` converts; getting this wrong bills everyone an
+ *  extra day. */
+export function occupiedDays(startDate: string, endDate: string): number | null {
+  const n = daysBetween(startDate, endDate);
+  return n === null ? null : n + 1;
+}
+
+/** The run sheet's check-out date → the tenancy table's inclusive last night. */
+export function checkOutToLastNight(checkOut: string): string | null {
+  return addDaysIso(checkOut, -1);
+}
+
+/**
+ * Days actually charged: nights occupied, less any weeks the occupant was away.
+ *
+ * The club deducts whole weeks for the Christmas break ("Vacated 22 Dec for 2
+ * wks holiday"). That deduction is the entire reason 23 calendar weeks are
+ * billed as 21, and without it every December tenancy overcharges by $60–$460.
+ *
+ * Never negative: a holiday longer than the tenancy is a data-entry mistake, and
+ * the right answer to it is zero, not a credit note.
+ */
+export function billableDays(startDate: string, endDate: string, holidayWeeks = 0): number | null {
+  const days = occupiedDays(startDate, endDate);
+  if (days === null) return null;
+  const holiday = Number.isFinite(holidayWeeks) ? Math.max(0, holidayWeeks) * 7 : 0;
+  return Math.max(0, days - holiday);
+}
+
+/** Billable days as weeks. For display and comparison against the run sheet's
+ *  own week counts — the money is always computed from DAYS, never from this. */
+export function billableWeeks(startDate: string, endDate: string, holidayWeeks = 0): number | null {
+  const d = billableDays(startDate, endDate, holidayWeeks);
+  return d === null ? null : d / 7;
+}
+
+// ── What an occupancy costs ──────────────────────────────────────────────────
+
+export interface TenancyMoneyInput {
+  startDate: string;
+  /** Inclusive last night. Null = still going; pass `asAt` to value it to date. */
+  endDate: string | null;
+  rentCents: number;
+  utilitiesCents?: number | null;
+  /** True when the rent figure already covers power — the Jan–May arrangement. */
+  utilitiesIncluded?: boolean | null;
+  holidayWeeks?: number | null;
+  rentFrequency?: RentFrequency | string | null;
+}
+
+export interface TenancyMoney {
+  days: number;
+  weeks: number;
+  /** Per week, whatever the stored frequency — so two tenancies can be compared. */
+  weeklyRentCents: number;
+  weeklyUtilitiesCents: number;
+  rentCents: number;
+  utilitiesCents: number;
+  totalCents: number;
+  /** True when the end date is open and this was valued to `asAt` instead. */
+  openEnded: boolean;
+}
+
+/** A rent figure expressed per week, whatever frequency it is stored at, so
+ *  a fortnightly and a weekly tenancy can sit in the same column. */
+export function weeklyEquivalentCents(amountCents: number, freq: RentFrequency | string | null | undefined): number {
+  switch (freq) {
+    case "fortnightly": return Math.round(amountCents / 2);
+    case "monthly": return Math.round(amountCents * 12 / 52.1775);
+    case "weekly":
+    default: return amountCents;   // an unknown frequency is treated as weekly,
+                                   // which is what every row in this residency is
+  }
+}
+
+/**
+ * What an occupancy costs, derived. The single definition — the server computes
+ * it, the client renders what the server sent, and the seed compares it against
+ * the club's own figure to produce the variance list.
+ *
+ * 🔴 Rounded ONCE, at the end, from whole days. Rounding the weeks first is how
+ * the source workbook turned 5.4286 weeks into "5.3" and would have turned a
+ * $1,248.57 invoice into $1,219.00 — a $29.57 error on one five-week stay.
+ */
+export function tenancyMoney(t: TenancyMoneyInput, asAt?: string): TenancyMoney | null {
+  const end = t.endDate ?? asAt ?? nzTodayIso();
+  if (!parseIso(t.startDate) || !parseIso(end)) return null;
+  if (compareIso(end, t.startDate) < 0) {
+    // Valued before it starts: no days, no money — not a negative bill.
+    return {
+      days: 0, weeks: 0,
+      weeklyRentCents: weeklyEquivalentCents(t.rentCents, t.rentFrequency),
+      weeklyUtilitiesCents: t.utilitiesIncluded ? 0 : weeklyEquivalentCents(t.utilitiesCents ?? 0, t.rentFrequency),
+      rentCents: 0, utilitiesCents: 0, totalCents: 0,
+      openEnded: t.endDate === null,
+    };
+  }
+
+  const days = billableDays(t.startDate, end, t.holidayWeeks ?? 0) ?? 0;
+  const weeklyRent = weeklyEquivalentCents(t.rentCents, t.rentFrequency);
+  const weeklyUtil = t.utilitiesIncluded ? 0 : weeklyEquivalentCents(t.utilitiesCents ?? 0, t.rentFrequency);
+
+  const rentCents = Math.round(weeklyRent * days / 7);
+  const utilitiesCents = Math.round(weeklyUtil * days / 7);
+
+  return {
+    days,
+    weeks: days / 7,
+    weeklyRentCents: weeklyRent,
+    weeklyUtilitiesCents: weeklyUtil,
+    rentCents,
+    utilitiesCents,
+    totalCents: rentCents + utilitiesCents,
+    openEnded: t.endDate === null,
+  };
+}
+
+/** The gap between what the club's document said and what the figures produce.
+ *  Positive means the recomputed cost is HIGHER than the club recorded — i.e.
+ *  somebody was probably under-billed. Null when there is nothing to compare. */
+export function statedVarianceCents(computedCents: number, statedCents: number | null | undefined): number | null {
+  if (statedCents === null || statedCents === undefined) return null;
+  return computedCents - statedCents;
+}
+
+/** Ignore rounding noise when deciding whether to show a variance at all. One
+ *  cent either way is a rounding artefact; a dollar is a question. */
+export const VARIANCE_TOLERANCE_CENTS = 1;
+
+export function hasMaterialVariance(computedCents: number, statedCents: number | null | undefined): boolean {
+  const v = statedVarianceCents(computedCents, statedCents);
+  return v !== null && Math.abs(v) > VARIANCE_TOLERANCE_CENTS;
+}
+
+// ── Occupancy, with reserve beds excluded ────────────────────────────────────
+
+export interface RoomLike { id: number; isReserve?: boolean | null }
+
+export interface AccommodationOccupancy extends OccupancySummary {
+  /** Sick / quarantine / overflow beds. Counted, but never in the percentage. */
+  reserveRooms: number;
+  reserveOccupied: number;
+}
+
+/**
+ * Occupancy over the rooms that can actually be let.
+ *
+ * 🔴 The two sick rooms are emergency beds, not stock. Including them makes a
+ * residency with every lettable room full report 85%, which reads as spare
+ * capacity that does not exist — and the whole reason this tab was built is a
+ * residency revenue line nobody could explain.
+ */
+export function summariseAccommodation(
+  rooms: RoomLike[],
+  activeTenancyRoomIds: Iterable<number>,
+): AccommodationOccupancy {
+  const occupiedIds = new Set(activeTenancyRoomIds);
+  const lettable = rooms.filter(r => !r.isReserve);
+  const reserve = rooms.filter(r => !!r.isReserve);
+  return {
+    ...summariseOccupancy(lettable, occupiedIds),
+    reserveRooms: reserve.length,
+    reserveOccupied: reserve.filter(r => occupiedIds.has(r.id)).length,
+  };
+}
+
+// ── Conflicts the database cannot catch ──────────────────────────────────────
+
+export interface OverlapCandidate {
+  id: number;
+  contactId: number;
+  roomId: number | null;
+  startDate: string;
+  endDate: string | null;
+}
+
+export interface PersonOverlap {
+  contactId: number;
+  a: OverlapCandidate;
+  b: OverlapCandidate;
+}
+
+/**
+ * One person recorded in two different rooms at the same time.
+ *
+ * 🔴 A warning, never a constraint. The database stops two people sharing a
+ * room; it deliberately does not stop one person holding two, because that
+ * genuinely happens here — Deen Hasanovic rented both Tiny House rooms at once
+ * for a single combined rate. So this reports and lets a human judge, rather
+ * than refusing a booking the club actually made.
+ */
+export function findPersonOverlaps(tenancies: OverlapCandidate[]): PersonOverlap[] {
+  const byPerson = new Map<number, OverlapCandidate[]>();
+  for (const t of tenancies) {
+    if (!byPerson.has(t.contactId)) byPerson.set(t.contactId, []);
+    byPerson.get(t.contactId)!.push(t);
+  }
+  const out: PersonOverlap[] = [];
+  for (const [contactId, list] of Array.from(byPerson.entries())) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        // Same room twice is the DB's problem and it already refused it.
+        if (a.roomId !== null && a.roomId === b.roomId) continue;
+        if (rangesOverlap(a.startDate, a.endDate, b.startDate, b.endDate)) out.push({ contactId, a, b });
+      }
+    }
+  }
+  return out;
+}
+
+// ── Where someone sits in the accommodation population ───────────────────────
+
+export type AccommodationStatus = "resident" | "arriving" | "former" | "non_resident";
+
+export const ACCOMMODATION_STATUS_LABELS: Record<AccommodationStatus, string> = {
+  resident: "Living on site",
+  arriving: "Arriving",
+  former: "Previously housed",
+  non_resident: "Off site",
+};
+
+/**
+ * DERIVED from the person's tenancies, never stored. A stored status is wrong
+ * from the moment a tenancy ends and nobody clicks — which is exactly how the
+ * source sheet ended up listing the Tiny House as empty while three other pages
+ * of the same workbook had Takumi living in it.
+ */
+export function accommodationStatus(
+  tenancies: { startDate: string; endDate: string | null }[],
+  today: string,
+): AccommodationStatus {
+  if (tenancies.length === 0) return "non_resident";
+  const states = tenancies.map(t => tenancyState(t.startDate, t.endDate, today));
+  if (states.includes("active")) return "resident";
+  if (states.includes("upcoming")) return "arriving";
+  return "former";
+}

@@ -373,6 +373,11 @@ function AdminRouter() {
         <Route path="/admin/budget" component={GroupBudget} />
         <Route path="/admin/cashflow" component={GroupCashflow} />
         <Route path="/admin/vehicles" component={GroupVehicles} />
+        {/* Accommodation — the residency at 482A Yaldhurst Rd. `/admin/housing`
+            is kept as an alias so a bookmark from the venue workspace still
+            resolves instead of hitting the catch-all NotFound. */}
+        <Route path="/admin/accommodation" component={VenueHousing} />
+        <Route path="/admin/housing" component={VenueHousing} />
         <Route path="/admin/sponsor-traffic" component={GroupSponsors} />
         <Route path="/admin/videos/record" component={GroupVideoRecord} />
         <Route path="/admin/videos/:id" component={GroupVideoDetail} />
