@@ -177,6 +177,7 @@ const tournamentTabs: TabDef[] = [
   { slug: "cic-referees", title: "Referees", url: "/admin/cic-referees" },
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
+  { slug: "ethnic-cup-registrations", title: "Ethnic Cup Registrations", url: "/admin/ethnic-cup-registrations" },
   { slug: "store", title: "Store", url: "/admin/store" },
   { slug: "media", title: "Media", url: "/admin/media" },
   { slug: "marketing", title: "Marketing", url: "/admin/marketing" },

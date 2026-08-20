@@ -242,6 +242,12 @@ app.use(attributionCookieMiddleware);
   const { registerHousingRoutes } = await import("./housing-routes");
   registerHousingRoutes(app);
 
+  // Christchurch Ethnic Cup — registrations of interest from ethniccup.com.
+  // Public POST is CORS-scoped to that site; the admin board is gated by
+  // requireTab("ethnic-cup-registrations") inside the CIC workspace.
+  const { registerEthnicCupRoutes } = await import("./ethnic-cup-routes");
+  registerEthnicCupRoutes(app);
+
   // Maintenance — the United Sports Centre's cleaning/consumable supplies and
   // its machines & equipment. Admin-only, gated by requireTab("maintenance") to
   // the venue workspace. Sibling of Housing, built for Riley (grounds staff).

@@ -17,7 +17,7 @@ type Org = {
 
 // Sub-view inside the CIC (tournament) workspace — toggles between the youth
 // tournament and the CIC 7's adult tournament. Persisted separately from the org.
-export type CicView = "youth" | "7s";
+export type CicView = "youth" | "7s" | "ethnic";
 
 type WorkspaceContextType = {
   currentOrg: Org | null;

@@ -284,6 +284,13 @@ const tournament7sNav = [
   { tab: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer", icon: Mail },
 ];
 
+// Christchurch Ethnic Cup — Nov 14-15 2026, run under the CIC organisation.
+// Registrations of interest today; entries, draw and results follow once the
+// venue is confirmed and payment opens.
+const tournamentEthnicNav = [
+  { tab: "ethnic-cup-registrations", title: "Registrations", url: "/admin/ethnic-cup-registrations", icon: ClipboardCheck },
+];
+
 const gymnasticsNav = [
   { tab: "dashboard", title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { tab: "links", title: "Links", url: "/admin/links", icon: Link2 },
@@ -500,22 +507,26 @@ function WorkspaceSwitcher() {
 function CicViewToggle() {
   const { cicView, setCicView } = useWorkspace();
   const [, setLocation] = useLocation();
-  const select = (v: "youth" | "7s") => {
+  const select = (v: "youth" | "7s" | "ethnic") => {
     setCicView(v);
-    setLocation(v === "7s" ? "/admin/cic7s-registrations" : "/admin");
+    setLocation(
+      v === "7s" ? "/admin/cic7s-registrations"
+      : v === "ethnic" ? "/admin/ethnic-cup-registrations"
+      : "/admin",
+    );
   };
   return (
     <div className="flex items-center gap-1 p-1 rounded-xl bg-white/[0.03] border border-white/[0.06]" data-testid="toggle-cic-view">
-      {(["youth", "7s"] as const).map((v) => (
+      {(["youth", "7s", "ethnic"] as const).map((v) => (
         <button
           key={v}
           onClick={() => select(v)}
-          className={`flex-1 text-[11px] font-semibold uppercase tracking-wider py-1.5 rounded-lg transition-all cursor-pointer ${
+          className={`flex-1 text-[10px] font-semibold uppercase tracking-wide py-1.5 rounded-lg transition-all cursor-pointer ${
             cicView === v ? "bg-blue-500/15 text-blue-300 border border-blue-500/25" : "text-white/40 hover:text-white/60"
           }`}
           data-testid={`button-cic-view-${v}`}
         >
-          {v === "youth" ? "CIC Youth" : "CIC 7's"}
+          {v === "youth" ? "Youth" : v === "7s" ? "7's" : "Ethnic"}
         </button>
       ))}
     </div>
@@ -629,7 +640,8 @@ export function AppSidebar() {
   const isPrints = isPrintsWorkspace(currentOrg?.slug);
   const isSandbox = isSandboxWorkspace(currentOrg?.slug);
   const isSiu = currentOrg?.slug === "south-island-united";
-  const tournamentMainNav = cicView === "7s" ? tournament7sNav : tournamentNav;
+  const tournamentMainNav =
+    cicView === "7s" ? tournament7sNav : cicView === "ethnic" ? tournamentEthnicNav : tournamentNav;
   const allMainNav = isSandbox ? sandboxNav : isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : isSiu ? siuNav : campsNav;
   const allSecondaryNav = isSandbox ? sandboxSecondary : isPrints ? printsSecondary : isGroup ? groupSecondary : isGymnastics ? gymnasticsSecondary : isTournament ? tournamentSecondary : isLeague ? leagueSecondary : isVenue ? venueSecondary : campsSecondary;
 
