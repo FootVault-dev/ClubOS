@@ -85,7 +85,9 @@ const CANARIES: Canary[] = [
   // registrations into a 404 and nobody finds out until a team asks why they
   // never heard back.
   { feature: "ethnic cup admin",    path: "/api/admin/ethnic-cup/registrations",   expect: [401] },
-  { feature: "ethnic cup form",     path: "/api/public/ethnic-cup/register-interest", expect: [400, 405] },
+  // OPTIONS, not GET: the route is POST-only, so a GET 404s and the canary
+  // would sit at "absent" forever — protecting nothing while looking green.
+  { feature: "ethnic cup form",     path: "/api/public/ethnic-cup/register-interest", method: "OPTIONS", expect: [204] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
