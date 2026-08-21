@@ -4056,6 +4056,27 @@ export type AppUser = typeof appUsers.$inferSelect;
 // ---- CIC 7's register-interest submissions (from the cic7s.com marketing site) ----
 // Lives under the same CIC organization as the youth tournament; surfaced in the
 // "CIC 7's" view of the Tournament workspace.
+// Christchurch Ethnic Cup — "register your interest" from ethniccup.com.
+// Its own table rather than a shared inbox, so the Cup's list can be worked
+// through and reported on without filtering someone else's enquiries out of it.
+// Mirrors cic7s_registrations; lives under the CIC organisation.
+export const ethnicCupRegistrations = pgTable("ethnic_cup_registrations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  community: text("community"),   // the community or team name they'd enter under
+  grade: text("grade"),           // "Men's" | "Women's" | "Both" | "Unsure" — free text, no CHECK
+  message: text("message"),
+  sourceUrl: text("source_url"),
+  status: text("status").notNull().default("new"), // new | contacted | entered | declined | archived
+  notes: text("notes"),           // staff notes, never shown to the registrant
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const cic7sRegistrations = pgTable("cic7s_registrations", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),

@@ -170,6 +170,7 @@ import StudioNew from "@/pages/studio/StudioNew";
 import StudioEditor from "@/pages/studio/StudioEditor";
 import StudioAnalytics from "@/pages/studio/StudioAnalytics";
 import Cic7sRegistrations from "@/pages/cic7s-registrations";
+import EthnicCupRegistrations from "@/pages/ethnic-cup-registrations";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
 import PrintsCRM from "@/pages/prints-crm";
@@ -467,6 +468,7 @@ function AdminRouter() {
         <Route path="/admin/vendors" component={TournamentVendors} />
         <Route path="/admin/volunteers" component={Volunteers} />
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
+        <Route path="/admin/ethnic-cup-registrations" component={EthnicCupRegistrations} />
         <Route path="/admin/cic-registrations" component={CicInbox} />
         <Route path="/admin/cic-livechat" component={CicLiveChat} />
         <Route path="/admin/mfl-livechat" component={MflLiveChat} />

@@ -87,6 +87,14 @@ const CANARIES: Canary[] = [
   // view has been deployed away from under it".
   { feature: "accommodation",       path: "/api/admin/housing/overview",            expect: [401] },
   { feature: "accommodation money", path: "/api/admin/housing/invoicing",           expect: [401] },
+  // Ethnic Cup — the admin board AND the public form the brand site posts to.
+  // The public one matters most: if it goes, ethniccup.com keeps accepting
+  // registrations into a 404 and nobody finds out until a team asks why they
+  // never heard back.
+  { feature: "ethnic cup admin",    path: "/api/admin/ethnic-cup/registrations",   expect: [401] },
+  // OPTIONS, not GET: the route is POST-only, so a GET 404s and the canary
+  // would sit at "absent" forever — protecting nothing while looking green.
+  { feature: "ethnic cup form",     path: "/api/public/ethnic-cup/register-interest", method: "OPTIONS", expect: [204] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
