@@ -69,17 +69,36 @@ try {
   ok("…and that same person still reaches Vehicles", (await call(cV, "GET", "/api/admin/vehicles")).status === 200);
 
   // ── The lifecycle ──────────────────────────────────────────────────────────
+  // Relative to the SERVER's today, in Pacific/Auckland — never the browser's,
+  // which is a day out for most of a New Zealand working day.
+  const bootstrap = await (await call(cG, "GET", "/api/admin/fines")).json();
+  const todayIso: string = bootstrap.today;
+  const shift = (days: number) => {
+    const [y, m, d] = todayIso.split("-").map(Number);
+    // Date.UTC has no DST, so adding days to it is exact.
+    const ms = Date.UTC(y, m - 1, d) + days * 86_400_000;
+    return new Date(ms).toISOString().slice(0, 10);
+  };
+
   const ref = `PROBE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
   const created = await call(cG, "POST", "/api/admin/fines", {
     direction: "club_owes", category: "parking", counterparty: "Probe Council",
-    reference: ref, amountCents: 4000, offenceOn: "2026-08-01",
-    issuedOn: "2026-08-05", dueOn: "2026-09-02", description: "Verification probe",
+    reference: ref, amountCents: 4000, offenceOn: shift(-20),
+    issuedOn: shift(-16), dueOn: shift(60), description: "Verification probe",
   });
   ok("a fine can be logged", created.status === 201, `HTTP ${created.status}`);
   const fine = (await created.json())?.fine;
   if (fine?.id) madeFines.push(fine.id);
-  ok("it comes back unpaid, not overdue", fine?.status === "open", String(fine?.status));
   ok("money is stored in cents", fine?.amountCents === 4000, String(fine?.amountCents));
+
+  // The three thresholds, walked deliberately rather than assumed. This is the
+  // whole reason status is derived: moving the due date must move the status,
+  // with nobody re-saving a stored flag.
+  ok("due in 60 days reads unpaid", fine?.status === "open", String(fine?.status));
+  const soon = await (await call(cG, "PATCH", `/api/admin/fines/${fine.id}`, { dueOn: shift(7) })).json();
+  ok("due in 7 days reads due-soon", soon?.fine?.status === "due_soon", String(soon?.fine?.status));
+  const late = await (await call(cG, "PATCH", `/api/admin/fines/${fine.id}`, { dueOn: shift(-3) })).json();
+  ok("🔴 3 days past due reads overdue", late?.fine?.status === "overdue", String(late?.fine?.status));
 
   // The duplicate a postal + emailed copy of the same notice would produce.
   const dupe = await call(cG, "POST", "/api/admin/fines", {
@@ -105,10 +124,18 @@ try {
   const noticeId = (await noticeRes.json())?.attachment?.id;
 
   const paid = await call(cG, "PATCH", `/api/admin/fines/${fine.id}`, {
-    paidOn: "2026-08-20", paidReference: "PROBE-PAY-1",
+    paidOn: todayIso, paidReference: "PROBE-PAY-1",
   });
   ok("it can be marked paid", paid.status === 200);
-  ok("…and then reads as paid", (await paid.json())?.fine?.status === "paid");
+  // It was overdue one line ago. Paying it late makes it PAID — the thing a
+  // stored status column gets wrong and a derived one cannot.
+  ok("🔴 an overdue fine paid late reads PAID, not overdue",
+     (await paid.json())?.fine?.status === "paid");
+
+  const bothRes = await call(cG, "PATCH", `/api/admin/fines/${fine.id}`, { waivedOn: todayIso });
+  const bothMsg = (await bothRes.json().catch(() => ({})))?.message ?? "";
+  ok("🔴 it cannot be waived while it is paid",
+     bothRes.status === 400 && /paid and waived/i.test(bothMsg), `${bothRes.status} ${bothMsg}`);
 
   const receiptRes = await attach("payment_confirmation", "receipt.pdf", "%PDF-1.4 probe receipt");
   ok("the payment confirmation attaches", receiptRes.status === 201);
