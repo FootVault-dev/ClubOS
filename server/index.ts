@@ -259,6 +259,12 @@ app.use(attributionCookieMiddleware);
   const { registerEquipmentRoutes } = await import("./equipment-routes");
   registerEquipmentRoutes(app);
 
+  // Fines — both directions (the club owes / owed to the club), with the notice
+  // and the payment confirmation stored through the Club Drive storage adapter
+  // and served by short-lived signed URL, never a public link.
+  const { registerFinesRoutes } = await import("./fines-routes");
+  registerFinesRoutes(app);
+
   // Open Trainings — free open-training requests from cufc.co.nz. The
   // invite-only funnel for U9–U20 academy programmes (2026-07-21): public
   // POST + the CUFC workspace tab where staff approve/decline each request.

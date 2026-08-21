@@ -230,6 +230,11 @@ const groupTabs: TabDef[] = [
   // and the termly count. Locked like Vehicles (see SUPER_ADMIN_ONLY_TABS) and
   // opened to Ryan and Travis individually.
   { slug: "equipment", title: "Equipment", url: "/admin/equipment" },
+  // Fines the club owes (parking, traffic, federation) and fines owed to the
+  // club (disciplinary), with the notice and the payment confirmation attached
+  // to each. Locked like Vehicles — it names people against money — and opened
+  // to Travis individually; Daniel reaches it as a super admin.
+  { slug: "fines", title: "Fines", url: "/admin/fines" },
   // The residency at 482A Yaldhurst Rd: rooms, who lives in each, what they owe,
   // and the compliance actions still open on it. Moved here from the venue
   // workspace on 2026-08-18 — these are the club's houses, not the sports
@@ -376,6 +381,10 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // (2026-08-18) via user_organizations.unlocked_tabs. Grant the next person
   // with script/grant-unlocked-tab.ts; no deploy needed.
   "equipment",
+  // Fines — names a person or a vehicle against money owed, and carries the
+  // scanned notice. Same class of data as vehicles/housing. Daniel + Travis
+  // only (2026-08-21), by name via user_organizations.unlocked_tabs.
+  "fines",
   // The United Print prospect database + sales pipeline: 400+ researched
   // companies with contact details, call notes and deal values. Daniel's
   // sales-training ground — launched dark while he shapes it. Remove this

@@ -68,6 +68,7 @@ import GroupContent from "@/pages/group-content";
 import GroupHiring from "@/pages/group-hiring";
 import GroupVehicles from "@/pages/group-vehicles";
 import GroupEquipment from "@/pages/group-equipment";
+import GroupFines from "@/pages/group-fines";
 import EquipmentHolder from "@/pages/equipment-holder";
 import GroupSponsors from "@/pages/group-sponsors";
 import GroupVideos from "@/pages/group-videos";
@@ -378,6 +379,7 @@ function AdminRouter() {
         <Route path="/admin/equipment/rounds/:id" component={GroupEquipment} />
         <Route path="/admin/equipment/:id" component={GroupEquipment} />
         <Route path="/admin/equipment" component={GroupEquipment} />
+        <Route path="/admin/fines" component={GroupFines} />
         {/* Accommodation — the residency at 482A Yaldhurst Rd. `/admin/housing`
             is kept as an alias so a bookmark from the venue workspace still
             resolves instead of hitting the catch-all NotFound. */}

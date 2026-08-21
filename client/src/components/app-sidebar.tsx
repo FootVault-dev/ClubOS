@@ -77,6 +77,7 @@ import {
   Images,
   Warehouse,
   Receipt,
+  ReceiptText,
   Car,
   Boxes,
   PhoneCall,
@@ -326,6 +327,9 @@ const groupNav = [
   // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
   { tab: "vehicles", title: "Vehicles", url: "/admin/vehicles", icon: Car },
   { tab: "equipment", title: "Equipment", url: "/admin/equipment", icon: Boxes },
+  // `ReceiptText`, not `Receipt` — a fine notice is a document, and Payouts
+  // already reads as the money-out icon in this nav.
+  { tab: "fines", title: "Fines", url: "/admin/fines", icon: ReceiptText },
   { tab: "housing", title: "Accommodation", url: "/admin/accommodation", icon: Home },
   { tab: "sponsor-traffic", title: "Sponsor Traffic", url: "/admin/sponsor-traffic", icon: Share2 },
   // `Video`, not `Clapperboard` — Content owns Clapperboard in this nav.

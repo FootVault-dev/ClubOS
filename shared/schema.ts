@@ -6565,6 +6565,78 @@ export const insertFleetCostSchema = createInsertSchema(fleetCosts).omit({ id: t
 export type InsertFleetCost = z.infer<typeof insertFleetCostSchema>;
 export type FleetCost = typeof fleetCosts.$inferSelect;
 
+// ── FINES ────────────────────────────────────────────────────────────────────
+// Fines the club owes (parking, traffic, federation) and fines owed to the club
+// (disciplinary), in one table with a `direction` — the same object pointing
+// opposite ways. Status maths lives in shared/fines.ts; nothing here stores
+// "overdue", which is computed from `paidOn` being null and `dueOn` past.
+export const fines = pgTable("fines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  direction: text("direction").notNull(),                 // club_owes|owed_to_club
+  category: text("category").notNull().default("other"),  // traffic|parking|toll|federation|disciplinary|regulatory|other
+
+  reference: text("reference"),                           // the notice / infringement number
+  counterparty: text("counterparty").notNull(),           // who issued it, or what it is for
+  description: text("description"),
+
+  // RESTRICT on both: deleting a person or a vehicle must never silently erase
+  // money owed, or who was driving when the offence happened.
+  personContactId: integer("person_contact_id").references(() => contacts.id, { onDelete: "restrict" }),
+  vehicleId: integer("vehicle_id").references(() => fleetVehicles.id, { onDelete: "restrict" }),
+
+  amountCents: integer("amount_cents").notNull(),
+
+  offenceOn: date("offence_on"),                          // NOT the same day as issued_on
+  issuedOn: date("issued_on"),
+  dueOn: date("due_on"),
+
+  paidOn: date("paid_on"),                                // null = unpaid. Overdue is derived from this.
+  paidReference: text("paid_reference"),
+  waivedOn: date("waived_on"),                            // challenged successfully, or written off
+  waivedReason: text("waived_reason"),
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgDirectionIdx: index("fines_org_direction_idx").on(t.organizationId, t.direction),
+  orgDueIdx: index("fines_org_due_idx").on(t.organizationId, t.dueOn),
+  vehicleIdx: index("fines_vehicle_idx").on(t.vehicleId),
+  personIdx: index("fines_person_idx").on(t.personContactId),
+}));
+export const insertFineSchema = createInsertSchema(fines).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFine = z.infer<typeof insertFineSchema>;
+export type Fine = typeof fines.$inferSelect;
+
+// The paperwork: the notice that arrived, and the proof we paid it. Bytes live
+// behind server/drive-storage.ts, so `storageKey` is opaque and these files
+// follow the rest of the club's storage to R2 with no schema change.
+export const fineAttachments = pgTable("fine_attachments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  fineId: integer("fine_id").notNull().references(() => fines.id, { onDelete: "cascade" }),
+
+  kind: text("kind").notNull().default("other"),          // notice|payment_confirmation|correspondence|other
+  filename: text("filename").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  storageKey: text("storage_key").notNull(),
+  storageBackend: text("storage_backend").notNull(),
+  checksum: text("checksum"),
+
+  uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  fineIdx: index("fine_attachments_fine_idx").on(t.fineId, t.uploadedAt),
+  orgIdx: index("fine_attachments_org_idx").on(t.organizationId),
+}));
+export const insertFineAttachmentSchema = createInsertSchema(fineAttachments).omit({ id: true, uploadedAt: true });
+export type InsertFineAttachment = z.infer<typeof insertFineAttachmentSchema>;
+export type FineAttachment = typeof fineAttachments.$inferSelect;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HOUSING — residency houses, rooms, tenants, rent and utilities (USC, org 4).
 //

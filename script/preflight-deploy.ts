@@ -73,6 +73,13 @@ const CANARIES: Canary[] = [
   // own page is a PUBLIC one, and a coach standing in a shed with a dead link
   // is the failure nobody here would notice.
   { feature: "equipment register",  path: "/api/admin/equipment/overview",          expect: [401] },
+  // Fines (2026-08-21). 🔴 A warning this list cannot give itself: the guard
+  // ships INSIDE the tree being deployed, so a branch that lacks a feature also
+  // lacks its canary and passes clean. Equipment was live on production and
+  // absent from feat/staff-voice on 2026-08-21, and this file on that branch
+  // had no equipment line to notice it. Probe by hand for anything added since
+  // the branch you are shipping was cut.
+  { feature: "fines",               path: "/api/admin/fines",                       expect: [401] },
   { feature: "equipment holders",   path: "/api/public/equipment/me",               expect: [401] },
   // Accommodation — the residency at 482A Yaldhurst Rd. `/overview` has been
   // live since July; `/invoicing` only exists in the 2026-08-18 build, so the
