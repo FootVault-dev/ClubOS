@@ -163,7 +163,10 @@ export default function CodingBudget() {
         </div>
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/50 rounded-md px-2.5 py-1.5">
           <Lock className="h-3.5 w-3.5" />
-          Super admins only — code 21 carries individual salaries
+          {/* Not "super admins only" — the tab is also reachable by anyone named
+              in unlocked_tabs (Ryan Edwards, 2026-08-27), and telling him he is
+              a super admin when he is not is both wrong and confusing. */}
+          Restricted — code 21 carries individual salaries
         </div>
       </div>
 
