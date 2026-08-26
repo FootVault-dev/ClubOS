@@ -18,6 +18,7 @@ import {
   ClipboardCheck,
   ListChecks,
   BookOpen,
+  Calculator,
   Home,
   Users,
   Mail,
@@ -330,6 +331,9 @@ const groupNav = [
   { tab: "invoices", title: "Invoices", url: "/admin/invoices", icon: Receipt },
   { tab: "payouts", title: "Payouts", url: "/admin/payouts", icon: Banknote },
   { tab: "budget", title: "Budget", url: "/admin/budget", icon: CreditCard },
+  // `Calculator`, not `CreditCard` — Budget already owns that, and this tab is
+  // the chart of accounts rather than a spend figure.
+  { tab: "coding-budget", title: "Coding Budget", url: "/admin/coding-budget", icon: Calculator },
   { tab: "cashflow", title: "Cashflow", url: "/admin/cashflow", icon: Waves },
   // `Car`, not `Truck` — the CIC Food Truck tab already owns that icon.
   { tab: "vehicles", title: "Vehicles", url: "/admin/vehicles", icon: Car },

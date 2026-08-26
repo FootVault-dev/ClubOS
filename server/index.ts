@@ -271,6 +271,12 @@ app.use(attributionCookieMiddleware);
   const { registerFinesRoutes } = await import("./fines-routes");
   registerFinesRoutes(app);
 
+  // Coding Budget — Victor's FY2026 chart of accounts (882 codes) and the
+  // transactions mapped against it. Locked to super admins: code 21 names
+  // eleven staff against their salaries.
+  const { registerCodingBudgetRoutes } = await import("./coding-budget-routes");
+  registerCodingBudgetRoutes(app);
+
   // Open Trainings — free open-training requests from cufc.co.nz. The
   // invite-only funnel for U9–U20 academy programmes (2026-07-21): public
   // POST + the CUFC workspace tab where staff approve/decline each request.

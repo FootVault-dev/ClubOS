@@ -225,6 +225,13 @@ const groupTabs: TabDef[] = [
   // inside each bank deposit. Read-only over the Stripe API + existing rows.
   { slug: "payouts", title: "Payouts", url: "/admin/payouts" },
   { slug: "budget", title: "Budget", url: "/admin/budget" },
+  // The club's chart of accounts — Victor Zoubkov's FY2026 coding structure,
+  // 882 codes across thirty streams (income 01–20, expenses 21–30). This is the
+  // categorisation Xero is being matched to and every transaction mapped
+  // against. Locked like Budget: code 21 names eleven staff against their
+  // salaries. Victor gets in by name via unlocked_tabs, not by removing the
+  // lock — see SUPER_ADMIN_ONLY_TABS.
+  { slug: "coding-budget", title: "Coding Budget", url: "/admin/coding-budget" },
   { slug: "cashflow", title: "Cashflow", url: "/admin/cashflow" },
   { slug: "vehicles", title: "Vehicles", url: "/admin/vehicles" },
   // Equipment Register — one responsible person per team, the gear they hold,
@@ -350,6 +357,15 @@ export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
  */
 export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "budget", // Phase 1 construction — staff salaries visible. Daniel only.
+  // Coding Budget — the chart of accounts. Same reason as `budget`, and more
+  // specific: code 21-01 lists eleven roles by title against a salary each
+  // (Chief Executive $150,000, Academy Director $115,000, Business Development
+  // Manager $72,000), and 21-04 does the same for eight contractors. Removing
+  // this line would hand the club's payroll to every United Sports Group admin,
+  // because a workspace admin bypasses the tabs whitelist entirely. Grant
+  // Victor — or anyone else — by name with script/grant-unlocked-tab.ts; it
+  // takes effect on the next request and needs no deploy.
+  "coding-budget",
   // Sporty / NZF NRS push: sends children's identity data to a national
   // register, and a mis-click during UAT could create real NRS records.
   // Daniel-only until the integration passes UAT and the deeds are signed.

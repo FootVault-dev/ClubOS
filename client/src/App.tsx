@@ -69,6 +69,7 @@ import GroupHiring from "@/pages/group-hiring";
 import GroupVehicles from "@/pages/group-vehicles";
 import GroupEquipment from "@/pages/group-equipment";
 import GroupFines from "@/pages/group-fines";
+import CodingBudget from "@/pages/coding-budget";
 import EquipmentHolder from "@/pages/equipment-holder";
 import GroupSponsors from "@/pages/group-sponsors";
 import GroupVideos from "@/pages/group-videos";
@@ -375,6 +376,7 @@ function AdminRouter() {
         <Route path="/admin/budget/cost-centres/:slug" component={GroupBudgetCostCentre} />
         <Route path="/admin/budget/xero" component={GroupBudgetXero} />
         <Route path="/admin/budget" component={GroupBudget} />
+        <Route path="/admin/coding-budget" component={CodingBudget} />
         <Route path="/admin/cashflow" component={GroupCashflow} />
         <Route path="/admin/vehicles" component={GroupVehicles} />
         <Route path="/admin/equipment/rounds/:id" component={GroupEquipment} />

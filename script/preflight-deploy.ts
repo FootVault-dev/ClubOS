@@ -81,6 +81,12 @@ const CANARIES: Canary[] = [
   // the branch you are shipping was cut.
   { feature: "fines",               path: "/api/admin/fines",                       expect: [401] },
   { feature: "equipment holders",   path: "/api/public/equipment/me",               expect: [401] },
+  // Coding Budget — the club's chart of accounts (882 codes) and the
+  // transactions mapped to it. Canaried because the DATA survives a bad deploy
+  // untouched while the route does not, which is exactly what made the previous
+  // five silent deletions invisible: a missing route is indistinguishable from
+  // one that never existed, and Victor would simply find the tab gone.
+  { feature: "coding budget",       path: "/api/admin/coding-budget",              expect: [401] },
   // Accommodation — the residency at 482A Yaldhurst Rd. `/overview` has been
   // live since July; `/invoicing` only exists in the 2026-08-18 build, so the
   // pair distinguishes "the tab is there" from "the tab is there but the money
@@ -126,6 +132,7 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/kb/articles":               { file: "server/kb-routes.ts",           needle: "/api/admin/kb/articles" },
   "/api/public/faqs/unitedprints":        { file: "server/faq-routes.ts",           needle: "/api/public/faqs/" },
   "/api/admin/print-expenses":            { file: "server/print-expense-routes.ts", needle: "/api/admin/print-expenses" },
+  "/api/admin/coding-budget":             { file: "server/coding-budget-routes.ts", needle: "/api/admin/coding-budget" },
 };
 
 import { readFileSync, existsSync } from "fs";
@@ -172,12 +179,27 @@ for (const c of CANARIES) {
   }
 }
 
-if (unreachable) console.log(`\n⚠️  ${unreachable} canary/canaries unreachable — treat this run as inconclusive.`);
-
 if (removals) {
   console.log(`\n🔴 REFUSING: this branch would remove ${removals} live feature(s) from production.`);
   console.log(`   Merge the branch that carries them FIRST (the union is always additive —`);
   console.log(`   keep both sides), then re-run this check.\n`);
   process.exit(1);
 }
+
+// 🔴 A guard that cannot see production has not cleared anything, and must not
+// say so. On 2026-08-26 every one of these came back unreachable — node's
+// outbound fetch was broken on that machine while curl worked fine — and the
+// script still printed "Safe to deploy" underneath the warning. That is the
+// most dangerous state this file can be in: it looks like a pass. It now
+// refuses, and names the way to check by hand.
+if (unreachable) {
+  console.log(`\n🔴 REFUSING: ${unreachable} of ${CANARIES.length} canaries could not reach production.`);
+  console.log(`   This run proves NOTHING — an unreachable canary is not a green one.`);
+  console.log(`   If node's networking is the problem (curl works, fetch does not), probe by hand:`);
+  console.log(`     curl -so/dev/null -w '%{http_code}\\n' ${PROD}/api/admin/proposals   # expect 401`);
+  console.log(`   Override only when you have checked another way: PREFLIGHT_ALLOW_UNREACHABLE=1\n`);
+  if (process.env.PREFLIGHT_ALLOW_UNREACHABLE !== "1") process.exit(1);
+  console.log(`   ...overridden by PREFLIGHT_ALLOW_UNREACHABLE=1.\n`);
+}
+
 console.log(`\n✓ No live feature would be removed. Safe to deploy.\n`);

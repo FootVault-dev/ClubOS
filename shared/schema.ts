@@ -8566,3 +8566,85 @@ export const equipmentAuditReminders = pgTable("equipment_audit_reminders", {
   roundIdx: index("equipment_reminders_round_idx").on(t.roundId, t.holderId),
 }));
 export type EquipmentAuditReminder = typeof equipmentAuditReminders.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CODING BUDGET — the club's chart of accounts (Victor's FY2026 structure),
+// and the transactions mapped against it. See shared/coding-budget.ts for the
+// vocabulary and migrations/2026-08-26_coding_budget.sql for the invariants.
+// ─────────────────────────────────────────────────────────────────────────────
+export const codingAccounts = pgTable("coding_accounts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  code: text("code").notNull(),                    // "01-02-03-04"
+  // RESTRICT: deleting a parent must never take 600 descendants — and every
+  // transaction coded to them — with it.
+  parentId: integer("parent_id"),
+  topCode: text("top_code").notNull(),             // "01"
+  depth: integer("depth").notNull(),
+
+  name: text("name").notNull(),
+  kind: text("kind").notNull(),                    // income|expense
+  treatment: text("treatment").notNull(),          // entry|coding|subtotal|reserved
+
+  // 🔴 NULL is NOT zero: most lines carry no figure and roll up from children,
+  // while 35 carry an explicit 0 ("we budget nothing here"). No default.
+  budgetExclCents: integer("budget_excl_cents"),
+  budgetInclCents: integer("budget_incl_cents"),
+
+  xeroAccount: text("xero_account"),               // the workbook's SUGGESTION
+  xeroTracking: text("xero_tracking"),
+  xeroAccountCode: text("xero_account_code"),      // what Victor actually configured
+  gstTreatment: text("gst_treatment"),             // null = nobody has decided yet
+
+  note: text("note"),
+  active: boolean("active").notNull().default(true),
+  // Generated in Postgres from `treatment`; read-only here.
+  postable: boolean("postable").notNull(),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  orgTopIdx: index("coding_accounts_org_top_idx").on(t.organizationId, t.topCode),
+  parentIdx: index("coding_accounts_parent_idx").on(t.parentId),
+  orgKindIdx: index("coding_accounts_org_kind_idx").on(t.organizationId, t.kind),
+}));
+export type CodingAccountRow = typeof codingAccounts.$inferSelect;
+
+export const codingTransactions = pgTable("coding_transactions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // 🔴 The composite FK (coding_account_id, account_postable) → (id, postable)
+  // is declared in SQL, not here: Drizzle cannot express it, and it is the
+  // constraint that makes coding money to a control row impossible.
+  codingAccountId: integer("coding_account_id").notNull(),
+  accountPostable: boolean("account_postable").notNull().default(true),
+
+  occurredOn: date("occurred_on").notNull(),
+
+  xeroContact: text("xero_contact"),
+  party: text("party"),                            // participant / player / supplier
+  reference: text("reference"),                    // invoice / bill number
+  description: text("description"),
+
+  amountExclCents: integer("amount_excl_cents").notNull(),
+  gstCents: integer("gst_cents").notNull().default(0),
+  // Generated in Postgres as excl + gst; read-only here so the three figures
+  // can never disagree the way the source workbook's do.
+  amountInclCents: integer("amount_incl_cents").notNull(),
+
+  status: text("status").notNull().default("draft"),   // draft|approved|reconciled
+  source: text("source").notNull().default("manual"),  // manual|xero|clubos|import
+  externalId: text("external_id"),                     // drives the idempotency index
+
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  accountIdx: index("coding_transactions_account_idx").on(t.codingAccountId, t.occurredOn),
+  orgDateIdx: index("coding_transactions_org_date_idx").on(t.organizationId, t.occurredOn),
+  statusIdx: index("coding_transactions_status_idx").on(t.organizationId, t.status),
+}));
+export type CodingTransactionRow = typeof codingTransactions.$inferSelect;
