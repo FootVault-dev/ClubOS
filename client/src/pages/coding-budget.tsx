@@ -184,7 +184,7 @@ export default function CodingBudget() {
       <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-2.5 text-sm">
         <div className="flex items-center gap-2 font-medium">
           <AlertTriangle className="h-4 w-4 text-amber-600" />
-          Two things to settle with Victor before this drives Xero
+          Three things to settle with Victor before this drives Xero
         </div>
         <p className="text-muted-foreground">
           <strong className="text-foreground">The surplus depends on which column you read.</strong>{" "}
