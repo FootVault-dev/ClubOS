@@ -291,6 +291,7 @@ const tournament7sNav = [
 // venue is confirmed and payment opens.
 const tournamentEthnicNav = [
   { tab: "ethnic-cup-registrations", title: "Registrations", url: "/admin/ethnic-cup-registrations", icon: ClipboardCheck },
+  { tab: "team-entries", title: "Team Entries", url: "/admin/team-entries", icon: Users },
 ];
 
 const gymnasticsNav = [

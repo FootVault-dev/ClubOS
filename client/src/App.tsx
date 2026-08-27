@@ -172,6 +172,11 @@ import StudioEditor from "@/pages/studio/StudioEditor";
 import StudioAnalytics from "@/pages/studio/StudioAnalytics";
 import Cic7sRegistrations from "@/pages/cic7s-registrations";
 import EthnicCupRegistrations from "@/pages/ethnic-cup-registrations";
+import TeamEntries from "@/pages/team-entries";
+import TeampayEnterPage from "@/pages/teampay/enter";
+import TeampayDashboard from "@/pages/teampay/dashboard";
+import TeampayPlayerPage from "@/pages/teampay/player";
+import TeampayFillinPage, { TeampayHoldPage } from "@/pages/teampay/fillin";
 import CicSkillsLandingPage from "@/pages/cic-skills-landing";
 import PrintsDashboard from "@/pages/prints-dashboard";
 import PrintsCRM from "@/pages/prints-crm";
@@ -471,6 +476,7 @@ function AdminRouter() {
         <Route path="/admin/volunteers" component={Volunteers} />
         <Route path="/admin/cic7s-registrations" component={Cic7sRegistrations} />
         <Route path="/admin/ethnic-cup-registrations" component={EthnicCupRegistrations} />
+        <Route path="/admin/team-entries" component={TeamEntries} />
         <Route path="/admin/cic-registrations" component={CicInbox} />
         <Route path="/admin/cic-livechat" component={CicLiveChat} />
         <Route path="/admin/mfl-livechat" component={MflLiveChat} />
@@ -837,6 +843,20 @@ function App() {
             <Route path="/print/checkout" component={PrintCheckout} />
             <Route path="/print/order/:token/upload" component={PrintUpload} />
             <Route path="/print/order/:token" component={PrintOrderStatus} />
+            {/* ── Team Pay ───────────────────────────────────────────────────
+                Public, no login. Every page is authenticated by a random token
+                in the URL, and each is branded from the competition's own row —
+                so these render as the Ethnic Cup, not as ClubOS.
+
+                🔴 /fill-in/reply/:token MUST precede /fill-in/:slug, or wouter
+                matches "reply" as a competition slug and a player answering an
+                invitation lands on a signup form. Same trap as the View As
+                /view-as/stop route, which locked people inside a staff account. */}
+            <Route path="/enter/:slug" component={TeampayEnterPage} />
+            <Route path="/team/:token" component={TeampayDashboard} />
+            <Route path="/pay/:token" component={TeampayPlayerPage} />
+            <Route path="/fill-in/reply/:token" component={TeampayHoldPage} />
+            <Route path="/fill-in/:slug" component={TeampayFillinPage} />
             {/* CIC Skills Challenge registration (join.cicyouth.com) */}
             <Route path="/skills" component={CicSkillsLandingPage} />
             {/* MFL team registration funnel (join.minifootball.co.nz) */}

@@ -248,6 +248,12 @@ app.use(attributionCookieMiddleware);
   const { registerEthnicCupRoutes } = await import("./ethnic-cup-routes");
   registerEthnicCupRoutes(app);
 
+  // Team Pay — team entries, per-player squad payment, the manager's dashboard
+  // and the fill-in marketplace. Public routes are authenticated by a token in
+  // the URL and no login; the staff board is gated by requireTab("team-entries").
+  const { registerTeampayRoutes } = await import("./teampay-routes");
+  registerTeampayRoutes(app);
+
   // Maintenance — the United Sports Centre's cleaning/consumable supplies and
   // its machines & equipment. Admin-only, gated by requireTab("maintenance") to
   // the venue workspace. Sibling of Housing, built for Riley (grounds staff).

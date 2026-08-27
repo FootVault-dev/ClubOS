@@ -149,3 +149,40 @@ export function constructWebhookEvent(payload: string | Buffer, sig: string): St
 }
 
 export { stripe };
+
+/**
+ * A plain card charge that belongs to no registration.
+ *
+ * Deliberately separate from createPaymentIntent, for two reasons:
+ *
+ * 1. createPaymentIntent stamps `registrationId` into metadata unconditionally.
+ *    The Stripe webhook's final `else if (registrationId)` branch treats that as
+ *    a camp registration — so passing any other kind of id through it means a
+ *    payment for one thing quietly finalising another.
+ *
+ * 2. It enables `automatic_payment_methods`, which turns on whatever Stripe is
+ *    promoting that quarter (Klarna showed up on the invoice pages this way).
+ *    A team subs payment should be a card, and only a card.
+ */
+export async function createCardPaymentIntent(params: {
+  amountCents: number;
+  currency: string;
+  receiptEmail?: string | null;
+  description: string;
+  metadata: Record<string, string>;
+  customerId?: string;
+  idempotencyKey?: string;
+}): Promise<Stripe.PaymentIntent> {
+  return stripe.paymentIntents.create(
+    {
+      amount: params.amountCents,
+      currency: params.currency.toLowerCase(),
+      ...(params.receiptEmail ? { receipt_email: params.receiptEmail } : {}),
+      ...(params.customerId ? { customer: params.customerId } : {}),
+      description: params.description,
+      metadata: params.metadata,
+      payment_method_types: ["card"],
+    },
+    params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined,
+  );
+}

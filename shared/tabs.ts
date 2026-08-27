@@ -178,6 +178,9 @@ const tournamentTabs: TabDef[] = [
   // CIC 7's sub-view (toggled via the Youth/7's switcher in the sidebar).
   { slug: "cic7s-registrations", title: "CIC 7's Registrations", url: "/admin/cic7s-registrations" },
   { slug: "ethnic-cup-registrations", title: "Ethnic Cup Registrations", url: "/admin/ethnic-cup-registrations" },
+  // Team Pay — entered teams, their squads, who has paid, and the fill-in pool.
+  // NOT super-admin locked: Isaac runs the tournaments and this is his board.
+  { slug: "team-entries", title: "Team Entries", url: "/admin/team-entries" },
   { slug: "store", title: "Store", url: "/admin/store" },
   { slug: "media", title: "Media", url: "/admin/media" },
   { slug: "marketing", title: "Marketing", url: "/admin/marketing" },

@@ -101,6 +101,13 @@ const CANARIES: Canary[] = [
   // OPTIONS, not GET: the route is POST-only, so a GET 404s and the canary
   // would sit at "absent" forever — protecting nothing while looking green.
   { feature: "ethnic cup form",     path: "/api/public/ethnic-cup/register-interest", method: "OPTIONS", expect: [204] },
+  // Team Pay. The public canary is the one that matters: a manager's dashboard
+  // link and a player's payment link are both sitting in people's inboxes, and
+  // a deploy that removed these routes would turn every one of them into a 404
+  // with nothing to tell us. 200 because the competition is public information;
+  // a bad slug 404s.
+  { feature: "team pay competition", path: "/api/public/teampay/competition/ethnic-cup-2026", expect: [200] },
+  { feature: "team pay admin",       path: "/api/admin/teampay/overview",                     expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -133,6 +140,8 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/public/faqs/unitedprints":        { file: "server/faq-routes.ts",           needle: "/api/public/faqs/" },
   "/api/admin/print-expenses":            { file: "server/print-expense-routes.ts", needle: "/api/admin/print-expenses" },
   "/api/admin/coding-budget":             { file: "server/coding-budget-routes.ts", needle: "/api/admin/coding-budget" },
+  "/api/public/teampay/competition/ethnic-cup-2026": { file: "server/teampay-routes.ts", needle: "/api/public/teampay/competition/:slug" },
+  "/api/admin/teampay/overview":          { file: "server/teampay-routes.ts",      needle: "/api/admin/teampay/overview" },
 };
 
 import { readFileSync, existsSync } from "fs";

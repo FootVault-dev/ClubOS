@@ -17569,7 +17569,16 @@ export async function registerRoutes(
         const paymentIntent = event.data.object as any;
         const regType = paymentIntent.metadata?.registrationType;
         const registrationId = parseInt(paymentIntent.metadata?.registrationId);
-        if (paymentIntent.metadata?.kind === "membership" && paymentIntent.metadata?.memberId) {
+        if (paymentIntent.metadata?.kind === "teampay" && paymentIntent.metadata?.teampayPlayerId) {
+          // Team Pay: one squad member's share cleared. Idempotent — the flip is
+          // an atomic UPDATE ... WHERE paid_at IS NULL, so a webhook retry racing
+          // the browser's own confirm call produces one paid row, not two.
+          // MUST precede the generic registrationId branch below, like the
+          // membership and invoice branches, so a Team Pay charge can never be
+          // mistaken for a camp registration.
+          const { markPaidByPaymentIntent } = await import("./teampay");
+          await markPaidByPaymentIntent(paymentIntent);
+        } else if (paymentIntent.metadata?.kind === "membership" && paymentIntent.metadata?.memberId) {
           // SIU membership self-serve join — finalize + welcome/notify emails.
           // MUST be first: createPaymentIntent stamps registrationId=memberId, so
           // without this guard the generic registrationId branch below would treat

@@ -8648,3 +8648,313 @@ export const codingTransactions = pgTable("coding_transactions", {
   statusIdx: index("coding_transactions_status_idx").on(t.organizationId, t.status),
 }));
 export type CodingTransactionRow = typeof codingTransactions.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Team Pay — team entries, squad payment, and the fill-in marketplace
+//
+// Built 2026-08-27 from Isaac Living's spec. Piloting on the Christchurch
+// Ethnic Cup, then MFL and CIC 7's.
+//
+// 🔴 These are NOT split_sessions/split_members. That pair carries live MFL
+// money and live USC venue bookings, its `email` column is NOT NULL and is read
+// unguarded in two dozen places including the marketing ingest, and the roster
+// here has to hold a player the manager has a phone number for and no email.
+// Reshaping a live money table to fit a new business rule is how the money
+// tables in this repo got their scars. Same PATTERN, own tables.
+//
+// The rules (share maths, the three statuses, nudge gating, what a manager may
+// see of a fill-in) live in shared/teampay.ts and are declared exactly once.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * The registry: which competitions accept team entries, at what fee, and
+ * whether money is switched on yet.
+ *
+ * Rolling Team Pay out to MFL or CIC 7's is an INSERT here — not a deploy.
+ */
+export const teampayCompetitions = pgTable("teampay_competitions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  // Exactly one of these is set — enforced by a CHECK in the migration, so no
+  // code path can create a competition belonging to both or neither.
+  kind: text("kind").notNull(),                       // 'tournament' | 'program'
+  tournamentId: integer("tournament_id").references(() => tournaments.id, { onDelete: "cascade" }),
+  programId: integer("program_id").references(() => programs.id, { onDelete: "cascade" }),
+
+  /** Public URL segment, e.g. `ethnic-cup-2026`. */
+  slug: text("slug").notNull(),
+  /** What the manager sees at the top of the page. */
+  name: text("name").notNull(),
+  /** Key into TEAMPAY_BRANDS — colours and faces for every public page. */
+  brand: text("brand").notNull().default("ethniccup"),
+
+  /** The whole team fee. Split equally across the squad. */
+  feeCents: integer("fee_cents").notNull(),
+  currency: text("currency").notNull().default("NZD"),
+  /** Pre-filled on the entry form; the manager can change it before anyone pays. */
+  defaultSquadSize: integer("default_squad_size").notNull().default(14),
+
+  // ── the three switches ──────────────────────────────────────────────────
+  /** Can a new team enter at all? */
+  entriesOpen: boolean("entries_open").notNull().default(false),
+  /**
+   * 🔴 Can money be taken? Daniel's standing call on the Ethnic Cup is that no
+   * money is taken until the venue is confirmed. With this false a team still
+   * enters, still builds its squad, and every player still sees what they will
+   * owe — the pay button just says so. It is what makes the pilot testable
+   * without taking a cent.
+   */
+  paymentsEnabled: boolean("payments_enabled").notNull().default(false),
+  /** Is the fill-in marketplace accepting players and showing them to managers? */
+  fillinsOpen: boolean("fillins_open").notNull().default(false),
+
+  /** Shown on the player's pay page so they know what they're paying for. */
+  blurb: text("blurb"),
+  /** Where the money must be in by. Display + reminder cadence only. */
+  payByDate: date("pay_by_date"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueSlug: uniqueIndex("teampay_competitions_slug_unique").on(t.slug),
+  orgIdx: index("teampay_competitions_org_idx").on(t.organizationId),
+}));
+export type TeampayCompetition = typeof teampayCompetitions.$inferSelect;
+
+/**
+ * One team's entry. Created by the manager; costs nothing up front (Isaac's
+ * spec is explicit — the manager pays their own share like everyone else).
+ */
+export const teampayEntries = pgTable("teampay_entries", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  competitionId: integer("competition_id").notNull().references(() => teampayCompetitions.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  teamName: text("team_name").notNull(),
+  /** The community the team represents — the whole point of the Ethnic Cup. */
+  community: text("community"),
+
+  managerName: text("manager_name").notNull(),
+  managerEmail: text("manager_email").notNull(),
+  managerPhone: text("manager_phone"),
+
+  /**
+   * Frozen at entry. 🔴 Editable ONLY while nobody has paid — otherwise the
+   * player who paid first paid a different share from the player who paid last,
+   * for the same seat.
+   */
+  squadSize: integer("squad_size").notNull(),
+  /** Copied from the competition at entry so a later fee change can't re-price a live squad. */
+  feeCents: integer("fee_cents").notNull(),
+
+  /**
+   * 🔴 The manager's dashboard link. Long and random because the page behind it
+   * lists every squad member's name, email, phone and payment status. Same rule
+   * as the invoice pages: the set must not be enumerable.
+   */
+  organiserToken: text("organiser_token").notNull(),
+
+  status: text("status").notNull().default("active"),  // active | withdrawn
+  withdrawnAt: timestamp("withdrawn_at"),
+
+  /** Stamped once, when the money first covers the fee. A fact, not a status. */
+  paidUpAt: timestamp("paid_up_at"),
+
+  /** Staff notes. Never shown to the manager. */
+  notes: text("notes"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueOrganiserToken: uniqueIndex("teampay_entries_organiser_token_unique").on(t.organiserToken),
+  competitionIdx: index("teampay_entries_competition_idx").on(t.competitionId),
+}));
+export type TeampayEntry = typeof teampayEntries.$inferSelect;
+
+/**
+ * One squad member. The row IS the invitation, the payment record and the
+ * dashboard line — there is no separate invite table, because a second table
+ * would be a second answer to "has Ahmed paid?".
+ */
+export const teampayPlayers = pgTable("teampay_players", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  entryId: integer("entry_id").notNull().references(() => teampayEntries.id, { onDelete: "cascade" }),
+
+  /**
+   * 🔴 The manager needs the NAME, not a count. An earlier internal build for
+   * the Pro League declaration system showed only status totals and was useless
+   * — Isaac called that out in the spec as the mistake to avoid.
+   */
+  name: text("name").notNull(),
+  /**
+   * Nullable, and that is the point. A manager has their squad's phone numbers
+   * in a group chat, not their email addresses. One or the other is required —
+   * enforced by a CHECK, not by hope.
+   */
+  email: text("email"),
+  phone: text("phone"),
+
+  /** The player's own pay link. Never guessable — it authenticates them. */
+  inviteToken: text("invite_token").notNull(),
+
+  /** 'manager' | 'roster' | 'fillin' | 'self' — how this player got here. */
+  source: text("source").notNull().default("roster"),
+  /** True for the row representing the manager themselves. They pay a share too. */
+  isManager: boolean("is_manager").notNull().default(false),
+
+  // ── the three statuses, as two timestamps ────────────────────────────────
+  /**
+   * 🔴 Stamped by a POST the page makes AFTER it mounts — never by the server
+   * GET that serves the link. Mail scanners, link previewers and Apple's Mail
+   * Privacy Protection fetch URLs; if a GET stamped this, the manager would be
+   * told a player had seen their link when a robot had. Scanners don't run JS.
+   */
+  firstOpenedAt: timestamp("first_opened_at"),
+  openCount: integer("open_count").notNull().default(0),
+  lastOpenedAt: timestamp("last_opened_at"),
+
+  /** The player said they can't play. Their slot frees up for a fill-in. */
+  declinedAt: timestamp("declined_at"),
+  /** The manager took them off the roster. Never a delete — see the CHECK. */
+  removedAt: timestamp("removed_at"),
+
+  // ── nudging ──────────────────────────────────────────────────────────────
+  nudgeCount: integer("nudge_count").notNull().default(0),
+  lastNudgedAt: timestamp("last_nudged_at"),
+
+  // ── money ────────────────────────────────────────────────────────────────
+  /**
+   * What they were actually charged, in cents. NULL until paid.
+   * 🔴 The charge is the fact; the quoted share is derived. A player who paid
+   * $57.15 keeps having paid $57.15 even if the squad size changes underneath.
+   */
+  paidCents: integer("paid_cents"),
+  paidAt: timestamp("paid_at"),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  stripeRefundId: text("stripe_refund_id"),
+  refundedAt: timestamp("refunded_at"),
+  refundedCents: integer("refunded_cents"),
+
+  /** Set when this player came out of the fill-in pool. */
+  fillinId: integer("fillin_id"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueInviteToken: uniqueIndex("teampay_players_invite_token_unique").on(t.inviteToken),
+  entryIdx: index("teampay_players_entry_idx").on(t.entryId),
+  piIdx: index("teampay_players_payment_intent_idx").on(t.stripePaymentIntentId),
+}));
+export type TeampayPlayer = typeof teampayPlayers.$inferSelect;
+
+/**
+ * The fill-in pool: individual players with no team. Replaces Isaac's informal
+ * "fill-ins" group chat.
+ *
+ * 🔴 Contact details in here are NOT browsable. See RELEASE_CONTACT_ON_REQUEST
+ * in shared/teampay.ts for the reasoning and the switch.
+ */
+export const teampayFillins = pgTable("teampay_fillins", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  competitionId: integer("competition_id").notNull().references(() => teampayCompetitions.id, { onDelete: "cascade" }),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  phone: text("phone"),
+
+  position: text("position"),
+  ability: text("ability"),
+  highestLevel: text("highest_level"),
+  /**
+   * Where they're from. Isaac's spec calls this out specifically: several
+   * fill-ins are newcomers to Christchurch who don't know anyone to form a
+   * team with, and that context is why a manager picks them.
+   */
+  fromWhere: text("from_where"),
+  motivation: text("motivation"),
+  note: text("note"),
+
+  /**
+   * available — in the pool.
+   * held      — a manager has asked; invisible to everyone else.
+   * placed    — accepted a team.
+   * withdrawn — took themselves out.
+   */
+  status: text("status").notNull().default("available"),
+
+  /** Their own link, to withdraw or update without a login. */
+  playerToken: text("player_token").notNull(),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  uniquePlayerToken: uniqueIndex("teampay_fillins_player_token_unique").on(t.playerToken),
+  competitionIdx: index("teampay_fillins_competition_idx").on(t.competitionId, t.status),
+}));
+export type TeampayFillin = typeof teampayFillins.$inferSelect;
+
+/**
+ * A manager's claim on a fill-in, and the player's answer.
+ *
+ * 🔴 "Avoid double-booking the same fill-in to two teams" is Isaac's requirement
+ * and it is enforced by a partial unique index on (fillin_id) WHERE state =
+ * 'active' — not by app code that two managers tapping at once can walk through.
+ */
+export const teampayFillinHolds = pgTable("teampay_fillin_holds", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  fillinId: integer("fillin_id").notNull().references(() => teampayFillins.id, { onDelete: "cascade" }),
+  entryId: integer("entry_id").notNull().references(() => teampayEntries.id, { onDelete: "cascade" }),
+
+  /** active | accepted | declined | expired | cancelled */
+  state: text("state").notNull().default("active"),
+
+  /** The player's one-tap accept/decline link. */
+  holdToken: text("hold_token").notNull(),
+
+  requestedAt: timestamp("requested_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  respondedAt: timestamp("responded_at"),
+  /** Optional note from the manager — "we train Tuesdays, you'd play right back". */
+  managerNote: text("manager_note"),
+
+  /** The roster row created when they accepted. */
+  playerId: integer("player_id").references(() => teampayPlayers.id, { onDelete: "set null" }),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqueHoldToken: uniqueIndex("teampay_fillin_holds_hold_token_unique").on(t.holdToken),
+  fillinIdx: index("teampay_fillin_holds_fillin_idx").on(t.fillinId),
+  entryIdx: index("teampay_fillin_holds_entry_idx").on(t.entryId, t.state),
+}));
+export type TeampayFillinHold = typeof teampayFillinHolds.$inferSelect;
+
+/**
+ * Append-only audit. Every nudge sent, every open, every fill-in request and
+ * answer, every payment.
+ *
+ * Worth its table because these are the questions a human asks weeks later —
+ * "did anyone actually chase him?", "why is this guy on two teams?" — and none
+ * of them can be answered from current state.
+ */
+export const teampayEvents = pgTable("teampay_events", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  entryId: integer("entry_id").references(() => teampayEntries.id, { onDelete: "cascade" }),
+  playerId: integer("player_id").references(() => teampayPlayers.id, { onDelete: "set null" }),
+  fillinId: integer("fillin_id").references(() => teampayFillins.id, { onDelete: "set null" }),
+  /** entry_created | invite_sent | nudge_sent | link_opened | paid | refunded |
+   *  declined | removed | fillin_requested | fillin_accepted | fillin_declined |
+   *  fillin_expired | squad_size_changed */
+  kind: text("kind").notNull(),
+  /** Who did it: 'manager' | 'player' | 'staff' | 'system'. */
+  actor: text("actor").notNull().default("system"),
+  /** Free-form context. Never the source of truth for anything. */
+  detail: jsonb("detail"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  entryIdx: index("teampay_events_entry_idx").on(t.entryId, t.createdAt),
+}));
+export type TeampayEvent = typeof teampayEvents.$inferSelect;
