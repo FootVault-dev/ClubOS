@@ -38,3 +38,25 @@ fly.toml.bak
 
 # Local-only preview harnesses (warehouse-dashboard.tsx/warehouse-scan.tsx, group-vehicles.tsx; no runtime role).
 preview
+
+# ── attached_assets: 203MB uploaded to use 432KB of it ───────────────────────
+# Added 2026-08-27, after a deploy stalled part-way through uploading this
+# directory and sat at 0% CPU for twenty minutes.
+#
+# `attached_assets/` is the Replit-era upload dump. The client reaches it through
+# the `@assets` vite alias, and exactly TWO files in the entire tree are imported
+# — both logos, 432KB together. The other 202MB has been going up on every
+# deploy since the folder existed, which is the real remainder of the "Fly's
+# depot builder hangs" folklore this file already half-fixed by excluding
+# .worktrees.
+#
+# 🔴 It must be `attached_assets/*`, not `attached_assets`. Docker cannot
+# re-include a file from a directory that was itself excluded, so a bare
+# directory rule would silently drop both logos and fail the build at the vite
+# step.
+#
+# Re-check the list before adding an import from @assets:
+#   grep -rhoE '@assets/[^")]+' --include="*.ts" --include="*.tsx" client/src | sort -u
+attached_assets/*
+!attached_assets/CUFC_LOGO_1772823768518.png
+!attached_assets/Untitled_design_-_2026-04-10T083202.470_1775766890766.png
