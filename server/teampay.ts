@@ -589,10 +589,21 @@ export async function payIntent(inviteToken: string): Promise<{ error?: string; 
       teampayEntryId: String(entry.id),
     },
     customerId,
-    // 🔴 A stable key per player, so a double-tap or a retry re-confirms the SAME
-    // intent instead of creating a second charge. A genuine second payment for
-    // the same seat does not exist — there is one share per player.
-    idempotencyKey: `teampay-player-${player.id}`,
+    // 🔴 Keyed on the player AND the amount.
+    //
+    // Per player alone looks right — one share per seat, so a double tap is a
+    // retry — but the manager is invited to change the squad size right up until
+    // the first payment, and that changes everyone's share. A player who had
+    // already opened their page at $57.15 and came back at $50.00 would send the
+    // same key with a different amount, and Stripe refuses that outright: "Keys
+    // for idempotent requests can only be used with the same parameters." They
+    // would see "couldn't start that payment" and have no way through it.
+    //
+    // With the amount in the key, a re-quote mints a fresh intent (correct — the
+    // price genuinely changed) and a repeat at the same price is still a retry
+    // (correct — one share per seat). The abandoned intent was never confirmed
+    // and expires on its own.
+    idempotencyKey: `teampay-player-${player.id}-${amountCents}`,
   });
 
   if (customerId && customerId !== player.stripeCustomerId) {
