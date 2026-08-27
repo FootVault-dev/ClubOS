@@ -19522,6 +19522,61 @@ export async function registerRoutes(
     }
   });
 
+  // ── External API v1 — Christchurch Ethnic Cup, scope ethnic-cup:read ───────
+  // Register-interest submissions from ethniccup.com, for the tournament
+  // director's own AIOS. `community` is the ethnic community a person is
+  // entering for — it is the axis the whole tournament is organised on, not an
+  // incidental demographic field, which is why it is here at all.
+  //
+  // 🔴 `notes` is deliberately NOT exposed. It is the staff annotation written
+  // ABOUT a person while triaging them, and a bulk analytics feed has no need
+  // of it. v1 is add-only, so adding a field later is safe and removing one is
+  // not — start narrow.
+  app.get("/api/v1/ethnic-cup/registrations", requireApiKey, requireScope("ethnic-cup:read"), async (req: Request, res: Response) => {
+    try {
+      const orgs = await apiKeyOrgsOfType(req, "tournament");
+      if (orgs.length === 0) return res.status(403).json({ error: "This API key has no tournament workspace access" });
+      const orgIdList = orgs.map((o) => o.id).join(",");
+
+      // Whitelisted before it reaches sql.raw — these are the statuses
+      // server/ethnic-cup-routes.ts itself accepts.
+      const allowed = ["new", "contacted", "entered", "declined", "archived"];
+      const status = typeof req.query.status === "string" && allowed.includes(req.query.status) ? req.query.status : null;
+
+      const limit = Math.min(parseInt(req.query.limit as string) || 1000, 2000);
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const { rows } = await db.execute(sql.raw(`
+        SELECT id, first_name, last_name, email, phone, community, grade, message,
+               source_url, status, created_at, updated_at
+        FROM ethnic_cup_registrations
+        WHERE organization_id IN (${orgIdList})
+          ${status ? `AND status = '${status}'` : ""}
+        ORDER BY created_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `));
+
+      res.json({
+        registrations: rows.map((r: any) => ({
+          id: r.id,
+          firstName: r.first_name,
+          lastName: r.last_name,
+          email: r.email,
+          phone: r.phone,
+          community: r.community,
+          grade: r.grade,
+          message: r.message,
+          sourceUrl: r.source_url,
+          status: r.status,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ── External API v1 — Sporty / NZF registration export, scope sporty:read ──
   // Exactly the Integration-1 field set from the CUFC × Sporty brief: identity,
   // contact, guardian + emergency (for minors), registration details, and a

@@ -108,6 +108,10 @@ const CANARIES: Canary[] = [
   // a bad slug 404s.
   { feature: "team pay competition", path: "/api/public/teampay/competition/ethnic-cup-2026", expect: [200] },
   { feature: "team pay admin",       path: "/api/admin/teampay/overview",                     expect: [401] },
+  // The Ethnic Cup feed into the tournament director's own AIOS. Silent if it
+  // goes: his collector logs a 403/404 into a file nobody reads and his
+  // dashboard simply stops gaining rows, which looks identical to a quiet week.
+  { feature: "ethnic cup v1 API",   path: "/api/v1/ethnic-cup/registrations",      expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -122,6 +126,7 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/push/register":             { file: "server/notification-routes.ts", needle: "/api/admin/push/register" },
   "/api/admin/chat/bootstrap":            { file: "server/staff-chat-routes.ts",   needle: "/api/admin/chat/bootstrap" },
   "/api/v1/squads":                       { file: "server/routes.ts",              needle: "/api/v1/squads" },
+  "/api/v1/ethnic-cup/registrations":     { file: "server/routes.ts",              needle: "/api/v1/ethnic-cup/registrations" },
   "/api/admin/task-tracker/bootstrap":    { file: "server/task-tracker-routes.ts", needle: "/bootstrap" },
   "/api/admin/people?q=a":                { file: "server/family-routes.ts",       needle: "/api/admin/people" },
   "/api/admin/videos":                    { file: "server/videos-routes.ts",       needle: "/api/admin/videos" },

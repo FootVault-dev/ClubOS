@@ -78,6 +78,13 @@ export const API_SCOPES: ApiScopeDef[] = [
       "The club's own teams and who is in them — squad name, age grade, season, and each player's name, number and position. Never DOB, contact details, medical notes or assessments.",
     personal: true,
   },
+  {
+    scope: "ethnic-cup:read",
+    label: "Ethnic Cup",
+    description:
+      "Christchurch Ethnic Cup register-interest submissions — name, contact, the community they represent, grade and status. Never the staff notes written about them.",
+    personal: true,
+  },
 ];
 
 export const VALID_API_SCOPES = new Set(API_SCOPES.map((s) => s.scope));
@@ -179,7 +186,17 @@ export function rejectedProgramTokens(raw: unknown): string[] {
 // scopes: the admin would see a "fenced" badge on a key that still returns
 // every CIC 7s registrant's email. The write endpoints reject that combination.
 
-export const PROGRAMME_UNAWARE_SCOPES = ["league:read", "tournament:read", "cic7s:read"] as const;
+export const PROGRAMME_UNAWARE_SCOPES = [
+  "league:read",
+  "tournament:read",
+  "cic7s:read",
+  // squads:read reads club_squads, and ethnic-cup:read reads
+  // ethnic_cup_registrations — neither query ever joins `programs`, so a fence
+  // on a key holding them is decorative. squads:read was missing here from the
+  // day it shipped.
+  "squads:read",
+  "ethnic-cup:read",
+] as const;
 
 export function scopesOutsideProgramFilter(scopes: string[]): string[] {
   return scopes.filter((s) => (PROGRAMME_UNAWARE_SCOPES as readonly string[]).includes(s));

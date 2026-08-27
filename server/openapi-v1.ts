@@ -269,6 +269,21 @@ export const OPENAPI_V1_SPEC = {
         responses: { "200": { description: "Registrations" }, ...errorResponses },
       },
     },
+    "/api/v1/ethnic-cup/registrations": {
+      get: {
+        summary: "Christchurch Ethnic Cup register-interest submissions",
+        description:
+          "Scope: ethnic-cup:read. Name, contact, the community the person is entering for, " +
+          "grade, their message and current status. Excluded by design: the staff notes " +
+          "written about a registrant while triaging them.",
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string", enum: ["new", "contacted", "entered", "declined", "archived"] } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 1000, maximum: 2000 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+        ],
+        responses: { "200": { description: "Registrations" }, ...errorResponses },
+      },
+    },
     "/api/v1/sporty/registrations": {
       get: {
         summary: "NZF-compliance registration export (Sporty Integration 1)",

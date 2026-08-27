@@ -60,7 +60,11 @@ function buildMcpTools(): ToolDef[] {
     const op = ops?.get;
     if (!op) continue;
 
-    const scopeMatch = /Scope:\s*([a-z0-9:_]+)/i.exec(op.description || "");
+    // Hyphen included: scope names are not all single words — "ethnic-cup:read"
+    // parsed as "ethnic" here, which is nobody's scope. Harmless while this
+    // field is informational (the loopback call to requireScope does the real
+    // gating), and a silent mis-grant the day anything filters on it.
+    const scopeMatch = /Scope:\s*([a-z0-9:_-]+)/i.exec(op.description || "");
     const scope = scopeMatch ? scopeMatch[1] : null;
 
     const params: ToolParam[] = (op.parameters || []).map((p: any) => ({
