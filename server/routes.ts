@@ -25344,6 +25344,44 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
         console.error("[Class confirmation email] failed:", e.message);
       }
     }
+
+    // Meta Purchase (server-side CAPI) — the class path has NEVER fired one.
+    //
+    // Camps go down the legacy path below, which has always sent this, so
+    // holiday-camp campaigns tracked correctly (March 50 purchases / 4.3x ROAS,
+    // April 48 / 3.0x, July 15 / 3.2x). Term programmes check out here instead,
+    // and this branch returned before any event was sent — so August 2026, which
+    // advertised Technification and FUNiño U4-U8, reported $634 of spend against
+    // ZERO purchases while ClubOS recorded the registrations. The ads were fine;
+    // the pixel was never wired to this route.
+    //
+    // The tracked person is the PAYING GUARDIAN. On a class registration
+    // `reg.contactId` is the CHILD, so read the guardian explicitly — no child
+    // name, DOB or medical detail ever reaches Meta (AGENTS.md hard rule 4).
+    if (program && guardian?.email) {
+      try {
+        await sendPurchaseEvent({
+          registrationId,
+          campId: program.id,
+          totalCents: reg.totalCents ?? 0,
+          currency: reg.currency || "NZD",
+          email: guardian.email,
+          phone: guardian.phone || undefined,
+          firstName: guardian.firstName,
+          lastName: guardian.lastName,
+          fbp: (reg as any).fbp || metadata?.fbp || undefined,
+          fbc: (reg as any).fbc || metadata?.fbc || undefined,
+          userAgent: metadata?.userAgent || undefined,
+          // Same deterministic id the browser pixel uses, so Meta dedupes the
+          // two rather than counting one registration twice.
+          eventId: purchaseEventId(registrationId),
+          contentName: `${program.name} — term registration`,
+          contentIds: [program.slug || String(program.id)],
+        });
+      } catch (e: any) {
+        console.error("[Class Meta Purchase] failed:", e.message);
+      }
+    }
     return;
   }
 

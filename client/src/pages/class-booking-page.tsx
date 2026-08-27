@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { initPixel, trackEvent } from "@/lib/meta-pixel";
+import { purchaseEventId } from "@shared/meta-events";
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "");
 
@@ -59,8 +61,9 @@ interface IntentResponse {
   term: any;
 }
 
-function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly }: {
+function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly, programName }: {
   slug: string; registrationId: number; totalCents: number; parentEmail: string; isWeekly: boolean;
+  programName: string;
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -89,6 +92,20 @@ function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly }
       return;
     }
     if (paymentIntent?.status === "succeeded") {
+      // Browser Purchase. Deterministic id → Meta dedupes this against the
+      // server-side CAPI event in handlePaymentSuccess, so one registration is
+      // counted once. Neither half existed on this route until 2026-08-27,
+      // which is why term-programme campaigns reported clicks and no sales.
+      // On a weekly plan this is week one's charge, not the term total —
+      // reporting the whole term here would overstate revenue on day one.
+      trackEvent("Purchase", {
+        value: totalCents / 100,
+        currency: "NZD",
+        content_name: programName,
+        content_ids: [slug],
+        num_items: 1,
+      }, purchaseEventId(registrationId));
+
       setLocation(`/${slug}/success?registrationId=${registrationId}`);
     } else {
       setProcessing(false);
@@ -142,6 +159,22 @@ export default function ClassBookingPage() {
     queryFn: () => fetch(`/api/public/programs/${slug}/options`).then(r => r.json()),
     enabled: !!slug,
   });
+
+  // Meta pixel. This route had none at all, so `trackEvent` was a silent no-op
+  // here (it returns early when `window.fbq` is undefined) — a term programme
+  // could be advertised, clicked and paid for without Meta seeing anything past
+  // the click. Must sit above the loading/early-return guards to keep hook
+  // order stable across renders.
+  useEffect(() => {
+    const pixelId = (import.meta as any).env?.VITE_META_PIXEL_ID;
+    if (!pixelId || !quoteData?.program) return;
+    initPixel(pixelId);
+    trackEvent("ViewContent", {
+      content_name: quoteData.program.name,
+      content_category: "Term Programme",
+      content_ids: [slug],
+    });
+  }, [quoteData?.program?.name, slug]);
 
   // Form state
   const [parentFirst, setParentFirst] = useState("");
@@ -558,6 +591,7 @@ export default function ClassBookingPage() {
                 totalCents={intent.quote.payNowCents}
                 parentEmail={parentEmail}
                 isWeekly={intent.paymentMode === "weekly"}
+                programName={program.name}
               />
             </Elements>
           </div>
