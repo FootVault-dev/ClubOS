@@ -102,10 +102,15 @@ async function main() {
     // ── the roster ────────────────────────────────────────────────────────
     const add = http("POST", `/api/public/teampay/team/${orgToken}/players`, {
       players: [
-        { name: "Emailed Player", email: "verify+p1@example.com" },
+        // 🔴 Resend REFUSES example.com outright ("Invalid `to` field — please
+        // use our testing email address"), so every send in this run failed and
+        // the nudge check could only ever go amber. delivered@resend.dev is
+        // Resend's own sink: it accepts and delivers nowhere, which makes the
+        // reminder path genuinely proven instead of permanently excused.
+        { name: "Emailed Player", email: "delivered@resend.dev" },
         { name: "Phone Only Player", phone: "+64211234567" },
         { name: "No Contact At All" },
-        { name: "Emailed Player Again", email: "VERIFY+P1@example.com" },
+        { name: "Emailed Player Again", email: "DELIVERED@RESEND.DEV" },
       ],
     });
     check(add.json?.added === 2, `two valid players added (got ${add.json?.added})`);
@@ -163,6 +168,15 @@ async function main() {
     // ── squad size ────────────────────────────────────────────────────────
     check(http("PATCH", `/api/public/teampay/team/${orgToken}/squad-size`, { squadSize: 20 }).status === 200,
       "squad size can be changed while nobody has paid");
+
+    // 🔴 The re-quote. A player who opened their page at the old share and comes
+    // back after the manager resized must still be able to pay. With the amount
+    // missing from the idempotency key Stripe refuses the second request
+    // outright and the player is stuck on "couldn't start that payment".
+    const requote = http("POST", `/api/public/teampay/pay/${inviteToken}/intent`);
+    check(requote.status === 200 && requote.json?.amountCents === shareCents(FEE_CENTS, 20),
+      `🔴 after a resize the player is re-quoted and can still pay (${requote.status}: ${requote.json?.amountCents ?? requote.json?.message})`);
+
     check(http("PATCH", `/api/public/teampay/team/${orgToken}/squad-size`, { squadSize: 2 }).status === 400,
       "it cannot be set below the players already on the roster");
     check(http("PATCH", `/api/public/teampay/team/${orgToken}/squad-size`, { squadSize: 999 }).status === 400,
@@ -171,13 +185,14 @@ async function main() {
 
     // ── nudging ───────────────────────────────────────────────────────────
     const n1 = http("POST", `/api/public/teampay/team/${orgToken}/players/${emailed.id}/nudge`);
-    // Sending may legitimately fail outside NZ hours or with no Resend key; both
-    // are reported honestly rather than as a success.
-    check(n1.status === 200 || /sending hours|couldn't get that email/i.test(n1.json?.message || ""),
-      `a nudge either sends or says why not (${n1.status}: ${n1.json?.message ?? "sent"})`);
+    const outsideHours = /sending hours/i.test(n1.json?.message || "");
+    check(n1.status === 200 || outsideHours,
+      `the reminder email actually leaves the building (${n1.status}: ${n1.json?.message ?? "sent"})`);
     if (n1.status === 200) {
       const n2 = http("POST", `/api/public/teampay/team/${orgToken}/players/${emailed.id}/nudge`);
       check(n2.status === 400, "🔴 a second nudge inside the cooling-off window is refused");
+    } else if (outsideHours) {
+      console.log("    (nudge skipped — outside 8am-8pm NZ, which is the rule working)");
     }
 
     const paidRow = (await db.query(
