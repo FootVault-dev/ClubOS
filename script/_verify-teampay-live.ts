@@ -30,12 +30,31 @@ function check(cond: boolean, m: string) { cond ? ok(m) : bad(m); }
 function http(method: string, path: string, body?: unknown): { status: number; json: any } {
   const args = ["-s", "-o", "/dev/stdout", "-w", "\n%{http_code}", "-X", method, `${BASE}${path}`, "--max-time", "25"];
   if (body !== undefined) args.push("-H", "Content-Type: application/json", "-d", JSON.stringify(body));
-  const out = execFileSync("curl", args, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
-  const nl = out.lastIndexOf("\n");
-  const status = Number(out.slice(nl + 1).trim());
-  let json: any = null;
-  try { json = JSON.parse(out.slice(0, nl)); } catch { /* html or empty */ }
-  return { status, json };
+
+  // 🔴 Retry a connection failure, and ONLY a connection failure.
+  //
+  // Fly rolls two machines one at a time, so for a few seconds after a deploy a
+  // request can land on one that is still coming up and curl returns 000. That
+  // is the network, not the server, and a run that aborts on it says nothing
+  // about the code. A real HTTP status — 400, 404, 500 — is never retried,
+  // because that is the answer the check is asking for.
+  for (let attempt = 0; ; attempt++) {
+    let out = "";
+    try {
+      out = execFileSync("curl", args, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
+    } catch (e: any) {
+      out = String(e?.stdout ?? "");
+    }
+    const nl = out.lastIndexOf("\n");
+    const status = Number(out.slice(nl + 1).trim());
+    if (status === 0 && attempt < 3) {
+      execFileSync("sleep", ["3"]);
+      continue;
+    }
+    let json: any = null;
+    try { json = JSON.parse(out.slice(0, nl)); } catch { /* html or empty */ }
+    return { status, json };
+  }
 }
 
 async function main() {
