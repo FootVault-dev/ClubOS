@@ -280,6 +280,56 @@ function build() {
   push(`   correct on a light page too. */`);
   push(...paletteRules.sort());
 
+  // ── 4. harden the design tokens against third-party :root blocks ─────────
+  //
+  // 🔴 Found live on app.usg.co.nz, 2026-09-02: a browser extension injects
+  // its own `:root { --primary: #009AF7; --secondary: …; --background: … }`
+  // into every page. Same specificity as ours, later in the cascade, so it
+  // WINS — and `hsl(var(--primary))` becomes `hsl(#009AF7)`, which is invalid
+  // and paints nothing. On Daniel's machine that silently blanked every
+  // `bg-primary` button and every chart stroke in ClubOS.
+  //
+  // ~510 utilities across 62 files ride on these tokens, so a stranger's
+  // stylesheet could repaint most of the admin. Re-declaring them at
+  // `:root:not(.dark)` / `:root.dark` raises specificity from (0,1,0) to
+  // (0,2,0), which any plain `:root` loses to.
+  //
+  // Generated from the real token blocks in this same file, so the hardened
+  // copy cannot drift from the source of truth.
+  // Read the file fresh here — the module-level `css` const is initialised
+  // after build() runs, and the tokens must come from the CURRENT file.
+  const selfCss = readFileSync(CSS, "utf8");
+  const tokenBlock = (selector) => {
+    const re = new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([\\s\\S]*?)\\n\\}`, "m");
+    const m = re.exec(selfCss);
+    if (!m) return null;
+    return m[1]
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("--") && l.endsWith(";"))
+      .filter((l) => !l.includes("hsl(from")); // relative-colour fallbacks re-derive themselves
+  };
+
+  const light = tokenBlock(":root");
+  const dark = tokenBlock(".dark");
+  push("");
+  push("/* Design tokens re-declared at higher specificity so a third-party");
+  push("   `:root` block (a browser extension's theme, say) cannot silently");
+  push("   repaint the admin. Observed live: an extension setting");
+  push("   `--primary: #009AF7` made hsl(var(--primary)) invalid, which blanked");
+  push("   every bg-primary button and every chart stroke. */");
+  if (light?.length) {
+    push(`:root:not(.dark) {`);
+    for (const l of light) push(`  ${l}`);
+    push(`}`);
+  }
+  // After the light block, so `.dark` still wins when it is present.
+  if (dark?.length) {
+    push(`:root.dark {`);
+    for (const l of dark) push(`  ${l}`);
+    push(`}`);
+  }
+
   push("");
   push(END);
   return out.join("\n");

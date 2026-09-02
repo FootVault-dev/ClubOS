@@ -114,6 +114,7 @@ import {
 import { registerMediaRoutes } from "./media-routes";
 import { registerMarketingRoutes } from "./marketing/routes";
 import { registerFamilyRoutes } from "./family-routes";
+import { registerDashboardRoutes } from "./dashboard-routes";
 import { registerViewAsRoutes, clearViewAs } from "./view-as-routes";
 import { registerParentRoutes, resolveOwnedChildContactId } from "./parent-routes";
 
@@ -24771,6 +24772,12 @@ export async function registerRoutes(
   // reuses resolveFamily() for membership so the office and the family can
   // never disagree about whose child someone is.
   registerParentRoutes(app);
+
+  // Dashboard revenue — one honest number per workspace, with a period filter
+  // and a daily series. Deliberately NOT built on /api/admin/stats, which
+  // answered 200-with-zeros for a failed request, a missing workspace header
+  // and a genuinely empty workspace alike. See server/dashboard-routes.ts.
+  registerDashboardRoutes(app, requireAuth, workspaceOrg);
 
   return httpServer;
 }
