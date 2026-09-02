@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { buildNav, type NavItem } from "@/lib/nav-tree";
 import { useLocation, useSearch, Link } from "wouter";
 import {
   Sidebar,
@@ -7,8 +8,12 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarHeader,
 } from "@/components/ui/sidebar";
 import {
@@ -23,6 +28,7 @@ import {
   Mail,
   Settings,
   ChevronDown,
+  type LucideIcon,
   Check,
   Building2,
   Calendar,
@@ -224,8 +230,12 @@ const campsNav = [
   { tab: "attribution", title: "Attribution", url: "/admin/attribution", icon: Target },
   { tab: "behavior", title: "Behavior", url: "/admin/behavior", icon: Activity },
   { tab: "camps", title: "Camps", url: "/admin/camps", icon: Tent },
-  { tab: "academy", title: "Academy", url: "/admin/academy", icon: GraduationCap },
-  { tab: "squads", title: "Squads", url: "/admin/squads", icon: Shield },
+  {
+    tab: "academy", title: "Academy", url: "/admin/academy", icon: GraduationCap,
+    children: [
+      { tab: "squads", title: "Squads", url: "/admin/squads", icon: Shield },
+    ],
+  },
   // Terms intentionally NOT in the sidebar — it's reachable as a sub-tab
   // from the Academy page (Programs / Term Dates), matching the gymnastics
   // workspace's All Programs / Term Dates pattern.
@@ -731,12 +741,17 @@ export function AppSidebar() {
   const isSiu = currentOrg?.slug === "south-island-united";
   const tournamentMainNav =
     cicView === "7s" ? tournament7sNav : cicView === "ethnic" ? tournamentEthnicNav : tournamentNav;
-  const allMainNav = isSandbox ? sandboxNav : isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : isSiu ? siuNav : campsNav;
+  const allMainNav: NavItem[] = isSandbox ? sandboxNav : isPrints ? printsNav : isGroup ? groupNav : isGymnastics ? gymnasticsNav : isTournament ? tournamentMainNav : isLeague ? leagueNav : isVenue ? venueNav : isSiu ? siuNav : campsNav;
   const allSecondaryNav = isSandbox ? sandboxSecondary : isPrints ? printsSecondary : isGroup ? groupSecondary : isGymnastics ? gymnasticsSecondary : isTournament ? tournamentSecondary : isLeague ? leagueSecondary : isVenue ? venueSecondary : campsSecondary;
 
   // Filter nav by the user's tab whitelist for this workspace.
   // canAccessTab handles the bypass cases (super_admin, admin/manager role,
   // null tabs = full access for legacy memberships).
+  // Which sections the person has opened by hand. Undefined = follow the route,
+  // so a section is already open when you are standing inside it and nobody has
+  // to click twice to see where they are.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+
   const navFilter = (item: { tab: string }) => canAccessTab({
     globalRole: user?.role,
     membershipRole: currentOrg?.userRole,
@@ -747,7 +762,9 @@ export function AppSidebar() {
   const hiddenHere = new Set(
     HIDDEN_GLOBAL.concat(HIDDEN_BY_WORKSPACE[currentOrg?.slug ?? ""] ?? []),
   );
-  const mainNav = allMainNav.filter((item) => !hiddenHere.has(item.tab) && navFilter(item));
+  const canSee = (item: NavItem) => !hiddenHere.has(item.tab) && navFilter(item);
+  // 🔴 See lib/nav-tree.ts: nesting must never subtract a destination.
+  const mainNav = buildNav(allMainNav, canSee);
   // The System section is now the four things staff USE — the account and
   // admin settings that used to sit alongside them moved to the top-right
   // account menu, and two unfinished tools are hidden. See the two sets at
@@ -817,22 +834,83 @@ export function AppSidebar() {
             <SidebarMenu className="space-y-0.5">
               {mainNav.map((item) => {
                 const isActive = item.url === activeUrl;
+                const kids = item.children ?? [];
+                const onChild = kids.some((k) => k.url === activeUrl);
+                // Open if you opened it; otherwise open because you are in it.
+                const expanded = openSections[item.tab] ?? (isActive || onChild);
+                const rowCls = `rounded-xl h-9 transition-all duration-300 ${
+                  isActive
+                    ? "bg-gradient-to-r from-blue-500/15 to-blue-500/5 text-blue-400 border border-blue-500/25 shadow-[0_0_12px_rgba(3,86,197,0.1)]"
+                    : "text-white/40 border border-transparent hover:text-white/60 hover:bg-white/[0.03]"
+                }`;
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
                       asChild
                       data-active={isActive}
-                      className={`rounded-xl h-9 transition-all duration-300 ${
-                        isActive
-                          ? "bg-gradient-to-r from-blue-500/15 to-blue-500/5 text-blue-400 border border-blue-500/25 shadow-[0_0_12px_rgba(3,86,197,0.1)]"
-                          : "text-white/40 border border-transparent hover:text-white/60 hover:bg-white/[0.03]"
-                      }`}
+                      className={rowCls}
                     >
-                      <Link href={item.url} data-testid={`link-nav-${item.title.toLowerCase().replace(/[\s&]/g, '-')}`}>
+                      <Link
+                        href={item.url}
+                        // Clicking a section goes to its page AND reveals what
+                        // is under it — one click, never a dead parent row.
+                        onClick={() => {
+                          if (kids.length) setOpenSections((o) => ({ ...o, [item.tab]: true }));
+                        }}
+                        data-testid={`link-nav-${item.title.toLowerCase().replace(/[\s&]/g, '-')}`}
+                      >
                         <item.icon className="w-4 h-4" />
                         <span className="text-[13px] font-medium truncate">{item.title}</span>
                       </Link>
                     </SidebarMenuButton>
+
+                    {kids.length > 0 && (
+                      <SidebarMenuAction
+                        onClick={(e) => {
+                          // Collapse without leaving the page you are on.
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setOpenSections((o) => ({ ...o, [item.tab]: !expanded }));
+                        }}
+                        aria-expanded={expanded}
+                        aria-label={`${expanded ? "Collapse" : "Expand"} ${item.title}`}
+                        data-testid={`toggle-nav-${item.tab}`}
+                        className="top-1.5 text-white/25 hover:text-white/60 hover:bg-white/[0.06] rounded-md"
+                      >
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 transition-transform duration-200 ${expanded ? "" : "-rotate-90"}`}
+                        />
+                      </SidebarMenuAction>
+                    )}
+
+                    {kids.length > 0 && expanded && (
+                      <SidebarMenuSub className="border-white/10 mt-0.5 space-y-0.5">
+                        {kids.map((child) => {
+                          const childActive = child.url === activeUrl;
+                          return (
+                            <SidebarMenuSubItem key={child.title}>
+                              <SidebarMenuSubButton
+                                asChild
+                                data-active={childActive}
+                                className={`rounded-lg h-8 transition-all duration-300 ${
+                                  childActive
+                                    ? "bg-blue-500/10 text-blue-400"
+                                    : "text-white/35 hover:text-white/60 hover:bg-white/[0.03]"
+                                }`}
+                              >
+                                <Link
+                                  href={child.url}
+                                  data-testid={`link-nav-${child.title.toLowerCase().replace(/[\s&]/g, '-')}`}
+                                >
+                                  <child.icon className="w-3.5 h-3.5" />
+                                  <span className="text-[12.5px] font-medium truncate">{child.title}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          );
+                        })}
+                      </SidebarMenuSub>
+                    )}
                   </SidebarMenuItem>
                 );
               })}
