@@ -131,6 +131,9 @@ if [ -n "$_LIVE_JS_PATH" ]; then
     "Notification settings|client/src/components/app-sidebar.tsx|Notification settings universal tab" \
     "/admin/equipment|client/src/components/app-sidebar.tsx|Equipment Register tab" \
     "/admin/accommodation|client/src/components/app-sidebar.tsx|Accommodation tab" \
+    "button-account-menu|client/src/components/account-menu.tsx|Top-right account menu" \
+    "Revenue isn't wired up for this workspace|client/src/components/dashboard/revenue-widget.tsx|Dashboard revenue widget" \
+    "MOVED_TO_ACCOUNT_MENU|client/src/components/app-sidebar.tsx|Trimmed sidebar (light-only era)" \
   | while IFS='|' read -r _marker _file _label; do
       [ -z "$_marker" ] && continue
       if printf '%s' "$_LIVE_JS" | grep -q -- "$_marker"; then

@@ -108,11 +108,16 @@ const CANARIES: Canary[] = [
   // a bad slug 404s.
   { feature: "team pay competition", path: "/api/public/teampay/competition/ethnic-cup-2026", expect: [200] },
   { feature: "team pay admin",       path: "/api/admin/teampay/overview",                     expect: [401] },
+  // The rebuilt dashboard's only endpoint. Silent if it goes: the page falls
+  // back to nothing and every workspace's revenue simply stops appearing,
+  // which is indistinguishable from a quiet month.
+  { feature: "dashboard revenue",    path: "/api/admin/dashboard/revenue",                    expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
  *  still has it. Checked as plain text: the literal must appear in the file. */
 const SOURCE: Record<string, { file: string; needle: string }> = {
+  "/api/admin/dashboard/revenue":        { file: "server/dashboard-routes.ts",    needle: "/api/admin/dashboard/revenue" },
   "/api/admin/drive/bootstrap":           { file: "server/drive-routes.ts",        needle: "/api/admin/drive/bootstrap" },
   "/api/admin/equipment/overview":        { file: "server/equipment-routes.ts",    needle: "/api/admin/equipment/overview" },
   "/api/public/equipment/me":             { file: "server/equipment-routes.ts",    needle: "/api/public/equipment/me" },
