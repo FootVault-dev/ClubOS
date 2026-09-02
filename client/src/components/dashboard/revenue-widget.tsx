@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, ArrowDownRight, ArrowUpRight, Minus, Info } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
@@ -51,18 +51,32 @@ function shortDate(iso: string) {
  * correct one, which is the only frame some people will look at.
  */
 function useMeasuredWidth<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null);
   const [width, setWidth] = useState(0);
+  const observer = useRef<ResizeObserver | null>(null);
 
-  useEffect(() => {
-    const el = ref.current;
+  // 🔴 A CALLBACK ref, not useRef + useEffect([]).
+  //
+  // The chart div only exists in the `hasAny` branch. With an empty dep array
+  // the effect runs ONCE, on mount — and if the div was not mounted at that
+  // instant (one render with an empty series, a refetch, StrictMode's
+  // double-invoke) then `ref.current` is null, the observer never attaches,
+  // and the width stays 0 forever. That is exactly what shipped in v473: the
+  // headline read $6,928.00 on production with no chart under it.
+  //
+  // A callback ref fires whenever the node attaches or detaches, so a
+  // conditionally-rendered element is always measured.
+  const ref = useCallback((el: T | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
     if (!el) return;
     const set = () => setWidth(el.clientWidth);
     set();
     const ro = new ResizeObserver(set);
     ro.observe(el);
-    return () => ro.disconnect();
+    observer.current = ro;
   }, []);
+
+  useEffect(() => () => observer.current?.disconnect(), []);
 
   return { ref, width };
 }
