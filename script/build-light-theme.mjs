@@ -214,20 +214,36 @@ function build() {
 
   // ── 2. hardcoded dark panel surfaces ─────────────────────────────────────
   // Any arbitrary hex dark enough to be a surface rather than a brand colour.
+  // 🔴 The opacity modifier is part of the CLASS NAME. `bg-[#0a0f1c]` and
+  // `bg-[#0a0f1c]/95` compile to two DIFFERENT Tailwind classes, so a pattern
+  // without the `/NN` maps the first and misses the second. That gap shipped:
+  // Club Drive's sticky header is `bg-[#0a0f1c]/95` and stayed a black band on
+  // a white page, on production, on twelve pages at once.
   const hexTokens = [
-    ...new Set(grep("\\b(bg|border|from|via|to|ring|divide)-\\[#[0-9a-fA-F]{3,8}\\]")),
+    ...new Set(
+      grep("(([a-zA-Z-]+:)*)(bg|border|from|via|to|ring|divide)-\\[#[0-9a-fA-F]{3,8}\\](/[0-9]+)?"),
+    ),
   ];
   const darkHexRules = [];
   const mappedHexes = [];
   for (const token of hexTokens) {
-    const prop = token.slice(0, token.indexOf("-["));
-    const hex = token.match(/#[0-9a-fA-F]{3,8}/)[0];
+    const mod = (token.match(/^([a-zA-Z-]+:)/) || ["", ""])[1];
+    if (mod && !(mod in MODIFIERS)) continue;
+    const bare = token.slice(mod.length);
+    const prop = bare.slice(0, bare.indexOf("-["));
+    const hex = bare.match(/#[0-9a-fA-F]{3,8}/)[0];
     if (luminance(hex) > DARK_SURFACE_MAX_L) continue; // brand colour — leave it
+    // A translucent dark surface stays translucent: a 95%-opaque sticky header
+    // is doing backdrop-blur, and flattening it to solid would lose that.
+    const alphaM = bare.match(/\]\/([0-9]+)$/);
+    const alpha = alphaM ? Number(alphaM[1]) / 100 : 1;
+    const cardBg =
+      alpha === 1 ? "hsl(var(--card))" : `hsl(var(--card) / ${alpha})`;
     mappedHexes.push(`${token} (L=${luminance(hex).toFixed(4)})`);
-    const sel = `.${esc(token)}`;
+    const sel = (MODIFIERS[mod || ""])(`.${esc(token)}`);
     if (prop === "bg") {
       darkHexRules.push(
-        `html:not(.dark) ${sel} { background-color: hsl(var(--card)) !important; }`
+        `html:not(.dark) ${sel} { background-color: ${cardBg} !important; }`
       );
     } else if (prop === "border" || prop === "divide") {
       darkHexRules.push(
@@ -254,26 +270,45 @@ function build() {
   // ── 3. dark palette surfaces (zinc/slate/neutral 800-950, solid black) ───
   const paletteTokens = [
     ...new Set(
-      grep("\\b(bg|border)-(zinc|slate|neutral|gray|stone)-(8|9)[0-9]0\\b")
+      grep("(([a-zA-Z-]+:)*)(bg|border)-(zinc|slate|neutral|gray|stone)-(8|9)[0-9]0(/[0-9]+)?"),
     ),
   ];
   const paletteRules = [];
   for (const token of paletteTokens) {
-    const prop = token.slice(0, token.indexOf("-"));
-    const sel = `.${esc(token)}`;
+    const mod = (token.match(/^((?:[a-zA-Z-]+:)+)/) || ["", ""])[1];
+    if (mod && !(mod in MODIFIERS)) continue;
+    const bare = token.slice(mod.length);
+    const prop = bare.slice(0, bare.indexOf("-"));
+    const alphaM = bare.match(/\/([0-9]+)$/);
+    const alpha = alphaM ? Number(alphaM[1]) / 100 : 1;
+    const sel = (MODIFIERS[mod || ""])(`.${esc(token)}`);
     paletteRules.push(
       prop === "bg"
-        ? `html:not(.dark) ${sel} { background-color: hsl(var(--card)) !important; }`
-        : `html:not(.dark) ${sel} { border-color: rgb(${INK} / 0.10) !important; }`
+        ? `html:not(.dark) ${sel} { background-color: hsl(var(--card)${alpha === 1 ? "" : ` / ${alpha}`}) !important; }`
+        : `html:not(.dark) ${sel} { border-color: rgb(${INK} / ${borderAlpha(alpha)}) !important; }`
     );
   }
-  // Solid `bg-black` (no alpha) is a panel and must flip. `bg-black/40` is a
-  // modal scrim and is correct on a light page too, so it must NOT flip —
-  // and it doesn't: Tailwind compiles that to the single class token
-  // `bg-black\/40`, which the `.bg-black` selector below cannot match.
+  // 🔴 `bg-black/NN` is NOT always a scrim. That assumption shipped, and Chat's
+  // channel column — `bg-black/20` on a plain <aside> — came out a murky grey
+  // panel on a white page. Of 216 uses only 97 are viewport scrims; the rest
+  // are panels, inputs and code blocks.
+  //
+  // A scrim is identifiable: it covers its container, so it carries `inset-0`,
+  // and it is positioned. A panel is neither. `:not()` on those Tailwind
+  // classes separates them mechanically, and the opacity cap keeps the
+  // heavier `bg-black/60`+ badges that sit ON images black, where their white
+  // text is still legible.
   paletteRules.push(
     `html:not(.dark) .bg-black { background-color: hsl(var(--card)) !important; }`
   );
+  const blackPanels = [
+    ...new Set(grep("\\bbg-black/[0-9]+")),
+  ].filter((t) => Number(t.split("/")[1]) <= 40);
+  for (const token of blackPanels) {
+    paletteRules.push(
+      `html:not(.dark) .${esc(token)}:not(.inset-0):not(.absolute):not(.fixed) { background-color: rgb(${INK} / ${bgAlpha(Number(token.split("/")[1]) / 100)}) !important; }`,
+    );
+  }
   push("");
   push(`/* ${paletteRules.length} dark palette surfaces → light card.`);
   push(`   bg-black/NN scrims are deliberately untouched — a dim scrim is`);

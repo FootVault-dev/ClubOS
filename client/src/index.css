@@ -326,8 +326,8 @@ html:not(.dark) .text-white\/95 { color: rgb(15 23 42 / 0.99) !important; }
 html:not(.dark) .to-white\/\[0\.01\] { --tw-gradient-to: rgb(15 23 42 / 0.015) var(--tw-gradient-to-position) !important; }
 html:not(.dark) .via-white\/10 { --tw-gradient-to: rgb(15 23 42 / 0); --tw-gradient-stops: var(--tw-gradient-from), rgb(15 23 42 / 0.06) var(--tw-gradient-via-position), var(--tw-gradient-to) !important; }
 
-/* 35 hardcoded dark surfaces → light card. Luminance < 0.02.
-   bg-[#011a48] (L=0.0121), bg-[#02060E] (L=0.0017), bg-[#050B16] (L=0.0033), bg-[#070C16] (L=0.0037), bg-[#0a0a0c] (L=0.0031), bg-[#0a0b0d] (L=0.0033), bg-[#0a0e17] (L=0.0044), bg-[#0a0e1a] (L=0.0045), bg-[#0a0f1a] (L=0.0048), bg-[#0a0f1c] (L=0.0049), bg-[#0b0b0c] (L=0.0034), bg-[#0b0c0e] (L=0.0037), bg-[#0b0f17] (L=0.0047), bg-[#0b1120] (L=0.0058), bg-[#0c0c0e] (L=0.0037), bg-[#0d1117] (L=0.0055), bg-[#0d1120] (L=0.0059), bg-[#0d1220] (L=0.0062), bg-[#0d1424] (L=0.0071), bg-[#0e0f12] (L=0.0048), bg-[#0e1116] (L=0.0055), bg-[#0f1216] (L=0.0059), bg-[#0f1423] (L=0.0072), bg-[#101013] (L=0.0053), bg-[#101215] (L=0.0060), bg-[#12151b] (L=0.0074), bg-[#131829] (L=0.0095), bg-[#141511] (L=0.0073), bg-[#15171c] (L=0.0086), bg-[#16171a] (L=0.0086), bg-[#17181c] (L=0.0092), bg-[#1b1814] (L=0.0094), bg-[#1c1e24] (L=0.0130), from-[#0d1117] (L=0.0055), via-[#0d1117] (L=0.0055) */
+/* 40 hardcoded dark surfaces → light card. Luminance < 0.02.
+   bg-[#011a48] (L=0.0121), bg-[#02060E] (L=0.0017), bg-[#050B16] (L=0.0033), bg-[#070C16] (L=0.0037), bg-[#0a0a0c] (L=0.0031), bg-[#0a0b0d] (L=0.0033), bg-[#0a0e17] (L=0.0044), bg-[#0a0e17]/95 (L=0.0044), bg-[#0a0e1a] (L=0.0045), bg-[#0a0e1a]/95 (L=0.0045), bg-[#0a0f1a] (L=0.0048), bg-[#0a0f1c] (L=0.0049), bg-[#0a0f1c]/95 (L=0.0049), bg-[#0b0b0c] (L=0.0034), bg-[#0b0b0c]/95 (L=0.0034), bg-[#0b0c0e] (L=0.0037), bg-[#0b0f17] (L=0.0047), bg-[#0b1120] (L=0.0058), bg-[#0c0c0e] (L=0.0037), bg-[#0d1117] (L=0.0055), bg-[#0d1120] (L=0.0059), bg-[#0d1220] (L=0.0062), bg-[#0d1424] (L=0.0071), bg-[#0e0f12] (L=0.0048), bg-[#0e1116] (L=0.0055), bg-[#0f1216] (L=0.0059), bg-[#0f1423] (L=0.0072), bg-[#101013] (L=0.0053), bg-[#101215] (L=0.0060), bg-[#12151b] (L=0.0074), bg-[#131829] (L=0.0095), bg-[#141511] (L=0.0073), bg-[#15171c] (L=0.0086), bg-[#16171a] (L=0.0086), bg-[#17181c] (L=0.0092), bg-[#1b1814] (L=0.0094), bg-[#1c1e24] (L=0.0130), from-[#0d1117] (L=0.0055), via-[#0d1117] (L=0.0055), via-[#0d1117]/40 (L=0.0055) */
 html:not(.dark) .bg-\[\#011a48\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#02060E\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#050B16\] { background-color: hsl(var(--card)) !important; }
@@ -335,10 +335,14 @@ html:not(.dark) .bg-\[\#070C16\] { background-color: hsl(var(--card)) !important
 html:not(.dark) .bg-\[\#0a0a0c\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0a0b0d\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0a0e17\] { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-\[\#0a0e17\]\/95 { background-color: hsl(var(--card) / 0.95) !important; }
 html:not(.dark) .bg-\[\#0a0e1a\] { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-\[\#0a0e1a\]\/95 { background-color: hsl(var(--card) / 0.95) !important; }
 html:not(.dark) .bg-\[\#0a0f1a\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0a0f1c\] { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-\[\#0a0f1c\]\/95 { background-color: hsl(var(--card) / 0.95) !important; }
 html:not(.dark) .bg-\[\#0b0b0c\] { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-\[\#0b0b0c\]\/95 { background-color: hsl(var(--card) / 0.95) !important; }
 html:not(.dark) .bg-\[\#0b0c0e\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0b0f17\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0b1120\] { background-color: hsl(var(--card)) !important; }
@@ -363,19 +367,32 @@ html:not(.dark) .bg-\[\#1b1814\] { background-color: hsl(var(--card)) !important
 html:not(.dark) .bg-\[\#1c1e24\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .from-\[\#0d1117\] { --tw-gradient-from: hsl(var(--card)) !important; }
 html:not(.dark) .via-\[\#0d1117\] { --tw-gradient-to: hsl(var(--card)) !important; }
+html:not(.dark) .via-\[\#0d1117\]\/40 { --tw-gradient-to: hsl(var(--card)) !important; }
 
-/* 9 dark palette surfaces → light card.
+/* 21 dark palette surfaces → light card.
    bg-black/NN scrims are deliberately untouched — a dim scrim is
    correct on a light page too. */
 html:not(.dark) .bg-black { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-black\/10:not(.inset-0):not(.absolute):not(.fixed) { background-color: rgb(15 23 42 / 0.06) !important; }
+html:not(.dark) .bg-black\/15:not(.inset-0):not(.absolute):not(.fixed) { background-color: rgb(15 23 42 / 0.085) !important; }
+html:not(.dark) .bg-black\/20:not(.inset-0):not(.absolute):not(.fixed) { background-color: rgb(15 23 42 / 0.11) !important; }
+html:not(.dark) .bg-black\/30:not(.inset-0):not(.absolute):not(.fixed) { background-color: rgb(15 23 42 / 0.16) !important; }
+html:not(.dark) .bg-black\/40:not(.inset-0):not(.absolute):not(.fixed) { background-color: rgb(15 23 42 / 0.16) !important; }
 html:not(.dark) .bg-neutral-900 { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-neutral-950 { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-neutral-950\/95 { background-color: hsl(var(--card) / 0.95) !important; }
 html:not(.dark) .bg-slate-800 { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-slate-900 { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-slate-900\/40 { background-color: hsl(var(--card) / 0.4) !important; }
+html:not(.dark) .bg-slate-900\/95 { background-color: hsl(var(--card) / 0.95) !important; }
 html:not(.dark) .bg-slate-950 { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-zinc-800 { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-zinc-900 { background-color: hsl(var(--card)) !important; }
-html:not(.dark) .border-zinc-900 { border-color: rgb(15 23 42 / 0.10) !important; }
+html:not(.dark) .border-zinc-900 { border-color: rgb(15 23 42 / 0.28) !important; }
+html:not(.dark) .focus\:border-zinc-900:focus { border-color: rgb(15 23 42 / 0.28) !important; }
+html:not(.dark) .hover\:bg-slate-800:hover { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .hover\:bg-zinc-800:hover { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .hover\:border-zinc-900:hover { border-color: rgb(15 23 42 / 0.28) !important; }
 
 /* Design tokens re-declared at higher specificity so a third-party
    `:root` block (a browser extension's theme, say) cannot silently

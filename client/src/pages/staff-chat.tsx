@@ -208,7 +208,10 @@ export default function StaffChat() {
   }, [channels.length]);
 
   return (
-    <div className="h-full flex overflow-hidden text-white">
+    // Chat paints its own surfaces rather than inheriting the page gradient:
+    // a messaging app reads as a pane of its own, and the derived black-tint
+    // the generated mapping would give it is a murky grey on white.
+    <div className="h-full flex overflow-hidden bg-card text-foreground">
       <ChannelListPane
         channels={channels}
         users={users}
@@ -308,7 +311,7 @@ function ChannelListPane(props: {
   });
 
   return (
-    <aside className={`w-full md:w-72 lg:w-80 shrink-0 flex-col border-r border-white/[0.06] bg-black/20 ${props.className ?? ""}`}>
+    <aside className={`w-full md:w-72 lg:w-80 shrink-0 flex-col border-r border-border bg-muted/50 ${props.className ?? ""}`}>
       <div className="p-3 pb-2 flex items-center gap-2">
         <h1 className="text-[15px] font-bold tracking-tight flex-1 px-1">Chat</h1>
         {/* Files & links — Travis's second ask: find that thing somebody shared
