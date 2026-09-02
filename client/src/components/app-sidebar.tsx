@@ -799,17 +799,9 @@ export function AppSidebar() {
   return (
     <Sidebar className="sidebar-gradient">
       <SidebarHeader className="px-3 py-4 border-b border-blue-500/[0.08] space-y-3">
-        <div className="flex items-center gap-3 px-1">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-lg shadow-blue-500/25 animate-pulse-glow">
-            <span className="text-white font-bold text-xs tracking-tight">{getWorkspaceInitials(currentOrg?.slug)}</span>
-          </div>
-          <div className="flex flex-col min-w-0">
-            <span className="font-semibold text-[13px] text-white/90 tracking-tight truncate" data-testid="text-club-name">
-              ClubOS
-            </span>
-            <span className="text-[10px] text-blue-400/40 tracking-wider uppercase">{getWorkspaceLabel(currentOrg?.slug)}</span>
-          </div>
-        </div>
+        {/* The "ClubOS / MANAGEMENT" lockup that sat here is gone (Daniel,
+            2026-09-02): the workspace switcher immediately below already says
+            where you are, and the app's name is not news to someone inside it. */}
         <WorkspaceSwitcher />
         {isTournament && <CicViewToggle />}
         {isVenue && currentOrg?.slug && (

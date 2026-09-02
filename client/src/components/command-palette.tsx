@@ -149,7 +149,17 @@ export function CommandPalette() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
-        className="top-[10%] translate-y-0 max-w-xl p-0 gap-0 overflow-hidden bg-[#0a0e17] border-white/10 shadow-2xl"
+        // 🔴 The shared DialogContent animates a CENTRED dialog: it slides in
+        // from top-[48%] to pair with `translate-y-[-50%]`. This palette
+        // overrides the anchor to `top-[10%] translate-y-0`, so that 48% slide
+        // had nothing to cancel it and the panel lurched down the screen on
+        // every ⌘K. Overridden to a short 2-unit drop with an ease-out curve;
+        // the horizontal `slide-in-from-left-1/2` is kept because it is what
+        // pairs with translate-x-[-50%] to keep it centred.
+        className="top-[10%] translate-y-0 max-w-xl p-0 gap-0 overflow-hidden bg-[#0a0e17] border-white/10 shadow-2xl
+                   duration-150 ease-out
+                   data-[state=open]:slide-in-from-top-2 data-[state=closed]:slide-out-to-top-2
+                   data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95"
         onKeyDown={onKeyDown}
       >
         <div className="flex items-center gap-2 px-4 border-b border-white/[0.08]">

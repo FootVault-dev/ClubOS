@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CalendarRange } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -13,8 +13,15 @@ import {
 } from "@shared/dashboard";
 
 /**
- * The period filter. A segmented row on desktop, wrapping to two lines on a
- * phone; "Custom" opens a popover with two date inputs.
+ * The period filter.
+ *
+ * 🔴 The dates use DatePickerInput, never `<input type="date">`. A native date
+ * input renders the BROWSER's picker — Chrome's and Safari's look nothing
+ * alike, so the same screen looked different on Daniel's Mac and Paul's. Every
+ * control in this console is drawn by us so it is identical on every device.
+ *
+ * A segmented row on desktop, wrapping to two lines on a phone; "Custom" opens
+ * a popover with two date pickers.
  *
  * The chosen period is lifted into the page and pushed into the URL, so a
  * dashboard someone is looking at can be sent to someone else and show the
@@ -71,22 +78,18 @@ export function PeriodPicker({
         <PopoverContent align="end" className="w-72 space-y-3">
           <div className="space-y-2">
             <Label htmlFor="from">From</Label>
-            <Input
-              id="from"
-              type="date"
-              max={today}
+            <DatePickerInput
               value={draft.from}
+              max={today}
               onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))}
               data-testid="input-custom-from"
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="to">To</Label>
-            <Input
-              id="to"
-              type="date"
-              max={today}
+            <DatePickerInput
               value={draft.to}
+              max={today}
               onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))}
               data-testid="input-custom-to"
             />
