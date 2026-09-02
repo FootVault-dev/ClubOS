@@ -1153,7 +1153,7 @@ function MessageRow(props: {
 
         {/* Provenance for a forwarded message — a forward that looks like an
             original is how a quote gets misattributed to the wrong person. */}
-        {msg.forwardedFrom && <ForwardedQuote ref={msg.forwardedFrom} />}
+        {msg.forwardedFrom && <ForwardedQuote quote={msg.forwardedFrom} />}
 
         {/* 🔴 A thread reply stays in the channel — this is the mitigation for
             the v1 concern that threads hide conversations. The root gets an

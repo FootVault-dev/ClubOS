@@ -31,9 +31,13 @@
  * untouched by all of this — see client/src/lib/theme-provider.tsx.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+
+const require = createRequire(import.meta.url);
+const TW = require("tailwindcss/colors");
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "client/src");
@@ -315,7 +319,59 @@ function build() {
   push(`   correct on a light page too. */`);
   push(...paletteRules.sort());
 
-  // ── 4. harden the design tokens against third-party :root blocks ─────────
+  // ── 4. pale palette TEXT, which is illegible on white ────────────────────
+  //
+  // 🔴 The console was written dark-first, so a "quiet" label is `text-blue-300`
+  // or `text-amber-300` — pale on purpose, because it sat on near-black. On a
+  // white page those are the same failure as white-on-white: the Knowledge
+  // Base shipped with gold-on-white headings and brand labels nobody could
+  // read. 1,286 of them across 162 files.
+  //
+  // index.css hand-listed NINE of those classes. That is the allowlist problem
+  // this whole file exists to end, one layer up, so it is generated too.
+  //
+  // Each shade is mapped to its OWN family's 700, which keeps the meaning —
+  // a red warning stays red — and is measured, not assumed: every 700 clears
+  // 4.5:1 on white (amber 5.02, emerald 5.48, blue 6.70). Anything already
+  // passing AA is left alone.
+  const contrastOnWhite = (hex) => {
+    const L = luminance(hex);
+    return (1.05) / (L + 0.05);
+  };
+  const AA = 4.5;
+  const paleTokens = [
+    ...new Set(
+      grep("(([a-zA-Z-]+:)*)text-(amber|yellow|blue|emerald|green|rose|red|violet|purple|sky|cyan|orange|pink|indigo|teal|lime)-(50|100|200|300|400|500|600)(/[0-9]+)?"),
+    ),
+  ];
+  const paleRules = [];
+  const paleFixed = new Set();
+  for (const token of paleTokens) {
+    const mod = (token.match(/^((?:[a-zA-Z-]+:)+)/) || ["", ""])[1];
+    if (mod && !(mod in MODIFIERS)) continue;
+    const bare = token.slice(mod.length);
+    const m = bare.match(/^text-([a-z]+)-([0-9]+)(?:\/([0-9]+))?$/);
+    if (!m) continue;
+    const [, family, shade, alphaRaw] = m;
+    const from = TW?.[family]?.[shade];
+    const to = TW?.[family]?.["700"];
+    if (!from || !to) continue;
+    // Already legible on white — leave it exactly as the designer wrote it.
+    if (contrastOnWhite(from) >= AA) continue;
+    const alpha = alphaRaw ? Number(alphaRaw) / 100 : 1;
+    // A translucent label was quiet on purpose; keep it quiet but readable.
+    const value = alpha === 1 ? to : `color-mix(in srgb, ${to} ${Math.round(Math.max(alpha, 0.7) * 100)}%, transparent)`;
+    const sel = (MODIFIERS[mod || ""])(`.${esc(token)}`);
+    paleRules.push(`html:not(.dark) ${sel} { color: ${value} !important; }`);
+    paleFixed.add(`${family}-${shade}`);
+  }
+  push("");
+  push(`/* ${paleRules.length} pale text utilities → their family's 700, which is the`);
+  push(`   lightest shade that clears 4.5:1 on white. Families touched:`);
+  push(`   ${[...paleFixed].sort().join(", ")} */`);
+  push(...paleRules.sort());
+
+  // ── 5. harden the design tokens against third-party :root blocks ─────────
   //
   // 🔴 Found live on app.usg.co.nz, 2026-09-02: a browser extension injects
   // its own `:root { --primary: #009AF7; --secondary: …; --background: … }`

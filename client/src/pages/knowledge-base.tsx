@@ -57,7 +57,7 @@ function Markdown({ text }: { text: string }) {
           p.startsWith("**") && p.endsWith("**") ? (
             <strong key={i} className="text-white/95 font-semibold">{p.slice(2, -2)}</strong>
           ) : p.startsWith("`") && p.endsWith("`") ? (
-            <code key={i} className="rounded bg-white/10 px-1.5 py-0.5 text-[12px] font-mono text-amber-200">{p.slice(1, -1)}</code>
+            <code key={i} className="rounded bg-white/10 px-1.5 py-0.5 text-[12px] font-mono text-primary">{p.slice(1, -1)}</code>
           ) : (
             <span key={i}>{p}</span>
           ),
@@ -145,7 +145,7 @@ export default function KnowledgeBase() {
       <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
-            <BookOpen className="w-5 h-5 text-amber-400" /> Knowledge Base
+            <BookOpen className="w-5 h-5 text-primary" /> Knowledge Base
           </h1>
           <p className="text-[13px] text-white/40 mt-1 max-w-2xl">
             How the club does things — written down once, so nobody has to be interrupted for the answer.
@@ -154,7 +154,7 @@ export default function KnowledgeBase() {
         <button
           onClick={() => setEditing({ brand: brand === "all" ? "all" : brand, status: "published", keywords: [] })}
           data-testid="button-new-article"
-          className="inline-flex items-center gap-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 px-4 py-2 text-sm font-medium hover:bg-amber-500/25 transition-colors"
+          className="inline-flex items-center gap-2 rounded-xl bg-primary text-primary-foreground border border-primary px-4 py-2 text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           <Plus className="w-4 h-4" /> Add an article
         </button>
@@ -169,7 +169,7 @@ export default function KnowledgeBase() {
             data-testid={`brand-${b.key}`}
             className={`rounded-lg px-3 py-1.5 text-[12px] font-medium border transition-colors ${
               brand === b.key
-                ? "bg-amber-500/15 border-amber-500/40 text-amber-200"
+                ? "bg-primary text-primary-foreground border-primary"
                 : "bg-white/[0.02] border-white/[0.06] text-white/40 hover:text-white/70"
             }`}
           >
@@ -228,7 +228,7 @@ export default function KnowledgeBase() {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search the vault…"
                 data-testid="input-kb-search"
-                className="rounded-lg bg-white/[0.03] border border-white/10 pl-8 pr-3 py-1.5 text-[13px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-amber-500/50 w-full sm:w-56"
+                className="rounded-lg bg-white/[0.03] border border-white/10 pl-8 pr-3 py-1.5 text-[13px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-primary/50 w-full sm:w-56"
               />
             </div>
           </div>
@@ -243,7 +243,7 @@ export default function KnowledgeBase() {
               </div>
               <button
                 onClick={() => setEditing({ brand: brand === "all" ? "all" : brand, status: "published", keywords: [] })}
-                className="text-amber-400 text-[13px] mt-2 hover:underline"
+                className="text-primary text-[13px] mt-2 hover:underline"
               >
                 Write the first article →
               </button>
@@ -266,7 +266,7 @@ export default function KnowledgeBase() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                        <span className="text-[10px] uppercase tracking-wide text-amber-300/70 font-medium">
+                        <span className="text-[10px] uppercase tracking-wide text-primary/70 font-medium">
                           {brands.find((b) => b.key === a.brand)?.short ?? a.brand}
                         </span>
                         {a.category && (
@@ -402,11 +402,11 @@ function RamboPanel({
 
   if (!boot?.rambo.enabled) {
     return (
-      <div className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] p-6 text-center">
-        <Bot className="w-8 h-8 text-amber-400/50 mx-auto mb-3" />
+      <div className="rounded-2xl border border-primary/20 bg-primary/[0.04] p-6 text-center">
+        <Bot className="w-8 h-8 text-primary/50 mx-auto mb-3" />
         <div className="text-white/70 text-sm font-medium">Rambo isn't switched on yet</div>
         <div className="text-white/40 text-[13px] mt-1">
-          The server needs an <code className="text-amber-200/80">ANTHROPIC_API_KEY</code>. Browsing and searching articles works regardless.
+          The server needs an <code className="text-primary">ANTHROPIC_API_KEY</code>. Browsing and searching articles works regardless.
         </div>
       </div>
     );
@@ -417,8 +417,8 @@ function RamboPanel({
       {/* Rambo header + the honest boundary */}
       <div className="border-b border-white/[0.06] px-4 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/30 grid place-items-center">
-            <Bot className="w-4 h-4 text-amber-300" />
+          <div className="w-7 h-7 rounded-lg bg-primary/10 border border-primary/25 grid place-items-center">
+            <Bot className="w-4 h-4 text-primary" />
           </div>
           <div>
             <div className="text-[13px] font-medium text-white/90">Rambo</div>
@@ -473,7 +473,7 @@ function RamboPanel({
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.length === 0 && !pending && (
           <div className="py-8 text-center">
-            <Sparkles className="w-7 h-7 text-amber-400/40 mx-auto mb-3" />
+            <Sparkles className="w-7 h-7 text-primary/40 mx-auto mb-3" />
             <div className="text-white/50 text-[13px] mb-4">Ask anything about how the club works.</div>
             <div className="flex flex-wrap gap-1.5 justify-center max-w-lg mx-auto">
               {suggestions.map((s) => (
@@ -492,7 +492,7 @@ function RamboPanel({
         {messages.map((m) => (
           <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
             {m.role === "user" ? (
-              <div className="rounded-2xl rounded-br-md bg-amber-500/15 border border-amber-500/20 px-3.5 py-2 text-[13.5px] text-white/90 max-w-[85%]">
+              <div className="rounded-2xl rounded-br-md bg-primary/10 border border-primary/25 px-3.5 py-2 text-[13.5px] text-white/90 max-w-[85%]">
                 {m.content}
               </div>
             ) : (
@@ -519,7 +519,7 @@ function RamboPanel({
         {pending && (
           <>
             <div className="flex justify-end">
-              <div className="rounded-2xl rounded-br-md bg-amber-500/15 border border-amber-500/20 px-3.5 py-2 text-[13.5px] text-white/90 max-w-[85%]">
+              <div className="rounded-2xl rounded-br-md bg-primary/10 border border-primary/25 px-3.5 py-2 text-[13.5px] text-white/90 max-w-[85%]">
                 {pending}
               </div>
             </div>
@@ -542,14 +542,14 @@ function RamboPanel({
           rows={1}
           placeholder="Ask Rambo…"
           data-testid="input-rambo"
-          className="flex-1 resize-none rounded-xl bg-white/[0.03] border border-white/10 px-3 py-2.5 text-[14px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-amber-500/50 max-h-32"
+          className="flex-1 resize-none rounded-xl bg-white/[0.03] border border-white/10 px-3 py-2.5 text-[14px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-primary/50 max-h-32"
           style={{ minHeight: 42 }}
         />
         <button
           onClick={send}
           disabled={!input.trim() || ask.isPending}
           data-testid="button-rambo-send"
-          className="rounded-xl bg-amber-500/20 border border-amber-500/30 text-amber-200 w-[42px] h-[42px] grid place-items-center disabled:opacity-30 hover:bg-amber-500/30 transition-colors shrink-0"
+          className="rounded-xl bg-primary text-primary-foreground border border-primary w-[42px] h-[42px] grid place-items-center disabled:opacity-30 hover:bg-primary/90 transition-colors shrink-0"
         >
           <Send className="w-4 h-4" />
         </button>
@@ -597,7 +597,7 @@ function ArticleDialog({
         ) : (
           <div>
             <div className="flex flex-wrap items-center gap-1.5 mb-2">
-              <span className="text-[10px] uppercase tracking-wide text-amber-300/70 font-medium">
+              <span className="text-[10px] uppercase tracking-wide text-primary/70 font-medium">
                 {brands.find((b) => b.key === a.brand)?.short ?? a.brand}
               </span>
               {a.category && <span className="text-[10px] text-white/30">· {a.category}</span>}
@@ -630,7 +630,7 @@ function ArticleDialog({
                   · <ShieldCheck className="w-3 h-3" /> facts confirmed {new Date(a.verifiedAt).toLocaleDateString("en-NZ")}
                 </span>
               ) : (
-                <span className="text-amber-400/50">· nobody has confirmed these facts yet</span>
+                <span className="text-primary/50">· nobody has confirmed these facts yet</span>
               )}
               {data.revisions.length > 0 && (
                 <span className="inline-flex items-center gap-1">· <History className="w-3 h-3" /> {data.revisions.length} edits</span>
@@ -680,7 +680,7 @@ function ArticleEditor({
   onCancel: () => void;
 }) {
   const set = (k: keyof FullArticle, v: any) => onChange({ ...draft, [k]: v });
-  const field = "w-full rounded-lg bg-white/[0.03] border border-white/10 px-3 py-2 text-[13.5px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-amber-500/50";
+  const field = "w-full rounded-lg bg-white/[0.03] border border-white/10 px-3 py-2 text-[13.5px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-primary/50";
 
   return (
     <div>
@@ -742,7 +742,7 @@ function ArticleEditor({
           onClick={onSave}
           disabled={saving || !draft.title?.trim()}
           data-testid="button-save-article"
-          className="inline-flex items-center gap-2 rounded-xl bg-amber-500/20 border border-amber-500/30 text-amber-200 px-4 py-2 text-sm font-medium disabled:opacity-30 hover:bg-amber-500/30 transition-colors"
+          className="inline-flex items-center gap-2 rounded-xl bg-primary text-primary-foreground border border-primary px-4 py-2 text-sm font-medium disabled:opacity-30 hover:bg-primary/90 transition-colors"
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Save
         </button>

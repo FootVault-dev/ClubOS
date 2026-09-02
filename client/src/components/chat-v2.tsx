@@ -415,12 +415,33 @@ export function ForwardDialog({ messageId, channels, onClose }: {
 }
 
 /** The quoted original shown above a forwarded message. */
-export function ForwardedQuote({ ref: fwd }: { ref: NonNullable<any> }) {
+/**
+ * The "Forwarded from #channel" provenance line above a forwarded message.
+ *
+ * 🔴 The prop is `quote`, and must never be called `ref` again. React reserves
+ * `ref`: on React 18 it is stripped from props and never reaches the component,
+ * so the parameter was `undefined` and the first property read threw — taking
+ * the whole app down to a white screen for anyone who opened a channel holding
+ * a forwarded message. That was #finance and #cic-tournament, reported by
+ * Travis, live on production. (React 19 passes `ref` through as an ordinary
+ * prop, which is why this shape looks plausible and is not.)
+ */
+export function ForwardedQuote({ quote: fwd }: { quote: NonNullable<any> }) {
+  // The server sends null when the source is gone or out of reach. Render the
+  // fact rather than the tree — a missing quote is not worth a blank page.
+  if (!fwd) {
+    return (
+      <div className="mb-1.5 pl-2.5 border-l-2 border-border text-[11px] text-muted-foreground flex items-center gap-1.5">
+        <CornerUpRight className="w-3 h-3" />
+        Forwarded message
+      </div>
+    );
+  }
   return (
     <div className="mb-1.5 pl-2.5 border-l-2 border-white/15">
       <div className="text-[11px] text-white/35 flex items-center gap-1.5">
         <CornerUpRight className="w-3 h-3" />
-        Forwarded from {fwd.channelKind === "dm" ? "a DM" : `#${fwd.channelName}`} · {fwd.authorName}
+        Forwarded from {fwd.channelKind === "dm" ? "a DM" : `#${fwd.channelName ?? "a channel"}`} · {fwd.authorName ?? "someone"}
       </div>
       <div className="text-[12.5px] text-white/55 whitespace-pre-wrap break-words mt-0.5">
         {fwd.deleted ? <span className="italic text-white/25">Original was deleted</span> : fwd.body}
