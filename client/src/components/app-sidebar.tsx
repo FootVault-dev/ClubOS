@@ -132,14 +132,67 @@ const MOVED_TO_ACCOUNT_MENU = new Set([
   "domains",      // → account menu · Domains
 ]);
 
-// Hidden outright, for now. The code, the routes and the data are all intact —
-// these are decluttered, not deleted, and are expected back once they earn
-// their place. Delete a slug from this set to restore it to the sidebar.
-const HIDDEN_FOR_NOW = new Set([
-  "studio",       // AI page-brief tool — unfinished, rarely used
-  "esign",        // e-signature — works, but not day-to-day for anyone
-  "feedback",     // superseded by Chat: staff report bugs in the chat now
-]);
+// Hidden outright, for now, in EVERY workspace. The code, the routes and the
+// data are all intact — these are decluttered, not deleted, and are expected
+// back once they earn their place. Delete a slug to restore it everywhere.
+//
+// The AttributionOS trio and MarketingOS live in all seven workspace navs
+// because they were copied outward from the CUFC one; Daniel's rule is that a
+// tab which only transferred across gets hidden with its original.
+const HIDDEN_GLOBAL: string[] = [
+  "studio",             // AI page-brief tool — unfinished, rarely used
+  "esign",              // e-signature — works, but not day-to-day for anyone
+  "feedback",           // superseded by Chat: staff report bugs in the chat now
+  "links",              // AttributionOS — same page in all 7 workspaces
+  "attribution",        // AttributionOS
+  "behavior",           // AttributionOS
+  "marketing",          // MarketingOS — same page in all 7, still unfinished
+  "sporty",             // Sporty NRS — inert until NZF UAT keys arrive
+  "drive",              // Club Drive — not finished yet
+  // ✅ Safe to hide: every FM registration and payment still renders on the
+  // person's own profile (/admin/people/:key → resolvePeopleHistory reads
+  // fm_registration_history + fm_payment_history directly), which is reachable
+  // from Contacts and global search — and by MORE people than this tab was,
+  // since the tab is super-admin-only and Contacts is not.
+  "fm-history",
+  //
+  // 🔴 NOT hidden: "fm-competitions". Verified 2026-09-02 — NOTHING else in
+  // ClubOS reads fm_competition_*. MFL's Competitions page reads the live
+  // `league_competitions` table and CIC's reads `tournaments`; neither touches
+  // the archive. Hiding this tab would make 41 competitions, 695 teams, 2,508
+  // games, 248 placings and the CIC club-loyalty ledger unreachable in the UI.
+  // It stays until that history is surfaced in the MFL and CIC workspaces.
+  //
+  // 🔴 NOT hidden: "cufc-mailer" (Newsletters). It is NOT the same view as
+  // Mailer. Mailer segments on camps/programmes/sessions ("all" | "camp" |
+  // "day" | "session" | "custom", server/routes.ts getMailerSegmentEmails);
+  // Newsletters sends to resolveCufcAudience — Play Predictor entrants who
+  // gave marketing consent, PLUS guardians, deduped, minus org-1
+  // suppressions. Hiding it today would quietly drop every predictor fan who
+  // is not also a guardian off the club's reach. Merging them means adding a
+  // "newsletter" segment to Mailer's send path, which is a mass-email
+  // audience change and deserves its own verification pass.
+  //
+  // 🔴 NOT hidden yet: "football-institute". It holds ONE real application —
+  // Sean Jovens Barquio, Year 12, intake 2027, submitted 26 Jul — and this
+  // tab is the only page that reads football_institute_applications. It gets
+  // hidden the moment the Football Institute exists as an Academy programme
+  // with that submission moved onto it, and not before.
+];
+
+// 🔴 Hidden in SOME workspaces only, because the same tab slug renders a
+// DIFFERENT page depending on where you are standing.
+//
+// `/admin/analytics` is CampAnalytics in CUFC, but LeagueAnalytics in MFL and
+// VenueAnalytics at the Centre. Hiding it globally would have deleted two real
+// tools to remove one dead one. Same shape for Volunteers: CUFC's is dormant,
+// the Cup's runs the July tournament.
+const HIDDEN_BY_WORKSPACE: Record<string, string[]> = {
+  "christchurch-united": [
+    "analytics",  // CampAnalytics — holiday-camp era, superseded by the dashboard
+    "volunteers", // dormant here; the Cup's is live and stays
+  ],
+};
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -679,7 +732,10 @@ export function AppSidebar() {
     membershipUnlockedTabs: currentOrg?.userUnlockedTabs,
     tabSlug: item.tab,
   });
-  const mainNav = allMainNav.filter(navFilter);
+  const hiddenHere = new Set(
+    HIDDEN_GLOBAL.concat(HIDDEN_BY_WORKSPACE[currentOrg?.slug ?? ""] ?? []),
+  );
+  const mainNav = allMainNav.filter((item) => !hiddenHere.has(item.tab) && navFilter(item));
   // The System section is now the four things staff USE — the account and
   // admin settings that used to sit alongside them moved to the top-right
   // account menu, and two unfinished tools are hidden. See the two sets at
@@ -688,14 +744,16 @@ export function AppSidebar() {
     ...allSecondaryNav.filter(
       (item) =>
         !MOVED_TO_ACCOUNT_MENU.has(item.tab) &&
-        !HIDDEN_FOR_NOW.has(item.tab) &&
+        !hiddenHere.has(item.tab) &&
         navFilter(item),
     ),
     taskTrackerSecondary,
     knowledgeBaseSecondary,
-    driveSecondary,
     chatSecondary,
-  ];
+    // driveSecondary — Club Drive is hidden until it is finished. Its route,
+    // its files and its permissions are untouched; put it back by removing
+    // "drive" from HIDDEN_GLOBAL and restoring it to this list.
+  ].filter((item) => !hiddenHere.has(item.tab));
 
   // Resolved once across BOTH groups so a Navigation item and a System item
   // can never both look active on the same page.
