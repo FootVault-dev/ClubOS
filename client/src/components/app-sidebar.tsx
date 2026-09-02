@@ -188,7 +188,11 @@ const HIDDEN_GLOBAL: string[] = [
 const HIDDEN_BY_WORKSPACE: Record<string, string[]> = {
   "christchurch-united": [
     "analytics",  // CampAnalytics — holiday-camp era, superseded by the dashboard
-    "volunteers", // dormant here; the Cup's is live and stays
+    "volunteers",      // dormant here; the Cup's is live and stays
+    // Its one row is the 2021 Queen's Birthday Festival with 0 teams and 0
+    // games. The 35 MFL seasons and 5 CIC editions now live in those
+    // workspaces, which is where somebody would look for them.
+    "fm-competitions",
   ],
 };
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -296,6 +300,9 @@ const leagueNav = [
   { tab: "rewards", title: "Rewards", url: "/admin/rewards", icon: Award },
   { tab: "loyalty", title: "Loyalty", url: "/admin/loyalty", icon: Crown },
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
+  // The league's own 35 Friendly Manager seasons, 2021–2025. Scoped to this
+  // workspace server-side, so it shows MFL history and only MFL history.
+  { tab: "fm-competitions", title: "Past Seasons", url: "/admin/fm-competitions", icon: HistoryIcon },
   { tab: "business-plan", title: "Business Plan", url: "/admin/business-plan", icon: FileText },
   { tab: "store", title: "Store", url: "/admin/store", icon: ShoppingCart },
   { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
@@ -338,6 +345,9 @@ const tournamentNav = [
   { tab: "cic-content-marketplace", title: "Content Marketplace", url: "/admin/cic-content-marketplace", icon: BarChart3 },
   { tab: "cic-referees", title: "Referees", url: "/admin/cic-referees", icon: ClipboardCheck },
   { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
+  // The Cup's own 5 Friendly Manager editions, 2021–2025, scoped to this
+  // workspace server-side.
+  { tab: "fm-competitions", title: "Past Tournaments", url: "/admin/fm-competitions", icon: HistoryIcon },
 ];
 
 const tournamentSecondary = [

@@ -18,35 +18,52 @@ import type { Express, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
+import { organizations } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 export function registerFmCompetitionsRoutes(app: Express) {
   const tab = requireTab("fm-competitions");
 
-  app.get("/api/admin/fm-competitions/stats", requireAuth, tab, async (_req: Request, res: Response) => {
+  /**
+   * The org whose history this request is asking for — the workspace the user
+   * is standing in. requireTab already refuses without the header, so by the
+   * time a handler runs the slug is present; an unknown slug yields -1, which
+   * matches nothing rather than falling back to "show everything".
+   */
+  async function askingOrgId(req: Request): Promise<number> {
+    const slug = String(req.headers["x-workspace-slug"] ?? "").trim();
+    if (!slug) return -1;
+    const [org] = await db.select({ id: organizations.id }).from(organizations)
+      .where(eq(organizations.slug, slug)).limit(1);
+    return org?.id ?? -1;
+  }
+
+  app.get("/api/admin/fm-competitions/stats", requireAuth, tab, async (req: Request, res: Response) => {
     try {
+      const orgId = await askingOrgId(req);
       const head: any = (await db.execute(sql`
         SELECT
-          (SELECT count(*) FROM fm_competition_history)::int AS "competitions",
-          (SELECT count(*) FROM fm_competition_teams)::int AS "teams",
-          (SELECT count(*) FROM fm_competition_games)::int AS "games",
-          (SELECT count(*) FROM fm_competition_games WHERE home_score IS NOT NULL AND away_score IS NOT NULL)::int AS "scoredGames",
-          (SELECT count(*) FROM fm_competition_placings)::int AS "placings",
-          (SELECT count(DISTINCT lower(trim(club_name))) FROM fm_competition_teams WHERE club_name IS NOT NULL AND trim(club_name) <> '')::int AS "clubs",
-          (SELECT min(season_year) FROM fm_competition_history) AS "firstYear",
-          (SELECT max(season_year) FROM fm_competition_history) AS "lastYear"
+          (SELECT count(*) FROM fm_competition_history WHERE organization_id = ${orgId})::int AS "competitions",
+          (SELECT count(*) FROM fm_competition_teams x JOIN fm_competition_history h ON h.fm_comp_id = x.fm_comp_id WHERE h.organization_id = ${orgId})::int AS "teams",
+          (SELECT count(*) FROM fm_competition_games x JOIN fm_competition_history h ON h.fm_comp_id = x.fm_comp_id WHERE h.organization_id = ${orgId})::int AS "games",
+          (SELECT count(*) FROM fm_competition_games x JOIN fm_competition_history h ON h.fm_comp_id = x.fm_comp_id WHERE h.organization_id = ${orgId} AND x.home_score IS NOT NULL AND x.away_score IS NOT NULL)::int AS "scoredGames",
+          (SELECT count(*) FROM fm_competition_placings x JOIN fm_competition_history h ON h.fm_comp_id = x.fm_comp_id WHERE h.organization_id = ${orgId})::int AS "placings",
+          (SELECT count(DISTINCT lower(trim(x.club_name))) FROM fm_competition_teams x JOIN fm_competition_history h ON h.fm_comp_id = x.fm_comp_id WHERE h.organization_id = ${orgId} AND x.club_name IS NOT NULL AND trim(x.club_name) <> '')::int AS "clubs",
+          (SELECT min(season_year) FROM fm_competition_history WHERE organization_id = ${orgId}) AS "firstYear",
+          (SELECT max(season_year) FROM fm_competition_history WHERE organization_id = ${orgId}) AS "lastYear"
       `)).rows[0];
       const segments = (await db.execute(sql`
         SELECT segment, count(*)::int AS "competitions",
                (SELECT count(*) FROM fm_competition_teams t WHERE t.fm_comp_id IN
                   (SELECT fm_comp_id FROM fm_competition_history h2 WHERE h2.segment = h.segment))::int AS "teams"
-        FROM fm_competition_history h GROUP BY segment ORDER BY 2 DESC
+        FROM fm_competition_history h WHERE h.organization_id = ${orgId} GROUP BY segment ORDER BY 2 DESC
       `)).rows;
       const byYear = (await db.execute(sql`
         SELECT season_year AS "year", count(*)::int AS "competitions",
                (SELECT count(*) FROM fm_competition_teams t
                  JOIN fm_competition_history h2 ON h2.fm_comp_id = t.fm_comp_id
                 WHERE h2.season_year = h.season_year)::int AS "teams"
-        FROM fm_competition_history h GROUP BY season_year ORDER BY season_year NULLS LAST
+        FROM fm_competition_history h WHERE h.organization_id = ${orgId} GROUP BY season_year ORDER BY season_year NULLS LAST
       `)).rows;
       res.json({ ...head, segments, byYear });
     } catch (err) {
@@ -57,6 +74,7 @@ export function registerFmCompetitionsRoutes(app: Express) {
 
   app.get("/api/admin/fm-competitions/list", requireAuth, tab, async (req: Request, res: Response) => {
     try {
+      const orgId = await askingOrgId(req);
       const segment = String(req.query.segment ?? "").trim();
       const q = String(req.query.q ?? "").trim().slice(0, 80);
       const rows = (await db.execute(sql`
@@ -71,7 +89,8 @@ export function registerFmCompetitionsRoutes(app: Express) {
         LEFT JOIN LATERAL (SELECT count(*) games, count(*) FILTER (WHERE home_score IS NOT NULL AND away_score IS NOT NULL) scored
                            FROM fm_competition_games g WHERE g.fm_comp_id = h.fm_comp_id) gc ON true
         LEFT JOIN LATERAL (SELECT count(*) placings FROM fm_competition_placings p WHERE p.fm_comp_id = h.fm_comp_id) pc ON true
-        WHERE (${segment} = '' OR h.segment = ${segment})
+        WHERE h.organization_id = ${orgId}
+          AND (${segment} = '' OR h.segment = ${segment})
           AND (${q} = '' OR h.name ILIKE ${"%" + q + "%"})
         ORDER BY h.start_date DESC NULLS LAST
       `)).rows;
@@ -86,10 +105,14 @@ export function registerFmCompetitionsRoutes(app: Express) {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Bad id" });
+      // 🔴 Scoped by id AND org: without the org clause, MFL could read a CIC
+      // competition's team managers by guessing an id. 404, never 403 — the
+      // existence of another workspace's record is not this caller's business.
+      const orgId = await askingOrgId(req);
       const comp: any = (await db.execute(sql`
         SELECT fm_comp_id AS "id", name, segment, season_year AS "seasonYear",
                to_char(start_date,'YYYY-MM-DD') AS "start", to_char(end_date,'YYYY-MM-DD') AS "end", organization_id AS "orgId"
-        FROM fm_competition_history WHERE fm_comp_id = ${id}
+        FROM fm_competition_history WHERE fm_comp_id = ${id} AND organization_id = ${orgId}
       `)).rows[0];
       if (!comp) return res.status(404).json({ message: "Not found" });
       const teams = (await db.execute(sql`
