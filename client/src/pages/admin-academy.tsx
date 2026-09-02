@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, X, ChevronRight, Users, UserPlus, GraduationCap, Sparkles } from "lucide-react";
+import { Plus, Search, X, ChevronRight, Users, UserPlus, GraduationCap, Sparkles, Tent } from "lucide-react";
 import { useSearch, useLocation } from "wouter";
 import { programDetailPath } from "@/lib/program-path";
 import type { Program } from "@shared/schema";
@@ -71,7 +71,7 @@ function CreateAcademyModal({ open, onClose }: { open: boolean; onClose: () => v
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-lg mx-4 rounded-2xl border border-blue-500/[0.15] overflow-hidden animate-fade-in-up" style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.04) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }} data-testid="modal-create-academy">
+      <div className="relative w-full max-w-lg mx-4 rounded-2xl border border-blue-500/[0.15] overflow-hidden animate-fade-in-up" style={{ background: "linear-gradient(135deg, hsl(214 60% 97%) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }} data-testid="modal-create-academy">
         <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08]">
           <h3 className="text-[14px] font-semibold text-white/80">Create Academy Program</h3>
           <button onClick={onClose} className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.08] transition-colors cursor-pointer">
@@ -239,6 +239,11 @@ export default function AdminAcademy() {
   const [filter, setFilter] = useState("");
   const { data: programs, isLoading } = useQuery<AcademyProgram[]>({ queryKey: ["/api/admin/academy"] });
   const { data: regCounts } = useQuery<Record<number, number>>({ queryKey: ["/api/admin/academy/registration-counts"] });
+  // Holiday camps live in the same `programs` table with type='holiday_camp',
+  // so they belong on this page beside the academy sections rather than behind
+  // a tab of their own (Daniel, 2026-09-02). The camps endpoint is unchanged;
+  // ProgramTable already routes each row by type via programDetailPath().
+  const { data: camps } = useQuery<AcademyProgram[]>({ queryKey: ["/api/admin/camps"] });
 
   const filtered = programs?.filter(p =>
     p.name.toLowerCase().includes(filter.toLowerCase()) ||
@@ -247,6 +252,10 @@ export default function AdminAcademy() {
 
   const corePrograms = filtered?.filter(p => (p.academySection || "core") === "core") || [];
   const additionalPrograms = filtered?.filter(p => p.academySection === "additional") || [];
+  const campPrograms = (camps ?? []).filter(c =>
+    c.name.toLowerCase().includes(filter.toLowerCase()) ||
+    c.slug?.toLowerCase().includes(filter.toLowerCase())
+  );
 
   return (
     <div className="p-4 sm:p-8 space-y-6 max-w-5xl mx-auto">
@@ -323,6 +332,22 @@ export default function AdminAcademy() {
                 regCounts={regCounts || {}}
                 navigate={navigate}
                 emptyMessage="No additional programs yet. Add technification, goalkeeper training, etc."
+              />
+            </div>
+
+            <div className="glass-card rounded-2xl overflow-hidden">
+              <div className="px-5 py-3 border-b border-blue-500/[0.08] flex items-center gap-2">
+                <Tent className="w-4 h-4 text-primary/50" />
+                <h2 className="text-[13px] font-semibold text-white/60">Holiday Camps</h2>
+                <Badge variant="outline" className="text-[9px] text-primary border-primary/20 bg-primary/5 ml-auto no-default-hover-elevate no-default-active-elevate">
+                  {campPrograms.length}
+                </Badge>
+              </div>
+              <ProgramTable
+                programs={campPrograms}
+                regCounts={regCounts || {}}
+                navigate={navigate}
+                emptyMessage="No holiday camps yet."
               />
             </div>
           </Fragment>

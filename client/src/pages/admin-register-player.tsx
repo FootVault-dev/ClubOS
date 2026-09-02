@@ -78,7 +78,11 @@ function formatProductType(pt: string) {
 
 // Contrast deliberately higher than the rest of the admin: this form gets used
 // at a counter with a parent waiting, often on a laptop screen at an angle.
-const FIELD = "bg-white/[0.06] border-white/[0.14] text-white placeholder:text-white/40";
+// 🔴 Real inputs, not translucent lifts. `bg-white/[0.06]` was a 6% white
+// panel on near-black; on a white modal it maps to a 4% dark tint, which
+// reads as no box at all — and this is the counter form Olga types a walk-up
+// registration into. Tokens give an opaque field with a visible edge.
+const FIELD = "bg-background border-input text-foreground placeholder:text-muted-foreground";
 const LABEL = "text-[11px] uppercase tracking-wide text-white/70 mb-1.5 block";
 
 // Theme for the shared NZF pickers, matched to this admin surface.
@@ -483,7 +487,7 @@ export function RegisterPlayerModal({
           header and footer instead, exactly as ModalShell does it. */}
       <div
         className="relative w-full max-w-2xl m-auto flex flex-col rounded-2xl border border-blue-500/[0.15]"
-        style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.04) 0%, hsl(var(--card)) 100%)" }}
+        style={{ background: "linear-gradient(135deg, hsl(214 60% 97%) 0%, hsl(var(--card)) 100%)" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08] sticky top-0 z-10 rounded-t-2xl" style={{ background: "hsl(var(--background))" }}>
@@ -514,7 +518,7 @@ export function RegisterPlayerModal({
             <div className="space-y-4">
               <div className="space-y-2">
                 {programmes.length === 0 && (
-                  <div className="px-4 py-6 rounded-xl bg-white/[0.03] border border-white/[0.10] text-center">
+                  <div className="px-4 py-6 rounded-xl bg-muted/40 border border-border text-center">
                     <p className="text-[13px] text-white/70">
                       {scope === "camp"
                         ? "No holiday camps are set up in this workspace yet."
@@ -536,7 +540,7 @@ export function RegisterPlayerModal({
                     className={`w-full text-left px-4 py-3 rounded-xl border transition-colors min-w-0 ${
                       selectedProgramId === p.id
                         ? "bg-blue-500/10 border-blue-500/30"
-                        : "bg-white/[0.05] border-white/[0.12] hover:bg-white/[0.09]"
+                        : "bg-background border-input hover:bg-muted"
                     }`}
                     data-testid={`option-programme-${p.id}`}
                   >
@@ -578,7 +582,7 @@ export function RegisterPlayerModal({
                             key={o.id}
                             onClick={() => { setOptionId(o.id); setAmountTouched(false); }}
                             className={`px-3 py-2.5 rounded-lg border text-left transition-colors min-w-0 ${
-                              optionId === o.id ? "bg-blue-500/10 border-blue-500/30" : "bg-white/[0.05] border-white/[0.12] hover:bg-white/[0.09]"
+                              optionId === o.id ? "bg-blue-500/10 border-blue-500/30" : "bg-background border-input hover:bg-muted"
                             }`}
                             data-testid={`option-academy-${o.id}`}
                           >
@@ -598,7 +602,7 @@ export function RegisterPlayerModal({
                             key={p}
                             onClick={() => { setPlan(p); setAmountTouched(false); }}
                             className={`px-3 py-2 rounded-lg border text-[12px] transition-colors ${
-                              plan === p ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"
+                              plan === p ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-background border-input text-foreground"
                             }`}
                           >
                             {p === "term" ? "This term" : "Full year (5% off)"}
@@ -609,7 +613,7 @@ export function RegisterPlayerModal({
                   )}
 
                   {academyData?.quote && (
-                    <div className="px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.10] space-y-1.5">
+                    <div className="px-4 py-3 rounded-xl bg-muted/40 border border-border space-y-1.5">
                       {academyData.quote.discountCents > 0 && (
                         <>
                           <div className="flex justify-between text-[12px] text-white/45">
@@ -695,7 +699,7 @@ export function RegisterPlayerModal({
                   <Field label="Gender">
                     <select value={playerGender} onChange={(e) => setPlayerGender(e.target.value)} className={`w-full h-10 rounded-md px-3 text-sm ${FIELD} border`} data-testid="select-player-gender">
                       <option value="">—</option>
-                      {GENDERS.map((g) => <option key={g} value={g} className="bg-[#02060E]">{g[0].toUpperCase() + g.slice(1)}</option>)}
+                      {GENDERS.map((g) => <option key={g} value={g} className="bg-background text-foreground">{g[0].toUpperCase() + g.slice(1)}</option>)}
                     </select>
                   </Field>
                   <Field label="School">
@@ -771,7 +775,7 @@ export function RegisterPlayerModal({
                       >
                         <option value="">Choose a reason…</option>
                         {IDENTITY_DEFER_REASONS.map((r) => (
-                          <option key={r} value={r} className="bg-[#02060E]">{r}</option>
+                          <option key={r} value={r} className="bg-background text-foreground">{r}</option>
                         ))}
                       </select>
                     </Field>
@@ -855,7 +859,7 @@ export function RegisterPlayerModal({
                           key={p.productType}
                           onClick={() => toggleItem(d.id, p.productType)}
                           className={`px-3 py-1.5 rounded-lg border text-[11.5px] transition-colors ${
-                            active ? "bg-blue-500/15 border-blue-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"
+                            active ? "bg-blue-500/15 border-blue-500/30 text-white/85" : "bg-background border-input text-foreground"
                           }`}
                         >
                           {formatProductType(p.productType)} · {formatCurrency(p.priceCents, { fromCents: true })}
@@ -879,12 +883,12 @@ export function RegisterPlayerModal({
               <div className="flex gap-2">
                 <button
                   onClick={() => setIsPaid(true)}
-                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${isPaid ? "bg-emerald-500/10 border-emerald-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"}`}
+                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${isPaid ? "bg-emerald-500/10 border-emerald-500/30 text-white/85" : "bg-background border-input text-foreground"}`}
                   data-testid="button-paid-yes"
                 >Paid now</button>
                 <button
                   onClick={() => setIsPaid(false)}
-                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${!isPaid ? "bg-amber-500/10 border-amber-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"}`}
+                  className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${!isPaid ? "bg-amber-500/10 border-amber-500/30 text-white/85" : "bg-background border-input text-foreground"}`}
                   data-testid="button-paid-no"
                 >Not paid yet</button>
               </div>
@@ -898,7 +902,7 @@ export function RegisterPlayerModal({
                           key={m.value}
                           onClick={() => setMethod(m.value)}
                           className={`px-2 py-2.5 rounded-lg border text-[12px] transition-colors min-w-0 break-words ${
-                            method === m.value ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-white/[0.05] border-white/[0.12] text-white/70"
+                            method === m.value ? "bg-blue-500/10 border-blue-500/30 text-white/85" : "bg-background border-input text-foreground"
                           }`}
                           data-testid={`button-method-${m.value}`}
                         >{m.label}</button>
@@ -945,7 +949,7 @@ export function RegisterPlayerModal({
                 >
                   <option value="">— not recorded —</option>
                   {(staff || []).map((s) => (
-                    <option key={s.id} value={s.id} className="bg-[#02060E]">{s.firstName} {s.lastName}</option>
+                    <option key={s.id} value={s.id} className="bg-background text-foreground">{s.firstName} {s.lastName}</option>
                   ))}
                 </select>
               </Field>

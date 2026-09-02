@@ -1620,7 +1620,7 @@ function PlayerProfileModal({ player, onClose }: { player: RollPlayer; onClose: 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-md mx-4 rounded-2xl border border-blue-500/[0.15] overflow-hidden animate-fade-in-up" style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.04) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }} data-testid="modal-player-profile">
+      <div className="relative w-full max-w-md mx-4 rounded-2xl border border-blue-500/[0.15] overflow-hidden animate-fade-in-up" style={{ background: "linear-gradient(135deg, hsl(214 60% 97%) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }} data-testid="modal-player-profile">
         <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08]">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/20 flex items-center justify-center">
@@ -2473,7 +2473,7 @@ export default function AdminCampDetail() {
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowEditModal(false)} />
           <div
             className="relative w-full max-w-2xl mx-4 max-h-[85vh] rounded-2xl border border-blue-500/[0.15] overflow-hidden flex flex-col animate-fade-in-up"
-            style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.04) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }}
+            style={{ background: "linear-gradient(135deg, hsl(214 60% 97%) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }}
             data-testid="modal-edit-camp"
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-blue-500/[0.08] flex-shrink-0">
@@ -2506,7 +2506,7 @@ export default function AdminCampDetail() {
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)} />
           <div
             className="relative w-full max-w-md mx-4 rounded-2xl border border-red-500/[0.2] p-6 animate-fade-in-up"
-            style={{ background: "linear-gradient(135deg, rgba(197,3,3,0.04) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }}
+            style={{ background: "linear-gradient(135deg, hsl(0 60% 97%) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }}
             data-testid="modal-delete-camp"
           >
             <div className="flex items-center gap-3 mb-4">

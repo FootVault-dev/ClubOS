@@ -189,6 +189,10 @@ const HIDDEN_BY_WORKSPACE: Record<string, string[]> = {
   "christchurch-united": [
     "analytics",  // CampAnalytics — holiday-camp era, superseded by the dashboard
     "volunteers",      // dormant here; the Cup's is live and stays
+    // Camps are now a "Holiday Camps" section on the Academy page, beside Core
+    // and Additional — same `programs` table, so they belong together. Every
+    // camp route still works; ProgramTable routes each row by type.
+    "camps",
     // Its one row is the 2021 Queen's Birthday Festival with 0 teams and 0
     // games. The 35 MFL seasons and 5 CIC editions now live in those
     // workspaces, which is where somebody would look for them.
