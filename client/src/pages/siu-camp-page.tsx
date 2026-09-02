@@ -5,6 +5,7 @@ import {
   Shield, Sparkles, Heart, Zap, Gamepad2, UserPlus, Star, Mountain,
 } from "lucide-react";
 import { PublicBlock } from "@/components/page-blocks/public-block";
+import { ForceDarkSurface } from "@/lib/theme-provider";
 
 /**
  * South Island United — public holiday-camp landing page.
@@ -225,6 +226,12 @@ export default function SiuCampPage({ data, slug, activeVariants, onBookClick }:
   };
 
   return (
+    <>
+      {/* This page paints its own Unity Black and its type is white. It shares
+          the `/{slug}` route with the LIGHT CUFC camp page, so the URL cannot
+          say which design is rendering — the page has to declare it, or the
+          light-mode mapping flips all this white text to dark ink on black. */}
+      <ForceDarkSurface />
     <div className="min-h-screen" style={{ background: SIU.black, fontFamily: BODY_FONT }}>
       <style>{`
         @font-face {
@@ -756,5 +763,6 @@ export default function SiuCampPage({ data, slug, activeVariants, onBookClick }:
         </Link>
       </div>
     </div>
+    </>
   );
 }

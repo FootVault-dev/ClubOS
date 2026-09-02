@@ -256,9 +256,9 @@ export default function GroupSponsorship() {
                   data-testid={`chip-brand-${b.slug}`}
                   className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
                   style={{
-                    borderColor: active ? b.color : "rgba(255,255,255,0.1)",
+                    borderColor: active ? b.color : "hsl(var(--foreground) / 0.085)",
                     background: active ? `${b.color}25` : "transparent",
-                    color: active ? "white" : "rgba(255,255,255,0.5)",
+                    color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)",
                   }}
                 >{b.label}</button>
               );
@@ -378,8 +378,8 @@ function DealCard({ deal, team, onClick, highlightMine }: { deal: SponsorshipDea
       data-testid={`card-deal-${deal.id}`}
       className="w-full text-left rounded-lg p-2.5 border transition-all hover:border-white/15"
       style={{
-        borderColor: highlightMine ? "rgba(59,130,246,0.4)" : "rgba(255,255,255,0.06)",
-        background: highlightMine ? "rgba(59,130,246,0.05)" : "rgba(255,255,255,0.02)",
+        borderColor: highlightMine ? "rgba(59,130,246,0.4)" : "hsl(var(--foreground) / 0.067)",
+        background: highlightMine ? "rgba(59,130,246,0.05)" : "hsl(var(--foreground) / 0.02)",
         boxShadow: highlightMine ? "0 0 0 1px rgba(59,130,246,0.3)" : undefined,
       }}
     >
@@ -517,9 +517,9 @@ function DealModal({ mode, deal, team, onClose, onSave, onDelete }: {
                     data-testid={`stage-${s.key}`}
                     className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition"
                     style={{
-                      borderColor: active ? s.color : "rgba(255,255,255,0.1)",
+                      borderColor: active ? s.color : "hsl(var(--foreground) / 0.085)",
                       background: active ? `${s.color}25` : "transparent",
-                      color: active ? "white" : "rgba(255,255,255,0.6)",
+                      color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)",
                     }}
                   >
                     {s.label}
@@ -560,9 +560,9 @@ function DealModal({ mode, deal, team, onClose, onSave, onDelete }: {
                     onClick={() => setBrandTags(prev => active ? prev.filter(x => x !== b.slug) : [...prev, b.slug])}
                     className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition"
                     style={{
-                      borderColor: active ? b.color : "rgba(255,255,255,0.1)",
+                      borderColor: active ? b.color : "hsl(var(--foreground) / 0.085)",
                       background: active ? `${b.color}25` : "transparent",
-                      color: active ? "white" : "rgba(255,255,255,0.6)",
+                      color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)",
                     }}
                   >
                     {b.label}
@@ -1033,9 +1033,9 @@ function CrossDeliverablesView({ orgId, team, category }: { orgId: number; team:
               onClick={() => setStatusFilter(t.key)}
               className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition"
               style={{
-                borderColor: active ? t.color : "rgba(255,255,255,0.1)",
+                borderColor: active ? t.color : "hsl(var(--foreground) / 0.085)",
                 background: active ? `${t.color}25` : "transparent",
-                color: active ? "white" : "rgba(255,255,255,0.5)",
+                color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)",
               }}
             >{t.label}</button>
           );
@@ -1743,9 +1743,9 @@ function BillboardsView({ orgId, team, currentUserId }: { orgId: number; team: T
                 onClick={() => setSourceFilter(active ? null : s.key)}
                 className="text-[10px] font-semibold px-2 py-1 rounded-md border transition flex items-center gap-1"
                 style={{
-                  borderColor: active ? s.color : "rgba(255,255,255,0.1)",
+                  borderColor: active ? s.color : "hsl(var(--foreground) / 0.085)",
                   background: active ? `${s.color}25` : "transparent",
-                  color: active ? "white" : "rgba(255,255,255,0.55)",
+                  color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.85)",
                 }}
               >
                 {s.label}
@@ -1842,8 +1842,8 @@ function BillboardDealCard({ deal, team, highlightMine, onClick }: { deal: Billb
       data-testid={`card-billboard-${deal.id}`}
       className="w-full text-left rounded-lg p-2.5 border transition-all hover:border-white/15"
       style={{
-        borderColor: highlightMine ? "rgba(59,130,246,0.4)" : "rgba(255,255,255,0.06)",
-        background: highlightMine ? "rgba(59,130,246,0.05)" : "rgba(255,255,255,0.02)",
+        borderColor: highlightMine ? "rgba(59,130,246,0.4)" : "hsl(var(--foreground) / 0.067)",
+        background: highlightMine ? "rgba(59,130,246,0.05)" : "hsl(var(--foreground) / 0.02)",
         boxShadow: highlightMine ? "0 0 0 1px rgba(59,130,246,0.3)" : undefined,
       }}
     >
@@ -1973,7 +1973,7 @@ function BillboardDealModal({ mode, deal, team, onClose, onSave, onDelete }: {
               {BILLBOARD_STAGES.map(s => {
                 const active = stage === s.key;
                 return (
-                  <button key={s.key} type="button" onClick={() => setStage(s.key)} className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition" style={{ borderColor: active ? s.color : "rgba(255,255,255,0.1)", background: active ? `${s.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.6)" }}>{s.label}</button>
+                  <button key={s.key} type="button" onClick={() => setStage(s.key)} className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition" style={{ borderColor: active ? s.color : "hsl(var(--foreground) / 0.085)", background: active ? `${s.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)" }}>{s.label}</button>
                 );
               })}
             </div>
@@ -1985,7 +1985,7 @@ function BillboardDealModal({ mode, deal, team, onClose, onSave, onDelete }: {
               {BILLBOARD_SOURCES.map(s => {
                 const active = source === s.key;
                 return (
-                  <button key={s.key} type="button" onClick={() => setSource(s.key)} className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition" style={{ borderColor: active ? s.color : "rgba(255,255,255,0.1)", background: active ? `${s.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.6)" }}>{s.label}</button>
+                  <button key={s.key} type="button" onClick={() => setSource(s.key)} className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition" style={{ borderColor: active ? s.color : "hsl(var(--foreground) / 0.085)", background: active ? `${s.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)" }}>{s.label}</button>
                 );
               })}
             </div>
@@ -2206,21 +2206,21 @@ function ProspectsView({ orgId }: { orgId: number }) {
             {["A", "B", "C"].map(t => {
               const active = tierFilter === t;
               return <button key={t} onClick={() => setTierFilter(active ? null : t)} className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
-                style={{ borderColor: active ? TIER_COLOR[t] : "rgba(255,255,255,0.1)", background: active ? `${TIER_COLOR[t]}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.55)" }}>Tier {t}</button>;
+                style={{ borderColor: active ? TIER_COLOR[t] : "hsl(var(--foreground) / 0.085)", background: active ? `${TIER_COLOR[t]}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.85)" }}>Tier {t}</button>;
             })}
           </div>
           <div className="flex items-center gap-1 flex-wrap">
             {BRANDS.map(b => {
               const active = brandFilter === b.slug;
               return <button key={b.slug} onClick={() => setBrandFilter(active ? null : b.slug)} className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
-                style={{ borderColor: active ? b.color : "rgba(255,255,255,0.1)", background: active ? `${b.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.5)" }}>{b.label}</button>;
+                style={{ borderColor: active ? b.color : "hsl(var(--foreground) / 0.085)", background: active ? `${b.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)" }}>{b.label}</button>;
             })}
           </div>
           <div className="flex items-center gap-1">
             {PROSPECT_STATUSES.map(s => {
               const active = statusFilter === s.key;
               return <button key={s.key} onClick={() => setStatusFilter(active ? null : s.key)} className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
-                style={{ borderColor: active ? s.color : "rgba(255,255,255,0.1)", background: active ? `${s.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.5)" }}>{s.label}</button>;
+                style={{ borderColor: active ? s.color : "hsl(var(--foreground) / 0.085)", background: active ? `${s.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)" }}>{s.label}</button>;
             })}
           </div>
           <span className="text-[10px] text-white/30 ml-auto">{filtered.length} of {prospects.length}</span>
@@ -2373,7 +2373,7 @@ function ProspectDetail({ prospect, onClose, onUpdate, onPromote }: {
               <div className="flex gap-1 flex-wrap">
                 {PROSPECT_STATUSES.map(s => (
                   <button key={s.key} onClick={() => onUpdate({ status: s.key })} className="text-[10px] font-semibold px-2.5 py-1 rounded-md border transition"
-                    style={{ borderColor: p.status === s.key ? s.color : "rgba(255,255,255,0.1)", background: p.status === s.key ? `${s.color}25` : "transparent", color: p.status === s.key ? "white" : "rgba(255,255,255,0.55)" }}>{s.label}</button>
+                    style={{ borderColor: p.status === s.key ? s.color : "hsl(var(--foreground) / 0.085)", background: p.status === s.key ? `${s.color}25` : "transparent", color: p.status === s.key ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.85)" }}>{s.label}</button>
                 ))}
               </div>
             </div>

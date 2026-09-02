@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import MatchTimer from "@/components/match-timer";
+import { ForceDarkSurface } from "@/lib/theme-provider";
 import type {
   MflGameFull,
   MflRefCard,
@@ -89,6 +90,11 @@ export default function MflScoreGame() {
 
   return (
     <div className="mfl-score-body min-h-screen w-full pb-16" style={{ background: INK }}>
+      {/* A complete gold-on-black pitchside tool that happens to live under
+          /admin. It opts out of the light mapping: without this its
+          `text-white/70` CLASSES flip to dark ink while its inline white stays
+          white, and the mixed result is the unreadable state. */}
+      <ForceDarkSurface />
       <style>{FONT_STYLE}</style>
       <TopBar game={game} homeName={homeName} awayName={awayName} onBack={goBack} />
       <div className="px-4 pt-4 space-y-4">

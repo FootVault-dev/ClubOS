@@ -130,8 +130,8 @@ export default function AdminEvents() {
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 bg-white/[0.03] border border-white/[0.07] rounded-lg p-1">
-            <button onClick={() => setView("board")} className="px-2.5 py-1.5 rounded-md text-[12px] font-medium flex items-center gap-1.5" style={{ background: view === "board" ? "rgba(255,255,255,0.08)" : "transparent", color: view === "board" ? "#fff" : "rgba(255,255,255,0.5)" }}><LayoutGrid className="w-3.5 h-3.5" /> Board</button>
-            <button onClick={() => setView("calendar")} className="px-2.5 py-1.5 rounded-md text-[12px] font-medium flex items-center gap-1.5" style={{ background: view === "calendar" ? "rgba(255,255,255,0.08)" : "transparent", color: view === "calendar" ? "#fff" : "rgba(255,255,255,0.5)" }}><CalendarDays className="w-3.5 h-3.5" /> Calendar</button>
+            <button onClick={() => setView("board")} className="px-2.5 py-1.5 rounded-md text-[12px] font-medium flex items-center gap-1.5" style={{ background: view === "board" ? "hsl(var(--foreground) / 0.05)" : "transparent", color: view === "board" ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)" }}><LayoutGrid className="w-3.5 h-3.5" /> Board</button>
+            <button onClick={() => setView("calendar")} className="px-2.5 py-1.5 rounded-md text-[12px] font-medium flex items-center gap-1.5" style={{ background: view === "calendar" ? "hsl(var(--foreground) / 0.05)" : "transparent", color: view === "calendar" ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)" }}><CalendarDays className="w-3.5 h-3.5" /> Calendar</button>
           </div>
           <Button onClick={() => setModal({ status: "idea", eventType: "other" })} className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold"><Plus className="w-4 h-4 mr-1" /> New event</Button>
         </div>

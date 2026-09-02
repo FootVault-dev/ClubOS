@@ -809,7 +809,7 @@ function ChipMulti({ options, selected, onToggle }: { options: { key: string; la
     <div className="flex flex-wrap gap-1.5">
       {options.map(o => { const active = selected.includes(o.key); return (
         <button key={o.key} type="button" onClick={() => onToggle(o.key)} className="text-[11px] font-semibold px-2.5 py-1 rounded-md border transition"
-          style={{ borderColor: active ? o.color : "rgba(255,255,255,0.1)", background: active ? `${o.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.6)" }}>{o.label}</button>
+          style={{ borderColor: active ? o.color : "hsl(var(--foreground) / 0.085)", background: active ? `${o.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)" }}>{o.label}</button>
       ); })}
     </div>
   );
@@ -986,7 +986,7 @@ function SessionModal({ mode, session, day, team, saving, onClose, onSave, onDel
           {team.map((t: TeamMember) => { const active = attendeeIds.includes(t.id); return (
             <button key={t.id} type="button" onClick={() => setAttendeeIds(prev => active ? prev.filter(x => x !== t.id) : [...prev, t.id])}
               className="text-[11px] font-medium px-2.5 py-1 rounded-md border transition"
-              style={{ borderColor: active ? "#ec4899" : "rgba(255,255,255,0.1)", background: active ? "#ec489925" : "transparent", color: active ? "white" : "rgba(255,255,255,0.6)" }}>{t.first_name}</button>
+              style={{ borderColor: active ? "#ec4899" : "hsl(var(--foreground) / 0.085)", background: active ? "#ec489925" : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)" }}>{t.first_name}</button>
           ); })}
           {!team.length && <span className="text-[11px] text-white/30">No team members yet — add staff in the Team tab.</span>}
         </div>

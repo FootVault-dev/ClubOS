@@ -380,7 +380,7 @@ function MatrixCell({ iso, weekend, assignment, task, tasks, onPick, onHours, on
           >
             {booked ? (
               <>
-                <span className="text-[10px] font-bold leading-tight truncate max-w-full" style={{ color: color || "#ffffff" }}>{short}</span>
+                <span className="text-[10px] font-bold leading-tight truncate max-w-full" style={{ color: color || "hsl(var(--foreground) / 1)" }}>{short}</span>
                 <span className="text-[9px] text-white/45 leading-tight flex items-center gap-0.5">
                   {assignment!.completed && <Check className="w-2.5 h-2.5 text-emerald-400" strokeWidth={3} />}{hrs(assignment!.hours)}h
                 </span>

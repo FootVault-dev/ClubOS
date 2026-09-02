@@ -203,7 +203,7 @@ export function CountryPicker({
       {open && (
         <div
           className={`absolute z-50 w-full rounded-xl overflow-hidden shadow-2xl ${placement.above ? "bottom-full mb-1" : "top-full mt-1"}`}
-          style={{ background: "#12161c", border: `1px solid ${theme.line}` }}
+          style={{ background: "hsl(var(--card))", border: `1px solid ${theme.line}` }}
         >
           <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: `1px solid ${theme.line}` }}>
             <Search className="w-4 h-4 opacity-50 flex-shrink-0" />
@@ -213,7 +213,7 @@ export function CountryPicker({
               onChange={(e) => setQ(e.target.value)}
               placeholder={placeholder}
               className="w-full bg-transparent outline-none text-[15px] py-1"
-              style={{ color: "#fff" }}
+              style={{ color: "hsl(var(--foreground))" }}
               data-testid={testId ? `${testId}-search` : undefined}
             />
             {q && (
@@ -234,7 +234,7 @@ export function CountryPicker({
                   type="button"
                   onClick={() => { onChange(c.code); setOpen(false); setQ(""); }}
                   className="w-full text-left px-3 py-2.5 text-[15px] flex items-center justify-between hover:bg-white/5"
-                  style={{ color: c.code === value ? theme.goldBright : "rgba(255,255,255,0.9)" }}
+                  style={{ color: c.code === value ? theme.goldBright : "hsl(var(--foreground))" }}
                 >
                   <span>{c.name}</span>
                   {c.code === value && <Check className="w-4 h-4" />}
@@ -308,7 +308,7 @@ function SelectionPicker({
         {open && (
           <div
             className={`absolute z-50 w-full rounded-xl overflow-hidden shadow-2xl ${placement.above ? "bottom-full mb-1" : "top-full mt-1"}`}
-            style={{ background: "#12161c", border: `1px solid ${theme.line}` }}
+            style={{ background: "hsl(var(--card))", border: `1px solid ${theme.line}` }}
           >
             {group.selections.length > 8 && (
               <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: `1px solid ${theme.line}` }}>
@@ -319,7 +319,7 @@ function SelectionPicker({
                   onChange={(e) => setQ(e.target.value)}
                   placeholder="Search…"
                   className="w-full bg-transparent outline-none text-[15px] py-1"
-                  style={{ color: "#fff" }}
+                  style={{ color: "hsl(var(--foreground))" }}
                 />
               </div>
             )}
@@ -334,7 +334,7 @@ function SelectionPicker({
                     onClick={() => toggle(s.id)}
                     disabled={disabled}
                     className="w-full text-left px-3 py-2.5 text-[15px] flex items-center justify-between hover:bg-white/5 disabled:opacity-35"
-                    style={{ color: on ? theme.goldBright : "rgba(255,255,255,0.9)" }}
+                    style={{ color: on ? theme.goldBright : "hsl(var(--foreground))" }}
                   >
                     <span>{s.name}</span>
                     {on && <Check className="w-4 h-4" />}
@@ -441,7 +441,7 @@ export function NzfIdentityFields({
         </div>
       </div>
 
-      <div className="rounded-xl p-4 space-y-4" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${theme.line}` }}>
+      <div className="rounded-xl p-4 space-y-4" style={{ background: "hsl(var(--muted) / 0.4)", border: `1px solid ${theme.line}` }}>
         <div className="text-[12px]" style={{ color: theme.mute }}>
           New Zealand Football asks every registered player for this. These are their categories.
         </div>

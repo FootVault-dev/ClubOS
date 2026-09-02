@@ -115,7 +115,7 @@ export default function AdminMembership() {
         {(["tiers", "members", "deliverables"] as const).map((v) => (
           <button key={v} onClick={() => setView(v)}
             className="px-3 py-1.5 rounded-md text-[12px] font-medium capitalize transition-colors"
-            style={{ background: view === v ? "rgba(255,255,255,0.08)" : "transparent", color: view === v ? "#fff" : "rgba(255,255,255,0.5)" }}>
+            style={{ background: view === v ? "hsl(var(--foreground) / 0.05)" : "transparent", color: view === v ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)" }}>
             {v}
           </button>
         ))}
@@ -135,7 +135,7 @@ export default function AdminMembership() {
                 </div>
                 {t.tagline && <div className="text-[12px] text-white/40 mb-3">{t.tagline}</div>}
                 <div className="flex items-baseline gap-1 mb-4">
-                  <span className="text-2xl font-bold" style={{ color: t.color || "#fff" }}>{money(t.priceCents)}</span>
+                  <span className="text-2xl font-bold" style={{ color: t.color || "hsl(var(--foreground) / 1)" }}>{money(t.priceCents)}</span>
                   <span className="text-[12px] text-white/40">{perLabel(t.billingInterval)}</span>
                 </div>
                 <div className="space-y-1.5">
@@ -328,7 +328,7 @@ function DeliverableModal({ orgId, del: dv, tiers, onClose, onSaved }: { orgId: 
       saving={save.isPending} canSave={!!f.title?.trim()} onSave={() => save.mutate(f)}>
       <Field label="Title"><Input value={f.title || ""} onChange={(e) => set("title", e.target.value)} className={inputCls} /></Field>
       <Field label="Description"><Textarea value={f.description || ""} onChange={(e) => set("description", e.target.value)} className="min-h-[56px] bg-white/[0.03] border-white/10 text-[13px]" /></Field>
-      <Field label="Which tiers get it"><div className="flex gap-2 flex-wrap">{allSlugs.map((s) => { const on = (f.tiers || []).includes(s); const t = tiers.find((x) => x.slug === s); return <button key={s} onClick={() => toggleTier(s)} className="text-[11px] font-semibold px-2.5 py-1 rounded-full border capitalize" style={{ background: on ? `${t?.color || "#888"}22` : "transparent", color: on ? (t?.color || "#fff") : "rgba(255,255,255,0.4)", borderColor: on ? `${t?.color || "#888"}66` : "rgba(255,255,255,0.12)" }}>{s}</button>; })}</div></Field>
+      <Field label="Which tiers get it"><div className="flex gap-2 flex-wrap">{allSlugs.map((s) => { const on = (f.tiers || []).includes(s); const t = tiers.find((x) => x.slug === s); return <button key={s} onClick={() => toggleTier(s)} className="text-[11px] font-semibold px-2.5 py-1 rounded-full border capitalize" style={{ background: on ? `${t?.color || "#888"}22` : "transparent", color: on ? (t?.color || "hsl(var(--foreground) / 1)") : "hsl(var(--foreground) / 0.74)", borderColor: on ? `${t?.color || "#888"}66` : "hsl(var(--foreground) / 0.094)" }}>{s}</button>; })}</div></Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Cadence"><select value={f.cadence || "one_off"} onChange={(e) => set("cadence", e.target.value)} className={inputCls}>{CADENCES.map((c) => <option key={c} value={c} className="bg-neutral-900 capitalize">{c.replace(/_/g, " ")}</option>)}</select></Field>
         <Field label="Status"><select value={f.status || "idea"} onChange={(e) => set("status", e.target.value)} className={inputCls}>{DEL_STATUS.map((s) => <option key={s.key} value={s.key} className="bg-neutral-900">{s.label}</option>)}</select></Field>

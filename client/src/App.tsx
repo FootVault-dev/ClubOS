@@ -240,7 +240,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen w-full items-center justify-center" style={{ background: '#02060E' }}>
+      <div className="flex h-screen w-full items-center justify-center" style={{ background: "hsl(var(--background))" }}>
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-lg shadow-blue-500/25 animate-pulse">
             <span className="text-white font-bold text-sm">CU</span>

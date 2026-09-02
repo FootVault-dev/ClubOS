@@ -483,10 +483,10 @@ export function RegisterPlayerModal({
           header and footer instead, exactly as ModalShell does it. */}
       <div
         className="relative w-full max-w-2xl m-auto flex flex-col rounded-2xl border border-blue-500/[0.15]"
-        style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.06) 0%, #02060E 100%)" }}
+        style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.04) 0%, hsl(var(--card)) 100%)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08] sticky top-0 z-10 rounded-t-2xl" style={{ background: "#02060E" }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08] sticky top-0 z-10 rounded-t-2xl" style={{ background: "hsl(var(--background))" }}>
           <div className="min-w-0">
             <h3 className="text-[14px] font-semibold text-white/80">Register at the office</h3>
             <p className="text-[11px] text-white/55 mt-0.5">Walk-up registration — records how they paid and who served them</p>
@@ -1015,7 +1015,7 @@ export function RegisterPlayerModal({
         </div>
 
         {/* Sticky so Save is always reachable on a short laptop screen. */}
-        <div className="px-5 py-4 border-t border-blue-500/[0.08] flex items-center justify-between gap-2 sticky bottom-0 z-10 rounded-b-2xl" style={{ background: "#02060E" }}>
+        <div className="px-5 py-4 border-t border-blue-500/[0.08] flex items-center justify-between gap-2 sticky bottom-0 z-10 rounded-b-2xl" style={{ background: "hsl(var(--background))" }}>
           <Button
             size="sm" variant="ghost"
             onClick={() => (step === 0 ? close() : setStep(step - 1))}

@@ -405,7 +405,7 @@ function CriterionDrawer({ orgId, criterion, onClose, onSaved, owners }:
                     className="w-full flex items-start gap-2 text-left p-2 rounded-lg hover:bg-white/[0.03] transition-colors group">
                     <Icon className="w-4 h-4 mt-0.5 shrink-0" style={{ color: sc.color }} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-[12px] leading-snug" style={{ color: s.status === "done" ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.85)", textDecoration: s.status === "done" ? "line-through" : "none" }}>
+                      <div className="text-[12px] leading-snug" style={{ color: s.status === "done" ? "hsl(var(--foreground) / 0.74)" : "hsl(var(--foreground) / 0.97)", textDecoration: s.status === "done" ? "line-through" : "none" }}>
                         {s.itemNum && <span className="text-white/30 mr-1">{s.itemNum}</span>}{s.description}
                       </div>
                       {s.actionRequired && <div className="text-[10px] text-white/30 mt-0.5">{s.actionRequired}</div>}

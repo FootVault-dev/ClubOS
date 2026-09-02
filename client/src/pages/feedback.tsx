@@ -174,8 +174,8 @@ export default function Feedback() {
               data-testid={`filter-status-${s.key}`}
               className="rounded-xl border px-3 py-2 text-left transition-colors"
               style={{
-                borderColor: active ? `${s.color}88` : "rgba(255,255,255,0.06)",
-                background: active ? `${s.color}18` : "rgba(255,255,255,0.02)",
+                borderColor: active ? `${s.color}88` : "hsl(var(--foreground) / 0.067)",
+                background: active ? `${s.color}18` : "hsl(var(--foreground) / 0.02)",
               }}
             >
               <div className="flex items-center gap-1.5 text-[10px] font-medium" style={{ color: s.color }}>
@@ -373,12 +373,12 @@ export default function Feedback() {
                   data-testid={`type-${t.key}`}
                   className="rounded-xl border p-2.5 text-center transition-colors"
                   style={{
-                    borderColor: active ? `${t.color}99` : "rgba(255,255,255,0.08)",
-                    background: active ? `${t.color}1a` : "rgba(255,255,255,0.02)",
+                    borderColor: active ? `${t.color}99` : "hsl(var(--foreground) / 0.076)",
+                    background: active ? `${t.color}1a` : "hsl(var(--foreground) / 0.02)",
                   }}
                 >
                   <Icon className="w-4 h-4 mx-auto mb-1" style={{ color: t.color }} />
-                  <div className="text-[12px] font-medium" style={{ color: active ? t.color : "rgba(255,255,255,0.7)" }}>{t.label}</div>
+                  <div className="text-[12px] font-medium" style={{ color: active ? t.color : "hsl(var(--foreground) / 0.92)" }}>{t.label}</div>
                 </button>
               );
             })}

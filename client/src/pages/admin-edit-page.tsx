@@ -976,7 +976,7 @@ export default function AdminEditPage() {
       {showAbModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowAbModal(false)} />
-          <div className="relative w-full max-w-lg mx-4 rounded-2xl border border-purple-500/20 overflow-hidden" style={{ background: '#0a0e1a' }} data-testid="modal-ab-test">
+          <div className="relative w-full max-w-lg mx-4 rounded-2xl border border-purple-500/20 overflow-hidden" style={{ background: "hsl(var(--card))" }} data-testid="modal-ab-test">
             <div className="flex items-center justify-between px-6 py-4 border-b border-purple-500/10">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/20 flex items-center justify-center">

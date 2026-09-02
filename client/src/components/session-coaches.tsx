@@ -107,7 +107,7 @@ export function AddCoachModal({
           its own top and can't be scrolled back to. */}
       <div
         className="relative rounded-2xl border border-blue-500/[0.12] p-5 sm:p-6 max-w-sm w-full space-y-5 my-8"
-        style={{ background: "#0a0f1a" }}
+        style={{ background: "hsl(var(--card))" }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">

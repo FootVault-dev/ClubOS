@@ -396,7 +396,7 @@ function GoalModal({ orgId, level, parentId, goal, goals, departments, team, onC
                 <div className="flex flex-wrap gap-1.5">
                   {BRANDS.map(b => {
                     const active = brandTags.includes(b.slug);
-                    return <button key={b.slug} type="button" onClick={() => setBrandTags(prev => active ? prev.filter(x => x !== b.slug) : [...prev, b.slug])} className="text-[11px] font-semibold px-2 py-1 rounded-md border transition" style={{ borderColor: active ? b.color : "rgba(255,255,255,0.1)", background: active ? `${b.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.6)" }}>{b.label}</button>;
+                    return <button key={b.slug} type="button" onClick={() => setBrandTags(prev => active ? prev.filter(x => x !== b.slug) : [...prev, b.slug])} className="text-[11px] font-semibold px-2 py-1 rounded-md border transition" style={{ borderColor: active ? b.color : "hsl(var(--foreground) / 0.085)", background: active ? `${b.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)" }}>{b.label}</button>;
                   })}
                 </div>
               </div>
@@ -775,7 +775,7 @@ export function FocusView({ allTasks, boards, departments, team, onEdit }: {
           return (
             <button key={c.key} onClick={() => setFilter(active ? null : c.key)} data-testid={`focus-filter-${c.key}`}
               className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
-              style={{ borderColor: active ? c.color : "rgba(255,255,255,0.1)", background: active ? `${c.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.5)" }}>
+              style={{ borderColor: active ? c.color : "hsl(var(--foreground) / 0.085)", background: active ? `${c.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)" }}>
               {c.label}
             </button>
           );
@@ -1043,7 +1043,7 @@ function PlaybookEditor({ orgId, template, departments, onClose }: {
               <div className="flex flex-wrap gap-1.5">
                 {BRANDS.map(b => {
                   const active = brandTags.includes(b.slug);
-                  return <button key={b.slug} type="button" onClick={() => setBrandTags(prev => active ? prev.filter(x => x !== b.slug) : [...prev, b.slug])} className="text-[11px] font-semibold px-2 py-1 rounded-md border transition" style={{ borderColor: active ? b.color : "rgba(255,255,255,0.1)", background: active ? `${b.color}25` : "transparent", color: active ? "white" : "rgba(255,255,255,0.6)" }}>{b.label}</button>;
+                  return <button key={b.slug} type="button" onClick={() => setBrandTags(prev => active ? prev.filter(x => x !== b.slug) : [...prev, b.slug])} className="text-[11px] font-semibold px-2 py-1 rounded-md border transition" style={{ borderColor: active ? b.color : "hsl(var(--foreground) / 0.085)", background: active ? `${b.color}25` : "transparent", color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.88)" }}>{b.label}</button>;
                 })}
               </div>
             </div>

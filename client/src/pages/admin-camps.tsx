@@ -100,7 +100,7 @@ function CreateCampModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-lg mx-4 rounded-2xl border border-blue-500/[0.15] overflow-hidden animate-fade-in-up" style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.06) 0%, #02060E 100%)", animationDelay: "0ms", opacity: 0 }} data-testid="modal-create-camp">
+      <div className="relative w-full max-w-lg mx-4 rounded-2xl border border-blue-500/[0.15] overflow-hidden animate-fade-in-up" style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.04) 0%, hsl(var(--card)) 100%)", animationDelay: "0ms", opacity: 0 }} data-testid="modal-create-camp">
         <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08]">
           <h3 className="text-[14px] font-semibold text-white/80">{mode === "term" ? "Create Term Program" : "Create Holiday Camp"}</h3>
           <button onClick={onClose} className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.08] transition-colors cursor-pointer">

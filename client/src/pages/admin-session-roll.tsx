@@ -45,7 +45,7 @@ function PlayerProfileModal({ player, onClose }: { player: RollPlayer; onClose: 
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div
         className="relative rounded-2xl border border-blue-500/[0.12] p-6 max-w-sm w-full space-y-5"
-        style={{ background: '#0a0f1a' }}
+        style={{ background: "hsl(var(--card))" }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -170,7 +170,7 @@ export function AddPlayerModal({
           viewport clips its own top and can't be scrolled back to. */}
       <div
         className="relative rounded-2xl border border-blue-500/[0.12] p-5 sm:p-6 max-w-sm w-full space-y-5 my-8"
-        style={{ background: "#0a0f1a" }}
+        style={{ background: "hsl(var(--card))" }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">

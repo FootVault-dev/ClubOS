@@ -40,25 +40,50 @@ function readStoredMode(): ThemeMode {
 }
 
 // PUBLIC surfaces are not admin surfaces and are unaffected by the rule above.
+// They are customer-facing pages with their own designed look, and they stay
+// dark for everyone regardless of ADMIN_DARK_MODE.
 //
-// The public booking flow (book.* subdomain or /book route) is hardcoded
-// dark-themed and the shared light-mode polyfill in index.css would flip its
-// white text invisible. Same for the CIC Skills Challenge landing page
-// (join.cicyouth.com / /skills) — hardcoded near-black, so a light-mode
-// phone rendered its white text navy-on-black. These stay dark for everyone,
-// regardless of ADMIN_DARK_MODE — they are customer-facing pages with their
-// own designed look, not the staff console.
+// 🔴 EVERY dark-designed public page must be listed here.
+//
+// Admin used to be light-or-dark by preference, so these pages were dark for
+// a dark-mode user and already wrong for a light-mode one. Making admin light
+// by default would have made them wrong for EVERYONE: the light mapping flips
+// their `text-white/70` to dark ink while their own hardcoded `#02060E`
+// background stays black, which is the unreadable-panel bug in a full page.
+//
+// Found by auditing inline `style={{ background: '#…' }}` — a class-based
+// mapping cannot reach an inline style, so grepping for classes would have
+// missed all of them. `scripts/audit-dark-surfaces.mjs` is that audit, kept.
 function isPublicDarkSurface(): boolean {
   if (typeof window === "undefined") return false;
   const host = window.location.hostname;
   const path = window.location.pathname;
+
+  const startsWithAny = (...prefixes: string[]) =>
+    prefixes.some((p) => path === p || path.startsWith(`${p}/`));
+
   return (
+    // Venue booking flow — book.* subdomain, /book and /book/success.
     host.startsWith("book.") ||
-    path === "/book" ||
-    path.startsWith("/book/") ||
+    startsWithAny("/book") ||
+    // CIC Youth: the whole brand is near-black, plus the Skills Challenge.
     host.includes("cicyouth") ||
-    path === "/skills" ||
-    path.startsWith("/skills/")
+    startsWithAny("/skills") ||
+    // Referee portals — gold on black, both leagues, and the clean-URL
+    // aliases the ref.* hosts redirect through.
+    startsWithAny("/mfl-ref", "/ref") ||
+    path === "/signup" ||
+    path === "/login" ||
+    path.startsWith("/game/") ||
+    // e-Sign: the signing page and the payables declaration.
+    startsWithAny("/sign", "/declaration") ||
+    // The members' booking page and the membership purchase page.
+    path === "/members" ||
+    path === "/membership" ||
+    // MFL's public league landing pages — gold on near-black.
+    startsWithAny("/league") ||
+    // The NZF academy registration page — navy and gold throughout.
+    startsWithAny("/academy")
   );
 }
 
@@ -123,4 +148,41 @@ export function useTheme() {
   const ctx = useContext(ThemeContext);
   if (!ctx) throw new Error("useTheme must be used inside <ThemeProvider>");
   return ctx;
+}
+
+/**
+ * For a dark-designed public page whose URL cannot identify it.
+ *
+ * `/{slug}` serves BOTH the light CUFC camp page and the black SIU one — same
+ * route, two designs — so `isPublicDarkSurface()` above cannot classify it,
+ * and a page that paints its own full-page black while the light mapping
+ * flips its white text to dark ink is unreadable.
+ *
+ * Rendering this inside such a page declares the requirement where the design
+ * that needs it lives, instead of in a central URL list that goes stale the
+ * next time somebody adds a route.
+ *
+ *   export default function SiuCampPage() {
+ *     return (<><ForceDarkSurface />…</>);
+ *   }
+ *
+ * ⚠️ There IS a brief light frame before this mounts. Prefer a URL rule when
+ * the URL is unambiguous; use this only when it genuinely is not.
+ */
+export function ForceDarkSurface() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const had = root.classList.contains("dark");
+    root.classList.add("dark");
+    root.setAttribute("data-theme", "dark");
+    root.style.colorScheme = "dark";
+    return () => {
+      if (!had) {
+        root.classList.remove("dark");
+        root.setAttribute("data-theme", "light");
+        root.style.colorScheme = "light";
+      }
+    };
+  }, []);
+  return null;
 }

@@ -162,7 +162,7 @@ function SquadFormModal({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
         className="relative w-full max-w-lg mx-4 rounded-2xl border border-blue-500/[0.15] overflow-hidden"
-        style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.06) 0%, #02060E 100%)" }}
+        style={{ background: "linear-gradient(135deg, rgba(3,86,197,0.04) 0%, hsl(var(--card)) 100%)" }}
         data-testid="modal-squad-form"
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08]">

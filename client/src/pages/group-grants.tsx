@@ -290,9 +290,9 @@ export default function GroupGrants() {
                   <button key={s.key} onClick={() => setStatusFilter(active ? null : s.key)} data-testid={`chip-status-${s.key}`}
                     className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
                     style={{
-                      borderColor: active ? s.color : "rgba(255,255,255,0.1)",
+                      borderColor: active ? s.color : "hsl(var(--foreground) / 0.085)",
                       background: active ? `${s.color}25` : "transparent",
-                      color: active ? "white" : "rgba(255,255,255,0.5)",
+                      color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)",
                     }}>
                     {s.label} {count ? `· ${count}` : ""}
                   </button>
@@ -337,7 +337,7 @@ export default function GroupGrants() {
                       <td className="px-3 py-2.5 text-white/60">{a.funderName}</td>
                       <td className="px-3 py-2.5"><BrandChips tags={a.brandTags} /></td>
                       <td className="px-3 py-2.5 text-right text-white/70">{fmtMoney(a.amountRequestedCents)}</td>
-                      <td className="px-3 py-2.5 text-right font-semibold" style={{ color: a.amountApprovedCents ? "#22c55e" : "rgba(255,255,255,0.3)" }}>{fmtMoney(a.amountApprovedCents)}</td>
+                      <td className="px-3 py-2.5 text-right font-semibold" style={{ color: a.amountApprovedCents ? "#22c55e" : "hsl(var(--foreground) / 0.66)" }}>{fmtMoney(a.amountApprovedCents)}</td>
                       <td className="px-3 py-2.5"><StatusPill status={a.status} /></td>
                       <td className="px-3 py-2.5 text-white/50">{fmtDate(a.submittedAt)}</td>
                       <td className="px-3 py-2.5 text-white/50">{a.owner || "—"}</td>
@@ -366,7 +366,7 @@ export default function GroupGrants() {
                     {f.priorityScore != null && (
                       <span className="flex items-center gap-0.5 shrink-0" title={`Priority ${f.priorityScore}/5`}>
                         {Array.from({ length: 5 }).map((_, i) => (
-                          <Star key={i} className="w-3 h-3" style={{ color: i < (f.priorityScore || 0) ? "#f59e0b" : "rgba(255,255,255,0.12)", fill: i < (f.priorityScore || 0) ? "#f59e0b" : "none" }} />
+                          <Star key={i} className="w-3 h-3" style={{ color: i < (f.priorityScore || 0) ? "#f59e0b" : "hsl(var(--foreground) / 0.516)", fill: i < (f.priorityScore || 0) ? "#f59e0b" : "none" }} />
                         ))}
                       </span>
                     )}
@@ -544,9 +544,9 @@ function ApplicationModal({ modal, funders, onClose, onSave, onDelete, saving }:
                 <button key={b.slug} type="button" onClick={() => set("brandTags", active ? form.brandTags.filter((t: string) => t !== b.slug) : [...form.brandTags, b.slug])}
                   className="text-[10px] font-semibold px-2 py-1 rounded-md border transition"
                   style={{
-                    borderColor: active ? b.color : "rgba(255,255,255,0.1)",
+                    borderColor: active ? b.color : "hsl(var(--foreground) / 0.085)",
                     background: active ? `${b.color}25` : "transparent",
-                    color: active ? "white" : "rgba(255,255,255,0.5)",
+                    color: active ? "hsl(var(--foreground) / 1)" : "hsl(var(--foreground) / 0.82)",
                   }}>{b.label}</button>
               );
             })}

@@ -195,7 +195,7 @@ export function MyWorkView({ projects, tasks, team, today, meId, onTask }: {
     <div className="p-4 sm:p-6 space-y-5 max-w-3xl">
       {grouped.filter((g) => g.items.length).map((g) => (
         <div key={g.key}>
-          <div className="text-xs uppercase tracking-wider font-semibold mb-2" style={{ color: g.color ?? "rgba(255,255,255,0.3)" }}>
+          <div className="text-xs uppercase tracking-wider font-semibold mb-2" style={{ color: g.color ?? "hsl(var(--foreground) / 0.66)" }}>
             {g.label} <span className="text-white/30">({g.items.length})</span>
           </div>
           <div className="space-y-1.5">
@@ -664,7 +664,7 @@ export function CalendarView({ projects, tasks, today, onTask, onPatch, onNewOnD
                         width: `calc(${(seg.span / 7) * 100}% - 4px)`,
                         background: `${color}${done ? "18" : "30"}`,
                         borderLeft: seg.clipLeft ? undefined : `2px solid ${color}`,
-                        color: done ? "rgba(255,255,255,0.35)" : "white",
+                        color: done ? "hsl(var(--foreground) / 0.7)" : "hsl(var(--foreground) / 1)",
                       }}>
                       {seg.task.milestone && <Diamond className="w-2.5 h-2.5 shrink-0 text-amber-300" />}
                       <span className={`truncate ${done ? "line-through" : ""}`}>{seg.task.title}</span>
