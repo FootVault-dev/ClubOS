@@ -1,10 +1,13 @@
+// Choose a new password. Light-only rebuild sharing AuthShell (2026-09-02).
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Lock, ArrowLeft, ShieldAlert } from "lucide-react";
+import { Lock, ArrowLeft, ShieldAlert, Loader2 } from "lucide-react";
+import { AuthShell } from "@/components/auth-shell";
 
 type ValidState =
   | { status: "checking" }
@@ -40,10 +43,14 @@ export default function ResetPassword() {
         if (res.ok && data.valid) {
           setState({ status: "valid", firstName: data.firstName, email: data.email });
         } else {
-          setState({ status: "invalid", message: data.message || "This reset link is invalid or has expired." });
+          setState({
+            status: "invalid",
+            message: data.message || "This reset link is invalid or has expired.",
+          });
         }
       } catch {
-        if (!cancelled) setState({ status: "invalid", message: "This reset link is invalid or has expired." });
+        if (!cancelled)
+          setState({ status: "invalid", message: "This reset link is invalid or has expired." });
       }
     })();
     return () => {
@@ -71,83 +78,84 @@ export default function ResetPassword() {
   const canSubmit = password.length >= 8 && password === confirm && !mutation.isPending;
 
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: "#02060E" }}>
-      <div className="w-full max-w-sm mx-4 animate-fade-in-up" style={{ animationDelay: "0ms", opacity: 0 }}>
-        <div className="text-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-center shadow-lg mx-auto mb-4 overflow-hidden">
-            <img src="/logos/united-sports-group.png" alt="United Sports Group" className="w-10 h-10 object-contain" />
-          </div>
-          <h1 className="text-xl font-semibold text-white tracking-tight">Choose your password</h1>
+    <AuthShell title="Choose your password">
+      {state.status === "checking" && (
+        <p className="text-[13px] text-muted-foreground text-center py-2">Checking your link…</p>
+      )}
+
+      {state.status === "invalid" && (
+        <div className="text-center space-y-4">
+          <ShieldAlert className="w-10 h-10 text-amber-500 mx-auto" />
+          <p className="text-[13px] text-muted-foreground leading-relaxed">{state.message}</p>
+          <a href="/forgot-password" className="block">
+            <Button className="w-full h-10">Request a new link</Button>
+          </a>
+          <a
+            href="/admin/login"
+            className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back to sign in
+          </a>
         </div>
+      )}
 
-        {state.status === "checking" && (
-          <div className="rounded-2xl glass-card p-6 text-center">
-            <p className="text-[13px] text-white/50">Checking your link…</p>
-          </div>
-        )}
-
-        {state.status === "invalid" && (
-          <div className="rounded-2xl glass-card p-6 text-center space-y-4">
-            <ShieldAlert className="w-10 h-10 text-amber-400 mx-auto" />
-            <p className="text-[13px] text-white/70 leading-relaxed">{state.message}</p>
-            <a href="/forgot-password" className="inline-block w-full">
-              <Button className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-white border-0 rounded-xl h-10 text-[13px] font-medium glow-btn">
-                Request a new link
-              </Button>
-            </a>
-            <a href="/admin/login" className="inline-flex items-center gap-1.5 text-[13px] text-blue-300/70 hover:text-blue-300 transition-colors">
-              <ArrowLeft className="w-3.5 h-3.5" /> Back to sign in
-            </a>
-          </div>
-        )}
-
-        {state.status === "valid" && (
-          <div className="rounded-2xl glass-card p-6 space-y-4">
-            <p className="text-[13px] text-white/55 leading-relaxed">
-              Hi {state.firstName} — set a new password for <span className="text-white/80">{state.email}</span>.
-            </p>
-            <div className="space-y-1.5">
-              <label className="text-[11px] text-blue-300/25 uppercase tracking-wider font-semibold">New password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 8 characters"
-                  className="pl-10 premium-input text-white/80 rounded-xl h-10"
-                  data-testid="input-new-password"
-                />
-              </div>
-              {tooShort && <p className="text-[11px] text-amber-400/80">Use at least 8 characters.</p>}
+      {state.status === "valid" && (
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (canSubmit) mutation.mutate();
+          }}
+        >
+          <p className="text-[13px] text-muted-foreground leading-relaxed">
+            Hi {state.firstName} — set a new password for{" "}
+            <span className="text-foreground font-medium">{state.email}</span>.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="new-password">New password</Label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              <Input
+                id="new-password"
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className="pl-10 h-10"
+                data-testid="input-new-password"
+              />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-[11px] text-blue-300/25 uppercase tracking-wider font-semibold">Confirm password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
-                <Input
-                  type="password"
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                  placeholder="Re-enter password"
-                  className="pl-10 premium-input text-white/80 rounded-xl h-10"
-                  data-testid="input-confirm-password"
-                  onKeyDown={(e) => e.key === "Enter" && canSubmit && mutation.mutate()}
-                />
-              </div>
-              {mismatch && <p className="text-[11px] text-amber-400/80">Passwords don't match.</p>}
-            </div>
-            <Button
-              onClick={() => mutation.mutate()}
-              disabled={!canSubmit}
-              className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-white border-0 rounded-xl h-10 text-[13px] font-medium glow-btn"
-              data-testid="button-set-password"
-            >
-              {mutation.isPending ? "Setting password..." : "Set password & sign in"}
-            </Button>
+            {tooShort && <p className="text-[12px] text-amber-600">Use at least 8 characters.</p>}
           </div>
-        )}
-      </div>
-    </div>
+          <div className="space-y-2">
+            <Label htmlFor="confirm-password">Confirm password</Label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              <Input
+                id="confirm-password"
+                type="password"
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="Re-enter password"
+                className="pl-10 h-10"
+                data-testid="input-confirm-password"
+              />
+            </div>
+            {mismatch && <p className="text-[12px] text-amber-600">Passwords don't match.</p>}
+          </div>
+          <Button
+            type="submit"
+            disabled={!canSubmit}
+            className="w-full h-10"
+            data-testid="button-set-password"
+          >
+            {mutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            {mutation.isPending ? "Setting password…" : "Set password & sign in"}
+          </Button>
+        </form>
+      )}
+    </AuthShell>
   );
 }

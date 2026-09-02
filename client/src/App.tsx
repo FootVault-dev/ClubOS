@@ -220,16 +220,17 @@ import KnowledgeBase from "@/pages/knowledge-base";
 import Drive from "@/pages/drive";
 import StaffChat from "@/pages/staff-chat";
 import NotificationSettings from "@/pages/notification-settings";
+import ProfilePage from "@/pages/profile";
 import MarketingHome from "@/pages/marketing/Home";
 import MarketingCampaignWizard from "@/pages/marketing/CampaignWizard";
 import MarketingCampaignDetail from "@/pages/marketing/CampaignDetail";
 import MarketingFlowEditor from "@/pages/marketing/FlowEditor";
-import { Search, Bell } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Search } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
 import { CommandPalette } from "@/components/command-palette";
 import { ViewAsBar } from "@/components/view-as-bar";
+import { AccountMenu } from "@/components/account-menu";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading, error } = useQuery({
@@ -270,6 +271,10 @@ function AdminRouter() {
   // Notification settings belong to the PERSON, not the workspace — same
   // universal pattern again, gated server-side by requireAuth only.
   if (location.startsWith("/admin/notification-settings")) return <NotificationSettings />;
+  // Your profile — the person's own name and photo. Universal for exactly the
+  // same reason, and reached from the account menu in the top-right rather
+  // than the sidebar. Was a modal until 2026-09-02.
+  if (location.startsWith("/admin/profile")) return <ProfilePage />;
   // Task Tracker — one organisation-wide project/task system, deliberately
   // not workspace-scoped, so it is reachable from every workspace too.
   if (location.startsWith("/admin/task-tracker")) return <TaskTracker />;
@@ -701,9 +706,11 @@ function AdminLayout() {
               <div className="flex items-center gap-2">
                 {/* View As — super-admin only; renders nothing for everyone else. */}
                 <ViewAsBar />
-                <Button variant="ghost" size="icon" className="text-white/30 hover:text-white/50 relative transition-colors duration-300 rounded-xl">
-                  <Bell className="w-4 h-4" />
-                </Button>
+                {/* The bell that used to sit here had no click handler and no
+                    panel behind it — a button that did nothing, for months.
+                    Notification PREFERENCES live in the account menu; a real
+                    notification inbox can earn this spot back when it exists. */}
+                <AccountMenu />
               </div>
             </header>
             <main className="flex-1 overflow-x-hidden overflow-y-auto gradient-mesh">

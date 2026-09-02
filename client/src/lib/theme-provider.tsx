@@ -1,9 +1,24 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 
-// Theme preference is stored as one of these. "system" falls back to the
-// browser's prefers-color-scheme so users get a reasonable default before
-// they touch the toggle. The toggle in the UI flips between "light" and
-// "dark" — "system" is only the initial default.
+// 🔴 ClubOS ADMIN IS LIGHT ONLY (Daniel, 2026-09-02).
+//
+// Dark mode was a per-user toggle. Staff complained about the dark rendering
+// constantly and nobody has ever complained about light, because a large part
+// of this codebase was written dark-first with hardcoded colours
+// (`bg-slate-950`, `text-white`, `border-white/10`) rather than tokens — so
+// light mode was being patched at the CSS level and leaked black-on-black
+// panels wherever the patch didn't reach. One theme, rendered properly, beats
+// two themes where one is broken.
+//
+// Nothing here is deleted. The `.dark` token block still lives in index.css
+// and this provider still knows how to resolve and apply a dark theme. To
+// bring the toggle back: flip ADMIN_DARK_MODE to true, and re-add the toggle
+// button to the profile menu (it was removed from the sidebar footer in the
+// same change).
+const ADMIN_DARK_MODE = false;
+
+// Theme preference is stored as one of these. Retained for when the toggle
+// comes back; while ADMIN_DARK_MODE is false the stored value is ignored.
 export type ThemeMode = "light" | "dark" | "system";
 
 type ThemeContextValue = {
@@ -24,12 +39,15 @@ function readStoredMode(): ThemeMode {
   return "system";
 }
 
+// PUBLIC surfaces are not admin surfaces and are unaffected by the rule above.
+//
 // The public booking flow (book.* subdomain or /book route) is hardcoded
 // dark-themed and the shared light-mode polyfill in index.css would flip its
 // white text invisible. Same for the CIC Skills Challenge landing page
 // (join.cicyouth.com / /skills) — hardcoded near-black, so a light-mode
-// phone rendered its white text navy-on-black. Force dark for these
-// regardless of the visitor's stored preference or OS setting.
+// phone rendered its white text navy-on-black. These stay dark for everyone,
+// regardless of ADMIN_DARK_MODE — they are customer-facing pages with their
+// own designed look, not the staff console.
 function isPublicDarkSurface(): boolean {
   if (typeof window === "undefined") return false;
   const host = window.location.hostname;
@@ -44,31 +62,18 @@ function isPublicDarkSurface(): boolean {
   );
 }
 
-// The mirror image, and the more damaging one. The public camp/academy
-// checkout pages are hardcoded LIGHT (bg-white cards, zinc text) and carry no
-// `dark:` variants at all — but the shadcn form controls inside them are
-// themed from CSS variables. So a parent whose phone is in dark mode got a
-// white page with BLACK input boxes, and a date-of-birth field that was
-// effectively invisible. Verified live on join.cufc.co.nz/u4-u8/class-book
-// (2026-08-04) — the club's only open academy checkout, and the busiest
-// holiday-camp flow, both entered in the dark.
-//
-// Only the unambiguous checkout suffixes are listed. A bare one-segment match
-// would swallow /skills, /league, /membership and /account — pages that are
-// deliberately dark — and flip them white.
-function isPublicLightSurface(): boolean {
-  if (typeof window === "undefined") return false;
-  const path = window.location.pathname;
-  // The venue booking flow at /book and /book/* is the DARK surface above and
-  // is matched there first; these are the two-segment /{slug}/… camp routes.
-  return /^\/[^/]+\/(class-book|book|checkout|success|cancel)$/.test(path);
-}
-
 function resolveMode(mode: ThemeMode): "light" | "dark" {
+  // Public dark surfaces win over everything — see above.
   if (isPublicDarkSurface()) return "dark";
-  if (isPublicLightSurface()) return "light";
+
+  // Everything else — the whole staff console, every public checkout — is
+  // light. The old per-route light-surface allowlist is gone with it: light
+  // is now the default rather than something a route had to opt into, which
+  // is what let a parent hit a black date-of-birth field on a white page.
+  if (!ADMIN_DARK_MODE) return "light";
+
   if (mode === "system") {
-    if (typeof window === "undefined") return "dark";
+    if (typeof window === "undefined") return "light";
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
   return mode;
@@ -88,11 +93,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.style.colorScheme = r;
   }, [mode]);
 
-  // Re-resolve when the OS preference changes — only relevant when mode = system.
+  // Re-resolve when the OS preference changes — only relevant when the toggle
+  // is back AND mode = system. Inert while ADMIN_DARK_MODE is false.
   useEffect(() => {
-    if (mode !== "system" || typeof window === "undefined") return;
+    if (!ADMIN_DARK_MODE || mode !== "system" || typeof window === "undefined") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => setResolved(mq.matches ? "dark" : "light");
+    const onChange = () => setResolved(resolveMode(mode));
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, [mode]);
@@ -103,8 +109,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   };
 
   const toggle = () => {
-    // Toggle from whatever's actually applied — feels right whether the
-    // user is on system or explicit.
     setMode(resolved === "dark" ? "light" : "dark");
   };
 
