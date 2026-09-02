@@ -896,7 +896,23 @@ export function AppSidebar() {
                       </SidebarMenuAction>
                     )}
 
-                    {kids.length > 0 && expanded && (
+                    {kids.length > 0 && (
+                      // Height animates with grid-rows 0fr → 1fr: no measuring,
+                      // and it stays correct for any number of children —
+                      // unlike a max-height guess, which hangs and then snaps.
+                      //
+                      // 🔴 The rows stay MOUNTED so the section can animate out
+                      // as well as in; unmounting on collapse is what made it
+                      // disappear in one frame. While shut they are made inert
+                      // (aria-hidden, no pointer events, not tabbable) so a
+                      // hidden link is never read aloud or tabbed into.
+                      <div
+                        aria-hidden={!expanded}
+                        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
+                          expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                        }`}
+                      >
+                        <div className={`overflow-hidden ${expanded ? "" : "pointer-events-none"}`}>
                       <SidebarMenuSub className="border-white/10 mt-0.5 space-y-0.5">
                         {kids.map((child) => {
                           const childActive = child.url === activeUrl;
@@ -913,6 +929,7 @@ export function AppSidebar() {
                               >
                                 <Link
                                   href={child.url}
+                                  tabIndex={expanded ? undefined : -1}
                                   data-testid={`link-nav-${child.title.toLowerCase().replace(/[\s&]/g, '-')}`}
                                 >
                                   <child.icon className="w-3.5 h-3.5" />
@@ -923,6 +940,8 @@ export function AppSidebar() {
                           );
                         })}
                       </SidebarMenuSub>
+                        </div>
+                      </div>
                     )}
                   </SidebarMenuItem>
                 );
