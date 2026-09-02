@@ -9,6 +9,7 @@
  * Money: DB is integer cents; every input is dollars via MoneyInput and every
  * display goes through formatCurrency. costUsd is a supplier reference only.
  */
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -1372,11 +1373,11 @@ function DiscountCodeModal({ orgId, code, onClose }: { orgId: number; code?: Dis
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-white/40 mb-1 block">Starts (optional)</label>
-              <Input type="date" value={form.startsAt} onChange={(e) => setForm((f) => ({ ...f, startsAt: e.target.value }))} className="premium-input text-white" />
+              <DatePickerInput value={form.startsAt} onChange={(e) => setForm((f) => ({ ...f, startsAt: e.target.value }))} className="premium-input text-white" />
             </div>
             <div>
               <label className="text-xs text-white/40 mb-1 block">Ends (optional)</label>
-              <Input type="date" value={form.endsAt} onChange={(e) => setForm((f) => ({ ...f, endsAt: e.target.value }))} className="premium-input text-white" />
+              <DatePickerInput value={form.endsAt} onChange={(e) => setForm((f) => ({ ...f, endsAt: e.target.value }))} className="premium-input text-white" />
             </div>
           </div>
           <div>

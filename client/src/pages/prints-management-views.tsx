@@ -3,6 +3,7 @@
 // lenses over the one task dataset passed down from prints-management.tsx —
 // no view fetches its own data.
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState, useMemo, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import {
@@ -374,7 +375,7 @@ export function TableView({ projects, tasks, team, today, onTask, onPatch, onDel
             <option value="">Priority…</option>
             {TASK_PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
           </select>
-          <input type="date" onChange={(e) => { if (e.target.value) { batch({ dueDate: e.target.value }); e.target.value = ""; } }}
+          <DatePickerInput onChange={(e) => { if (e.target.value) { batch({ dueDate: e.target.value }); e.target.value = ""; } }}
             className="h-7 rounded-md bg-white/[0.04] border border-white/10 px-1.5 [color-scheme:dark]" title="Set due date" />
           {confirmBatchDel
             ? <span className="flex items-center gap-1.5"><span className="text-white/50">Delete {selected.size}?</span><button onClick={batchDelete} className="text-red-300 font-semibold">Yes</button><button onClick={() => setConfirmBatchDel(false)} className="text-white/50">No</button></span>
@@ -461,11 +462,11 @@ export function TableView({ projects, tasks, team, today, onTask, onPatch, onDel
                               </select>
                             </td>
                             <td className="px-2 py-1.5">
-                              <input type="date" value={t.startDate ?? ""} max={t.dueDate ?? undefined} disabled={!editable}
+                              <DatePickerInput value={t.startDate ?? ""} max={t.dueDate ?? undefined} disabled={!editable}
                                 onChange={(e) => onPatch(t.id, { startDate: e.target.value || null })} className={dateCls} />
                             </td>
                             <td className="px-2 py-1.5">
-                              <input type="date" value={t.dueDate ?? ""} min={t.startDate ?? undefined} disabled={!editable}
+                              <DatePickerInput value={t.dueDate ?? ""} min={t.startDate ?? undefined} disabled={!editable}
                                 onChange={(e) => onPatch(t.id, { dueDate: e.target.value || null })}
                                 className={`${dateCls} ${dueTone(t.dueDate, done2, today) === "overdue" ? "!text-red-300" : ""}`} />
                             </td>

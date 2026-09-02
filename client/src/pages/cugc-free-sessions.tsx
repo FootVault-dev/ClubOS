@@ -3,6 +3,7 @@
 // bookings from cugc.co.nz. Staff mark attendance, convert to enrolled,
 // reschedule, and keep per-booking staff notes. Internal-only — session + tab
 // permission.
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -405,8 +406,7 @@ function DetailModal({ row, onClose }: { row: FreeSession; onClose: () => void }
             <div className="border-t border-white/[0.06] pt-4 space-y-3">
               <p className="text-[11px] uppercase tracking-wider text-white/35">Reschedule</p>
               <div className="flex items-center gap-2 flex-wrap">
-                <input
-                  type="date"
+                <DatePickerInput
                   value={newDate}
                   onChange={(e) => setNewDate(e.target.value)}
                   className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/85 focus:outline-none focus:border-blue-400/40 [color-scheme:dark]"

@@ -6,6 +6,7 @@
 //
 // All subcomponents are MODULE scope (never define a component inside another —
 // it remounts the tree and inputs lose focus; see sign.tsx / sign-native.tsx).
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -149,7 +150,7 @@ function DeclList({ onOpen }: { onOpen: (id: number) => void }) {
             </div>
             <div>
               <label className={labelCls}>Paid up to (as-of date)</label>
-              <input type="date" className={inputCls} value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
+              <DatePickerInput className={inputCls} value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
             </div>
             <div className="sm:col-span-2">
               <label className={labelCls}>Club (legal applicant)</label>
@@ -473,8 +474,8 @@ function DeclDetail({ id, onBack }: { id: number; onBack: () => void }) {
           </div>
           <div>
             <label className={labelCls}>Paid up to (as-of date)</label>
-            <input type="date" className={inputCls} defaultValue={decl.asOfDate || ""} disabled={closed}
-              onBlur={(e) => e.target.value !== (decl.asOfDate || "") && patch.mutate({ asOfDate: e.target.value })} />
+            <DatePickerInput className={inputCls} value={decl.asOfDate || ""} disabled={closed}
+              onChange={(e) => e.target.value !== (decl.asOfDate || "") && patch.mutate({ asOfDate: e.target.value })} />
           </div>
           <div className="sm:col-span-2">
             <label className={labelCls}>Club (legal applicant)</label>

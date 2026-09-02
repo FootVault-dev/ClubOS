@@ -9,6 +9,7 @@
 // `overdue` is always read off the API response, never recomputed here —
 // it's derived server-side from dueOn vs nzTodayIso(), a date/timezone
 // computation that stays server-only per AGENTS.md.
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Search, Plus, X, HandCoins, Undo2, Loader2, ChevronRight, AlertTriangle } from "lucide-react";
@@ -157,7 +158,7 @@ function CheckOutModal({ open, onClose, items, locations }: { open: boolean; onC
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-white/40">Due back</label>
-              <input type="date" value={dueOn} onChange={(e) => setDueOn(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" style={{ colorScheme: "dark" }} />
+              <DatePickerInput value={dueOn} onChange={(e) => setDueOn(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" />
             </div>
           </div>
           <div>

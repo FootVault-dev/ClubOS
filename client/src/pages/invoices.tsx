@@ -1,3 +1,4 @@
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -528,11 +529,11 @@ function CreateInvoiceDialog({ open, onClose }: { open: boolean; onClose: () => 
           <div className="grid grid-cols-3 gap-2.5">
             <div>
               <label className="text-[11px] text-white/40 mb-1 block">Issued *</label>
-              <input value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} type="date" data-testid="input-issued-on" className={inputCls} />
+              <DatePickerInput value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} data-testid="input-issued-on" className={inputCls} />
             </div>
             <div>
               <label className="text-[11px] text-white/40 mb-1 block">Due *</label>
-              <input value={dueOn} onChange={(e) => setDueOn(e.target.value)} type="date" data-testid="input-due-on" className={inputCls} />
+              <DatePickerInput value={dueOn} onChange={(e) => setDueOn(e.target.value)} data-testid="input-due-on" className={inputCls} />
             </div>
             <div>
               <label className="text-[11px] text-white/40 mb-1 block">GST treatment</label>

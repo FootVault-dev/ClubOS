@@ -9,6 +9,7 @@
 //
 // Approving creates a real job on the Jobs board and links the two.
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -172,7 +173,7 @@ function NewRequestModal({ open, onClose, brands }: { open: boolean; onClose: ()
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-white/40">Needed by</label>
-              <Input type="date" value={f.neededBy} onChange={e => setF({ ...f, neededBy: e.target.value })}
+              <DatePickerInput value={f.neededBy} onChange={e => setF({ ...f, neededBy: e.target.value })}
                 className="bg-white/[0.02] border-white/10 text-white" />
             </div>
           </div>

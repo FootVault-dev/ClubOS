@@ -23,6 +23,7 @@
 // dark-glass Tailwind, page-local types mirroring the server response.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -886,7 +887,7 @@ function VehicleForm({ vehicle, saving, onCancel, onSubmit }: {
           </div>
           <div>
             <label className={labelCls}>Reading taken on</label>
-            <input type="date" value={odometerAt} onChange={(e) => setOdometerAt(e.target.value)} className={inputCls} />
+            <DatePickerInput value={odometerAt} onChange={(e) => setOdometerAt(e.target.value)} className={inputCls} />
           </div>
         </div>
       </Section>
@@ -905,8 +906,7 @@ function VehicleForm({ vehicle, saving, onCancel, onSubmit }: {
           </div>
           <div>
             <label className={labelCls}>{complianceType === "cof" ? "COF expiry" : "WOF expiry"}</label>
-            <input
-              type="date"
+            <DatePickerInput
               value={complianceType === "cof" ? cofExpiresOn : wofExpiresOn}
               onChange={(e) => (complianceType === "cof" ? setCofExpiresOn(e.target.value) : setWofExpiresOn(e.target.value))}
               className={inputCls}
@@ -916,7 +916,7 @@ function VehicleForm({ vehicle, saving, onCancel, onSubmit }: {
 
         <div>
           <label className={labelCls}>Rego expiry</label>
-          <input type="date" value={regoExpiresOn} onChange={(e) => setRegoExpiresOn(e.target.value)} className={inputCls} />
+          <DatePickerInput value={regoExpiresOn} onChange={(e) => setRegoExpiresOn(e.target.value)} className={inputCls} />
         </div>
 
         <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
@@ -943,7 +943,7 @@ function VehicleForm({ vehicle, saving, onCancel, onSubmit }: {
         <div className="grid grid-cols-2 gap-2.5">
           <div>
             <label className={labelCls}>Next service due</label>
-            <input type="date" value={nextServiceDueOn} onChange={(e) => setNextServiceDueOn(e.target.value)} className={inputCls} />
+            <DatePickerInput value={nextServiceDueOn} onChange={(e) => setNextServiceDueOn(e.target.value)} className={inputCls} />
           </div>
           <div>
             <label className={labelCls}>Next service due (km)</label>
@@ -968,7 +968,7 @@ function VehicleForm({ vehicle, saving, onCancel, onSubmit }: {
             </div>
             <div>
               <label className={labelCls}>Lease ends</label>
-              <input type="date" value={leaseEndsOn} onChange={(e) => setLeaseEndsOn(e.target.value)} className={inputCls} />
+              <DatePickerInput value={leaseEndsOn} onChange={(e) => setLeaseEndsOn(e.target.value)} className={inputCls} />
             </div>
             <div>
               <label className={labelCls}>Lease monthly</label>
@@ -980,7 +980,7 @@ function VehicleForm({ vehicle, saving, onCancel, onSubmit }: {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
           <div>
             <label className={labelCls}>Purchased on</label>
-            <input type="date" value={purchasedOn} onChange={(e) => setPurchasedOn(e.target.value)} className={inputCls} />
+            <DatePickerInput value={purchasedOn} onChange={(e) => setPurchasedOn(e.target.value)} className={inputCls} />
           </div>
           <div>
             <label className={labelCls}>Purchase price</label>
@@ -996,7 +996,7 @@ function VehicleForm({ vehicle, saving, onCancel, onSubmit }: {
           <div className="grid grid-cols-2 gap-2.5">
             <div>
               <label className={labelCls}>Disposed on</label>
-              <input type="date" value={disposedOn} onChange={(e) => setDisposedOn(e.target.value)} className={inputCls} />
+              <DatePickerInput value={disposedOn} onChange={(e) => setDisposedOn(e.target.value)} className={inputCls} />
             </div>
             <div>
               <label className={labelCls}>Disposal price</label>
@@ -1294,7 +1294,7 @@ function ReturnForm({ defaultDate, onCancel, onSubmit, saving }: {
     <div className="mt-2 pt-2 border-t border-white/10 flex flex-wrap items-end gap-2">
       <div>
         <label className={labelCls}>Returned on</label>
-        <input type="date" value={returnedOn} onChange={(e) => setReturnedOn(e.target.value)} className={inputCls} />
+        <DatePickerInput value={returnedOn} onChange={(e) => setReturnedOn(e.target.value)} className={inputCls} />
       </div>
       <div>
         <label className={labelCls}>Odometer at return (km)</label>
@@ -1338,7 +1338,7 @@ function AssignmentForm({ onCancel, onSubmit, saving }: {
         </div>
         <div>
           <label className={labelCls}>Assigned on *</label>
-          <input type="date" value={assignedOn} onChange={(e) => setAssignedOn(e.target.value)} className={inputCls} />
+          <DatePickerInput value={assignedOn} onChange={(e) => setAssignedOn(e.target.value)} className={inputCls} />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2.5">
@@ -1358,7 +1358,7 @@ function AssignmentForm({ onCancel, onSubmit, saving }: {
         </div>
         <div>
           <label className={labelCls}>Licence expiry</label>
-          <input type="date" value={licenceExpiresOn} onChange={(e) => setLicenceExpiresOn(e.target.value)} className={inputCls} />
+          <DatePickerInput value={licenceExpiresOn} onChange={(e) => setLicenceExpiresOn(e.target.value)} className={inputCls} />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2.5">
@@ -1491,11 +1491,11 @@ function InsuranceForm({ policy, onCancel, onSubmit, saving }: {
         </div>
         <div>
           <label className={labelCls}>Starts *</label>
-          <input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} className={inputCls} />
+          <DatePickerInput value={startsOn} onChange={(e) => setStartsOn(e.target.value)} className={inputCls} />
         </div>
         <div>
           <label className={labelCls}>Expires *</label>
-          <input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className={inputCls} />
+          <DatePickerInput value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className={inputCls} />
         </div>
       </div>
       <div className="grid grid-cols-3 gap-2.5">
@@ -1636,7 +1636,7 @@ function ServiceForm({ service, onCancel, onSubmit, saving }: {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
         <div>
           <label className={labelCls}>Date *</label>
-          <input type="date" value={servicedOn} onChange={(e) => setServicedOn(e.target.value)} className={inputCls} autoFocus />
+          <DatePickerInput value={servicedOn} onChange={(e) => setServicedOn(e.target.value)} className={inputCls} autoFocus />
         </div>
         <div>
           <label className={labelCls}>Type</label>
@@ -1670,7 +1670,7 @@ function ServiceForm({ service, onCancel, onSubmit, saving }: {
       <div className="grid grid-cols-2 gap-2.5">
         <div>
           <label className={labelCls}>Next service due</label>
-          <input type="date" value={nextServiceDueOn} onChange={(e) => setNextServiceDueOn(e.target.value)} className={inputCls} />
+          <DatePickerInput value={nextServiceDueOn} onChange={(e) => setNextServiceDueOn(e.target.value)} className={inputCls} />
         </div>
         <div>
           <label className={labelCls}>Next service due (km)</label>
@@ -1837,7 +1837,7 @@ function CostForm({ cost, onCancel, onSubmit, saving }: {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
         <div>
           <label className={labelCls}>Date *</label>
-          <input type="date" value={incurredOn} onChange={(e) => setIncurredOn(e.target.value)} className={inputCls} autoFocus />
+          <DatePickerInput value={incurredOn} onChange={(e) => setIncurredOn(e.target.value)} className={inputCls} autoFocus />
         </div>
         <div>
           <label className={labelCls}>Category *</label>

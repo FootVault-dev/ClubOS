@@ -18,6 +18,7 @@
 // maths uses `today` from the API response, never the browser clock.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -445,15 +446,15 @@ function FineForm({ fine, onClose, onSaved }: { fine?: FineRow; onClose: () => v
           </div>
           <div>
             <label className={labelCls}>Date of the offence</label>
-            <input type="date" value={offenceOn} onChange={(e) => setOffenceOn(e.target.value)} className={inputCls} data-testid="input-offence-on" />
+            <DatePickerInput value={offenceOn} onChange={(e) => setOffenceOn(e.target.value)} className={inputCls} data-testid="input-offence-on" />
           </div>
           <div>
             <label className={labelCls}>Date issued</label>
-            <input type="date" value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} className={inputCls} data-testid="input-issued-on" />
+            <DatePickerInput value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} className={inputCls} data-testid="input-issued-on" />
           </div>
           <div>
             <label className={labelCls}>Due</label>
-            <input type="date" value={dueOn} onChange={(e) => setDueOn(e.target.value)} className={inputCls} data-testid="input-due-on" />
+            <DatePickerInput value={dueOn} onChange={(e) => setDueOn(e.target.value)} className={inputCls} data-testid="input-due-on" />
           </div>
           <div>
             <label className={labelCls}>Vehicle</label>
@@ -614,7 +615,7 @@ function FineDetail({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
               <div>
                 <label className={labelCls}>Paid on</label>
-                <input type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} className={inputCls} data-testid="input-paid-on" />
+                <DatePickerInput value={paidOn} onChange={(e) => setPaidOn(e.target.value)} className={inputCls} data-testid="input-paid-on" />
               </div>
               <div>
                 <label className={labelCls}>Payment reference</label>
@@ -638,7 +639,7 @@ function FineDetail({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end mt-2">
                 <div>
                   <label className={labelCls}>Waived on</label>
-                  <input type="date" value={waivedOn} onChange={(e) => setWaivedOn(e.target.value)} className={inputCls} data-testid="input-waived-on" />
+                  <DatePickerInput value={waivedOn} onChange={(e) => setWaivedOn(e.target.value)} className={inputCls} data-testid="input-waived-on" />
                 </div>
                 <div>
                   <label className={labelCls}>Why</label>

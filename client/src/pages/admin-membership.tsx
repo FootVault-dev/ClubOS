@@ -1,3 +1,4 @@
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -309,8 +310,8 @@ function MemberModal({ orgId, member, tiers, onClose, onSaved }: { orgId: number
         <Field label="Payment"><select value={f.paymentStatus || "unpaid"} onChange={(e) => set("paymentStatus", e.target.value)} className={inputCls}>{PAY_STATUS.map((s) => <option key={s.key} value={s.key} className="bg-neutral-900">{s.label}</option>)}</select></Field>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Joined"><input type="date" value={f.joinedAt ? String(f.joinedAt).slice(0, 10) : ""} onChange={(e) => set("joinedAt", e.target.value)} className={inputCls} /></Field>
-        <Field label="Renews"><input type="date" value={f.renewsAt ? String(f.renewsAt).slice(0, 10) : ""} onChange={(e) => set("renewsAt", e.target.value)} className={inputCls} /></Field>
+        <Field label="Joined"><DatePickerInput value={f.joinedAt ? String(f.joinedAt).slice(0, 10) : ""} onChange={(e) => set("joinedAt", e.target.value)} className={inputCls} /></Field>
+        <Field label="Renews"><DatePickerInput value={f.renewsAt ? String(f.renewsAt).slice(0, 10) : ""} onChange={(e) => set("renewsAt", e.target.value)} className={inputCls} /></Field>
       </div>
       <Field label="Notes"><Textarea value={f.notes || ""} onChange={(e) => set("notes", e.target.value)} className="min-h-[56px] bg-white/[0.03] border-white/10 text-[13px]" /></Field>
     </Drawer>

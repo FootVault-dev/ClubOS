@@ -6,6 +6,7 @@
 // routes to QUARANTINE server-side) → status auto-advances from derived
 // qty_received. Item picker + locations list reused verbatim from the T16a
 // items/locations pages' "fetch once, filter client-side" pattern.
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Search, Plus, X, Truck, PackageCheck, Trash2, Loader2, ChevronRight } from "lucide-react";
@@ -163,7 +164,7 @@ function CreatePoModal({ open, onClose }: { open: boolean; onClose: () => void }
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-white/40">Expected</label>
-              <input type="date" value={expectedOn} onChange={(e) => setExpectedOn(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" style={{ colorScheme: "dark" }} />
+              <DatePickerInput value={expectedOn} onChange={(e) => setExpectedOn(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" />
             </div>
           </div>
           <div>
@@ -426,7 +427,7 @@ function PoDetailModal({
                   </div>
                   <div>
                     <label className="text-[10px] uppercase tracking-wider text-white/40">Expected</label>
-                    <input type="date" value={expectedOn} onChange={(e) => setExpectedOn(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" style={{ colorScheme: "dark" }} />
+                    <DatePickerInput value={expectedOn} onChange={(e) => setExpectedOn(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" />
                   </div>
                 </div>
                 <div>

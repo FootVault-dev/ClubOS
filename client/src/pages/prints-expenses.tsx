@@ -6,6 +6,7 @@
 // result before he saves — it never picks a rate on his behalf, because an
 // invented GST figure is a wrong claim, not a rounding error.
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -160,7 +161,7 @@ function ExpenseModal({ existing, vocab, onClose }: { existing: Expense | null; 
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-white/40">Invoice date</label>
-              <Input type="date" value={f.spentOn} onChange={(e) => setF({ ...f, spentOn: e.target.value })}
+              <DatePickerInput value={f.spentOn} onChange={(e) => setF({ ...f, spentOn: e.target.value })}
                 className="bg-white/[0.02] border-white/10 text-white" />
             </div>
           </div>
@@ -374,11 +375,11 @@ export default function PrintsExpenses() {
         </div>
         <div>
           <label className="text-[10px] uppercase tracking-wider text-white/40">From</label>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="bg-white/[0.02] border-white/10 text-white" />
+          <DatePickerInput value={from} onChange={(e) => setFrom(e.target.value)} className="bg-white/[0.02] border-white/10 text-white" />
         </div>
         <div>
           <label className="text-[10px] uppercase tracking-wider text-white/40">To</label>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="bg-white/[0.02] border-white/10 text-white" />
+          <DatePickerInput value={to} onChange={(e) => setTo(e.target.value)} className="bg-white/[0.02] border-white/10 text-white" />
         </div>
         {(from || to || category !== "all") && (
           <Button variant="ghost" onClick={() => { setFrom(""); setTo(""); setCategory("all"); }} className="text-white/50">Clear</Button>

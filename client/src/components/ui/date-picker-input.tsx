@@ -24,6 +24,8 @@ interface DatePickerInputProps {
   max?: string;
   fromYear?: number;
   toYear?: number;
+  autoFocus?: boolean;
+  title?: string;
   "data-testid"?: string;
 }
 
@@ -47,6 +49,8 @@ export function DatePickerInput({
   max,
   fromYear,
   toYear,
+  autoFocus,
+  title,
   ...rest
 }: DatePickerInputProps) {
   const [open, setOpen] = React.useState(false);
@@ -61,6 +65,8 @@ export function DatePickerInput({
           type="button"
           disabled={disabled}
           data-testid={rest["data-testid"]}
+          autoFocus={autoFocus}
+          title={title}
           className={cn(
             // Match the existing dark input look exactly so this drops into
             // any existing form without restyling.

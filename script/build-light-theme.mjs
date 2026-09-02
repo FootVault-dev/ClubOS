@@ -371,7 +371,72 @@ function build() {
   push(`   ${[...paleFixed].sort().join(", ")} */`);
   push(...paleRules.sort());
 
-  // ── 5. harden the design tokens against third-party :root blocks ─────────
+  // ── 5. bare `text-white` — right on a button, wrong on a card ────────────
+  //
+  // Every `text-white/NN` is mapped above, but bare `text-white` never was,
+  // because it is genuinely correct on a blue button and genuinely wrong on a
+  // white card. It cannot be one blanket rule; it has to read the ground.
+  //
+  // So: darken it by default, then RESTORE white wherever the element — or an
+  // ancestor — actually carries a coloured ground.
+  //
+  // 🔴 The restore list deliberately EXCLUDES bg-black and the neutral
+  // families (slate/gray/zinc/neutral/stone 800-950). Sections 2 and 3 above
+  // convert exactly those into LIGHT panels, so white ink on them is wrong in
+  // light mode too. Restoring them would undo this file's own work.
+  //
+  // 🔴 It also excludes any token carrying an opacity modifier: `bg-blue-600`
+  // is a solid button, `bg-blue-600/10` is a pale wash on white, and white ink
+  // on the second is invisible. `bg-blue-600` and `bg-blue-600/10` are
+  // different Tailwind classes — the lesson from Drive's black header band.
+  {
+    // Saturated colours keep their white ink at every shade from 500 up.
+    const COLOURED = /^(bg|from)-(blue|indigo|sky|cyan|teal|emerald|green|lime|yellow|amber|orange|red|rose|pink|fuchsia|purple|violet)-(5|6|7|8|9)[0-9]{2}$/;
+    // 🔴 Neutrals only up to 700. Section 3 above converts neutral 800-950
+    // into LIGHT panels, so white ink on those has to darken with them.
+    const NEUTRAL = /^(bg|from)-(slate|gray|zinc|neutral|stone)-(5|6|7)[0-9]{2}$/;
+    // A colour at >=70% alpha is effectively solid and still needs white ink;
+    // below that it is a wash on white and must not restore it.
+    const SOLID_ALPHA = 70;
+    const used = new Set();
+    for (const t of grep("(bg|from)-[a-z]+-[0-9]{3}(/[0-9]+)?")) {
+      const [base, alpha] = t.split("/");
+      if (!COLOURED.test(base) && !NEUTRAL.test(base)) continue;
+      if (alpha === undefined) used.add(base);
+      else if (Number(alpha) >= SOLID_ALPHA) used.add(t);
+    }
+    // Arbitrary hex grounds. Section 2 above lightens only the near-black
+    // ones (L < 0.02); a brand blue like bg-[#0143b0] survives as a coloured
+    // ground and still needs its white ink. Upper bound keeps pale tints out.
+    for (const t of new Set(grep("bg-\\[#[0-9a-fA-F]{6}\\]"))) {
+      const hex = t.slice(4, -1);
+      const L = luminance(hex);
+      if (L >= DARK_SURFACE_MAX_L && L < 0.3) used.add(t);
+    }
+    // Design tokens that stay dark on a light page.
+    const tokens = ["bg-primary", "bg-destructive"];
+    const grounds = [...used, ...tokens].sort();
+
+    push("");
+    push("/* 5. bare `text-white`: dark by default, white again on a coloured ground */");
+    // Specificity: (0,2,1). Every restore below is (0,3,1) and so wins.
+    push(`html:not(.dark) .text-white { color: rgb(${INK}) !important; }`);
+
+    const restores = [];
+    for (const g of grounds) {
+      // The ground on the element ITSELF, and the ground on an ANCESTOR.
+      // Both are (0,4,1) and so beat the darkening rule's (0,2,1).
+      const sel = g.includes("/")
+        ? `.${esc(g)}`                                  // already a specific alpha
+        : `.${esc(g)}:not([class*="${g}/"])`;           // solid only, never a wash
+      restores.push(`html:not(.dark) .text-white${sel}`);
+      restores.push(`html:not(.dark) ${sel} .text-white`);
+    }
+    for (const r of restores) push(`${r} { color: #fff !important; }`);
+    push(`/* ${grounds.length} coloured grounds keep their white ink */`);
+  }
+
+  // ── 6. harden the design tokens against third-party :root blocks ─────────
   //
   // 🔴 Found live on app.usg.co.nz, 2026-09-02: a browser extension injects
   // its own `:root { --primary: #009AF7; --secondary: …; --background: … }`

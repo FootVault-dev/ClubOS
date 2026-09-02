@@ -6,6 +6,7 @@
 //   4. Directory      — manage every volunteer's contact, status, academy flag, notes
 // Org-scoped server-side (x-workspace-slug), so each workspace sees only its own
 // volunteers. For CIC the matrix defaults to the 5–16 July tournament window.
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -591,7 +592,7 @@ function AddVolunteerDialog({ open, onOpenChange, onCreate, pending }: { open: b
           </div>
           <div>
             <Label className="text-xs text-white/50">Date of birth</Label>
-            <Input type="date" value={f.dateOfBirth} onChange={set("dateOfBirth")} className="mt-1" />
+            <DatePickerInput value={f.dateOfBirth} onChange={set("dateOfBirth")} className="mt-1" />
           </div>
           <label className="flex items-center justify-between gap-2 py-1">
             <span className="text-sm text-white/70 flex items-center gap-1.5"><GraduationCap className="w-4 h-4 text-amber-300" /> Academy player (volunteer hours)</span>
@@ -698,7 +699,7 @@ function VolunteerDetailDialog({ v, onOpenChange, onSave, onDelete, saving }: {
             <Input placeholder="City" value={f.location} onChange={set("location")} />
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs text-white/50 flex items-center gap-1"><Cake className="w-3 h-3" /> Date of birth</Label><Input type="date" value={f.dateOfBirth} onChange={set("dateOfBirth")} className="mt-1" /></div>
+            <div><Label className="text-xs text-white/50 flex items-center gap-1"><Cake className="w-3 h-3" /> Date of birth</Label><DatePickerInput value={f.dateOfBirth} onChange={set("dateOfBirth")} className="mt-1" /></div>
             <div><Label className="text-xs text-white/50">Status</Label>
               <select value={f.status} onChange={set("status")} className="mt-1 w-full h-10 rounded-md bg-white/5 border border-white/10 text-white text-sm px-2">
                 {ALL_STATUSES.map((s) => <option key={s} value={s} className="bg-[#15171c]">{STATUS_META[s].label}</option>)}

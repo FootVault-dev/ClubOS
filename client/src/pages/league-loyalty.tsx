@@ -1,3 +1,4 @@
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -313,7 +314,7 @@ function AddPurchaseModal({ onClose }: { onClose: () => void }) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-[10px] uppercase tracking-wider text-white/30">Amount (NZD) *</label><input className={input} value={f.amount} onChange={(e) => set("amount", e.target.value)} inputMode="decimal" placeholder="500" /></div>
-            <div><label className="text-[10px] uppercase tracking-wider text-white/30">Date paid *</label><input type="date" className={input} value={f.purchasedAt} onChange={(e) => set("purchasedAt", e.target.value)} /></div>
+            <div><label className="text-[10px] uppercase tracking-wider text-white/30">Date paid *</label><DatePickerInput className={input} value={f.purchasedAt} onChange={(e) => set("purchasedAt", e.target.value)} /></div>
           </div>
           <div><label className="text-[10px] uppercase tracking-wider text-white/30">Notes</label><input className={input} value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="e.g. proof: emailed receipt 2023" /></div>
         </div>

@@ -4,6 +4,7 @@
 // place for "any item/location/date" filtering — GET /movements (added this
 // task, server/warehouse-routes.ts) is that endpoint. Read-only: the ledger
 // is append-only (AGENTS.md) and nothing on this page ever posts a movement.
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Boxes, Search } from "lucide-react";
@@ -109,20 +110,16 @@ export default function WarehouseLedger() {
             {REF_KINDS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
           </SelectContent>
         </Select>
-        <input
-          type="date"
+        <DatePickerInput
           value={dateFrom}
           onChange={(e) => setDateFrom(e.target.value)}
           className="h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm"
-          style={{ colorScheme: "dark" }}
         />
         <span className="text-white/30 text-xs">to</span>
-        <input
-          type="date"
+        <DatePickerInput
           value={dateTo}
           onChange={(e) => setDateTo(e.target.value)}
           className="h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm"
-          style={{ colorScheme: "dark" }}
         />
       </div>
 

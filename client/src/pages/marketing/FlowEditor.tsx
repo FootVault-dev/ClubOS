@@ -2,6 +2,7 @@
 // trigger card at the top, then delay / condition / email / SMS / update /
 // exit step cards, with an add-step button between each. Publish snapshots an
 // immutable version — running enrolments keep the version they entered on.
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -239,7 +240,7 @@ export default function FlowEditor() {
                   <Input value={triggerConfig.propertyPath || ""} onChange={(e) => setTriggerConfig({ ...triggerConfig, propertyPath: e.target.value })} placeholder="e.g. membership_expiry" /></div>
               ) : (
                 <div><Label className="text-xs">Date</Label>
-                  <Input type="date" value={triggerConfig.date || ""} onChange={(e) => setTriggerConfig({ ...triggerConfig, date: e.target.value })} data-testid="mkt-flow-date" /></div>
+                  <DatePickerInput value={triggerConfig.date || ""} onChange={(e) => setTriggerConfig({ ...triggerConfig, date: e.target.value })} data-testid="mkt-flow-date" /></div>
               )}
               <div><Label className="text-xs">Days offset (−14 = 14 days before)</Label>
                 <Input type="number" value={triggerConfig.offsetDays ?? 0} onChange={(e) => setTriggerConfig({ ...triggerConfig, offsetDays: Number(e.target.value) })} /></div>

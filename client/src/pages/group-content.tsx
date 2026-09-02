@@ -7,6 +7,7 @@
 // Conventions match group-projects.tsx: native <select>, hand-rolled modals,
 // apiRequest + react-query, dark-theme tokens, brand chips from lib/work.
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -886,8 +887,8 @@ function ItemModal({ mode, item, plannedDate, team, saving, onClose, onSave, onD
       <div><FieldLabel>Channels</FieldLabel><ChipMulti options={CHANNELS} selected={channels} onToggle={(k) => setChannels(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])} /></div>
       <div><FieldLabel>Brands it serves</FieldLabel><ChipMulti options={BRANDS.map(b => ({ key: b.slug, label: b.label, color: b.color }))} selected={brandTags} onToggle={(k) => setBrandTags(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])} /></div>
       <div className="grid grid-cols-2 gap-3">
-        <div><FieldLabel><span className="flex items-center gap-1"><CalIcon className="w-3 h-3" />Planned date</span></FieldLabel><Input type="date" value={planned} onChange={e => setPlanned(e.target.value)} className={`${inputCls} h-9`} /></div>
-        <div><FieldLabel><span className="flex items-center gap-1"><Check className="w-3 h-3" />Delivered date</span></FieldLabel><Input type="date" value={published} onChange={e => setPublished(e.target.value)} className={`${inputCls} h-9`} /></div>
+        <div><FieldLabel><span className="flex items-center gap-1"><CalIcon className="w-3 h-3" />Planned date</span></FieldLabel><DatePickerInput value={planned} onChange={e => setPlanned(e.target.value)} className={`${inputCls} h-9`} /></div>
+        <div><FieldLabel><span className="flex items-center gap-1"><Check className="w-3 h-3" />Delivered date</span></FieldLabel><DatePickerInput value={published} onChange={e => setPublished(e.target.value)} className={`${inputCls} h-9`} /></div>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <PersonSelect value={ownerId} onChange={setOwnerId} icon={Users} label="Owner" />
@@ -971,7 +972,7 @@ function SessionModal({ mode, session, day, team, saving, onClose, onSave, onDel
         <div><FieldLabel>Type</FieldLabel><select value={sessionType} onChange={e => setSessionType(e.target.value)} className={selCls}>{SESSION_TYPES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
-        <div><FieldLabel>Date</FieldLabel><Input type="date" value={dateStr} onChange={e => setDateStr(e.target.value)} className={`${inputCls} h-9`} /></div>
+        <div><FieldLabel>Date</FieldLabel><DatePickerInput value={dateStr} onChange={e => setDateStr(e.target.value)} className={`${inputCls} h-9`} /></div>
         <div><FieldLabel>Start</FieldLabel><Input type="time" value={startT} onChange={e => setStartT(e.target.value)} disabled={allDay} className={`${inputCls} h-9 ${allDay ? "opacity-40" : ""}`} /></div>
         <div><FieldLabel>End</FieldLabel><Input type="time" value={endT} onChange={e => setEndT(e.target.value)} disabled={allDay} className={`${inputCls} h-9 ${allDay ? "opacity-40" : ""}`} /></div>
         <label className="flex items-center gap-2 text-xs text-white/60 h-9"><input type="checkbox" checked={allDay} onChange={e => setAllDay(e.target.checked)} className="accent-pink-500 w-4 h-4" />All day</label>

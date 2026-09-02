@@ -5,6 +5,7 @@
 // in, goes through the ledger — there is no quantity box and no quick edit.
 // The detail sheet's Move and Retire buttons post movements; the form fields
 // only ever edit descriptive facts (serial, warranty, cost).
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -390,11 +391,11 @@ function AddSheet({ items, onClose }: { items: Overview["items"]; onClose: () =>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-xs text-white/50">Bought on</label>
-                  <Input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} className="scroll-mb-24" />
+                  <DatePickerInput value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} className="scroll-mb-24" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs text-white/50">Warranty until</label>
-                  <Input type="date" value={warrantyUntil} onChange={(e) => setWarrantyUntil(e.target.value)} className="scroll-mb-24" />
+                  <DatePickerInput value={warrantyUntil} onChange={(e) => setWarrantyUntil(e.target.value)} className="scroll-mb-24" />
                 </div>
               </div>
 

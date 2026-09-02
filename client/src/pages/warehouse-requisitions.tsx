@@ -7,6 +7,7 @@
 // with sourceKind='requisition' — 'picking'/'ready' are server-derived from
 // real pick evidence, never set directly), then mark collected. Second tab
 // is the monthly chargeback report (D13's cost-deterrent half).
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
@@ -180,7 +181,7 @@ function CreateRequisitionModal({ open, onClose, items }: { open: boolean; onClo
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-white/40">Needed by</label>
-              <input type="date" value={neededBy} onChange={(e) => setNeededBy(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" style={{ colorScheme: "dark" }} />
+              <DatePickerInput value={neededBy} onChange={(e) => setNeededBy(e.target.value)} className="w-full h-9 px-3 rounded-md bg-white/[0.02] border border-white/10 text-white text-sm" />
             </div>
           </div>
           <div>

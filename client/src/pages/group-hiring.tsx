@@ -14,6 +14,7 @@
 // automatically from localStorage — no explicit header wiring needed here.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -572,7 +573,7 @@ function JobForm({ job, saving, onCancel, onSubmit, allowedBrands }: {
         <div className="grid grid-cols-2 gap-2.5">
           <div>
             <label className="text-[11px] text-white/40 mb-1 block">Closes</label>
-            <input type="date" value={closesAt} onChange={(e) => setClosesAt(e.target.value)} className={inputCls} />
+            <DatePickerInput value={closesAt} onChange={(e) => setClosesAt(e.target.value)} className={inputCls} />
           </div>
           <div>
             <label className="text-[11px] text-white/40 mb-1 block">Notify email</label>

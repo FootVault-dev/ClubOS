@@ -1,3 +1,4 @@
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -410,7 +411,7 @@ function EventModal({ orgId, event, owners, tasks, onClose, onSaved }:
             <Field label="Partner"><Input value={f.partner || ""} onChange={(e) => set("partner", e.target.value)} placeholder="e.g. Nomads, Flying Kiwis" className={inputCls} /></Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Date"><input type="date" value={f.eventDate ? String(f.eventDate).slice(0, 10) : ""} onChange={(e) => set("eventDate", e.target.value)} className={inputCls} /></Field>
+            <Field label="Date"><DatePickerInput value={f.eventDate ? String(f.eventDate).slice(0, 10) : ""} onChange={(e) => set("eventDate", e.target.value)} className={inputCls} /></Field>
             <Field label="Location"><Input value={f.location || ""} onChange={(e) => set("location", e.target.value)} placeholder="Venue" className={inputCls} /></Field>
           </div>
           <Field label="Plan / description"><Textarea value={f.description || ""} onChange={(e) => set("description", e.target.value)} className="min-h-[64px] bg-white/[0.03] border-white/10 text-[13px]" placeholder="What's the event and what needs to happen?" /></Field>
@@ -433,7 +434,7 @@ function EventModal({ orgId, event, owners, tasks, onClose, onSaved }:
               </div>
               <div className="flex gap-2">
                 <Input value={newTask.title} onChange={(e) => setNewTask((p) => ({ ...p, title: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && newTask.title.trim()) addTask.mutate(); }} placeholder="Add a task…" className="flex-1 bg-white/[0.03] border-white/10 text-[12px] h-8" />
-                <input type="date" value={newTask.dueDate} onChange={(e) => setNewTask((p) => ({ ...p, dueDate: e.target.value }))} className="bg-white/[0.03] border border-white/10 rounded-md px-2 text-[11px] text-white/70 h-8" />
+                <DatePickerInput value={newTask.dueDate} onChange={(e) => setNewTask((p) => ({ ...p, dueDate: e.target.value }))} className="bg-white/[0.03] border border-white/10 rounded-md px-2 text-[11px] text-white/70 h-8" />
                 <Button onClick={() => addTask.mutate()} disabled={!newTask.title.trim() || addTask.isPending} className="h-8 px-2.5 bg-cyan-500/80 hover:bg-cyan-400 text-black"><Plus className="w-4 h-4" /></Button>
               </div>
             </div>

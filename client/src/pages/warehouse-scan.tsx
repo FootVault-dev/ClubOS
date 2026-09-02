@@ -39,6 +39,7 @@
 // reference inputs — none of this duplicates the movement engine, it only
 // assembles the same request bodies the admin pages (T16) will also send.
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -1129,7 +1130,7 @@ function LoanOutForm({ item, ...common }: FormCommonProps & { item: ScanResolved
         <input className={inputCls} value={borrowerName} onChange={(e) => setBorrowerName(e.target.value)} placeholder="Who's taking it?" autoFocus />
       </Field>
       <Field label="Due back">
-        <input type="date" className={inputCls} value={dueOn} onChange={(e) => setDueOn(e.target.value)} />
+        <DatePickerInput className={inputCls} value={dueOn} onChange={(e) => setDueOn(e.target.value)} />
       </Field>
       <Field label="Quantity">
         <NumberField value={qty} onChange={setQty} step="1" />

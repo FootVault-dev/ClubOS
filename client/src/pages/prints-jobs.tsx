@@ -1,3 +1,4 @@
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -140,7 +141,7 @@ function AddJobModal({ open, onClose, orgId }: { open: boolean; onClose: () => v
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-white/40">Due date</label>
-              <Input type="date" value={form.dueDate} onChange={e => setForm({ ...form, dueDate: e.target.value })}
+              <DatePickerInput value={form.dueDate} onChange={e => setForm({ ...form, dueDate: e.target.value })}
                 className="bg-white/[0.02] border-white/10 text-white" />
             </div>
           </div>

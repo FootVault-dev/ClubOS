@@ -200,7 +200,7 @@
  * Scoped html:not(.dark) so the public dark booking flow is untouched.
  */
 
-/* 130 translucent white utilities → dark ink on light */
+/* 128 translucent white utilities → dark ink on light */
 html:not(.dark) .bg-white\/\[0\.01\] { background-color: rgb(15 23 42 / 0.015) !important; }
 html:not(.dark) .bg-white\/\[0\.015\] { background-color: rgb(15 23 42 / 0.018) !important; }
 html:not(.dark) .bg-white\/\[0\.02\] { background-color: rgb(15 23 42 / 0.02) !important; }
@@ -233,7 +233,6 @@ html:not(.dark) .border-white\/\[0\.07\] { border-color: rgb(15 23 42 / 0.072) !
 html:not(.dark) .border-white\/\[0\.08\] { border-color: rgb(15 23 42 / 0.076) !important; }
 html:not(.dark) .border-white\/\[0\.10\] { border-color: rgb(15 23 42 / 0.085) !important; }
 html:not(.dark) .border-white\/\[0\.12\] { border-color: rgb(15 23 42 / 0.094) !important; }
-html:not(.dark) .border-white\/\[0\.14\] { border-color: rgb(15 23 42 / 0.103) !important; }
 html:not(.dark) .border-white\/10 { border-color: rgb(15 23 42 / 0.085) !important; }
 html:not(.dark) .border-white\/12 { border-color: rgb(15 23 42 / 0.094) !important; }
 html:not(.dark) .border-white\/15 { border-color: rgb(15 23 42 / 0.108) !important; }
@@ -274,7 +273,6 @@ html:not(.dark) .hover\:bg-white\/\[0\.05\]:hover { background-color: rgb(15 23 
 html:not(.dark) .hover\:bg-white\/\[0\.06\]:hover { background-color: rgb(15 23 42 / 0.04) !important; }
 html:not(.dark) .hover\:bg-white\/\[0\.07\]:hover { background-color: rgb(15 23 42 / 0.045) !important; }
 html:not(.dark) .hover\:bg-white\/\[0\.08\]:hover { background-color: rgb(15 23 42 / 0.05) !important; }
-html:not(.dark) .hover\:bg-white\/\[0\.09\]:hover { background-color: rgb(15 23 42 / 0.055) !important; }
 html:not(.dark) .hover\:bg-white\/\[0\.1\]:hover { background-color: rgb(15 23 42 / 0.06) !important; }
 html:not(.dark) .hover\:bg-white\/\[0\.12\]:hover { background-color: rgb(15 23 42 / 0.07) !important; }
 html:not(.dark) .hover\:bg-white\/10:hover { background-color: rgb(15 23 42 / 0.06) !important; }
@@ -602,6 +600,128 @@ html:not(.dark) .text-yellow-400\/80 { color: color-mix(in srgb, #a16207 80%, tr
 html:not(.dark) .text-yellow-500 { color: #a16207 !important; }
 html:not(.dark) .text-yellow-600 { color: #a16207 !important; }
 
+/* 5. bare `text-white`: dark by default, white again on a coloured ground */
+html:not(.dark) .text-white { color: rgb(15 23 42) !important; }
+html:not(.dark) .text-white.bg-\[\#013590\]:not([class*="bg-[#013590]/"]) { color: #fff !important; }
+html:not(.dark) .bg-\[\#013590\]:not([class*="bg-[#013590]/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-\[\#0143b0\]:not([class*="bg-[#0143b0]/"]) { color: #fff !important; }
+html:not(.dark) .bg-\[\#0143b0\]:not([class*="bg-[#0143b0]/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-\[\#0a8fc4\]:not([class*="bg-[#0a8fc4]/"]) { color: #fff !important; }
+html:not(.dark) .bg-\[\#0a8fc4\]:not([class*="bg-[#0a8fc4]/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-\[\#635BFF\]:not([class*="bg-[#635BFF]/"]) { color: #fff !important; }
+html:not(.dark) .bg-\[\#635BFF\]:not([class*="bg-[#635BFF]/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-amber-500:not([class*="bg-amber-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-amber-500:not([class*="bg-amber-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-amber-500\/70 { color: #fff !important; }
+html:not(.dark) .bg-amber-500\/70 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-amber-500\/90 { color: #fff !important; }
+html:not(.dark) .bg-amber-500\/90 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-amber-600:not([class*="bg-amber-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-amber-600:not([class*="bg-amber-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-amber-700:not([class*="bg-amber-700/"]) { color: #fff !important; }
+html:not(.dark) .bg-amber-700:not([class*="bg-amber-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-blue-500:not([class*="bg-blue-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-blue-500:not([class*="bg-blue-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-blue-500\/70 { color: #fff !important; }
+html:not(.dark) .bg-blue-500\/70 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-blue-500\/80 { color: #fff !important; }
+html:not(.dark) .bg-blue-500\/80 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-blue-500\/90 { color: #fff !important; }
+html:not(.dark) .bg-blue-500\/90 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-blue-600:not([class*="bg-blue-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-blue-600:not([class*="bg-blue-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-blue-600\/90 { color: #fff !important; }
+html:not(.dark) .bg-blue-600\/90 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-blue-700:not([class*="bg-blue-700/"]) { color: #fff !important; }
+html:not(.dark) .bg-blue-700:not([class*="bg-blue-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-cyan-500:not([class*="bg-cyan-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-cyan-500:not([class*="bg-cyan-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-cyan-500\/80 { color: #fff !important; }
+html:not(.dark) .bg-cyan-500\/80 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-destructive:not([class*="bg-destructive/"]) { color: #fff !important; }
+html:not(.dark) .bg-destructive:not([class*="bg-destructive/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-emerald-500:not([class*="bg-emerald-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-emerald-500:not([class*="bg-emerald-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-emerald-500\/80 { color: #fff !important; }
+html:not(.dark) .bg-emerald-500\/80 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-emerald-600:not([class*="bg-emerald-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-emerald-600:not([class*="bg-emerald-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-emerald-600\/90 { color: #fff !important; }
+html:not(.dark) .bg-emerald-600\/90 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-emerald-700:not([class*="bg-emerald-700/"]) { color: #fff !important; }
+html:not(.dark) .bg-emerald-700:not([class*="bg-emerald-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-emerald-800:not([class*="bg-emerald-800/"]) { color: #fff !important; }
+html:not(.dark) .bg-emerald-800:not([class*="bg-emerald-800/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-green-500:not([class*="bg-green-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-green-500:not([class*="bg-green-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-green-600:not([class*="bg-green-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-green-600:not([class*="bg-green-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-green-600\/80 { color: #fff !important; }
+html:not(.dark) .bg-green-600\/80 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-green-700:not([class*="bg-green-700/"]) { color: #fff !important; }
+html:not(.dark) .bg-green-700:not([class*="bg-green-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-indigo-500:not([class*="bg-indigo-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-indigo-500:not([class*="bg-indigo-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-indigo-600:not([class*="bg-indigo-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-indigo-600:not([class*="bg-indigo-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-indigo-700:not([class*="bg-indigo-700/"]) { color: #fff !important; }
+html:not(.dark) .bg-indigo-700:not([class*="bg-indigo-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-orange-500:not([class*="bg-orange-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-orange-500:not([class*="bg-orange-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-pink-500:not([class*="bg-pink-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-pink-500:not([class*="bg-pink-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-pink-600:not([class*="bg-pink-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-pink-600:not([class*="bg-pink-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-pink-700:not([class*="bg-pink-700/"]) { color: #fff !important; }
+html:not(.dark) .bg-pink-700:not([class*="bg-pink-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-primary:not([class*="bg-primary/"]) { color: #fff !important; }
+html:not(.dark) .bg-primary:not([class*="bg-primary/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-purple-500:not([class*="bg-purple-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-purple-500:not([class*="bg-purple-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-purple-600:not([class*="bg-purple-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-purple-600:not([class*="bg-purple-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-red-500:not([class*="bg-red-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-red-500:not([class*="bg-red-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-red-500\/80 { color: #fff !important; }
+html:not(.dark) .bg-red-500\/80 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-red-500\/90 { color: #fff !important; }
+html:not(.dark) .bg-red-500\/90 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-red-600:not([class*="bg-red-600/"]) { color: #fff !important; }
+html:not(.dark) .bg-red-600:not([class*="bg-red-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-red-700:not([class*="bg-red-700/"]) { color: #fff !important; }
+html:not(.dark) .bg-red-700:not([class*="bg-red-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-rose-500:not([class*="bg-rose-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-rose-500:not([class*="bg-rose-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-violet-500:not([class*="bg-violet-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-violet-500:not([class*="bg-violet-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-yellow-500:not([class*="bg-yellow-500/"]) { color: #fff !important; }
+html:not(.dark) .bg-yellow-500:not([class*="bg-yellow-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-yellow-500\/90 { color: #fff !important; }
+html:not(.dark) .bg-yellow-500\/90 .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-amber-500:not([class*="from-amber-500/"]) { color: #fff !important; }
+html:not(.dark) .from-amber-500:not([class*="from-amber-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-blue-500:not([class*="from-blue-500/"]) { color: #fff !important; }
+html:not(.dark) .from-blue-500:not([class*="from-blue-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-blue-600:not([class*="from-blue-600/"]) { color: #fff !important; }
+html:not(.dark) .from-blue-600:not([class*="from-blue-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-cyan-500:not([class*="from-cyan-500/"]) { color: #fff !important; }
+html:not(.dark) .from-cyan-500:not([class*="from-cyan-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-emerald-500:not([class*="from-emerald-500/"]) { color: #fff !important; }
+html:not(.dark) .from-emerald-500:not([class*="from-emerald-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-green-600:not([class*="from-green-600/"]) { color: #fff !important; }
+html:not(.dark) .from-green-600:not([class*="from-green-600/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-green-700:not([class*="from-green-700/"]) { color: #fff !important; }
+html:not(.dark) .from-green-700:not([class*="from-green-700/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-indigo-500:not([class*="from-indigo-500/"]) { color: #fff !important; }
+html:not(.dark) .from-indigo-500:not([class*="from-indigo-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-purple-500:not([class*="from-purple-500/"]) { color: #fff !important; }
+html:not(.dark) .from-purple-500:not([class*="from-purple-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-violet-500:not([class*="from-violet-500/"]) { color: #fff !important; }
+html:not(.dark) .from-violet-500:not([class*="from-violet-500/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.from-violet-600:not([class*="from-violet-600/"]) { color: #fff !important; }
+html:not(.dark) .from-violet-600:not([class*="from-violet-600/"]) .text-white { color: #fff !important; }
+/* 59 coloured grounds keep their white ink */
+
 /* Design tokens re-declared at higher specificity so a third-party
    `:root` block (a browser extension's theme, say) cannot silently
    repaint the admin. Observed live: an extension setting
@@ -748,58 +868,11 @@ html:not(.dark) .admin-header {
   border-bottom-color: hsl(220 14% 90%);
 }
 
-/* text-white surgery — in light mode, plain `text-white` (no opacity) is
-   used both on colored buttons (where it must stay white) and on values
-   sitting on dark cards (where it must flip to dark to be readable on
-   the now-light card). Default to dark; restore white when an ancestor
-   or the same element has a coloured / gradient / dark background. */
-html:not(.dark) .text-white { color: rgb(15 23 42) !important; }
-html:not(.dark) [class*="bg-blue-"].text-white,
-html:not(.dark) [class*="bg-blue-"] .text-white,
-html:not(.dark) [class*="bg-red-"].text-white,
-html:not(.dark) [class*="bg-red-"] .text-white,
-html:not(.dark) [class*="bg-green-"].text-white,
-html:not(.dark) [class*="bg-green-"] .text-white,
-html:not(.dark) [class*="bg-emerald-"].text-white,
-html:not(.dark) [class*="bg-emerald-"] .text-white,
-html:not(.dark) [class*="bg-amber-"].text-white,
-html:not(.dark) [class*="bg-amber-"] .text-white,
-html:not(.dark) [class*="bg-orange-"].text-white,
-html:not(.dark) [class*="bg-orange-"] .text-white,
-html:not(.dark) [class*="bg-rose-"].text-white,
-html:not(.dark) [class*="bg-rose-"] .text-white,
-html:not(.dark) [class*="bg-pink-"].text-white,
-html:not(.dark) [class*="bg-pink-"] .text-white,
-html:not(.dark) [class*="bg-purple-"].text-white,
-html:not(.dark) [class*="bg-purple-"] .text-white,
-html:not(.dark) [class*="bg-violet-"].text-white,
-html:not(.dark) [class*="bg-violet-"] .text-white,
-html:not(.dark) [class*="bg-indigo-"].text-white,
-html:not(.dark) [class*="bg-indigo-"] .text-white,
-html:not(.dark) [class*="bg-cyan-"].text-white,
-html:not(.dark) [class*="bg-cyan-"] .text-white,
-html:not(.dark) [class*="bg-yellow-"].text-white,
-html:not(.dark) [class*="bg-yellow-"] .text-white,
-html:not(.dark) [class*="bg-zinc-7"].text-white,
-html:not(.dark) [class*="bg-zinc-8"].text-white,
-html:not(.dark) [class*="bg-zinc-9"].text-white,
-html:not(.dark) [class*="bg-slate-7"].text-white,
-html:not(.dark) [class*="bg-slate-8"].text-white,
-html:not(.dark) [class*="bg-slate-9"].text-white,
-html:not(.dark) [class*="bg-gradient-"]:not([class*="00/"]).text-white,
-html:not(.dark) [class*="bg-gradient-"]:not([class*="00/"]) .text-white,
-html:not(.dark) [class*="from-blue-"]:not([class*="00/"]) .text-white,
-html:not(.dark) [class*="from-red-"]:not([class*="00/"]) .text-white,
-html:not(.dark) [class*="from-emerald-"]:not([class*="00/"]) .text-white,
-html:not(.dark) [class*="from-green-"]:not([class*="00/"]) .text-white,
-html:not(.dark) [class*="from-purple-"]:not([class*="00/"]) .text-white,
-html:not(.dark) [class*="from-pink-"]:not([class*="00/"]) .text-white,
-html:not(.dark) .bg-primary .text-white,
-html:not(.dark) .bg-primary.text-white,
-html:not(.dark) .bg-destructive .text-white,
-html:not(.dark) .bg-destructive.text-white {
-  color: white !important;
-}
+/* `text-white` is handled by the GENERATED block above, which requires the
+   exact solid token (`.bg-blue-500`, never a substring). The hand-written
+   version that lived here matched `[class*="bg-blue-"]`, so a 4% wash like
+   `bg-blue-500/[0.04]` counted as a dark ground and painted the Academy term
+   cards white-on-white. Do not reintroduce it. */
 
 /* Premium search input — dark-on-dark in dark mode, light-on-light in
    light mode. */

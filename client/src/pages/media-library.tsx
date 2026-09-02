@@ -8,6 +8,7 @@
  * Money: DB is integer cents; the optional per-asset price is edited in
  * dollars via MoneyInput (feedback_money_in_dollars).
  */
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -594,7 +595,7 @@ function GalleryHeader({
           <div className="flex items-center gap-2 flex-wrap">
             <Input value={ageGroup} onChange={(e) => setAgeGroup(e.target.value)} placeholder="Age group" className="premium-input text-white h-8 w-32 text-xs" data-testid="input-gallery-age-group" />
             <Input value={clubName} onChange={(e) => setClubName(e.target.value)} placeholder="Club name" className="premium-input text-white h-8 w-40 text-xs" data-testid="input-gallery-club-name" />
-            <Input type="date" value={shootDate} onChange={(e) => setShootDate(e.target.value)} className="premium-input text-white h-8 w-36 text-xs" data-testid="input-gallery-shoot-date" />
+            <DatePickerInput value={shootDate} onChange={(e) => setShootDate(e.target.value)} className="premium-input text-white h-8 w-36 text-xs" data-testid="input-gallery-shoot-date" />
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -978,7 +979,7 @@ function NewGalleryDialog({
               <Input value={ageGroup} onChange={(e) => setAgeGroup(e.target.value)} placeholder="Age group (optional)" className="premium-input text-white" data-testid="input-new-gallery-age-group" />
               <Input value={clubName} onChange={(e) => setClubName(e.target.value)} placeholder="Club name (optional)" className="premium-input text-white" data-testid="input-new-gallery-club-name" />
             </div>
-            <Input type="date" value={shootDate} onChange={(e) => setShootDate(e.target.value)} className="premium-input text-white" data-testid="input-new-gallery-shoot-date" />
+            <DatePickerInput value={shootDate} onChange={(e) => setShootDate(e.target.value)} className="premium-input text-white" data-testid="input-new-gallery-shoot-date" />
             <Button
               onClick={() => customMut.mutate()}
               disabled={!title.trim() || customMut.isPending}

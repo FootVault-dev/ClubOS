@@ -1,3 +1,4 @@
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -573,13 +574,13 @@ function ApplicationModal({ modal, funders, onClose, onSave, onDelete, saving }:
           <Input className={inputCls} value={form.referenceNumber} onChange={e => set("referenceNumber", e.target.value)} />
         </Field>
         <Field label="Submitted">
-          <Input type="date" className={inputCls} value={form.submittedAt} onChange={e => set("submittedAt", e.target.value)} data-testid="input-submitted-at" />
+          <DatePickerInput className={inputCls} value={form.submittedAt} onChange={e => set("submittedAt", e.target.value)} data-testid="input-submitted-at" />
         </Field>
         <Field label="Decision">
-          <Input type="date" className={inputCls} value={form.decisionAt} onChange={e => set("decisionAt", e.target.value)} />
+          <DatePickerInput className={inputCls} value={form.decisionAt} onChange={e => set("decisionAt", e.target.value)} />
         </Field>
         <Field label="Acquittal / accountability due">
-          <Input type="date" className={inputCls} value={form.acquittalDueAt} onChange={e => set("acquittalDueAt", e.target.value)} />
+          <DatePickerInput className={inputCls} value={form.acquittalDueAt} onChange={e => set("acquittalDueAt", e.target.value)} />
         </Field>
         <Field label="Docs link">
           <Input className={inputCls} value={form.docsUrl} onChange={e => set("docsUrl", e.target.value)} placeholder="Drive folder URL" />

@@ -8,6 +8,7 @@
 // lib/management so screen and server never disagree. `today` always comes
 // from the server (NZ) — the client never invents a date.
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -584,11 +585,11 @@ function TaskModal({ mode, task, draft, projects, allTasks, deps, team, today, s
         </div>
         <div>
           <FieldLabel>Start</FieldLabel>
-          <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={`${inputCls} h-9`} />
+          <DatePickerInput value={startDate} onChange={(e) => setStartDate(e.target.value)} className={`${inputCls} h-9`} />
         </div>
         <div>
           <FieldLabel>Due</FieldLabel>
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={`${inputCls} h-9 ${dateInvalid ? "border-red-500/60" : ""}`} />
+          <DatePickerInput value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={`${inputCls} h-9 ${dateInvalid ? "border-red-500/60" : ""}`} />
         </div>
         <label className="flex items-center gap-2 text-xs text-white/60 h-9 cursor-pointer">
           <input type="checkbox" checked={milestone} onChange={(e) => setMilestone(e.target.checked)} className="accent-indigo-500 w-4 h-4" />
@@ -835,11 +836,11 @@ function ProjectModal({ mode, project, liveProject, team, taskCountByStatus, onC
       <div className="grid grid-cols-2 gap-3">
         <div>
           <FieldLabel>Start</FieldLabel>
-          <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={`${inputCls} h-9`} />
+          <DatePickerInput value={startDate} onChange={(e) => setStartDate(e.target.value)} className={`${inputCls} h-9`} />
         </div>
         <div>
           <FieldLabel>Target</FieldLabel>
-          <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className={`${inputCls} h-9 ${dateInvalid ? "border-red-500/60" : ""}`} />
+          <DatePickerInput value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className={`${inputCls} h-9 ${dateInvalid ? "border-red-500/60" : ""}`} />
         </div>
       </div>
       {dateInvalid && <div className="text-[11px] text-red-300">Start must be on or before the target date.</div>}

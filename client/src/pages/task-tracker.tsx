@@ -10,6 +10,7 @@
 // derived comes from @shared/task-tracker; `today` always comes from the
 // server in NZ time.
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -506,7 +507,7 @@ function TaskModal({
           </div>
           <div>
             <Label className={labelCls}>Due</Label>
-            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="text-[13px]" data-testid="input-task-due" />
+            <DatePickerInput value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="text-[13px]" data-testid="input-task-due" />
           </div>
           <div>
             <Label className={labelCls}>Priority</Label>
@@ -762,11 +763,11 @@ function ProjectModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label className={labelCls}>Start</Label>
-            <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="text-[13px]" data-testid="input-project-start" />
+            <DatePickerInput value={startDate} onChange={(e) => setStartDate(e.target.value)} className="text-[13px]" data-testid="input-project-start" />
           </div>
           <div>
             <Label className={labelCls}>Target</Label>
-            <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="text-[13px]" data-testid="input-project-target-date" />
+            <DatePickerInput value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="text-[13px]" data-testid="input-project-target-date" />
           </div>
         </div>
 

@@ -22,6 +22,7 @@
 // mutations, dark-glass Tailwind, page-local types mirroring the server.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -780,8 +781,7 @@ function ProspectDetail({ id, onClose, onSave, onLog }: {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <label className="text-[10px] uppercase tracking-wider text-white/40 space-y-1">
               <span>Next follow-up</span>
-              <input
-                type="date"
+              <DatePickerInput
                 value={p.nextFollowUpOn ?? ""}
                 onChange={(e) => onSave({ nextFollowUpOn: e.target.value || null })}
                 className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-white/25 [color-scheme:dark]"

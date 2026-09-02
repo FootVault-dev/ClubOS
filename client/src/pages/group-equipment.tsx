@@ -22,6 +22,7 @@
 // never the browser clock.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useState } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -737,7 +738,7 @@ function AuditsTab({ today }: { today: string }) {
               </Field>
             </div>
             <Field label="Due by" hint="Leave blank if there's no deadline yet">
-              <input type="date" value={dueOn} onChange={e => setDueOn(e.target.value)} className={INPUT} />
+              <DatePickerInput value={dueOn} onChange={e => setDueOn(e.target.value)} className={INPUT} />
             </Field>
             <div className="flex justify-end gap-2">
               <button onClick={() => setOpen(false)} className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 hover:bg-white/5">Cancel</button>

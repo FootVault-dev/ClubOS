@@ -11,6 +11,7 @@
 // needed. House style + react-query/apiRequest patterns match the other
 // admin pages built alongside it (mfl-referees.tsx, mfl-game-feed.tsx).
 // ─────────────────────────────────────────────────────────────────────────────
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -118,8 +119,7 @@ export default function MflMedia() {
             placeholder="Caption (optional)"
             className={inputCls}
           />
-          <Input
-            type="date"
+          <DatePickerInput
             value={takenAt}
             onChange={(e) => setTakenAt(e.target.value)}
             className={inputCls}
