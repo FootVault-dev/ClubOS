@@ -751,6 +751,14 @@ export function AppSidebar() {
   // so a section is already open when you are standing inside it and nobody has
   // to click twice to see where they are.
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  // 🔴 A hand-opened section lasts until you go somewhere else. Without this
+  // the override is permanent: open Academy, click Dashboard, and Academy is
+  // still hanging open under a page it has nothing to do with (Daniel,
+  // 2026-09-02). Clearing it hands the decision back to the route, which is
+  // the only thing that actually knows where you are.
+  useEffect(() => {
+    setOpenSections({});
+  }, [location]);
 
   const navFilter = (item: { tab: string }) => canAccessTab({
     globalRole: user?.role,
@@ -786,7 +794,12 @@ export function AppSidebar() {
 
   // Resolved once across BOTH groups so a Navigation item and a System item
   // can never both look active on the same page.
-  const activeUrl = activeNavUrl(location, [...mainNav, ...secondaryNav]);
+  // 🔴 Flatten before asking which row is active. `mainNav` is a TREE now, so
+  // passing it straight in hides every child's url from the matcher — which
+  // made /admin/squads resolve to some ancestor, so the child never lit up and
+  // the section did not know you were standing in it.
+  const flatNav = mainNav.flatMap((i) => [i, ...(i.children ?? [])]);
+  const activeUrl = activeNavUrl(location, [...flatNav, ...secondaryNav]);
 
   // Live unread badge for the Chat item: mentions + DM messages count (gold),
   // other unreads show as a subtle dot. Polling this ALSO acts as the presence
