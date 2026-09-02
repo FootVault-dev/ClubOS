@@ -15315,6 +15315,58 @@ export async function registerRoutes(
     // reach the persons table (Hard Rule 4; verifier finding MAJOR-1, 2026-07-04).
     if (req) Object.assign(values, await buildConversionAttribution(req, { email, firstName: s(body?.parentName, 120) || undefined, phone: body?.phone }));
     const [row] = await db.insert(footballInstituteApplications).values(values).returning();
+
+    // 🔴 Mirror the application onto the Football Institute ACADEMY programme.
+    //
+    // The Institute stopped being its own sidebar tab on 2026-09-02 and became
+    // one more programme in the Academy. The apply form at
+    // footballinstitute.co.nz/apply is still live, so without this an
+    // application would land in a table with no page left to read it — a form
+    // that silently goes nowhere, which is the exact failure this cleanup was
+    // meant to end.
+    //
+    // The application row stays the record: it holds year level, position,
+    // school, club, student email and video URL, none of which the waitlist has
+    // columns for. This row is how the applicant SHOWS UP on the programme, and
+    // it carries that detail in `notes` so nothing is lost to a reader.
+    //
+    // Best-effort on purpose: a parent's application must never fail because
+    // the mirror did. script/seed-football-institute.ts is idempotent and
+    // back-fills anything that slipped through.
+    try {
+      const [fiProgram] = await db.select({ id: programsTable.id }).from(programsTable)
+        .where(and(eq(programsTable.slug, "football-institute"), eq(programsTable.organizationId, orgId)))
+        .limit(1);
+      if (fiProgram) {
+        const nameParts = applicantName.trim().replace(/\s+/g, " ");
+        const cut = nameParts.lastIndexOf(" ");
+        const notes = [
+          `Football Institute application #${row.id} (new), submitted ${new Date().toISOString().slice(0, 10)}.`,
+          values.yearLevel && `Year level: ${values.yearLevel}`,
+          values.position && `Position: ${values.position}`,
+          values.currentSchool && `School: ${values.currentSchool}`,
+          values.currentClub && `Club: ${values.currentClub}`,
+          values.studentEmail && `Student email: ${values.studentEmail}`,
+          values.videoUrl && `Video: ${values.videoUrl}`,
+          values.intakeYear && `Intake year: ${values.intakeYear}`,
+        ].filter(Boolean).join("\n");
+        await db.insert(academyWaitlist).values({
+          organizationId: orgId,
+          programId: fiProgram.id,
+          seasonYear: values.intakeYear ?? null,
+          childFirstName: cut === -1 ? nameParts : nameParts.slice(0, cut),
+          childLastName: cut === -1 ? "—" : nameParts.slice(cut + 1),
+          guardianName: values.parentName || applicantName,
+          email,
+          phone: values.phone || "",
+          notes,
+          status: "waiting",
+        });
+      }
+    } catch (e) {
+      console.error("[FI] application saved but the programme mirror failed:", e);
+    }
+
     return { application: row };
   }
 

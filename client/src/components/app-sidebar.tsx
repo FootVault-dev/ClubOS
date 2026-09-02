@@ -149,6 +149,10 @@ const HIDDEN_GLOBAL: string[] = [
   "marketing",          // MarketingOS — same page in all 7, still unfinished
   "sporty",             // Sporty NRS — inert until NZF UAT keys arrive
   "drive",              // Club Drive — not finished yet
+  // Now Academy → Football Institute (programme 58). Sean Jovens Barquio is on
+  // it, and the live apply form at footballinstitute.co.nz mirrors every new
+  // application onto the programme, so hiding this strands nobody.
+  "football-institute",
   // ✅ Safe to hide: every FM registration and payment still renders on the
   // person's own profile (/admin/people/:key → resolvePeopleHistory reads
   // fm_registration_history + fm_payment_history directly), which is reachable
@@ -172,12 +176,6 @@ const HIDDEN_GLOBAL: string[] = [
   // is not also a guardian off the club's reach. Merging them means adding a
   // "newsletter" segment to Mailer's send path, which is a mass-email
   // audience change and deserves its own verification pass.
-  //
-  // 🔴 NOT hidden yet: "football-institute". It holds ONE real application —
-  // Sean Jovens Barquio, Year 12, intake 2027, submitted 26 Jul — and this
-  // tab is the only page that reads football_institute_applications. It gets
-  // hidden the moment the Football Institute exists as an Academy programme
-  // with that submission moved onto it, and not before.
 ];
 
 // 🔴 Hidden in SOME workspaces only, because the same tab slug renders a
