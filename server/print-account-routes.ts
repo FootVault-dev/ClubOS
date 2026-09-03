@@ -1,10 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // UNITED PRINTS — CUSTOMER ACCOUNTS (join.unitedprints.co.nz/account)
 //
-//   POST /api/public/unitedprints/account/request-code   — email → a 6-digit code
-//   POST /api/public/unitedprints/account/verify         — code → a session cookie
+//   POST /api/public/unitedprints/account/signup   — email + password → account
+//   POST /api/public/unitedprints/account/login    — email + password → session
+//   POST /api/public/unitedprints/account/forgot   — email → a 6-digit reset code
+//   POST /api/public/unitedprints/account/reset    — code + new password → session
 //   POST /api/public/unitedprints/account/logout
-//   GET  /api/public/unitedprints/account/me             — profile + their orders
+//   GET  /api/public/unitedprints/account/me       — profile + their orders
 //   PATCH /api/public/unitedprints/account/profile
 //
 // ── Why this is same-origin, and why that matters ───────────────────────────
@@ -48,10 +50,10 @@ import {
   PRINT_ACCOUNT_SESSION_TTL_MS,
   PRINT_ACCOUNT_CODE_TTL_MS,
   PRINT_ACCOUNT_CODE_MAX_ATTEMPTS,
-  PRINT_ACCOUNT_CODE_MAX_PER_EMAIL_HOUR,
-  PRINT_ACCOUNT_CODE_MAX_PER_IP_HOUR,
   normalizePrintEmail,
   looksLikeEmail,
+  passwordProblem,
+  SIGNIN_FAILED,
   accountDiscountPct,
   customerStatusLabel,
   countsTowardSpend,
@@ -104,6 +106,35 @@ async function audit(params: {
   } catch (e) {
     console.error("[up-account] audit", e);
   }
+}
+
+// ── Passwords ────────────────────────────────────────────────────────────────
+// scrypt, `s1$salt$hex`. The SAME scheme as natural-footballers-web,
+// atarangi-lodge and conscious-agency, so the workspace has one password format
+// rather than four half-remembered ones (reference/app-baseline-standard.md §1).
+const SCRYPT = { N: 16384, r: 8, p: 1 } as const;
+
+function hashPrintPassword(plain: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(plain, salt, 64, SCRYPT).toString("hex");
+  return `s1$${salt}$${hash}`;
+}
+
+/**
+ * 🔴 Returns false for a NULL or malformed stored hash, never true.
+ *
+ * password_hash is nullable because accounts created during the passwordless
+ * window have none. "No password set" must fail closed — a verifier that
+ * treated a blank column as a match would let anyone into every legacy account
+ * by typing anything.
+ */
+function verifyPrintPassword(candidate: string, stored: string | null): boolean {
+  const [scheme, salt, hashHex] = String(stored ?? "").split("$");
+  if (scheme !== "s1" || !salt || !hashHex) return false;
+  const expected = Buffer.from(hashHex, "hex");
+  if (expected.length === 0) return false;
+  const got = crypto.scryptSync(candidate, salt, expected.length, SCRYPT);
+  return got.length === expected.length && crypto.timingSafeEqual(got, expected);
 }
 
 // ── Sessions ─────────────────────────────────────────────────────────────────
@@ -297,96 +328,219 @@ async function buildMe(customer: PrintCustomer): Promise<PrintAccountMe> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Issue a session, set the cookie, and return the payload. ONE path, used by
+ *  sign-up, sign-in and password reset alike, so the three cannot drift on
+ *  cookie flags or expiry. */
+async function startSession(req: Request, res: Response, customerId: number): Promise<PrintAccountMe> {
+  const { token, hash } = newSessionToken();
+  await db.execute(sql`
+    INSERT INTO print_customer_sessions (customer_id, token_hash, expires_at, ip, user_agent)
+    VALUES (${customerId}, ${hash}, ${new Date(Date.now() + PRINT_ACCOUNT_SESSION_TTL_MS)},
+            ${ipOf(req)}, ${uaOf(req)})`);
+  await db.execute(sql`UPDATE print_customers SET last_login_at = now() WHERE id = ${customerId}`);
+  setSessionCookie(res, token);
+
+  const r = await db.execute(sql`
+    SELECT id, email, name, phone, company, tier, discount_pct, disabled_at, created_at
+    FROM print_customers WHERE id = ${customerId}`);
+  const row = (r.rows as any[])[0];
+  return buildMe({
+    id: customerId,
+    email: String(row.email),
+    name: row.name ?? null,
+    phone: row.phone ?? null,
+    company: row.company ?? null,
+    tier: String(row.tier ?? "standard"),
+    discountPct: Number(row.discount_pct ?? 0),
+    disabledAt: row.disabled_at ?? null,
+    createdAt: row.created_at ?? null,
+  });
+}
+
+/** Shared rate-limit gate for anything that takes an email + a guessable secret. */
+async function tooManyAttempts(email: string, ip: string | null): Promise<boolean> {
+  const since = new Date(Date.now() - 60 * 60 * 1000);
+  const r = await db.execute(sql`
+    SELECT
+      COUNT(*) FILTER (WHERE lower(email) = ${email}) AS by_email,
+      COUNT(*) FILTER (WHERE ip IS NOT NULL AND ip = ${ip}) AS by_ip
+    FROM print_customer_auth_events
+    WHERE created_at > ${since} AND event IN ('signin_failed','code_sent','rate_limited')`);
+  const c = (r.rows as any[])[0] ?? {};
+  // Per-email is tight (someone guessing one business's password); per-IP is
+  // loose, because a whole office shares one address and a per-IP limit would
+  // otherwise lock out a customer's colleagues.
+  return Number(c.by_email ?? 0) >= 10 || Number(c.by_ip ?? 0) >= 50;
+}
+
 export function registerPrintAccountRoutes(app: Express) {
   const BASE = "/api/public/unitedprints/account";
 
-  // ── Request a code ─────────────────────────────────────────────────────────
-  // Unlike the parent portal, an unknown address is NOT a dead end — this is
-  // also the sign-up path, and the account is created on successful VERIFY, not
-  // here. Creating it here would let anyone fill the table with addresses they
-  // do not own.
-  //
-  // 🔴 The response is identical either way regardless, so this endpoint still
-  // cannot be used to ask "does this business have an account with you".
-  app.post(`${BASE}/request-code`, async (req, res) => {
-    const generic = { ok: true, message: "Check your email — we've sent you a 6-digit code." };
+  // ── Create an account ─────────────────────────────────────────────────────
+  app.post(`${BASE}/signup`, async (req, res) => {
     try {
       const email = normalizePrintEmail(req.body?.email);
-      if (!looksLikeEmail(email)) {
-        return res.status(400).json({ message: "That doesn't look like an email address." });
-      }
-      const ip = ipOf(req);
+      const password = String(req.body?.password ?? "");
+      const name = s(req.body?.name, 120);
+      const company = s(req.body?.company, 160);
+      const phone = s(req.body?.phone, 40);
 
-      const since = new Date(Date.now() - 60 * 60 * 1000);
-      const counts = await db.execute(sql`
-        SELECT
-          COUNT(*) FILTER (WHERE lower(email) = ${email}) AS by_email,
-          COUNT(*) FILTER (WHERE request_ip IS NOT NULL AND request_ip = ${ip}) AS by_ip
-        FROM print_customer_codes WHERE created_at > ${since}`);
-      const c = (counts.rows as any[])[0] ?? {};
-      if (
-        Number(c.by_email ?? 0) >= PRINT_ACCOUNT_CODE_MAX_PER_EMAIL_HOUR ||
-        Number(c.by_ip ?? 0) >= PRINT_ACCOUNT_CODE_MAX_PER_IP_HOUR
-      ) {
+      if (!looksLikeEmail(email)) return res.status(400).json({ message: "That doesn't look like an email address." });
+      const pwProblem = passwordProblem(password);
+      if (pwProblem) return res.status(400).json({ message: pwProblem });
+
+      if (await tooManyAttempts(email, ipOf(req))) {
         await audit({ email, event: "rate_limited", req });
         return res.status(429).json({ message: "Too many attempts. Please try again in an hour." });
       }
 
+      const existing = await db.execute(sql`
+        SELECT id, password_hash, disabled_at FROM print_customers WHERE lower(email) = ${email} LIMIT 1`);
+      const found = (existing.rows as any[])[0];
+
+      if (found?.password_hash) {
+        // 🔴 An address that already has a password is NOT told so in a way that
+        // confirms it exists to a stranger — the copy points at signing in and
+        // at the reset, both of which a real owner can act on and a stranger
+        // learns nothing from beyond "this form is for new accounts".
+        await audit({ email, customerId: Number(found.id), event: "signup_existing", req });
+        return res.status(409).json({
+          message: "There's already an account for that email. Sign in instead, or use 'Forgot password'.",
+        });
+      }
+
+      const hash = hashPrintPassword(password);
+      if (found) {
+        // A legacy passwordless account, or one part-created. Claim it by
+        // setting the password — same address, same orders, no duplicate row.
+        if (found.disabled_at) return res.status(403).json({ message: "This account isn't active. Please contact the office." });
+        await db.execute(sql`
+          UPDATE print_customers
+          SET password_hash = ${hash}, password_set_at = now(),
+              name = COALESCE(${name}, name), company = COALESCE(${company}, company),
+              phone = COALESCE(${phone}, phone)
+          WHERE id = ${found.id}`);
+      } else {
+        await db.execute(sql`
+          INSERT INTO print_customers (email, name, company, phone, password_hash, password_set_at)
+          VALUES (${email}, ${name}, ${company}, ${phone}, ${hash}, now())
+          ON CONFLICT (lower(email)) DO NOTHING`);
+      }
+
+      const row = await db.execute(sql`SELECT id FROM print_customers WHERE lower(email) = ${email} LIMIT 1`);
+      const id = Number((row.rows as any[])[0]?.id);
+      if (!Number.isFinite(id)) return res.status(500).json({ message: "Something went wrong. Please try again." });
+
+      await audit({ email, customerId: id, event: "signup_ok", req });
+      res.json({ ok: true, me: await startSession(req, res, id) });
+    } catch (e: any) {
+      console.error("[up-account] signup", e);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
+    }
+  });
+
+  // ── Sign in ───────────────────────────────────────────────────────────────
+  app.post(`${BASE}/login`, async (req, res) => {
+    try {
+      const email = normalizePrintEmail(req.body?.email);
+      const password = String(req.body?.password ?? "");
+      if (!looksLikeEmail(email) || !password) {
+        return res.status(400).json({ message: SIGNIN_FAILED });
+      }
+      if (await tooManyAttempts(email, ipOf(req))) {
+        await audit({ email, event: "rate_limited", req });
+        return res.status(429).json({ message: "Too many attempts. Please try again in an hour." });
+      }
+
+      const r = await db.execute(sql`
+        SELECT id, password_hash, disabled_at FROM print_customers WHERE lower(email) = ${email} LIMIT 1`);
+      const row = (r.rows as any[])[0];
+
+      // 🔴 ONE answer for every failure — unknown address, wrong password, no
+      // password set, closed account. Anything more specific makes this form an
+      // oracle for which businesses bank with the print shop.
+      const okPassword = !!row && !row.disabled_at && verifyPrintPassword(password, row.password_hash ?? null);
+      if (!okPassword) {
+        await audit({ email, customerId: row ? Number(row.id) : null, event: "signin_failed", req });
+        return res.status(401).json({ message: SIGNIN_FAILED });
+      }
+
+      const id = Number(row.id);
+      await audit({ email, customerId: id, event: "signin_ok", req });
+      res.json({ ok: true, me: await startSession(req, res, id) });
+    } catch (e: any) {
+      console.error("[up-account] login", e);
+      res.status(500).json({ message: "Something went wrong. Please try again." });
+    }
+  });
+
+  // ── Forgot password ───────────────────────────────────────────────────────
+  // The emailed code lives on, doing the job it is genuinely best at: proving
+  // control of an inbox. It is no longer how anyone signs in.
+  app.post(`${BASE}/forgot`, async (req, res) => {
+    const generic = { ok: true, message: "If there's an account for that email, we've sent a reset code." };
+    try {
+      const email = normalizePrintEmail(req.body?.email);
+      if (!looksLikeEmail(email)) return res.status(400).json({ message: "That doesn't look like an email address." });
+      const ip = ipOf(req);
+      if (await tooManyAttempts(email, ip)) {
+        await audit({ email, event: "rate_limited", req });
+        return res.status(429).json({ message: "Too many attempts. Please try again in an hour." });
+      }
+
+      const found = await db.execute(sql`
+        SELECT id, name FROM print_customers WHERE lower(email) = ${email} AND disabled_at IS NULL LIMIT 1`);
+      const row = (found.rows as any[])[0];
+      // 🔴 No account → the SAME response, and no email. The reply must not
+      // differ by a byte between "we sent one" and "there is nobody here".
+      if (!row) return res.json(generic);
+
       const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
       const codeHash = crypto.createHash("sha256").update(`${code}:${email}`).digest("hex");
       await db.execute(sql`
-        INSERT INTO print_customer_codes (email, code_hash, expires_at, request_ip)
-        VALUES (${email}, ${codeHash}, ${new Date(Date.now() + PRINT_ACCOUNT_CODE_TTL_MS)}, ${ip})`);
+        INSERT INTO print_customer_codes (email, code_hash, expires_at, request_ip, purpose)
+        VALUES (${email}, ${codeHash}, ${new Date(Date.now() + PRINT_ACCOUNT_CODE_TTL_MS)}, ${ip}, 'reset')`);
 
-      const existing = await db.execute(sql`
-        SELECT name FROM print_customers WHERE lower(email) = ${email} LIMIT 1`);
-      const firstName = ((existing.rows as any[])[0]?.name ?? "").split(" ")[0] || null;
-
-      // 🔴 AWAITED. An un-awaited send after the response has gone out may never
-      // run — a paid booking went unannounced that way (reference_serverless_unawaited_sends).
+      // AWAITED — an un-awaited send after the response has gone may never run.
       await sendPrintAccountLoginCode({
         to: email,
-        firstName,
+        firstName: (String(row.name ?? "").split(" ")[0] || null),
         code,
         minutes: Math.round(PRINT_ACCOUNT_CODE_TTL_MS / 60000),
       });
-      await audit({ email, event: "code_sent", req });
+      await audit({ email, customerId: Number(row.id), event: "code_sent", req });
 
-      // Local testing only. Gated on a NON-production build as well as the env
-      // var, so a stray production variable cannot hand out live credentials.
       if (process.env.PRINT_ACCOUNT_ECHO_CODE === "1" && process.env.NODE_ENV !== "production") {
-        console.log(`[up-account] DEV echo — code for ${email}: ${code}`);
         return res.json({ ...generic, devCode: code });
       }
       res.json(generic);
     } catch (e: any) {
-      console.error("[up-account] request-code", e);
-      res.json(generic); // never leak a failure shape that differs from success
+      console.error("[up-account] forgot", e);
+      res.json(generic);
     }
   });
 
-  // ── Verify ────────────────────────────────────────────────────────────────
-  app.post(`${BASE}/verify`, async (req, res) => {
+  // ── Set a new password with the code ──────────────────────────────────────
+  app.post(`${BASE}/reset`, async (req, res) => {
     try {
       const email = normalizePrintEmail(req.body?.email);
       const code = String(req.body?.code ?? "").trim();
+      const password = String(req.body?.password ?? "");
       if (!looksLikeEmail(email) || !/^\d{6}$/.test(code)) {
         return res.status(400).json({ message: "Enter the 6-digit code from your email." });
       }
-      const codeHash = crypto.createHash("sha256").update(`${code}:${email}`).digest("hex");
+      const pwProblem = passwordProblem(password);
+      if (pwProblem) return res.status(400).json({ message: pwProblem });
 
-      // Every live code for this address, not just the newest — someone who
-      // taps "send me a code" twice and types the first one is holding a code
-      // we really did send. Each is still single-use, time-limited and
-      // attempt-limited, so accepting any live one is no weaker.
+      const codeHash = crypto.createHash("sha256").update(`${code}:${email}`).digest("hex");
       const live = await db.execute(sql`
         SELECT id, code_hash FROM print_customer_codes
-        WHERE lower(email) = ${email} AND consumed_at IS NULL
+        WHERE lower(email) = ${email} AND purpose = 'reset' AND consumed_at IS NULL
           AND expires_at > now() AND attempts < ${PRINT_ACCOUNT_CODE_MAX_ATTEMPTS}
         ORDER BY created_at DESC`);
       const rows = live.rows as any[];
       if (rows.length === 0) {
-        await audit({ email, event: "verify_expired", req });
+        await audit({ email, event: "reset_expired", req });
         return res.status(400).json({ message: "That code has expired. Please request a new one." });
       }
 
@@ -395,90 +549,51 @@ export function registerPrintAccountRoutes(app: Express) {
         const stored = Buffer.from(String(r.code_hash), "hex");
         return given.length === stored.length && crypto.timingSafeEqual(given, stored);
       });
-
       if (!match) {
-        const spent = await db.execute(sql`
-          SELECT 1 FROM print_customer_codes
-          WHERE lower(email) = ${email} AND code_hash = ${codeHash} AND consumed_at IS NOT NULL
-          LIMIT 1`);
-        if ((spent.rows as any[]).length > 0) {
-          await audit({ email, event: "verify_reused", req });
-          return res.status(400).json({ message: "That code has already been used. Please request a new one." });
-        }
-        // Burn an attempt on every live code, so guessing is bounded across all
-        // of them rather than resetting each time a new one is requested.
         await db.execute(sql`
           UPDATE print_customer_codes SET attempts = attempts + 1
-          WHERE lower(email) = ${email} AND consumed_at IS NULL AND expires_at > now()`);
-        await audit({ email, event: "verify_bad_code", req });
+          WHERE lower(email) = ${email} AND purpose = 'reset' AND consumed_at IS NULL AND expires_at > now()`);
+        await audit({ email, event: "reset_bad_code", req });
         return res.status(400).json({ message: "That code isn't right. Check the email and try again." });
       }
 
-      await db.execute(sql`
-        UPDATE print_customer_codes SET consumed_at = now() WHERE id = ${match.id}`);
-
-      // 🔴 Create-or-find, never create-blindly. The unique index on
-      // lower(email) is the real guard; ON CONFLICT makes a race a no-op rather
-      // than a 500 on a customer's second device.
-      //
-      // Note what is NOT set here: tier stays 'standard' and discount_pct stays
-      // 0. Signing up is not an agreement about price — Daniel's rule is that
-      // Dima decides who gets trade rates.
-      await db.execute(sql`
-        INSERT INTO print_customers (email) VALUES (${email})
-        ON CONFLICT (lower(email)) DO NOTHING`);
-
       const found = await db.execute(sql`
-        SELECT id, disabled_at FROM print_customers WHERE lower(email) = ${email} LIMIT 1`);
+        SELECT id FROM print_customers WHERE lower(email) = ${email} AND disabled_at IS NULL LIMIT 1`);
       const row = (found.rows as any[])[0];
-      if (!row) {
-        console.error("[up-account] verify — customer missing after upsert", email);
-        return res.status(500).json({ message: "Something went wrong. Please try again." });
-      }
-      if (row.disabled_at) {
-        // Deliberately vague. Whether an account is closed is between that
-        // customer and the office, not something a form should announce.
-        await audit({ email, customerId: Number(row.id), event: "verify_disabled", req });
-        return res.status(403).json({ message: "This account isn't active. Please contact the office." });
-      }
+      if (!row) return res.status(400).json({ message: "That code has expired. Please request a new one." });
+      const id = Number(row.id);
 
-      const customerId = Number(row.id);
-      const { token, hash } = newSessionToken();
+      await db.execute(sql`UPDATE print_customer_codes SET consumed_at = now() WHERE id = ${match.id}`);
       await db.execute(sql`
-        INSERT INTO print_customer_sessions (customer_id, token_hash, expires_at, ip, user_agent)
-        VALUES (${customerId}, ${hash}, ${new Date(Date.now() + PRINT_ACCOUNT_SESSION_TTL_MS)},
-                ${ipOf(req)}, ${uaOf(req)})`);
+        UPDATE print_customers
+        SET password_hash = ${hashPrintPassword(password)}, password_set_at = now(),
+            email_verified_at = COALESCE(email_verified_at, now())
+        WHERE id = ${id}`);
+
+      // 🔴 Changing a password ends every OTHER session. If somebody else was
+      // signed in — which is the usual reason a person resets — the reset has
+      // to actually push them out, not just add a second key to the door.
       await db.execute(sql`
-        UPDATE print_customers SET last_login_at = now() WHERE id = ${customerId}`);
+        UPDATE print_customer_sessions SET revoked_at = now()
+        WHERE customer_id = ${id} AND revoked_at IS NULL`);
 
-      setSessionCookie(res, token);
-      await audit({ email, customerId, event: "verify_ok", req });
-
-      // Built from the row we just wrote, NOT via currentPrintCustomer() —
-      // that reads the request's cookie, and the cookie this session needs was
-      // only set on the RESPONSE a moment ago. It would resolve the customer's
-      // previous session, or nobody at all on a first sign-in.
-      const fresh = await db.execute(sql`
-        SELECT id, email, name, phone, company, tier, discount_pct, disabled_at, created_at
-        FROM print_customers WHERE id = ${customerId}`);
-      const cRow = (fresh.rows as any[])[0];
-      const me = await buildMe({
-        id: customerId,
-        email: String(cRow.email),
-        name: cRow.name ?? null,
-        phone: cRow.phone ?? null,
-        company: cRow.company ?? null,
-        tier: String(cRow.tier ?? "standard"),
-        discountPct: Number(cRow.discount_pct ?? 0),
-        disabledAt: cRow.disabled_at ?? null,
-        createdAt: cRow.created_at ?? null,
-      });
-      res.json({ ok: true, me });
+      await audit({ email, customerId: id, event: "reset_ok", req });
+      res.json({ ok: true, me: await startSession(req, res, id) });
     } catch (e: any) {
-      console.error("[up-account] verify", e);
+      console.error("[up-account] reset", e);
       res.status(500).json({ message: "Something went wrong. Please try again." });
     }
   });
+
+  // ── The passwordless sign-in that used to live here is GONE ───────────────
+  // Daniel, 2026-09-03: "make this email password standard sign up and login."
+  //
+  // 🔴 Deleted rather than left mounted. An emailed code that signs somebody
+  // straight in is a SECOND way through the door that skips the password
+  // entirely — so the account would only ever be as strong as the weaker of the
+  // two, and revoking a password would not actually close it. The same
+  // mechanism now backs /forgot + /reset, where proving control of the inbox
+  // earns you a password change rather than a session.
 
   // ── Logout ────────────────────────────────────────────────────────────────
   // Revokes the row, so it is a real sign-out and not just a discarded cookie.

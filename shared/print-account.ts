@@ -95,6 +95,36 @@ export function pricingBadge(customer: { tier?: string | null; discountPct?: num
   };
 }
 
+// ── Passwords ────────────────────────────────────────────────────────────────
+// The rules only. The scrypt itself lives server-side in print-account-routes.ts
+// — a hashing function must never be reachable from a browser bundle.
+
+/**
+ * Stated as the failure a person can act on, not as a checklist.
+ *
+ * 🔴 Length is the only composition rule, and the floor is 12 — the house
+ * standard shared with natural-footballers-web and atarangi-lodge
+ * (reference/app-baseline-standard.md §1). Symbol-and-capital rules push people
+ * towards `Password1!`, which is worse than four ordinary words.
+ */
+export function passwordProblem(p: string): string | null {
+  if (!p || p.length < 12) return "Use at least 12 characters — length matters far more than symbols.";
+  if (p.length > 200) return "That's longer than 200 characters.";
+  const weak = ["password", "12345678", "qwerty", "letmein", "unitedprints", "printing", "christchurch"];
+  if (weak.some((w) => p.toLowerCase().includes(w))) return "That contains something too easy to guess.";
+  return null;
+}
+
+/**
+ * 🔴 ONE message for every sign-in failure.
+ *
+ * An unknown address, a wrong password, an account with no password set and a
+ * closed account all answer with this exact string. Anything more specific
+ * turns the login form into a tool for discovering which businesses have an
+ * account with the print shop, and which of those have never set a password.
+ */
+export const SIGNIN_FAILED = "That email and password don't match. Check them and try again.";
+
 // ── Email ────────────────────────────────────────────────────────────────────
 
 export function normalizePrintEmail(raw: unknown): string {

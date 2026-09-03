@@ -11,7 +11,7 @@
 // correct answer for a new customer and reads as one — it is not an error and
 // it is not a blank screen.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { PrintAccountMe, PrintAccountOrder } from "@shared/print-account";
 import { pricingBadge } from "@shared/print-account";
 
@@ -48,118 +48,157 @@ function StatusPill({ order }: { order: PrintAccountOrder }) {
   );
 }
 
-// ── Sign in ──────────────────────────────────────────────────────────────────
+// ── Sign in / create account ─────────────────────────────────────────────────
+// Email + password, the way every other shop does it (Daniel, 2026-09-03).
+// Three modes on one card: sign in, create an account, and the reset when
+// someone has forgotten. The emailed code survives only in the reset — proving
+// control of an inbox earns a password change, never a session.
+
+type Mode = "signin" | "signup" | "forgot" | "reset";
+
+const inputCls =
+  "w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 outline-none transition focus:border-[#043bcb] focus:ring-4 focus:ring-[#043bcb]/12 placeholder:text-slate-400";
+const primaryCls =
+  "min-h-[52px] w-full rounded-full bg-[#33cc00] px-6 text-[15px] font-bold uppercase tracking-wide text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50";
+const linkCls = "min-h-[44px] text-[14px] font-semibold text-[#043bcb] underline-offset-4 hover:underline";
+
+function Field({ id, label, hint, ...rest }: {
+  id: string; label: string; hint?: string;
+} & React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <div>
+      <label htmlFor={id} className="mb-2 block text-sm font-semibold text-slate-800">{label}</label>
+      <input id={id} className={inputCls} {...rest} />
+      {hint && <p className="mt-1.5 text-[13px] leading-relaxed text-slate-500">{hint}</p>}
+    </div>
+  );
+}
 
 function SignIn({ onSignedIn }: { onSignedIn: (me: PrintAccountMe) => void }) {
-  const [stage, setStage] = useState<"email" | "code">("email");
+  const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [company, setCompany] = useState("");
   const [code, setCode] = useState("");
+  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const codeRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (stage === "code") codeRef.current?.focus();
-  }, [stage]);
-
-  async function requestCode(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true); setError(null);
-    try {
-      const res = await fetch(`${BASE}/request-code`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(data?.message ?? "Couldn't send that code."); return; }
-      setNote(data?.message ?? "Check your email.");
-      setStage("code");
-    } catch {
-      setError("Couldn't reach us just now. Check your connection and try again.");
-    } finally { setBusy(false); }
+  function go(next: Mode) {
+    setMode(next); setError(null); setNote(null); setPassword(""); setCode("");
   }
 
-  async function verify(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true); setError(null);
+    const path =
+      mode === "signin" ? "login" : mode === "signup" ? "signup" : mode === "forgot" ? "forgot" : "reset";
+    const body =
+      mode === "signin" ? { email, password }
+      : mode === "signup" ? { email, password, name, company }
+      : mode === "forgot" ? { email }
+      : { email, code, password };
     try {
-      const res = await fetch(`${BASE}/verify`, {
+      const res = await fetch(`${BASE}/${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data?.message ?? "That didn't work."); return; }
+      if (mode === "forgot") {
+        setNote(data?.message ?? "Check your email.");
+        setMode("reset");
+        return;
+      }
       onSignedIn(data.me as PrintAccountMe);
     } catch {
       setError("Couldn't reach us just now. Check your connection and try again.");
     } finally { setBusy(false); }
   }
 
-  const inputCls =
-    "w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 outline-none transition focus:border-[#043bcb] focus:ring-4 focus:ring-[#043bcb]/12 placeholder:text-slate-400";
+  const heading =
+    mode === "signin" ? "Sign in to United Prints"
+    : mode === "signup" ? "Create your account"
+    : mode === "forgot" ? "Reset your password"
+    : "Choose a new password";
+
+  const blurb =
+    mode === "signin" ? "See your orders, your artwork and your pricing in one place."
+    : mode === "signup" ? "Track every job you place with us, and get your pricing in one place."
+    : mode === "forgot" ? "Enter your email and we'll send you a 6-digit code."
+    : <>We sent a code to <span className="font-semibold text-slate-900">{email}</span>. It expires in 10 minutes.</>;
 
   return (
     <div className="mx-auto w-full max-w-md px-5 py-12 sm:py-20">
       <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-[0_1px_2px_rgba(16,24,40,.04),0_12px_32px_-12px_rgba(4,59,203,.18)] sm:p-9">
-        <h1 className="text-[26px] font-extrabold leading-tight tracking-tight text-slate-900">
-          {stage === "email" ? "Your United Prints account" : "Check your email"}
-        </h1>
-        <p className="mt-2 text-[15px] leading-relaxed text-slate-600">
-          {stage === "email"
-            ? "Sign in to see your orders, your artwork and your pricing. No password — we'll email you a code."
-            : <>We sent a 6-digit code to <span className="font-semibold text-slate-900">{email}</span>. It expires in 10 minutes.</>}
-        </p>
+        <h1 className="text-[26px] font-extrabold leading-tight tracking-tight text-slate-900">{heading}</h1>
+        <p className="mt-2 text-[15px] leading-relaxed text-slate-600">{blurb}</p>
 
-        {stage === "email" ? (
-          <form onSubmit={requestCode} className="mt-7 space-y-4">
+        <form onSubmit={submit} className="mt-7 space-y-4">
+          {mode !== "reset" && (
+            <Field
+              id="up-email" label="Email address" type="email" required
+              autoComplete={mode === "signup" ? "email" : "username"} inputMode="email"
+              value={email} onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@yourbusiness.co.nz"
+            />
+          )}
+
+          {mode === "signup" && (
+            <>
+              <Field id="up-name" label="Your name" required autoComplete="name"
+                     value={name} onChange={(e) => setName(e.target.value)} placeholder="Jamie Smith" />
+              <Field id="up-company" label="Business (optional)" autoComplete="organization"
+                     value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Smith Signage Ltd" />
+            </>
+          )}
+
+          {mode === "reset" && (
+            <Field
+              id="up-code" label="6-digit code" required inputMode="numeric" autoComplete="one-time-code"
+              maxLength={6} value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="000000"
+              className={`${inputCls} text-center font-mono text-[30px] font-bold tracking-[0.4em]`}
+            />
+          )}
+
+          {mode !== "forgot" && (
             <div>
-              <label htmlFor="up-email" className="mb-2 block text-sm font-semibold text-slate-800">Email address</label>
+              <div className="mb-2 flex items-baseline justify-between gap-3">
+                <label htmlFor="up-password" className="block text-sm font-semibold text-slate-800">
+                  {mode === "signin" ? "Password" : "New password"}
+                </label>
+                <button type="button" onClick={() => setShow((v) => !v)} className="text-[13px] font-semibold text-slate-500 hover:text-slate-800">
+                  {show ? "Hide" : "Show"}
+                </button>
+              </div>
               <input
-                id="up-email" type="email" required autoComplete="email" inputMode="email"
-                value={email} onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@yourbusiness.co.nz" className={inputCls}
+                id="up-password" type={show ? "text" : "password"} required
+                autoComplete={mode === "signin" ? "current-password" : "new-password"}
+                value={password} onChange={(e) => setPassword(e.target.value)}
+                className={inputCls}
+                placeholder={mode === "signin" ? "" : "At least 12 characters"}
               />
+              {mode !== "signin" && (
+                <p className="mt-1.5 text-[13px] leading-relaxed text-slate-500">
+                  At least 12 characters. A few ordinary words you'll remember beats a short one with symbols.
+                </p>
+              )}
             </div>
-            <button
-              type="submit" disabled={busy || !email}
-              className="min-h-[52px] w-full rounded-full bg-[#33cc00] px-6 text-[15px] font-bold uppercase tracking-wide text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {busy ? "Sending…" : "Email me a code"}
-            </button>
-            <p className="pt-1 text-center text-[13px] leading-relaxed text-slate-500">
-              New here? Signing in with your email creates your account.
-            </p>
-          </form>
-        ) : (
-          <form onSubmit={verify} className="mt-7 space-y-4">
-            <div>
-              <label htmlFor="up-code" className="mb-2 block text-sm font-semibold text-slate-800">6-digit code</label>
-              <input
-                ref={codeRef} id="up-code" required inputMode="numeric" autoComplete="one-time-code"
-                pattern="\d{6}" maxLength={6} value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                placeholder="000000"
-                className={`${inputCls} text-center font-mono text-[30px] font-bold tracking-[0.4em]`}
-              />
-            </div>
-            <button
-              type="submit" disabled={busy || code.length !== 6}
-              className="min-h-[52px] w-full rounded-full bg-[#33cc00] px-6 text-[15px] font-bold uppercase tracking-wide text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {busy ? "Checking…" : "Sign in"}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setStage("email"); setCode(""); setError(null); setNote(null); }}
-              className="min-h-[44px] w-full text-[14px] font-semibold text-[#043bcb] underline-offset-4 hover:underline"
-            >
-              Use a different email
-            </button>
-          </form>
-        )}
+          )}
+
+          <button type="submit" disabled={busy} className={primaryCls}>
+            {busy ? "Just a moment…"
+              : mode === "signin" ? "Sign in"
+              : mode === "signup" ? "Create account"
+              : mode === "forgot" ? "Email me a code"
+              : "Save password and sign in"}
+          </button>
+        </form>
 
         {note && !error && (
           <p className="mt-4 rounded-xl bg-[#043bcb]/6 px-4 py-3 text-[14px] leading-relaxed text-[#043bcb]">{note}</p>
@@ -167,6 +206,21 @@ function SignIn({ onSignedIn }: { onSignedIn: (me: PrintAccountMe) => void }) {
         {error && (
           <p role="alert" className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-[14px] leading-relaxed text-rose-700">{error}</p>
         )}
+
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-5">
+          {mode === "signin" && (
+            <>
+              <button type="button" onClick={() => go("signup")} className={linkCls}>Create an account</button>
+              <button type="button" onClick={() => go("forgot")} className={linkCls}>Forgot password?</button>
+            </>
+          )}
+          {mode === "signup" && (
+            <button type="button" onClick={() => go("signin")} className={linkCls}>Already have an account? Sign in</button>
+          )}
+          {(mode === "forgot" || mode === "reset") && (
+            <button type="button" onClick={() => go("signin")} className={linkCls}>Back to sign in</button>
+          )}
+        </div>
       </div>
 
       <p className="mt-6 text-center text-[13px] leading-relaxed text-slate-500">
