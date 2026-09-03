@@ -328,19 +328,19 @@ export default function LinksPage() {
                 </label>
                 <Select value={programId} onValueChange={chooseProgramme} disabled={!business}>
                   <SelectTrigger className={inputClass} data-testid="select-qr-programme">
-                    <SelectValue placeholder={business ? "Whole business \u2014 or pick one" : "Pick a business first"} />
+                    <SelectValue placeholder={business ? "Whole business — or pick one" : "Pick a business first"} />
                   </SelectTrigger>
                   <SelectContent>
                     {programmes.map((pr) => (
                       <SelectItem key={pr.id} value={String(pr.id)}>
-                        {pr.name}{pr.registrationOpen ? "" : "  \u00b7 not open"}
+                        {pr.name}{pr.registrationOpen ? "" : "  · not open"}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <p className="text-[11px] text-white/30 mt-1">
                   {business && programmes.length === 0
-                    ? "No live programmes \u2014 the code will point at the business."
+                    ? "No live programmes — the code will point at the business."
                     : "Fills the destination with that programme's real page."}
                 </p>
               </div>
@@ -356,7 +356,7 @@ export default function LinksPage() {
                 data-testid="input-link-destination"
               />
               <p className="text-[11px] text-white/30 mt-1">
-                Filled in from the business and programme above. Editable \u2014 must be one of our own domains.
+                Filled in from the business and programme above. Editable — must be one of our own domains.
               </p>
             </div>
 
