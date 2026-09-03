@@ -152,7 +152,37 @@ else
 fi
 echo ""
 
-exec flyctl deploy -a clubos \
+# NOT `exec` — we have to still be here afterwards to check what actually
+# shipped. (2026-09-03: a deploy that went around this script dropped the
+# --build-arg and compiled every checkout down to loadStripe(""). Nothing
+# noticed for a day and a half because every route still answered 200.)
+# `set -e` is on, so capture the code with `|| _deploy_rc=$?` — a bare
+# `_deploy_rc=$?` on the next line never runs, the shell has already exited.
+_deploy_rc=0
+flyctl deploy -a clubos \
   --build-arg VITE_STRIPE_PUBLISHABLE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY" \
   --build-arg VITE_META_PIXEL_ID="$VITE_META_PIXEL_ID" \
-  "$@"
+  "$@" || _deploy_rc=$?
+
+# ── POST-DEPLOY: did a working checkout actually reach production? ───────────
+# The guard above proves the key was in .env. It cannot prove it survived the
+# build. This asks the LIVE bundle. Do not remove it: a broken checkout is
+# invisible to every route probe we have — the booking still writes, the
+# PaymentIntent is still created, and only a human hitting a dead payment step
+# ever finds out.
+if [ "$_deploy_rc" -ne 0 ]; then
+  echo ""
+  echo "❌ flyctl exited $_deploy_rc — the deploy FAILED. Production is unchanged."
+  exit "$_deploy_rc"
+fi
+
+echo ""
+echo "── Post-deploy: can production mount a card checkout? ──"
+sleep 5
+npx tsx --env-file=.env script/_verify-checkout-live.ts || {
+  echo ""
+  echo "🔴 The deploy landed but production CANNOT TAKE A CARD PAYMENT."
+  echo "   Almost always: the VITE_* build args did not reach the build."
+  echo "   Re-run ./deploy.sh (never a bare 'flyctl deploy' — it drops them)."
+  exit 1
+}
