@@ -155,9 +155,13 @@ export default function AdminMailer() {
     onSuccess: async (res) => {
       const data = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/mailer/campaigns"] });
+      // The send is a QUEUE now, not a burst that finishes inside the request —
+      // it paces at ~1.5/s to stay under Resend's 10/s limit, so 3,861 people
+      // takes about 40 minutes. Claiming "sent!" the instant the button is
+      // pressed is exactly how nobody noticed 75% were being rejected.
       toast({
-        title: "Campaign sent!",
-        description: `${data.sentCount} of ${data.recipientCount} emails delivered successfully${data.failedCount > 0 ? `, ${data.failedCount} failed` : ""}`,
+        title: "Sending started",
+        description: `${data.recipientCount} ${data.recipientCount === 1 ? "person" : "people"} queued. It sends steadily — watch the count on this page climb.`,
       });
       setStep(0);
       setSubject("");

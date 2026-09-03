@@ -23,7 +23,7 @@ import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent, sendVenuePurchaseEvent } from "./meta-capi";
 import { purchaseEventId } from "@shared/meta-events";
-import { sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCugcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy, sendRefundConfirmationEmail } from "./email";
+import { sendEmail, sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCugcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy, sendRefundConfirmationEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
 import * as splitPay from "./split-pay";
@@ -5470,71 +5470,46 @@ export async function registerRoutes(
         return res.status(500).json({ message: "RESEND_API_KEY not configured" });
       }
 
-      let sentCount = 0;
-      let failedCount = 0;
-      const BATCH_SIZE = 50;
-      const DELAY_MS = 1000;
-
-      for (let i = 0; i < emails.length; i += BATCH_SIZE) {
-        const batch = emails.slice(i, i + BATCH_SIZE);
-        const promises = batch.map(async (email) => {
-          try {
-            const apiRes = await fetch("https://api.resend.com/emails", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${RESEND_API_KEY}`,
-              },
-              body: JSON.stringify({
-                from: senderEmail,
-                to: [email],
-                reply_to: replyAddress,
-                subject,
-                html: body,
-                headers: {
-                  "List-Unsubscribe": `<mailto:${replyAddress}?subject=unsubscribe>`,
-                },
-              }),
-            });
-            const result = await apiRes.json();
-            await storage.createEmailLog({
-              campId: null,
-              registrationId: null,
-              toEmail: email,
-              subject,
-              body,
-              providerMessageId: result.id || null,
-            });
-            if (apiRes.ok) {
-              sentCount++;
-            } else {
-              console.error(`[Mailer] Failed to send to ${email}:`, JSON.stringify(result));
-              failedCount++;
-            }
-          } catch (err: any) {
-            console.error(`[Mailer] Exception sending to ${email}:`, err?.message || err);
-            failedCount++;
-          }
-        });
-        await Promise.all(promises);
-        if (i + BATCH_SIZE < emails.length) {
-          await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-        }
-      }
-
-      await storage.updateEmailCampaign(campaign.id, {
-        sentCount,
-        failedCount,
-        status: failedCount === emails.length ? "failed" : "sent",
-      } as any);
-      await db.update(emailCampaigns).set({ sentAt: new Date() }).where(eq(emailCampaigns.id, campaign.id));
+      // ── Send through the shared queue, not a burst ──────────────────────
+      //
+      // 🔴 What was here fired **50 requests at once** and then slept a second:
+      //
+      //     const BATCH_SIZE = 50; const DELAY_MS = 1000;
+      //     await Promise.all(batch.map(...fetch...));
+      //
+      // Resend's limit is **10 requests per second** (`ratelimit-policy: 10;w=1`,
+      // verified live 2026-09-04), so 40 of every 50 were rejected. That is not a
+      // theory: campaign 26 had 40 recipients and sent EXACTLY 10. Travis's
+      // 3,861-recipient send accepted 665 of 2,725 attempts — the same ~25%.
+      //
+      // And it ran INSIDE the request, so on a big list Fly's proxy timed the
+      // handler out mid-loop: the campaign stayed `sending` for ever with
+      // sent/failed still 0, which is why it looked like nothing was attempted.
+      //
+      // runBroadcastQueue already solves both — 650ms spacing (~1.5/s, well
+      // under the limit), retries with backoff, progress written every 10, and
+      // a final status. It is what the league and newsletter mailers use. This
+      // one had simply never been moved across.
+      void runBroadcastQueue(
+        campaign.id,
+        emails,
+        async (email) => {
+          const ok = await sendEmail({
+            to: email,
+            from: senderEmail,
+            replyTo: replyAddress,
+            subject,
+            html: body,
+          });
+          return ok;
+        },
+      ).catch((e) => console.error("[Camps mailer queue] error:", e));
 
       res.json({
         campaignId: campaign.id,
         recipientCount: emails.length,
-        sentCount,
-        failedCount,
-        status: failedCount === emails.length ? "failed" : "sent",
+        queued: true,
+        status: "sending",
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -26197,10 +26172,31 @@ async function runBroadcastQueue(
   sendOne: (email: string, pixelUrl: string) => Promise<boolean>,
   opts?: { pixelHost?: string },
 ): Promise<void> {
-  const SPACING_MS = 650;   // ~1.5 req/s — safely under Resend's 2/s
+  const SPACING_MS = 650;   // ~1.5 req/s — Resend's limit is 10/s (verified 2026-09-04)
   const RETRIES = 3;
   const pixelHost = opts?.pixelHost || "app.usg.co.nz";
-  let sent = 0, failed = 0;
+
+  // ── Resume, never re-send ───────────────────────────────────────────────
+  // A 3,861-recipient send is 42 minutes of in-process work, and this app is
+  // deployed several times a day — so a big campaign WILL be interrupted, and
+  // the natural fix is to press send again. Without this that would mail
+  // everyone who already got it a second time, which is worse than the
+  // original bug. Anyone already recorded for this campaign is skipped.
+  let alreadyDone = new Set<string>();
+  try {
+    const prior = await db.select({ email: emailCampaignRecipients.email })
+      .from(emailCampaignRecipients)
+      .where(and(eq(emailCampaignRecipients.campaignId, campaignId),
+                 eq(emailCampaignRecipients.status, "sent")));
+    alreadyDone = new Set(prior.map((r) => r.email));
+  } catch { /* no prior rows readable — treat as a fresh send */ }
+  const pending = recipients.filter((e) => !alreadyDone.has(e.trim().toLowerCase()));
+  if (alreadyDone.size > 0) {
+    console.log(`[Broadcast ${campaignId}] resuming — ${alreadyDone.size} already sent, ${pending.length} to go`);
+  }
+  recipients = pending;
+
+  let sent = alreadyDone.size, failed = 0;
   for (let i = 0; i < recipients.length; i++) {
     let ok = false;
     const email = recipients[i];
