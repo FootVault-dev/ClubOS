@@ -18,3 +18,4 @@ preview/
 vite.preflight.skills.config.mts
 client/preflight-skills.html
 client/src/preflight-skills.tsx
+.last-deployed-sha

@@ -99,6 +99,35 @@ if [ "${PREFLIGHT_SKIP:-0}" != "1" ]; then
 fi
 
 _GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<unknown>")
+_GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
+
+# ── WHAT AM I ACTUALLY SHIPPING? (added 2026-09-03) ────────────────────────
+# `fly deploy` ships the WORKING TREE, not your commit — so anything that
+# landed on this branch while you were working goes out with your change,
+# under your deploy. On 2026-09-03 a United Prints customer-accounts feature
+# was committed mid-session and rode three deploys to production; nobody
+# decided to release it, and it was only noticed afterwards.
+#
+# This does not block anything. It PRINTS the commits going out and any
+# uncommitted files, so the operator sees a name they do not recognise before
+# the 20-minute build rather than after.
+if [ -f .last-deployed-sha ]; then
+  _LAST=$(cat .last-deployed-sha)
+  if git cat-file -e "$_LAST^{commit}" 2>/dev/null; then
+    _N=$(git rev-list --count "$_LAST..HEAD" 2>/dev/null || echo 0)
+    if [ "$_N" -gt 0 ]; then
+      echo "── Shipping $_N commit(s) since the last deploy from this machine ──"
+      git log --oneline --format="   %h %an  %s" "$_LAST..HEAD" | head -20
+      echo ""
+    fi
+  fi
+fi
+_DIRTY=$(git status --porcelain 2>/dev/null | grep -vE '^\?\? ' | head -10)
+if [ -n "$_DIRTY" ]; then
+  echo "⚠️  UNCOMMITTED changes — fly ships the working tree, so these go out too:"
+  echo "$_DIRTY" | sed 's/^/   /'
+  echo ""
+fi
 echo "==============================================="
 echo "  ClubOS deploy → app 'clubos' (Sydney)"
 echo "  Branch     : ${_GIT_BRANCH}   ← D16: confirm this is the ONE canonical deploy branch"
@@ -186,3 +215,7 @@ npx tsx --env-file=.env script/_verify-checkout-live.ts || {
   echo "   Re-run ./deploy.sh (never a bare 'flyctl deploy' — it drops them)."
   exit 1
 }
+
+# Only now — a deploy that landed AND verified — is this the state production
+# serves. The next run diffs against it to show what is going out.
+git rev-parse HEAD > .last-deployed-sha 2>/dev/null || true
