@@ -80,6 +80,16 @@ function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// What each channel is CALLED in the picker. titleCase() renders "signage" as
+// "Signage", and the person choosing it is looking for the words they'd use for
+// a banner or an A-frame. Anything not listed falls back to titleCase().
+const CHANNEL_LABEL: Record<string, string> = {
+  qr: "QR code",
+  signage: "Physical signage",
+  sms: "SMS",
+  whatsapp: "WhatsApp",
+};
+
 const CHANNEL_BADGE: Record<string, string> = {
   facebook: "bg-blue-500/15 text-blue-300 border-blue-500/25",
   instagram: "bg-pink-500/15 text-pink-300 border-pink-500/25",
@@ -88,6 +98,7 @@ const CHANNEL_BADGE: Record<string, string> = {
   whatsapp: "bg-green-500/15 text-green-300 border-green-500/25",
   sms: "bg-cyan-500/15 text-cyan-300 border-cyan-500/25",
   qr: "bg-violet-500/15 text-violet-300 border-violet-500/25",
+  signage: "bg-orange-500/15 text-orange-300 border-orange-500/25",
   referral: "bg-indigo-500/15 text-indigo-300 border-indigo-500/25",
   organic: "bg-teal-500/15 text-teal-300 border-teal-500/25",
   direct: "bg-white/10 text-white/60 border-white/15",
@@ -363,21 +374,16 @@ export default function LinksPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-white/40 font-medium mb-1 block">Channel</label>
-                <select
-                  value={channel}
-                  onChange={(e) => setChannel(e.target.value)}
-                  className={`${inputClass} w-full h-10 px-3 bg-white/[0.03] appearance-none`}
-                  data-testid="select-link-channel"
-                >
-                  <option value="" disabled>
-                    Select channel…
-                  </option>
-                  {CANONICAL_CHANNELS.map((c) => (
-                    <option key={c} value={c} className="bg-[#0a0e1a]">
-                      {titleCase(c)}
-                    </option>
-                  ))}
-                </select>
+                <Select value={channel} onValueChange={setChannel}>
+                  <SelectTrigger className={inputClass} data-testid="select-link-channel">
+                    <SelectValue placeholder="Where will this be shared?" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CANONICAL_CHANNELS.map((c) => (
+                      <SelectItem key={c} value={c}>{CHANNEL_LABEL[c] ?? titleCase(c)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <label className="text-xs text-white/40 font-medium mb-1 block">Campaign</label>
@@ -584,9 +590,9 @@ export default function LinksPage() {
                         {l.channel && (
                           <Badge
                             variant="outline"
-                            className={`text-[10px] ${CHANNEL_BADGE[l.channel] || CHANNEL_BADGE.other}`}
+                            className={`text-[10px] ${CHANNEL_BADGE[l.channel ?? ""] || CHANNEL_BADGE.other}`}
                           >
-                            {titleCase(l.channel)}
+                            {CHANNEL_LABEL[l.channel ?? ""] ?? titleCase(l.channel)}
                           </Badge>
                         )}
                         {l.campaign && (

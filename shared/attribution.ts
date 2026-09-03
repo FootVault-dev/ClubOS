@@ -33,6 +33,20 @@ export const CANONICAL_CHANNELS = [
   "whatsapp",
   "sms",
   "qr",
+  // Physical signage — a banner, corflute, A-frame, fence sign or vehicle
+  // wrap (Daniel, 2026-09-03). Deliberately NOT folded into `qr`: three of
+  // the club's first tracked links are literally `small-sign-at-home-fence`,
+  // `up-a-frame-at-the-office` and `united-prints-big-banners-at-the-usc-exit`,
+  // and "a banner at the USC exit" and "a QR on a flyer" are different spends
+  // that need to be compared, not merged.
+  //
+  // 🔴 The SYNONYM_MAP entries poster→qr / flyer→qr and the HDYHAU regex
+  // /(poster|flyer|\bqr\b|sign)/→qr are LEFT ALONE on purpose. Those read
+  // INBOUND traffic we did not tag and a survey answer a stranger typed; there
+  // is no way to tell a signage scan from a flyer scan in either, so guessing
+  // would be worse than the existing bucket. This channel is only ever set
+  // deliberately, by a staff member who knows what they printed.
+  "signage",
   "referral",
   "organic",
   "direct",

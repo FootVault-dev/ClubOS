@@ -69,6 +69,29 @@ for (const p of progs) {
     : bad(`${p.name} → ${url} answered ${code} — a poster would send people to a dead page`);
 }
 
+const c2 = c;
+// ── 4b. Physical signage is a real, storable channel ───────────────────────
+// Added 2026-09-03 because three of the club's first tracked links are literally
+// signs. It must be offered, must survive normalisation, and must NOT have
+// reinterpreted the poster/flyer→qr rules that read untagged inbound traffic.
+{
+  const { CANONICAL_CHANNELS, normalizeSource } = await import("../shared/attribution.js");
+  (CANONICAL_CHANNELS as readonly string[]).includes("signage")
+    ? ok("`signage` is a canonical channel")
+    : bad("`signage` missing from CANONICAL_CHANNELS");
+  normalizeSource("signage") === "signage"
+    ? ok("utm_source=signage classifies as signage, not `other`")
+    : bad(`utm_source=signage classified as ${normalizeSource("signage")}`);
+  normalizeSource("poster") === "qr" && normalizeSource("flyer") === "qr"
+    ? ok("poster/flyer still fold to qr — untagged inbound traffic unchanged")
+    : bad("poster/flyer no longer classify as qr — historical data reinterpreted");
+  const { rows: [ch] } = await c2.query(
+    `select data_type t from information_schema.columns
+     where table_name='short_links' and column_name='channel'`);
+  ch?.t === "text" ? ok("short_links.channel is plain text — a new channel needs no migration")
+                   : bad(`channel is ${ch?.t}; a new value may be refused`);
+}
+
 // ── 5. The allow-list still refuses the world ──────────────────────────────
 for (const evil of ["https://evil.example.com/", "http://cufc.co.nz.evil.com/", "javascript:alert(1)"]) {
   isAllowedDestination(evil) ? bad(`allow-list ACCEPTED ${evil}`) : ok(`allow-list refuses ${evil}`);
