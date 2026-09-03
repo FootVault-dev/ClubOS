@@ -576,6 +576,92 @@ export function registerFamilyRoutes(app: Express) {
   // Link a guardian to a child. Both must be `contacts` rows: contact_relationships
   // has a foreign key into contacts, and a camp child's parent is already fixed by
   // children.parent_id. Idempotent — the unique index makes a double-tap a no-op.
+  // ── Correct someone's details ────────────────────────────────────────────
+  // Daniel, 2026-09-04: Travis found "Noothan Matthew" filed with the wrong
+  // email, and there was no way to fix it — every correction came back to
+  // Daniel or was pushed onto the parent. Staff take these over the phone; they
+  // have to be able to write them down.
+  //
+  // 🔴 Deliberately NARROW: name, email, phone and the child's school. NOT date
+  // of birth (it sets the NZF age grade and a typo silently regrades a child),
+  // not medical or identity fields, and nothing that moves money. Widening this
+  // is a decision, not an oversight.
+  //
+  // 🔴 An email is how a family is matched to what is already on file, so
+  // changing one re-points a person's whole history. It is validated, lowercased
+  // and refused if another record of the same kind already holds it — a
+  // duplicate email is how two people become one by accident.
+  app.patch("/api/admin/people/:key", ...gate, async (req: Request, res: Response) => {
+    try {
+      const parsed = parsePersonKey(String(req.params.key));
+      if (!parsed) return res.status(400).json({ message: "Unknown person" });
+      const body = req.body ?? {};
+
+      const clean = (v: unknown, max = 120) => {
+        if (v === undefined) return undefined;
+        const t = String(v ?? "").trim();
+        return t.slice(0, max);
+      };
+      const firstName = clean(body.firstName, 80);
+      const lastName = clean(body.lastName, 80);
+      const emailRaw = clean(body.email, 200);
+      const phone = clean(body.phone, 40);
+      const school = clean(body.school, 120);
+
+      if (firstName !== undefined && !firstName) {
+        return res.status(400).json({ message: "A first name can't be blank." });
+      }
+      let email: string | null | undefined = undefined;
+      if (emailRaw !== undefined) {
+        if (emailRaw === "") email = null;                 // clearing is allowed
+        else {
+          const e = emailRaw.toLowerCase();
+          if (!/^[^\s@]+@[^\s@,;]+\.[a-z]{2,}$/i.test(e)) {
+            return res.status(400).json({ message: "That doesn't look like an email address." });
+          }
+          email = e;
+        }
+      }
+
+      if (parsed.kind === "contact") {
+        if (email) {
+          const clash = await db.execute(sql`
+            SELECT id FROM contacts WHERE lower(email) = ${email} AND id <> ${parsed.id} LIMIT 1`);
+          if (clash.rows.length) {
+            return res.status(409).json({
+              message: "Another contact already uses that email. Fix the duplicate first, or use a different address.",
+            });
+          }
+        }
+        const sets: string[] = [];
+        const vals: any[] = [];
+        if (firstName !== undefined) { sets.push("first_name"); vals.push(firstName); }
+        if (lastName !== undefined)  { sets.push("last_name");  vals.push(lastName); }
+        if (email !== undefined)     { sets.push("email");      vals.push(email); }
+        if (phone !== undefined)     { sets.push("phone");      vals.push(phone || null); }
+        if (!sets.length) return res.status(400).json({ message: "Nothing to change." });
+        const assignments = sql.join(sets.map((col, i) => sql`${sql.raw(col)} = ${vals[i]}`), sql`, `);
+        await db.execute(sql`UPDATE contacts SET ${assignments} WHERE id = ${parsed.id}`);
+      } else {
+        const sets: string[] = [];
+        const vals: any[] = [];
+        if (firstName !== undefined) { sets.push("first_name"); vals.push(firstName); }
+        if (lastName !== undefined)  { sets.push("last_name");  vals.push(lastName); }
+        if (school !== undefined)    { sets.push("school");     vals.push(school || null); }
+        if (!sets.length) return res.status(400).json({ message: "Nothing to change." });
+        const assignments = sql.join(sets.map((col, i) => sql`${sql.raw(col)} = ${vals[i]}`), sql`, `);
+        await db.execute(sql`UPDATE children SET ${assignments} WHERE id = ${parsed.id}`);
+      }
+
+      // Who changed it. A contact's email is load-bearing — it is how their
+      // registrations and payments are matched — so the change is auditable.
+      console.log(`[People] user ${(req as any).session?.userId} edited ${req.params.key}: ${Object.keys(body).join(", ")}`);
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/admin/people/:key/guardians", ...gate, async (req: Request, res: Response) => {
     try {
       const child = parsePersonKey(String(req.params.key));

@@ -10,10 +10,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useRoute, Link, useLocation } from "wouter";
 import {
-  ArrowLeft, User, Users, Mail, Phone, Calendar, AlertTriangle, MapPin, School,
+  ArrowLeft, User, Users, Mail, Phone, Calendar, AlertTriangle, MapPin, School, Pencil,
   Link2, Unlink, Plus, Search, X, Copy,
 } from "lucide-react";
 import { useBackTo } from "@/lib/back-to";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import { formatCurrency } from "@/lib/format";
 import { apiRequest, queryClient, workspaceFetch } from "@/lib/queryClient";
 import { RELATIONSHIP_OPTIONS, ageFromDob } from "@shared/family";
@@ -198,7 +201,7 @@ function DetailRow({ label, value, icon: Icon }: { label: string; value: string 
   );
 }
 
-function Card({ title, count, action, children }: { title: string; count?: number; action?: React.ReactNode; children: React.ReactNode }) {
+function Card({ title, count, action, onEdit, children }: { title: string; count?: number; action?: React.ReactNode; onEdit?: () => void; children: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-blue-500/[0.08] overflow-hidden">
       <div className="px-4 py-2.5 bg-blue-500/[0.04] border-b border-blue-500/[0.06] flex items-center justify-between gap-2">
@@ -206,6 +209,15 @@ function Card({ title, count, action, children }: { title: string; count?: numbe
           {title}{typeof count === "number" ? ` (${count})` : ""}
         </span>
         {action}
+        {onEdit && (
+          <button
+            onClick={onEdit}
+            className="flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
+            data-testid="button-edit-details"
+          >
+            <Pencil className="w-3 h-3" />Edit
+          </button>
+        )}
       </div>
       <div className="p-4">{children}</div>
     </div>
@@ -427,7 +439,13 @@ export default function AdminPersonDetail() {
   const [, navigate] = useLocation();
   const personKeyParam = params?.key || "";
   const back = useBackTo("/admin/contacts", "Back to Contacts");
+  const { toast } = useToast();
   const [linking, setLinking] = useState<null | "guardian" | "child">(null);
+  // Correcting details taken over the phone (Daniel, 2026-09-04).
+  const [editing, setEditing] = useState(false);
+  const [eFirst, setEFirst] = useState(""); const [eLast, setELast] = useState("");
+  const [eEmail, setEEmail] = useState(""); const [ePhone, setEPhone] = useState("");
+  const [eSchool, setESchool] = useState(""); const [saveErr, setSaveErr] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ["/api/admin/people", personKeyParam],
@@ -471,6 +489,28 @@ export default function AdminPersonDetail() {
   const children: any[] = data.children || [];
   const regs: any[] = data.registrations || [];
   const isPlayer = p.type === "player";
+
+  const saveEdits = useMutation({
+    mutationFn: async () => {
+      const payload: Record<string, string> = { firstName: eFirst, lastName: eLast };
+      if (isPlayer) payload.school = eSchool; else { payload.email = eEmail; payload.phone = ePhone; }
+      const res = await apiRequest("PATCH", `/api/admin/people/${personKeyParam}`, payload);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Could not save");
+      return res.json();
+    },
+    onSuccess: () => {
+      setEditing(false); setSaveErr(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/people"] });
+      toast({ title: "Details updated" });
+    },
+    onError: (e: Error) => setSaveErr(e.message),
+  });
+
+  const startEditing = () => {
+    setEFirst(p.firstName || ""); setELast(p.lastName || "");
+    setEEmail(p.email || ""); setEPhone(p.phone || ""); setESchool(p.school || "");
+    setSaveErr(null); setEditing(true);
+  };
   const age = ageFromDob(p.dateOfBirth, today);
   const hasMedical = p.allergies || p.medicalNotes || p.epiPen;
   // A camp child's parent is fixed by the booking; only contacts carry an
@@ -513,8 +553,55 @@ export default function AdminPersonDetail() {
         </div>
       </div>
 
-      {isPlayer ? (
-        <Card title="Player Details">
+      {editing ? (
+        <Card title={isPlayer ? "Player Details" : "Contact Details"}>
+          {/* Narrow on purpose: a name, how to reach them, and the school. NOT
+              the date of birth — it sets the NZF age grade, and a typo there
+              regrades a child silently. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <div>
+              <label className="text-[11px] uppercase tracking-wide text-foreground/60 mb-1 block">First name</label>
+              <Input value={eFirst} onChange={(e) => setEFirst(e.target.value)} data-testid="input-edit-first" />
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wide text-foreground/60 mb-1 block">Last name</label>
+              <Input value={eLast} onChange={(e) => setELast(e.target.value)} data-testid="input-edit-last" />
+            </div>
+            {isPlayer ? (
+              <div className="sm:col-span-2">
+                <label className="text-[11px] uppercase tracking-wide text-foreground/60 mb-1 block">School</label>
+                <Input value={eSchool} onChange={(e) => setESchool(e.target.value)} data-testid="input-edit-school" />
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-foreground/60 mb-1 block">Email</label>
+                  <Input type="email" value={eEmail} onChange={(e) => setEEmail(e.target.value)} data-testid="input-edit-email" />
+                  <p className="text-[11px] text-foreground/45 mt-1 leading-snug">
+                    This is how their registrations and payments are matched to them — changing it re-points their whole history.
+                  </p>
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-foreground/60 mb-1 block">Phone</label>
+                  <Input type="tel" value={ePhone} onChange={(e) => setEPhone(e.target.value)} data-testid="input-edit-phone" />
+                </div>
+              </>
+            )}
+          </div>
+          {saveErr && (
+            <p className="text-[12.5px] text-red-500 mt-3" data-testid="text-edit-error">{saveErr}</p>
+          )}
+          <div className="flex gap-2 mt-4">
+            <Button size="sm" onClick={() => saveEdits.mutate()} disabled={saveEdits.isPending || !eFirst.trim()} data-testid="button-save-details">
+              {saveEdits.isPending ? "Saving…" : "Save"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => { setEditing(false); setSaveErr(null); }} data-testid="button-cancel-edit">
+              Cancel
+            </Button>
+          </div>
+        </Card>
+      ) : isPlayer ? (
+        <Card title="Player Details" onEdit={startEditing}>
           <DetailRow label="Date of Birth" value={p.dateOfBirth ? `${formatDate(p.dateOfBirth)}${age !== null ? ` · ${age}y old` : ""}` : null} icon={Calendar} />
           {p.gender && <DetailRow label="Gender" value={p.gender} icon={User} />}
           {p.school && <DetailRow label="School" value={p.schoolYear ? `${p.school} · ${p.schoolYear}` : p.school} icon={School} />}
@@ -522,7 +609,7 @@ export default function AdminPersonDetail() {
           {p.phone && <DetailRow label="Phone" value={p.phone} icon={Phone} />}
         </Card>
       ) : (
-        <Card title="Contact Details">
+        <Card title="Contact Details" onEdit={startEditing}>
           <DetailRow label="Email" value={p.email} icon={Mail} />
           <DetailRow label="Phone" value={p.phone} icon={Phone} />
           {p.alternatePhone && <DetailRow label="Alternate Phone" value={p.alternatePhone} icon={Phone} />}
