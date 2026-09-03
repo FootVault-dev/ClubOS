@@ -7,6 +7,8 @@
 // tables, and every row carries its family — whose child this is, or whose
 // parent — so the answer is on the row rather than a click away.
 import { useState, useEffect, useMemo } from "react";
+import { useSearch } from "wouter";
+import { withFrom } from "@/lib/back-to";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -68,15 +70,46 @@ function downloadCSV(rows: Person[], filename: string) {
 
 export default function AdminContacts() {
   const [, navigate] = useLocation();
-  const [input, setInput] = useState("");
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  // ── The search lives in the URL ─────────────────────────────────────────
+  // Daniel, 2026-09-04: "when I search for a contact and click into it and then
+  // click back, it takes me back to all contacts with no search."
+  //
+  // It did, because the search was component state and the page remounts on the
+  // way back. In the URL it survives Back, a refresh, and a pasted link — and
+  // the row carries it in `?from=`, so the detail page's Back button returns to
+  // the exact search rather than the top of 10,996 people.
+  const search = useSearch();
+  const initial = new URLSearchParams(search);
+  const [input, setInput] = useState(initial.get("q") || "");
+  const [query, setQuery] = useState(initial.get("q") || "");
+  const [filter, setFilter] = useState<Filter>(((initial.get("filter") as Filter) || "all"));
 
   // Debounced so typing a name doesn't fire a query per keystroke.
   useEffect(() => {
     const t = setTimeout(() => setQuery(input.trim()), 250);
     return () => clearTimeout(t);
   }, [input]);
+
+  // Mirror the search into the address bar. replaceState, not push — typing
+  // "noothan" would otherwise leave seven history entries and Back would walk
+  // back through them one letter at a time.
+  useEffect(() => {
+    const qs = new URLSearchParams();
+    if (query) qs.set("q", query);
+    if (filter !== "all") qs.set("filter", filter);
+    const next = `${window.location.pathname}${qs.toString() ? `?${qs}` : ""}`;
+    if (next !== window.location.pathname + window.location.search) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [query, filter]);
+
+  // Where Back should return to — this list, with this search still in it.
+  const hereWithSearch = (() => {
+    const qs = new URLSearchParams();
+    if (query) qs.set("q", query);
+    if (filter !== "all") qs.set("filter", filter);
+    return `/admin/contacts${qs.toString() ? `?${qs}` : ""}`;
+  })();
 
   const { data, isLoading, isFetching } = useQuery<PeopleData>({
     queryKey: ["/api/admin/people", query, filter],
@@ -246,7 +279,7 @@ export default function AdminContacts() {
             return (
               <div key={p.key}>
               <button
-                onClick={() => navigate(`/admin/people/${p.key}`)}
+                onClick={() => navigate(withFrom(`/admin/people/${p.key}`, hereWithSearch))}
                 className="w-full text-left px-3 py-3 rounded-xl bg-white/[0.03] border border-blue-500/[0.06] hover:bg-white/[0.07] transition-colors min-h-[44px] flex items-center gap-3"
                 data-testid={`row-person-${p.key}`}
               >
@@ -317,7 +350,7 @@ export default function AdminContacts() {
                   {[p, ...dupes].map((d, i) => (
                     <button
                       key={d.key}
-                      onClick={() => navigate(`/admin/people/${d.key}`)}
+                      onClick={() => navigate(withFrom(`/admin/people/${d.key}`, hereWithSearch))}
                       className="w-full text-left px-3 py-2 rounded-lg bg-white/[0.02] border border-blue-500/[0.06] hover:bg-white/[0.06] transition-colors min-h-[40px] flex items-center gap-2"
                       data-testid={`dupe-row-${d.key}`}
                     >
