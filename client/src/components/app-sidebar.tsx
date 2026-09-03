@@ -93,6 +93,7 @@ import {
   Megaphone,
   HelpCircle,
   HardDrive,
+  QrCode,
 } from "lucide-react";
 
 // Universal "Feedback" tab — shown in EVERY workspace's System section so any
@@ -116,6 +117,14 @@ const taskTrackerSecondary = { tab: "task-tracker", title: "Task Tracker", url: 
 // filter INSIDE the tab, not a workspace, because "how United Prints sizes a
 // banner" is the same fact whichever workspace you happen to be standing in.
 const knowledgeBaseSecondary = { tab: "knowledge-base", title: "Knowledge Base", url: "/admin/knowledge-base", icon: BookOpen };
+// Universal "QR Code Generator" — tracked links and QR posters for every
+// business, in ONE place. It used to be a "Links" tab copied into all seven
+// workspace navs, listing only that workspace's links; it is universal now
+// because the person building a poster picks the BUSINESS in the form, which
+// is both clearer and the only way one tab can serve all of them. Same pattern
+// as the rest of System: requireAuth server-side, and the API scopes every
+// read and write to the businesses that person actually belongs to.
+const qrSecondary = { tab: "qr-codes", title: "QR Code Generator", url: "/admin/qr-codes", icon: QrCode };
 // Universal "Notification settings" — belongs to the PERSON, not a workspace,
 // so it follows the same pattern: requireAuth-gated server-side, appended
 // directly rather than filtered through the per-workspace tab whitelist.
@@ -724,6 +733,7 @@ export function AppSidebar() {
     ),
     taskTrackerSecondary,
     knowledgeBaseSecondary,
+    qrSecondary,
     chatSecondary,
     // driveSecondary — Club Drive is hidden until it is finished. Its route,
     // its files and its permissions are untouched; put it back by removing

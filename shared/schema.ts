@@ -4599,6 +4599,11 @@ export const shortLinks = pgTable("short_links", {
   medium: text("medium"),
   content: text("content"),
   brand: text("brand"),                       // which brand this link is for
+  // Which programme the QR/link was built for (QR Code Generator, 2026-09-03).
+  // Nullable — a link can point at a business's home page, or at anything else.
+  // ON DELETE SET NULL: retiring a programme must never delete a poster's
+  // tracking history along with it.
+  programId: integer("program_id").references(() => programs.id, { onDelete: "set null" }),
   note: text("note"),                         // free-text staff note
   qrDefault: boolean("qr_default").notNull().default(false),  // built primarily for a QR poster
   clicks: integer("clicks").notNull().default(0),             // cached counter (repairable)

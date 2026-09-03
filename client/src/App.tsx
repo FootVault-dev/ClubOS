@@ -208,6 +208,8 @@ import WarehouseFieldTemplates from "@/pages/warehouse-field-templates";
 import WarehouseStockTake from "@/pages/warehouse-stock-take";
 import WarehouseUniformStocktake from "@/pages/warehouse-uniform-stocktake";
 import PrintHub from "@/pages/print-hub";
+import PrintAccountPage from "@/pages/print-account";
+import PrintDtfPage from "@/pages/print-dtf";
 import PrintConfigure from "@/pages/print-configure";
 import PrintCheckout from "@/pages/print-checkout";
 import PrintOrderStatus from "@/pages/print-order-status";
@@ -286,6 +288,11 @@ function AdminRouter() {
   // same reason as the vault above: a contract is the club's document whichever
   // workspace you happen to be standing in when you need it.
   if (location.startsWith("/admin/drive")) return <Drive />;
+  // QR Code Generator — tracked links + QR posters for every business in one
+  // place. Universal because a poster is made for a BUSINESS you pick in the
+  // form, not for the workspace you happened to be standing in; the old
+  // per-workspace /admin/links path still resolves here for old bookmarks.
+  if (location.startsWith("/admin/qr-codes") || location.startsWith("/admin/links")) return <LinksPage />;
   const isVenue = currentOrg?.slug === "united-sports-centre";
   const isLeague = currentOrg?.slug === "mini-football-leagues";
   const isTournament = currentOrg?.slug === "christchurch-international-cup";
@@ -845,6 +852,16 @@ function App() {
             <Route path="/book/payshare/pay/:token" component={VenuePaySharePage} />
             {/* Member booking requests (book.unitedsportscentre.com/members) */}
             <Route path="/members" component={MemberBookingPage} />
+            {/* United Prints customer account. Registered before the one-segment
+                /:slug route below — otherwise /account falls through to it and a
+                customer gets "Camp not found", which is exactly what happened to
+                the parent portal. Same-origin on join.unitedprints.co.nz, so the
+                __Host- session cookie is first-party. */}
+            <Route path="/account" component={PrintAccountPage} />
+            {/* DTF / printed tees, with a live placement mockup. Same origin as
+                the account portal, so a signed-in trade customer is priced at
+                their own rate with no CORS involved. */}
+            <Route path="/print/dtf" component={PrintDtfPage} />
             <Route path="/print" component={PrintHub} />
             <Route path="/print/configure/:slug" component={PrintConfigure} />
             <Route path="/print/checkout" component={PrintCheckout} />

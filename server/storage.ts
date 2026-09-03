@@ -633,6 +633,7 @@ export interface IStorage {
 
   // AttributionOS — short links (T10)
   listShortLinks(orgId: number, opts?: { includeArchived?: boolean }): Promise<ShortLinkWithClicks[]>;
+  listShortLinksForOrgs(orgIds: number[], opts?: { includeArchived?: boolean }): Promise<ShortLinkWithClicks[]>;
   getShortLink(id: number): Promise<ShortLink | undefined>;
   getShortLinkByKey(key: string): Promise<ShortLink | undefined>;
   createShortLink(data: InsertShortLink): Promise<ShortLink>;
@@ -3962,6 +3963,35 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── AttributionOS short links (T10) ────────────────────────────────────────
+
+  /**
+   * Every tracked link across a set of workspaces — what the universal QR Code
+   * Generator lists, because it is not scoped to the workspace you happen to be
+   * standing in. Callers MUST pass only orgs the user is a member of.
+   *
+   * Deliberately a union rather than "all links": a person sees the links of
+   * the businesses they belong to and no others.
+   */
+  async listShortLinksForOrgs(orgIds: number[], opts?: { includeArchived?: boolean }): Promise<ShortLinkWithClicks[]> {
+    if (!orgIds.length) return [];
+    const conds = [inArray(shortLinks.organizationId, orgIds)];
+    if (!opts?.includeArchived) conds.push(eq(shortLinks.active, true));
+    const links = await db.select().from(shortLinks).where(and(...conds)).orderBy(desc(shortLinks.createdAt));
+    if (links.length === 0) return [];
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select({ linkId: linkClicks.linkId, n: sql<number>`count(*)::int` })
+      .from(linkClicks)
+      .where(and(
+        inArray(linkClicks.linkId, links.map((l) => l.id)),
+        eq(linkClicks.isBot, false),
+        gt(linkClicks.createdAt, since),
+      ))
+      .groupBy(linkClicks.linkId);
+    const last7d = new Map<number, number>();
+    for (const r of rows) last7d.set(r.linkId, Number(r.n) || 0);
+    return links.map((l) => ({ ...l, last7dClicks: last7d.get(l.id) ?? 0 }));
+  }
 
   async listShortLinks(orgId: number, opts?: { includeArchived?: boolean }): Promise<ShortLinkWithClicks[]> {
     const conds = [eq(shortLinks.organizationId, orgId)];

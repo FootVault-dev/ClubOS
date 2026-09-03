@@ -8,7 +8,7 @@ import { isExpoPushToken, sendSinglePush, runPushBroadcastQueue } from "./push";
 import { USC_WAIVER_VERSION } from "@shared/usc-waiver";
 import { canAccessTab, workspaceTypeFor, type WorkspaceType } from "@shared/tabs";
 import { missedPayments, subscriptionIdFromInvoice } from "@shared/league-weekly";
-import { fromForOrg, workspaceDomainByOrgId } from "@shared/org-domains";
+import { fromForOrg, workspaceDomainByOrgId, workspaceDomainBySlug } from "@shared/org-domains";
 import { budgetStorage } from "./budget-storage";
 import { objectStorageClient } from "./replit_integrations/object_storage/objectStorage";
 import { db } from "./db";
@@ -117,6 +117,7 @@ import { registerFamilyRoutes } from "./family-routes";
 import { registerDashboardRoutes } from "./dashboard-routes";
 import { registerViewAsRoutes, clearViewAs } from "./view-as-routes";
 import { registerParentRoutes, resolveOwnedChildContactId } from "./parent-routes";
+import { registerPrintAccountRoutes, registerPrintAccountAdminRoutes } from "./print-account-routes";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -1374,6 +1375,75 @@ export async function registerRoutes(
     return { ok: true, value: c };
   };
 
+  // ── QR Code Generator (universal tab, 2026-09-03) ─────────────────────────
+  //
+  // The links admin used to live in every workspace's sidebar and list only
+  // that workspace's links. It is now ONE tab in the System section, so the
+  // person building a poster says which business it is for instead of it being
+  // implied by where they were standing. These two endpoints are what that
+  // needs; the workspace-scoped ones below are untouched so old bookmarks and
+  // the per-workspace page keep working.
+  //
+  // 🔴 Scope is the user's OWN memberships, never "all orgs". A person sees the
+  // links of the businesses they belong to and no others.
+  app.get("/api/admin/qr/options", requireAuth, async (req, res) => {
+    try {
+      const orgs = await storage.getUserOrganizations(req.session.userId!);
+      const withFunnel = orgs.filter((o) => !!workspaceDomainBySlug(o.slug)?.joinHost);
+      const progs = withFunnel.length
+        ? await db.select({
+            id: programsTable.id, organizationId: programsTable.organizationId, slug: programsTable.slug,
+            name: programsTable.name, type: programsTable.type, isActive: programsTable.isActive,
+            registrationOpen: programsTable.registrationOpen,
+          }).from(programsTable)
+            .where(inArray(programsTable.organizationId, withFunnel.map((o) => o.id)))
+            .orderBy(programsTable.name)
+        : [];
+      res.json({
+        businesses: withFunnel.map((o) => ({
+          orgId: o.id,
+          slug: o.slug,
+          name: o.name,
+          joinHost: workspaceDomainBySlug(o.slug)!.joinHost!,
+          programmes: progs
+            .filter((p) => p.organizationId === o.id && p.isActive)
+            .map((p) => ({
+              id: p.id, slug: p.slug, name: p.name, type: p.type,
+              isActive: !!p.isActive, registrationOpen: !!p.registrationOpen,
+            })),
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Every tracked link across the businesses this person belongs to, each
+  // carrying the business and programme it was built for so the one list can
+  // be filtered. This is what keeps every link ever created — Dima's, the
+  // field-hire one, the technification ones — visible in the new single tab.
+  app.get("/api/admin/qr/links", requireAuth, async (req, res) => {
+    try {
+      const orgs = await storage.getUserOrganizations(req.session.userId!);
+      const includeArchived = req.query.archived === "1" || req.query.archived === "true";
+      const links = await storage.listShortLinksForOrgs(orgs.map((o) => o.id), { includeArchived });
+      const orgById = new Map(orgs.map((o) => [o.id, o]));
+      const progIds = Array.from(new Set(links.map((l) => l.programId).filter((x): x is number => x != null)));
+      const progs = progIds.length
+        ? await db.select({ id: programsTable.id, name: programsTable.name }).from(programsTable).where(inArray(programsTable.id, progIds))
+        : [];
+      const progById = new Map(progs.map((p) => [p.id, p.name]));
+      res.json(links.map((l) => ({
+        ...l,
+        organizationName: orgById.get(l.organizationId)?.name ?? null,
+        organizationSlug: orgById.get(l.organizationId)?.slug ?? null,
+        programName: l.programId != null ? progById.get(l.programId) ?? null : null,
+      })));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/admin/links", requireAuth, async (req, res) => {
     try {
       const org = await workspaceOrg(req);
@@ -1389,11 +1459,42 @@ export async function registerRoutes(
 
   app.post("/api/admin/links", requireAuth, async (req, res) => {
     try {
-      const org = await workspaceOrg(req);
-      if (!org) return res.status(400).json({ message: "X-Workspace-Slug header required" });
-      if (!(await checkUserOrg(req.session.userId!, org.id))) return res.status(403).json({ message: "Forbidden" });
-
       const body = req.body || {};
+
+      // The QR Code Generator is universal, so the business comes from the FORM.
+      // The workspace header remains the fallback for the per-workspace page.
+      // 🔴 Membership is re-checked against whichever org wins — a caller can
+      // name any organizationId, so this is the only thing standing between a
+      // person and creating a link on a business they do not belong to.
+      let org: { id: number } | null | undefined;
+      if (body.organizationId != null) {
+        const wanted = parseInt(String(body.organizationId), 10);
+        if (!Number.isFinite(wanted)) return res.status(400).json({ message: "Invalid organizationId" });
+        if (!(await checkUserOrg(req.session.userId!, wanted))) {
+          return res.status(403).json({ message: "You are not a member of that business." });
+        }
+        org = { id: wanted };
+      } else {
+        org = await workspaceOrg(req);
+        if (!org) return res.status(400).json({ message: "Pick a business (or send X-Workspace-Slug)." });
+        if (!(await checkUserOrg(req.session.userId!, org.id))) return res.status(403).json({ message: "Forbidden" });
+      }
+
+      // A programme must belong to the business the link is being created for,
+      // or the QR would carry one brand's name over another brand's page.
+      let programId: number | null = null;
+      if (body.programId != null && String(body.programId) !== "") {
+        const pid = parseInt(String(body.programId), 10);
+        if (!Number.isFinite(pid)) return res.status(400).json({ message: "Invalid programId" });
+        const [prog] = await db.select({ id: programsTable.id, organizationId: programsTable.organizationId })
+          .from(programsTable).where(eq(programsTable.id, pid));
+        if (!prog) return res.status(400).json({ message: "Programme not found" });
+        if (prog.organizationId !== org.id) {
+          return res.status(400).json({ message: "That programme belongs to a different business." });
+        }
+        programId = pid;
+      }
+
       const destination = String(body.destination || "").trim();
       if (!isAllowedDestination(destination)) {
         return res.status(400).json({ message: "Destination must be a full URL on one of our own domains (no open redirects)." });
@@ -1432,6 +1533,7 @@ export async function registerRoutes(
         campaign: slugifyCampaign(body.campaign),
         content: linkStrOrNull(body.content),
         brand: linkStrOrNull(body.brand),
+        programId,
         note: linkStrOrNull(body.note),
         qrDefault: Boolean(body.qrDefault),
         active: true,
@@ -24830,6 +24932,14 @@ export async function registerRoutes(
   // answered 200-with-zeros for a failed request, a missing workspace header
   // and a genuinely empty workspace alike. See server/dashboard-routes.ts.
   registerDashboardRoutes(app, requireAuth, workspaceOrg);
+
+  // United Prints customer accounts — a print customer's own view of their
+  // orders and their own prices, on join.unitedprints.co.nz/account. A CUSTOMER
+  // credential and never a staff session (its own cookie, its own tables), and
+  // deliberately same-origin: the marketing site LINKS here rather than calling
+  // across, so no cross-site cookie and no CORS credentials are ever needed.
+  registerPrintAccountRoutes(app);
+  registerPrintAccountAdminRoutes(app);
 
   return httpServer;
 }

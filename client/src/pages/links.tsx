@@ -1,4 +1,15 @@
-// AttributionOS — Links & QR admin tab (T11).
+// QR Code Generator (was: AttributionOS Links & QR, T11).
+//
+// A UNIVERSAL System tab as of 2026-09-03 — one place for every business,
+// rather than a copy of the same page in each of the seven workspace sidebars.
+// Because it is no longer scoped to where you are standing, the builder asks
+// which BUSINESS the code is for and, optionally, which PROGRAMME, and derives
+// the destination from that (shared/qr-targets.ts) instead of asking a person
+// to remember whether a camp lives at /slug or /slug/class-book.
+//
+// Every link ever created is still here: the list reads across every business
+// the viewer belongs to, so Dima's instant-quote codes and the 860-click
+// field-hire one are in the same place as anything made today.
 //
 // Staff-facing builder for tracked short links (/l/:key) + QR posters + a
 // WhatsApp click-to-chat helper. Consumes the T10 admin API
@@ -29,12 +40,19 @@ import {
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { CANONICAL_CHANNELS } from "@shared/attribution";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { isAllowedDestination, isValidLinkKey } from "@shared/short-links";
+import { suggestedDestination, type QrBusiness } from "@shared/qr-targets";
 import type { ShortLink } from "@shared/schema";
 
 // Mirror of storage.ts ShortLinkWithClicks (kept local so the client never
 // imports server code just for a shape).
-type ShortLinkWithClicks = ShortLink & { last7dClicks: number };
+type ShortLinkWithClicks = ShortLink & {
+  last7dClicks: number;
+  organizationName?: string | null;
+  organizationSlug?: string | null;
+  programName?: string | null;
+};
 
 function publicBase(): string {
   if (typeof window === "undefined") return "";
@@ -80,6 +98,10 @@ export default function LinksPage() {
   const { toast } = useToast();
 
   // ── Builder form state ──────────────────────────────────────────────
+  // Which business this code is for. Required — a QR with no business is a URL
+  // nobody can attribute, and the destination cannot be derived without it.
+  const [orgId, setOrgId] = useState<string>("");
+  const [programId, setProgramId] = useState<string>("");
   const [destination, setDestination] = useState("");
   const [channel, setChannel] = useState("");
   const [campaign, setCampaign] = useState("");
@@ -104,17 +126,49 @@ export default function LinksPage() {
   const [qr, setQr] = useState<{ url: string; name: string } | null>(null);
   const qrWrapRef = useRef<HTMLDivElement>(null);
 
-  const { data: links, isLoading } = useQuery<ShortLinkWithClicks[]>({
-    queryKey: ["/api/admin/links", showArchived ? "all" : "active"],
-    queryFn: async () =>
-      (await apiRequest("GET", `/api/admin/links${showArchived ? "?archived=1" : ""}`)).json(),
+  // The businesses this person belongs to, each with its live programmes.
+  const { data: options } = useQuery<{ businesses: QrBusiness[] }>({
+    queryKey: ["/api/admin/qr/options"],
+    queryFn: async () => (await apiRequest("GET", "/api/admin/qr/options")).json(),
   });
+  const businesses = options?.businesses ?? [];
+  const business = businesses.find((b) => String(b.orgId) === orgId) ?? null;
+  const programmes = business?.programmes ?? [];
+
+  // Every link across every business the viewer belongs to — NOT just the
+  // workspace they happen to be standing in, which is what makes this one tab.
+  const { data: links, isLoading } = useQuery<ShortLinkWithClicks[]>({
+    queryKey: ["/api/admin/qr/links", showArchived ? "all" : "active"],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/admin/qr/links${showArchived ? "?archived=1" : ""}`)).json(),
+  });
+
+  // Picking a business (and optionally a programme) fills the destination in.
+  // It stays editable: the suggestion is a convenience, never a constraint.
+  function chooseBusiness(next: string) {
+    setOrgId(next);
+    setProgramId("");
+    const b = businesses.find((x) => String(x.orgId) === next);
+    if (b) {
+      const url = suggestedDestination(b.orgId, null);
+      if (url) setDestination(url);
+      if (!brand) setBrand(b.slug);
+    }
+  }
+  function chooseProgramme(next: string) {
+    setProgramId(next);
+    if (!business) return;
+    const prog = business.programmes.find((p) => String(p.id) === next) ?? null;
+    const url = suggestedDestination(business.orgId, prog);
+    if (url) setDestination(url);
+    if (prog && !campaign) setCampaign(prog.slug);
+  }
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>): Promise<ShortLink> =>
       (await apiRequest("POST", "/api/admin/links", body)).json(),
     onSuccess: (link) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/links"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/qr/links"] });
       toast({ title: "Link created", description: linkUrlFor(link.key) });
       // Reset the builder so the next link starts clean.
       setDestination("");
@@ -126,6 +180,7 @@ export default function LinksPage() {
       setBrand("");
       setNote("");
       setQrDefault(false);
+      setProgramId("");
     },
     onError: (e: any) =>
       toast({ title: "Couldn't create link", description: e.message, variant: "destructive" }),
@@ -135,7 +190,7 @@ export default function LinksPage() {
     mutationFn: async ({ id, active }: { id: number; active: boolean }): Promise<ShortLink> =>
       (await apiRequest("PATCH", `/api/admin/links/${id}`, { active })).json(),
     onSuccess: (_l, vars) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/links"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/qr/links"] });
       toast({ title: vars.active ? "Link restored" : "Link archived" });
     },
     onError: (e: any) =>
@@ -175,7 +230,13 @@ export default function LinksPage() {
       });
       return;
     }
+    if (!orgId) {
+      toast({ title: "Pick a business", description: "Every code is reported under a business.", variant: "destructive" });
+      return;
+    }
     createMutation.mutate({
+      organizationId: Number(orgId),
+      programId: programId ? Number(programId) : undefined,
       destination: dest,
       channel,
       campaign: campaign.trim() || undefined,
@@ -221,10 +282,11 @@ export default function LinksPage() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold text-white tracking-tight" data-testid="text-page-title">
-            Links &amp; QR
+            QR Code Generator
           </h1>
           <p className="text-sm text-white/40 mt-1">
-            Build tracked short links, download QR posters, and generate WhatsApp click-to-chat links.
+            Make a QR code or a tracked link for any of our businesses, download the poster, and
+            see every scan and click. Works for a whole business or one programme.
           </p>
         </div>
       </div>
@@ -239,6 +301,51 @@ export default function LinksPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* Business first, then programme. Both drive the destination, so
+                they sit above it rather than beside it. shadcn Select rather
+                than a bare <select> — the standing rule is that every control
+                is drawn by us, not by whichever browser the person is on. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-white/40 font-medium mb-1 block">Business</label>
+                <Select value={orgId} onValueChange={chooseBusiness}>
+                  <SelectTrigger className={inputClass} data-testid="select-qr-business">
+                    <SelectValue placeholder="Which business is this for?" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {businesses.map((b) => (
+                      <SelectItem key={b.orgId} value={String(b.orgId)}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-white/30 mt-1">
+                  {business ? business.joinHost : "Sets where the code points and who it is reported under."}
+                </p>
+              </div>
+              <div>
+                <label className="text-xs text-white/40 font-medium mb-1 block">
+                  Programme <span className="text-white/25">(optional)</span>
+                </label>
+                <Select value={programId} onValueChange={chooseProgramme} disabled={!business}>
+                  <SelectTrigger className={inputClass} data-testid="select-qr-programme">
+                    <SelectValue placeholder={business ? "Whole business \u2014 or pick one" : "Pick a business first"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {programmes.map((pr) => (
+                      <SelectItem key={pr.id} value={String(pr.id)}>
+                        {pr.name}{pr.registrationOpen ? "" : "  \u00b7 not open"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-white/30 mt-1">
+                  {business && programmes.length === 0
+                    ? "No live programmes \u2014 the code will point at the business."
+                    : "Fills the destination with that programme's real page."}
+                </p>
+              </div>
+            </div>
+
             <div>
               <label className="text-xs text-white/40 font-medium mb-1 block">Destination URL</label>
               <Input
@@ -248,7 +355,9 @@ export default function LinksPage() {
                 className={inputClass}
                 data-testid="input-link-destination"
               />
-              <p className="text-[11px] text-white/30 mt-1">Must be one of our own domains.</p>
+              <p className="text-[11px] text-white/30 mt-1">
+                Filled in from the business and programme above. Editable \u2014 must be one of our own domains.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -498,6 +607,25 @@ export default function LinksPage() {
                         <ExternalLink className="w-3 h-3 flex-shrink-0" />
                         <span className="truncate">{l.destination}</span>
                       </a>
+                      {/* Which business (and programme) this code belongs to.
+                          The list spans every business the viewer belongs to,
+                          so without this a row is unattributable. Links made
+                          before 2026-09-03 carry no programme and say so by
+                          simply not rendering one — never a guessed name. */}
+                      {(l.organizationName || l.programName) && (
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {l.organizationName && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-white/15 text-white/50">
+                              {l.organizationName}
+                            </Badge>
+                          )}
+                          {l.programName && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-400/25 text-blue-300/70">
+                              {l.programName}
+                            </Badge>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-4 text-center flex-shrink-0">
