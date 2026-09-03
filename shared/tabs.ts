@@ -359,6 +359,22 @@ export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
  * system (workspace role + tabs whitelist) takes over.
  */
 export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
+  // ── OPENED 2026-09-03 (Daniel) ──────────────────────────────────────────
+  // studio · cic-watch · market-research · store · media · sales ·
+  // sponsor-traffic were all "launched dark while Daniel shapes it" and every
+  // one of their comments said "remove this line to open it". Nobody ever went
+  // back. The result: 21 tabs that only the super admin could see, so Daniel
+  // would ship a feature, look at it, and no member of staff ever knew it
+  // existed. They now follow the ordinary permission system — workspace role
+  // plus the per-member `tabs` whitelist set in /admin/team.
+  //
+  // 🔴 What is LEFT here is left ON PURPOSE. `canAccessTab` returns true for
+  // EVERY tab once a membership role is admin/manager, so deleting a line does
+  // not open a tab to one person — it opens it to every admin of that
+  // workspace (eight of them in United Sports Group). Everything below names
+  // real people against money, an address, a bank account or a child. Grant an
+  // individual with `script/grant-unlocked-tab.ts <email> <tab> <workspace>
+  // --commit`; it needs no deploy and takes effect on the next request.
   "budget", // Phase 1 construction — staff salaries visible. Daniel only.
   // Coding Budget — the chart of accounts. Same reason as `budget`, and more
   // specific: code 21-01 lists eleven roles by title against a salary each
@@ -375,13 +391,8 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   "sporty",
   "cashflow", // Club-wide cashflow insight (Xero patterns, wage-level data). Daniel only.
   "projects", // Work Management System v1 — launched dark while Daniel shapes it. Remove to open to admins/managers.
-  "studio", // USG Studio v1 — soft-launched to Daniel while it's shaped. Remove to open to admins/managers.
   "business-plan", // MFL business plan + who-opened-it access log — Daniel only for privacy. Remove to open to admins/managers.
-  "cic-watch", // OTT streaming platform control (watch.cicyouth.com) — launched dark to Daniel. Remove to open to Isaac/managers.
   "club-dossier", // Sandbox — first-party people intelligence (PII across all programs). Daniel only.
-  "market-research", // Sandbox — competitor & category intelligence. Daniel only while it's shaped.
-  "store", // MFL Store (native e-commerce, Shopify replacement pilot) — dark launch, Daniel only. Remove to open to admins/managers.
-  "media", // CIC Media Library — dark launch while Daniel shapes it with Max. Remove to open to Max (admin/manager).
   "invoices", // Tracked invoices — carries bank details. Daniel only while it's shaped.
   // "payouts" UNLOCKED 2026-07-23 (Daniel): the tab now follows the normal
   // permission system — workspace role + the per-member tabs whitelist set in
@@ -405,11 +416,6 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // scanned notice. Same class of data as vehicles/housing. Daniel + Travis
   // only (2026-08-21), by name via user_organizations.unlocked_tabs.
   "fines",
-  // The United Print prospect database + sales pipeline: 400+ researched
-  // companies with contact details, call notes and deal values. Daniel's
-  // sales-training ground — launched dark while he shapes it. Remove this
-  // line to open Sales to the Print workspace's admins/managers.
-  "sales",
   // Accommodation (slug `housing`): occupants' names and emails, what each owes,
   // bond, key codes for every room, and which players are still unverified.
   // Without this lock every *admin* of the group workspace would see it — the
@@ -417,10 +423,6 @@ export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set([
   // budget/cashflow, plus door codes. Grant an individual with
   // script/grant-unlocked-tab.ts rather than removing this line.
   "housing",
-  // Sponsor Traffic — launched dark while Daniel shapes it, matching how
-  // vehicles/housing/market-research were launched. Remove this line to open
-  // it to the Group workspace's admins/managers.
-  "sponsor-traffic",
   // Friendly Manager History — 10 years of children's enrolment records and
   // family payment history (imported 2026-07-14). Daniel-only while he shapes
   // it. Remove this line to open it to CUFC admins/managers.
