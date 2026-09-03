@@ -107,28 +107,42 @@ export default function AdminContacts() {
   // survives is a judgement about a real child's history and belongs to a human
   // with the evidence in front of them, not to a list renderer.
   const groups = useMemo(() => {
+    // 🔴 The key is name + FAMILY, not name + date of birth.
+    //
+    // Keying on the DOB was the obvious choice and it only got Darren from 7
+    // rows to 3: six of his records read 03/10/2017 and the original reads
+    // 04/10/2017, because the import wrote them through a UTC `Date` and NZ is
+    // a day ahead. Grouping on a field the bug corrupted just reproduces the
+    // bug. All three say "Child of Gong Zhang", and that is the thing that is
+    // actually stable.
+    //
+    // Two real children sharing a first name, a surname AND a parent does not
+    // happen; two sharing a name with DIFFERENT parents does, which is why the
+    // parent is in the key rather than dropped. With no parent on file we fall
+    // back to the DOB, because then a name is all that is left and fusing on it
+    // alone would merge strangers.
+    const keyOf = (p: (typeof people)[number]) => {
+      const name = `${(p.firstName || "").trim().toLowerCase()}|${(p.lastName || "").trim().toLowerCase()}`;
+      const family = [...(p.parents || [])].map((x) => x.trim().toLowerCase()).sort().join(",");
+      return `${p.personType}|${name}|${family || `dob:${p.dateOfBirth || ""}`}`;
+    };
     const byKey = new Map<string, typeof people>();
     for (const p of people) {
-      // Name + DOB. Name alone would fuse two real children who share one, and
-      // this list already shows a genuine "Darren Clements" beside the Zhangs.
-      const k = [
-        p.personType,
-        (p.firstName || "").trim().toLowerCase(),
-        (p.lastName || "").trim().toLowerCase(),
-        p.dateOfBirth || "",
-      ].join("|");
+      const k = keyOf(p);
       const arr = byKey.get(k); if (arr) arr.push(p); else byKey.set(k, [p]);
     }
-    // Preserve the server's ordering: a group sits where its first member was.
     const seen = new Set<string>();
-    const out: { lead: (typeof people)[number]; dupes: (typeof people)[number][] }[] = [];
+    const out: { lead: (typeof people)[number]; dupes: (typeof people)[number][]; dobs: string[] }[] = [];
     for (const p of people) {
-      const k = [p.personType, (p.firstName || "").trim().toLowerCase(),
-                 (p.lastName || "").trim().toLowerCase(), p.dateOfBirth || ""].join("|");
+      const k = keyOf(p);
       if (seen.has(k)) continue;
       seen.add(k);
       const all = byKey.get(k)!;
-      out.push({ lead: all[0], dupes: all.slice(1) });
+      // Differing dates of birth inside one group are worth SAYING — that is
+      // the evidence whoever merges these later needs, and hiding it would make
+      // the collapsed row look tidier than the data actually is.
+      const dobs = Array.from(new Set(all.map((x) => x.dateOfBirth).filter(Boolean) as string[]));
+      out.push({ lead: all[0], dupes: all.slice(1), dobs });
     }
     return out;
   }, [people]);
@@ -224,7 +238,7 @@ export default function AdminContacts() {
               rows below — tap a <span className="text-amber-600">records</span> badge to see them. Nothing has been merged or deleted.
             </p>
           )}
-          {groups.map(({ lead: p, dupes }) => {
+          {groups.map(({ lead: p, dupes, dobs }) => {
             const isPlayer = p.personType === "player";
             const age = ageFromDob(p.dateOfBirth, today);
             const fullName = `${p.firstName || ""} ${p.lastName || ""}`.trim();
@@ -294,6 +308,11 @@ export default function AdminContacts() {
                 <div className="ml-6 mt-1 mb-1 pl-3 border-l-2 border-amber-500/25 space-y-1" data-testid={`dupes-${p.key}`}>
                   <p className="text-[11px] text-foreground/45 py-1">
                     {dupes.length + 1} records for this person. Nothing has been merged — open one to see its history.
+                    {dobs.length > 1 && (
+                      <span className="text-amber-600">
+                        {" "}They don't all carry the same date of birth ({dobs.join(", ")}) — worth checking which is right.
+                      </span>
+                    )}
                   </p>
                   {[p, ...dupes].map((d, i) => (
                     <button
