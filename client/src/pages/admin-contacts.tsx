@@ -6,7 +6,7 @@
 // records "aren't linked". Search now runs on the server across BOTH people
 // tables, and every row carries its family — whose child this is, or whose
 // parent — so the answer is on the row rather than a click away.
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -94,6 +94,47 @@ export default function AdminContacts() {
   });
 
   const people = data?.people || [];
+
+  // ── Collapse duplicate records (Olga, 2026-08-20) ────────────────────────
+  // She sent a screenshot of "Darren Zhang · Child of Gong Zhang" repeated
+  // SEVEN times and asked "can you check please one child with many profiles".
+  // There are 231 such groups and 492 redundant rows: the Friendly Manager
+  // import minted a fresh contact per registration, and six of Darren's carry a
+  // date of birth one day earlier than the original — the UTC-vs-NZ off-by-one.
+  //
+  // 🔴 Nothing is merged or deleted here. This is a VIEW: one row per real
+  // person, with every record still reachable behind it. Deciding which record
+  // survives is a judgement about a real child's history and belongs to a human
+  // with the evidence in front of them, not to a list renderer.
+  const groups = useMemo(() => {
+    const byKey = new Map<string, typeof people>();
+    for (const p of people) {
+      // Name + DOB. Name alone would fuse two real children who share one, and
+      // this list already shows a genuine "Darren Clements" beside the Zhangs.
+      const k = [
+        p.personType,
+        (p.firstName || "").trim().toLowerCase(),
+        (p.lastName || "").trim().toLowerCase(),
+        p.dateOfBirth || "",
+      ].join("|");
+      const arr = byKey.get(k); if (arr) arr.push(p); else byKey.set(k, [p]);
+    }
+    // Preserve the server's ordering: a group sits where its first member was.
+    const seen = new Set<string>();
+    const out: { lead: (typeof people)[number]; dupes: (typeof people)[number][] }[] = [];
+    for (const p of people) {
+      const k = [p.personType, (p.firstName || "").trim().toLowerCase(),
+                 (p.lastName || "").trim().toLowerCase(), p.dateOfBirth || ""].join("|");
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const all = byKey.get(k)!;
+      out.push({ lead: all[0], dupes: all.slice(1) });
+    }
+    return out;
+  }, [people]);
+
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const hiddenCount = people.length - groups.length;
   const total = data?.total ?? 0;
   const today = data?.today || new Date().toISOString().slice(0, 10);
 
@@ -177,14 +218,20 @@ export default function AdminContacts() {
         </div>
       ) : (
         <div className="space-y-2">
-          {people.map(p => {
+          {hiddenCount > 0 && (
+            <p className="text-[12px] text-foreground/50 pb-1" data-testid="text-collapsed-note">
+              {hiddenCount.toLocaleString()} duplicate {hiddenCount === 1 ? "record is" : "records are"} folded into the
+              rows below — tap a <span className="text-amber-600">records</span> badge to see them. Nothing has been merged or deleted.
+            </p>
+          )}
+          {groups.map(({ lead: p, dupes }) => {
             const isPlayer = p.personType === "player";
             const age = ageFromDob(p.dateOfBirth, today);
             const fullName = `${p.firstName || ""} ${p.lastName || ""}`.trim();
             const initials = `${p.firstName?.[0] || ""}${p.lastName?.[0] || ""}`.trim();
             return (
+              <div key={p.key}>
               <button
-                key={p.key}
                 onClick={() => navigate(`/admin/people/${p.key}`)}
                 className="w-full text-left px-3 py-3 rounded-xl bg-white/[0.03] border border-blue-500/[0.06] hover:bg-white/[0.07] transition-colors min-h-[44px] flex items-center gap-3"
                 data-testid={`row-person-${p.key}`}
@@ -209,6 +256,18 @@ export default function AdminContacts() {
                       {isPlayer ? "Player" : "Parent"}
                     </Badge>
                     {isPlayer && age !== null && <span className="text-[11px] text-white/25">{age}y</span>}
+                    {dupes.length > 0 && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); setExpanded(expanded === p.key ? null : p.key); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setExpanded(expanded === p.key ? null : p.key); } }}
+                        className="text-[10px] px-1.5 py-0.5 rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 cursor-pointer"
+                        data-testid={`badge-duplicates-${p.key}`}
+                      >
+                        {dupes.length + 1} records{expanded === p.key ? " ▲" : " ▼"}
+                      </span>
+                    )}
                   </div>
 
                   {/* The family, on the row. A hit on a child's name shows whose
@@ -226,6 +285,35 @@ export default function AdminContacts() {
 
                 <ChevronRight className="w-4 h-4 text-white/15 flex-shrink-0" />
               </button>
+
+              {/* Every other record for this person, still reachable. Newest
+                  first: the most recently created is usually the one the
+                  duplicate-minting checkout just made, and the oldest is
+                  usually the real one carrying the history. */}
+              {expanded === p.key && dupes.length > 0 && (
+                <div className="ml-6 mt-1 mb-1 pl-3 border-l-2 border-amber-500/25 space-y-1" data-testid={`dupes-${p.key}`}>
+                  <p className="text-[11px] text-foreground/45 py-1">
+                    {dupes.length + 1} records for this person. Nothing has been merged — open one to see its history.
+                  </p>
+                  {[p, ...dupes].map((d, i) => (
+                    <button
+                      key={d.key}
+                      onClick={() => navigate(`/admin/people/${d.key}`)}
+                      className="w-full text-left px-3 py-2 rounded-lg bg-white/[0.02] border border-blue-500/[0.06] hover:bg-white/[0.06] transition-colors min-h-[40px] flex items-center gap-2"
+                      data-testid={`dupe-row-${d.key}`}
+                    >
+                      <span className="text-[11.5px] text-foreground/70 min-w-0 truncate">
+                        {d.key}
+                        {i === 0 && <span className="text-foreground/35"> · shown above</span>}
+                      </span>
+                      <span className="ml-auto text-[11px] text-foreground/40 whitespace-nowrap">
+                        {d.email || d.phone || "no contact details"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              </div>
             );
           })}
           {total > people.length && (

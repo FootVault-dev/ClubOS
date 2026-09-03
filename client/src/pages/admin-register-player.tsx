@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { OFFICE_PAYMENT_METHODS } from "@shared/payments";
 import { GENDERS } from "@shared/academy";
@@ -82,8 +83,13 @@ function formatProductType(pt: string) {
 // panel on near-black; on a white modal it maps to a 4% dark tint, which
 // reads as no box at all — and this is the counter form Olga types a walk-up
 // registration into. Tokens give an opaque field with a visible edge.
-const FIELD = "bg-background border-input text-foreground placeholder:text-muted-foreground";
-const LABEL = "text-[11px] uppercase tracking-wide text-white/70 mb-1.5 block";
+// Olga, 2026-08-18: "сделай пожалуйста саму форму больше размером, чтобы буквы
+// были чуть больше." She enters these at a counter with a parent waiting, often
+// reading off a phone screen held up to her — 11px uppercase was too small to
+// scan. Labels 11→12.5px, inputs 14→15px, and the card is wider.
+const FIELD = "bg-background border-input text-foreground placeholder:text-muted-foreground text-[15px] h-11";
+const LABEL = "text-[12.5px] uppercase tracking-wide text-foreground/75 mb-1.5 block font-medium";
+const SECTION = "text-[14px] font-semibold text-foreground/90";
 
 // Theme for the shared NZF pickers, matched to this admin surface.
 const NZF_THEME = {
@@ -147,6 +153,14 @@ export function RegisterPlayerModal({
   const [parentLast, setParentLast] = useState("");
   const [parentEmail, setParentEmail] = useState("");
   const [parentPhone, setParentPhone] = useState("");
+  // Set when Next is pressed with something missing (item 5), and when a stray
+  // click on the backdrop would have thrown the form away (item 7).
+  const [showErrors, setShowErrors] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Item 6: an agreed price for this family, and why. Blank = the list price.
+  const [priceOverride, setPriceOverride] = useState("");
+  const [priceReason, setPriceReason] = useState("");
+  const [editingPrice, setEditingPrice] = useState(false);
   const [emergencyContact, setEmergencyContact] = useState("");
   const [emergencyPhone, setEmergencyPhone] = useState("");
   const [children, setChildren] = useState<ChildData[]>([
@@ -273,9 +287,21 @@ export function RegisterPlayerModal({
     return { subtotalCents: subtotal, discountCents: discount, totalCents: subtotal - discount };
   }, [items, pricing, validChildren.length, campData]);
 
-  const totalCents = shape === "academy"
+  // What the programme charges, before any agreed reduction.
+  const listTotalCents = shape === "academy"
     ? academyData?.quote?.totalCents ?? 0
     : campTotals.totalCents;
+
+  // The agreed price for THIS family, if one has been typed. null = none, so a
+  // blank box means "charge the list price" rather than "charge nothing" — the
+  // distinction MoneyInput cannot make for us.
+  const agreedCents = priceOverride.trim() === "" ? null : dollarInputToCents(priceOverride);
+
+  // What they actually owe. Only a valid reduction with a reason counts, so a
+  // half-typed override can never quietly undercharge a family.
+  const priceApplies =
+    agreedCents != null && agreedCents >= 0 && agreedCents <= listTotalCents && !!priceReason.trim();
+  const totalCents = priceApplies ? agreedCents! : listTotalCents;
 
   // Keep the amount box in step with the price until the user edits it — a
   // part-payment is deliberate, never a stale number left behind by a change
@@ -328,6 +354,10 @@ export function RegisterPlayerModal({
           policyAccepted,
           acknowledgeAgeWarning: ackAgeWarning,
           notes: notes.trim() || null,
+          // Only sent when it is a real, reasoned reduction — the server
+          // re-validates both, so a half-typed box can never undercharge.
+          priceOverrideCents: priceApplies ? agreedCents : undefined,
+          priceOverrideReason: priceApplies ? priceReason.trim() : undefined,
           payment,
           servedByUserId: servedById,
         });
@@ -391,6 +421,7 @@ export function RegisterPlayerModal({
     setSelectedProgramId(null);
     setParentFirst(""); setParentLast(""); setParentEmail(""); setParentPhone("");
     setEmergencyContact(""); setEmergencyPhone("");
+    setPriceOverride(""); setPriceReason(""); setEditingPrice(false);
     setChildren([{ firstName: "", lastName: "", dateOfBirth: "", allergies: "", epiPen: false, medicalNotes: "" }]);
     setItems([]);
     setOptionId(null); setPlan("term");
@@ -404,7 +435,17 @@ export function RegisterPlayerModal({
     setServedById(me?.id ?? null);
   };
 
-  const close = () => { resetForm(); onClose(); };
+  // Anything typed at all counts. Deliberately generous: the cost of asking
+  // once too often is a click, the cost of asking too rarely is the whole form.
+  const isDirty = !!(
+    selectedProgramId || parentFirst || parentLast || parentEmail || parentPhone ||
+    playerFirst || playerLast || playerDob || playerSchool || allergies || medicalNotes ||
+    emergencyContact || emergencyPhone || reference || notes ||
+    identity.countryOfBirthCode || identity.nationalityCode || nzfAddress.street ||
+    children.some((c) => c.firstName || c.lastName || c.dateOfBirth) || items.length > 0
+  );
+
+  const close = () => { resetForm(); setShowErrors(false); setConfirmDiscard(false); onClose(); };
 
   const addChild = () => setChildren([...children, { firstName: "", lastName: "", dateOfBirth: "", allergies: "", epiPen: false, medicalNotes: "" }]);
   const removeChild = (idx: number) => { if (children.length > 1) setChildren(children.filter((_, i) => i !== idx)); };
@@ -421,6 +462,30 @@ export function RegisterPlayerModal({
       setItems(filtered);
     }
   };
+
+  // Olga, 2026-08-18, item 3: "26 Aug 2015 can you please change 26/08/2015
+  // age 10(11) — 10 is right now, 11 will be by end of current year."
+  //
+  // Both numbers matter and they are different questions. The age TODAY is who
+  // is standing at the counter; the age by 31 December is the NZF age grade
+  // (season year minus birth year), which is what the child actually plays in.
+  // Showing one without the other is how a nine-year-old gets put in the wrong
+  // group. Parsed as calendar parts — `new Date("2015-08-26")` is UTC and reads
+  // a day early in NZ.
+  const dobHint = (() => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(playerDob);
+    if (!m) return "Sets their age grade (season year minus birth year).";
+    const [, y, mo, d] = m;
+    const [ty, tm, td] = nzToday.split("-").map(Number);
+    const by = Number(y), bm = Number(mo), bd = Number(d);
+    let ageNow = ty - by;
+    if (tm < bm || (tm === bm && td < bd)) ageNow -= 1;
+    const ageAtYearEnd = ty - by;                        // NZF grade age
+    if (ageNow < 0) return "That date is in the future.";
+    return ageAtYearEnd === ageNow
+      ? `${d}/${mo}/${y} · age ${ageNow}`
+      : `${d}/${mo}/${y} · age ${ageNow} (${ageAtYearEnd} by the end of ${ty})`;
+  })();
 
   const stepName = STEPS[step];
 
@@ -441,6 +506,63 @@ export function RegisterPlayerModal({
     !!nzfAddress.region.trim() && !!nzfAddress.postcode.trim() && !!nzfAddress.country;
   const deferralOk = !!deferReason && (deferReason !== "Other" || !!deferNote.trim());
   const nzfStepOk = deferIdentity ? deferralOk : (nzfIdentityOk && nzfAddressOk);
+
+  // Olga, 2026-08-18, item 5: "If you are skipping some fields by mistake, and
+  // try to go to next page, it doesn't work but doesn't show where is mistake,
+  // unfilled gap."
+  //
+  // The Next button was simply `disabled`, which tells a person nothing — least
+  // of all on a long form where the missing box has scrolled off. This names
+  // every field still needed, in the order they appear, and the button now
+  // always CLICKS: pressing it either advances or reveals the list.
+  const missingForStep = (): string[] => {
+    const out: string[] = [];
+    const need = (ok: boolean, label: string) => { if (!ok) out.push(label); };
+    if (stepName === STEP_ONE) {
+      need(!!selectedProgramId, scope === "camp" ? "a camp" : "a programme");
+      if (shape === "academy" && selectedProgramId) {
+        need(!!optionId, "an age group / option");
+        need(!!academyData?.quote, "a price for that option");
+      }
+    }
+    if (stepName === "Family") {
+      need(!!playerFirst.trim(), "Player first name");
+      need(!!playerLast.trim(), "Player last name");
+      need(/^\d{4}-\d{2}-\d{2}$/.test(playerDob), "Player date of birth");
+      need(!!parentFirst.trim(), "Parent first name");
+      need(!!parentLast.trim(), "Parent last name");
+      need(parentEmail.trim().includes("@"), "Parent email");
+      need(!!parentPhone.trim(), "Parent phone");
+      if (deferIdentity) {
+        need(!!deferReason, "a reason for skipping the NZ Football details");
+        if (deferReason === "Other") need(!!deferNote.trim(), "a note for that reason");
+      } else {
+        need(!!identity.countryOfBirthCode, "Country of birth");
+        need(!!identity.nationalityCode, "Nationality");
+        need(!!nzfGroup, "Ethnic group");
+        if (nzfGroup && nzfGroup.maxSelections > 0)
+          need(identity.ethnicitySelectionIds.length >= nzfGroup.minSelections, `an ethnicity under ${nzfGroup.name}`);
+        need(!!nzfAddress.street.trim(), "Street address");
+        need(!!nzfAddress.suburb.trim(), "Suburb");
+        need(!!nzfAddress.city.trim(), "City or town");
+        need(!!nzfAddress.region.trim(), "Region");
+        need(!!nzfAddress.postcode.trim(), "Postcode");
+        need(!!nzfAddress.country, "Country");
+      }
+    }
+    if (stepName === "Parent") {
+      need(!!parentFirst.trim(), "Parent first name");
+      need(!!parentLast.trim(), "Parent last name");
+      need(!!parentPhone.trim(), "Parent phone");
+    }
+    if (stepName === "Children") need(validChildren.length > 0, "at least one child with a first name");
+    if (stepName === "Sessions") need(items.length > 0, "at least one session");
+    if (stepName === "Payment" && isPaid) {
+      need(!!method, "how they paid");
+      need(paidCents > 0, "the amount taken");
+    }
+    return out;
+  };
 
   const canNextStep = () => {
     if (stepName === STEP_ONE) {
@@ -477,7 +599,13 @@ export function RegisterPlayerModal({
     // modal broke on Dima's Windows machine.
     <div
       className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex p-3 sm:p-4 overflow-y-auto"
-      onClick={close}
+      onClick={() => {
+        // Olga, 2026-08-18, item 7: "If you click outside the form by accident,
+        // you are losing everything." It did — the backdrop called close(),
+        // which calls resetForm(). A half-filled walk-up registration is five
+        // minutes of a parent's time standing at the counter.
+        if (isDirty) setConfirmDiscard(true); else close();
+      }}
       data-testid="modal-register-player"
     >
       {/* NO overflow-hidden on this card. It would become the containing block
@@ -486,16 +614,41 @@ export function RegisterPlayerModal({
           on any viewport shorter than the form. Corners are rounded on the
           header and footer instead, exactly as ModalShell does it. */}
       <div
-        className="relative w-full max-w-2xl m-auto flex flex-col rounded-2xl border border-blue-500/[0.15]"
+        className="relative w-full max-w-3xl m-auto flex flex-col rounded-2xl border border-blue-500/[0.15]"
         style={{ background: "linear-gradient(135deg, hsl(214 60% 97%) 0%, hsl(var(--card)) 100%)" }}
         onClick={(e) => e.stopPropagation()}
       >
+        {confirmDiscard && (
+          <div
+            className="absolute inset-0 z-30 rounded-2xl flex items-center justify-center p-6"
+            style={{ background: "hsl(var(--background) / 0.92)" }}
+            onClick={(e) => e.stopPropagation()}
+            data-testid="confirm-discard"
+          >
+            <div className="max-w-sm text-center">
+              <AlertTriangle className="w-7 h-7 text-amber-500 mx-auto mb-3" />
+              <p className="text-[15px] font-semibold text-foreground/90">Throw this registration away?</p>
+              <p className="text-[13px] text-foreground/60 mt-1.5 leading-snug">
+                You've entered details that haven't been saved. Closing now loses all of them.
+              </p>
+              <div className="flex gap-2 justify-center mt-4">
+                <Button size="sm" variant="outline" onClick={() => setConfirmDiscard(false)} data-testid="button-keep-editing">
+                  Keep editing
+                </Button>
+                <Button size="sm" onClick={close} className="bg-red-600 hover:bg-red-700 text-white" data-testid="button-discard">
+                  Discard it
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between px-5 py-4 border-b border-blue-500/[0.08] sticky top-0 z-10 rounded-t-2xl" style={{ background: "hsl(var(--background))" }}>
           <div className="min-w-0">
             <h3 className="text-[14px] font-semibold text-white/80">Register at the office</h3>
             <p className="text-[11px] text-white/55 mt-0.5">Walk-up registration — records how they paid and who served them</p>
           </div>
-          <button onClick={close} className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.08] transition-colors shrink-0" data-testid="button-close-register">
+          <button onClick={() => { if (isDirty) setConfirmDiscard(true); else close(); }} className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.08] transition-colors shrink-0" data-testid="button-close-register">
             <X className="w-3.5 h-3.5 text-white/40" />
           </button>
         </div>
@@ -646,11 +799,79 @@ export function RegisterPlayerModal({
 
           {/* ── Academy: family ──────────────────────────────────────────── */}
           {stepName === "Family" && (
-            <div className="space-y-5">
+            <div className="space-y-6">
+              {/* Olga, 2026-08-18, items 1 + 2: "change player and guardian
+                  (because it's player profile)" and "organize all fields in a
+                  more logical way. Player: name, DOB, gender....etc. then
+                  parent, emergency/second parent/guardian details."
+
+                  So: the PLAYER leads — this record is a player's profile and
+                  the person in front of her is registering a child. The parent
+                  follows. Emergency contact was sitting INSIDE the player block
+                  between School and Allergies, which is why she asked what it
+                  even meant; it is a second adult, so it is now its own group
+                  and says so. */}
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <User className="w-3.5 h-3.5 text-blue-400/70" />
-                  <span className="text-[12.5px] font-semibold text-white/85">Parent / guardian</span>
+                  <Baby className="w-4 h-4 text-blue-400/70" />
+                  <span className={SECTION}>Player</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="First name" required>
+                    <Input value={playerFirst} onChange={(e) => setPlayerFirst(e.target.value)} className={FIELD} data-testid="input-player-first" />
+                  </Field>
+                  <Field label="Last name" required>
+                    <Input value={playerLast} onChange={(e) => setPlayerLast(e.target.value)} className={FIELD} data-testid="input-player-last" />
+                  </Field>
+                  <Field label="Date of birth" required hint={dobHint}>
+                    {/* fromYear/toYear switch the calendar caption to year +
+                        month dropdowns. Without them the picker only has
+                        month arrows, so entering a six-year-old's birthday
+                        means ~70 clicks — hopeless with a parent waiting. */}
+                    <DatePickerInput
+                      value={playerDob}
+                      onChange={(e) => setPlayerDob(e.target.value)}
+                      max={nzToday}
+                      fromYear={thisYear - 25}
+                      toYear={thisYear}
+                      placeholder="Pick the player's date of birth"
+                      className={FIELD}
+                      data-testid="input-player-dob"
+                    />
+                  </Field>
+                  <Field label="Gender">
+                    {/* shadcn, not a bare <select>: the standing rule is that
+                        every control is drawn by us. A native select paints its
+                        options with the OS panel, which is what made the NZF
+                        pickers read as empty on Olga's Windows machine. */}
+                    <Select value={playerGender || "—"} onValueChange={(v) => setPlayerGender(v === "—" ? "" : v)}>
+                      <SelectTrigger className={FIELD} data-testid="select-player-gender">
+                        <SelectValue placeholder="—" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="—">—</SelectItem>
+                        {GENDERS.map((g) => <SelectItem key={g} value={g}>{g[0].toUpperCase() + g.slice(1)}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="School">
+                    <Input value={playerSchool} onChange={(e) => setPlayerSchool(e.target.value)} className={FIELD} />
+                  </Field>
+                  <Field label="Allergies">
+                    <Input value={allergies} onChange={(e) => setAllergies(e.target.value)} className={FIELD} />
+                  </Field>
+                </div>
+                <div className="mt-3">
+                  <Field label="Medical notes">
+                    <Input value={medicalNotes} onChange={(e) => setMedicalNotes(e.target.value)} className={FIELD} />
+                  </Field>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <User className="w-4 h-4 text-blue-400/70" />
+                  <span className={SECTION}>Parent / guardian</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="First name" required>
@@ -669,62 +890,26 @@ export function RegisterPlayerModal({
               </div>
 
               <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <Baby className="w-3.5 h-3.5 text-blue-400/70" />
-                  <span className="text-[12.5px] font-semibold text-white/85">Player</span>
+                <div className="flex items-center gap-2 mb-1">
+                  <User className="w-4 h-4 text-blue-400/70" />
+                  <span className={SECTION}>Emergency contact</span>
                 </div>
+                <p className="text-[12px] text-foreground/55 mb-3 leading-snug">
+                  A second adult to ring if the parent above can't be reached — the other parent, a grandparent, whoever they nominate.
+                </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Field label="First name" required>
-                    <Input value={playerFirst} onChange={(e) => setPlayerFirst(e.target.value)} className={FIELD} data-testid="input-player-first" />
+                  <Field label="Name">
+                    <Input value={emergencyContact} onChange={(e) => setEmergencyContact(e.target.value)} className={FIELD} data-testid="input-emergency-contact" />
                   </Field>
-                  <Field label="Last name" required>
-                    <Input value={playerLast} onChange={(e) => setPlayerLast(e.target.value)} className={FIELD} data-testid="input-player-last" />
-                  </Field>
-                  <Field label="Date of birth" required hint="Sets their age grade (season year minus birth year).">
-                    {/* fromYear/toYear switch the calendar caption to year +
-                        month dropdowns. Without them the picker only has
-                        month arrows, so entering a six-year-old's birthday
-                        means ~70 clicks — hopeless with a parent waiting. */}
-                    <DatePickerInput
-                      value={playerDob}
-                      onChange={(e) => setPlayerDob(e.target.value)}
-                      max={nzToday}
-                      fromYear={thisYear - 25}
-                      toYear={thisYear}
-                      placeholder="Pick the player's date of birth"
-                      className={FIELD}
-                      data-testid="input-player-dob"
-                    />
-                  </Field>
-                  <Field label="Gender">
-                    <select value={playerGender} onChange={(e) => setPlayerGender(e.target.value)} className={`w-full h-10 rounded-md px-3 text-sm ${FIELD} border`} data-testid="select-player-gender">
-                      <option value="">—</option>
-                      {GENDERS.map((g) => <option key={g} value={g} className="bg-background text-foreground">{g[0].toUpperCase() + g.slice(1)}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="School">
-                    <Input value={playerSchool} onChange={(e) => setPlayerSchool(e.target.value)} className={FIELD} />
-                  </Field>
-                  <Field label="Emergency contact">
-                    <Input value={emergencyContact} onChange={(e) => setEmergencyContact(e.target.value)} className={FIELD} />
-                  </Field>
-                  <Field label="Emergency phone">
-                    <Input type="tel" value={emergencyPhone} onChange={(e) => setEmergencyPhone(e.target.value)} className={FIELD} />
-                  </Field>
-                  <Field label="Allergies">
-                    <Input value={allergies} onChange={(e) => setAllergies(e.target.value)} className={FIELD} />
-                  </Field>
-                </div>
-                <div className="mt-3">
-                  <Field label="Medical notes">
-                    <Input value={medicalNotes} onChange={(e) => setMedicalNotes(e.target.value)} className={FIELD} />
+                  <Field label="Phone">
+                    <Input type="tel" value={emergencyPhone} onChange={(e) => setEmergencyPhone(e.target.value)} className={FIELD} data-testid="input-emergency-phone" />
                   </Field>
                 </div>
               </div>
 
               <div>
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[12.5px] font-semibold text-white/85">New Zealand Football details</span>
+                  <span className={SECTION}>New Zealand Football details</span>
                 </div>
                 <p className="text-[11px] text-white/50 mb-3 leading-snug">
                   New Zealand Football needs all of these to register the player. Ask the parent now if you can —
@@ -875,9 +1060,54 @@ export function RegisterPlayerModal({
           {/* ── Payment ──────────────────────────────────────────────────── */}
           {stepName === "Payment" && (
             <div className="space-y-4">
-              <div className="px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.10] flex items-center justify-between gap-2">
-                <span className="text-[12.5px] text-white/70">Total owing</span>
-                <span className="text-[16px] font-semibold text-white/90">{formatCurrency(totalCents, { fromCents: true })}</span>
+              <div className="px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.10]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] text-foreground/70">Total owing</span>
+                  <div className="flex items-center gap-2">
+                    {agreedCents != null && agreedCents !== listTotalCents && (
+                      <span className="text-[13px] text-foreground/45 line-through">
+                        {formatCurrency(listTotalCents, { fromCents: true })}
+                      </span>
+                    )}
+                    <span className="text-[17px] font-semibold text-foreground/90" data-testid="text-total-owing">
+                      {formatCurrency(totalCents, { fromCents: true })}
+                    </span>
+                  </div>
+                </div>
+                {/* Olga, item 6: "Payment page. I don't have option to change
+                    price." It can only go DOWN, and it needs a reason — that
+                    reason is what answers "why is this one $140" months later. */}
+                {!editingPrice ? (
+                  <button
+                    onClick={() => setEditingPrice(true)}
+                    className="text-[12.5px] text-blue-600 hover:underline mt-1"
+                    data-testid="button-adjust-price"
+                  >
+                    {agreedCents != null ? "Change the agreed price" : "Agree a different price"}
+                  </button>
+                ) : (
+                  <div className="mt-3 pt-3 border-t border-white/[0.10] grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Field label="Agreed price" hint={`The programme's price is ${formatCurrency(listTotalCents, { fromCents: true })}. You can only go lower.`}>
+                      <MoneyInput value={priceOverride} onChange={setPriceOverride} className={FIELD} data-testid="input-agreed-price" />
+                    </Field>
+                    <Field label="Why" required hint="Goes on the registration so the figure can be explained later.">
+                      <Input value={priceReason} onChange={(e) => setPriceReason(e.target.value)} className={FIELD} placeholder="Sibling discount, hardship, part term…" data-testid="input-price-reason" />
+                    </Field>
+                    <div className="sm:col-span-2 flex gap-2">
+                      <Button size="sm" variant="outline" onClick={() => { setPriceOverride(""); setPriceReason(""); setEditingPrice(false); }} data-testid="button-price-cancel">
+                        Use the programme's price
+                      </Button>
+                      <Button size="sm" onClick={() => setEditingPrice(false)} disabled={agreedCents == null || !priceReason.trim()} data-testid="button-price-apply">
+                        Apply
+                      </Button>
+                    </div>
+                    {agreedCents != null && agreedCents > listTotalCents && (
+                      <p className="sm:col-span-2 text-[12.5px] text-amber-600">
+                        That's more than the programme's price. Reduce it, or pick a different programme.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2">
@@ -1022,15 +1252,38 @@ export function RegisterPlayerModal({
         <div className="px-5 py-4 border-t border-blue-500/[0.08] flex items-center justify-between gap-2 sticky bottom-0 z-10 rounded-b-2xl" style={{ background: "hsl(var(--background))" }}>
           <Button
             size="sm" variant="ghost"
-            onClick={() => (step === 0 ? close() : setStep(step - 1))}
+            onClick={() => (step === 0 ? (isDirty ? setConfirmDiscard(true) : close()) : setStep(step - 1))}
             className="text-white/50"
             data-testid="button-back"
           >
             {step === 0 ? "Cancel" : <><ChevronLeft className="w-3.5 h-3.5 mr-1" />Back</>}
           </Button>
 
+          {showErrors && missingForStep().length > 0 && (
+            <div
+              className="absolute bottom-full left-0 right-0 mx-4 mb-2 px-3 py-2.5 rounded-lg bg-amber-500/[0.10] border border-amber-500/30"
+              data-testid="banner-missing-fields"
+            >
+              <div className="flex gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-[13px] text-foreground/85 leading-snug min-w-0">
+                  Still needed before you can go on:{" "}
+                  <span className="font-medium">{missingForStep().join(", ")}</span>
+                </p>
+              </div>
+            </div>
+          )}
           {step < STEPS.length - 1 ? (
-            <Button size="sm" onClick={() => setStep(step + 1)} disabled={!canNextStep()} className="bg-blue-600 hover:bg-blue-700 text-white" data-testid="button-next">
+            <Button
+              size="sm"
+              onClick={() => {
+                // Never silently dead. Either it moves, or it tells her why not.
+                if (canNextStep()) { setShowErrors(false); setStep(step + 1); }
+                else setShowErrors(true);
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              data-testid="button-next"
+            >
               Next<ChevronRight className="w-3.5 h-3.5 ml-1" />
             </Button>
           ) : (

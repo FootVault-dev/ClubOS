@@ -52,6 +52,12 @@ interface DetailResponse {
   account: AccountKey;
   truncated: boolean;
   payout: PayoutRow;
+  negativeBalance?: {
+    reason: string;
+    windowFrom: string;
+    causes: { when: string; type: string; amountCents: number; description: string | null }[];
+    causeTotalCents: number;
+  } | null;
   summary: {
     grossCents: number;
     feeCents: number;
@@ -361,7 +367,49 @@ export default function GroupPayouts() {
             </div>
 
             <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-              <div className="overflow-x-auto">
+              {detail.negativeBalance && (
+              <div className="mb-4 px-4 py-3.5 rounded-xl bg-amber-500/[0.08] border border-amber-500/25" data-testid="panel-negative-payout">
+                <p className="text-[13.5px] font-semibold text-foreground/90">
+                  Money went OUT of the bank — {detail.negativeBalance.reason}
+                </p>
+                <p className="text-[12.5px] text-foreground/65 mt-1 leading-snug">
+                  This isn't a deposit, so it has no payments inside it. Stripe took it back to cover a
+                  balance that refunds had pushed below zero. What caused it, from{" "}
+                  {detail.negativeBalance.windowFrom}:
+                </p>
+                {detail.negativeBalance.causes.length > 0 ? (
+                  <>
+                    <ul className="mt-2.5 space-y-1">
+                      {detail.negativeBalance.causes.slice(0, 12).map((c, i) => (
+                        <li key={i} className="flex items-baseline justify-between gap-3 text-[12.5px]">
+                          <span className="text-foreground/70 min-w-0 truncate">
+                            <span className="text-foreground/45">{c.when}</span>{" "}
+                            {c.description || c.type.replace(/_/g, " ")}
+                          </span>
+                          <span className="text-red-500 font-medium whitespace-nowrap">
+                            {formatCurrency(c.amountCents, { fromCents: true })}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="flex items-baseline justify-between gap-3 text-[12.5px] mt-2 pt-2 border-t border-amber-500/20">
+                      <span className="text-foreground/70 font-medium">
+                        Total refunded in that window
+                      </span>
+                      <span className="text-red-500 font-semibold">
+                        {formatCurrency(detail.negativeBalance.causeTotalCents, { fromCents: true })}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-[12.5px] text-foreground/50 mt-2">
+                    Stripe didn't return the surrounding transactions — check the Stripe dashboard for that week.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wide text-white/35 border-b border-white/[0.06]">
@@ -427,7 +475,11 @@ export default function GroupPayouts() {
                     {filteredLines.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="px-4 py-10 text-center text-white/30 text-sm">
-                          {search ? "Nothing in this payout matches that search." : "No transactions in this payout."}
+                          {search
+                            ? "Nothing in this payout matches that search."
+                            : detail.negativeBalance
+                              ? "This one has no payments of its own — see the explanation above."
+                              : "No transactions in this payout."}
                         </td>
                       </tr>
                     ) : null}

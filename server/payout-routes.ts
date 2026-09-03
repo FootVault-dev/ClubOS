@@ -698,7 +698,58 @@ export async function explainPayout(client: Stripe, account: AccountKey, id: str
   const charges = lines.filter((l) => l.kind === "charge");
   const refunds = lines.filter((l) => l.kind === "refund");
   const others = lines.filter((l) => l.kind === "other");
+
+  // ── A negative payout has no lines of its own ───────────────────────────
+  // Olga, 2026-08-20: "No splits for this transaction", on a -$1,740.99 payout.
+  // Reproduced against Stripe: `balance_transactions?payout=po_…` returns ZERO
+  // rows for it. That is not a bug in the query — a negative payout is Stripe
+  // pulling money FROM the bank to square a balance the refunds pushed under
+  // zero, so it has no payments attached. Stripe's own description says so:
+  // "Withdrawal to cover a negative balance".
+  //
+  // Answering "nothing here" is useless to whoever is reconciling the bank: the
+  // money left the account and they have to explain it. So we go and find what
+  // actually caused it — the refunds in the days before it — and say so.
+  let negativeBalance: {
+    reason: string;
+    windowFrom: string;
+    causes: { when: string; type: string; amountCents: number; description: string | null }[];
+    causeTotalCents: number;
+  } | null = null;
+  if (payout.amount < 0 && lines.length === 0) {
+    const WINDOW_DAYS = 7;
+    const from = payout.created - WINDOW_DAYS * 24 * 60 * 60;
+    try {
+      const around = await client.balanceTransactions.list({
+        limit: 100,
+        created: { gte: from, lte: payout.created },
+      });
+      const causes = around.data
+        .filter((t) => t.amount < 0 && t.type !== "payout")
+        .sort((a, b) => a.amount - b.amount)
+        .map((t) => ({
+          when: arrivalIso(t.created),
+          type: t.type,
+          amountCents: t.amount,
+          description: t.description ?? null,
+        }));
+      negativeBalance = {
+        reason: payout.description || "Withdrawal to cover a negative balance",
+        windowFrom: arrivalIso(from),
+        causes,
+        causeTotalCents: causes.reduce((n, c) => n + c.amountCents, 0),
+      };
+    } catch {
+      // Stripe unreachable for the window — still explain what the payout IS.
+      negativeBalance = {
+        reason: payout.description || "Withdrawal to cover a negative balance",
+        windowFrom: arrivalIso(from), causes: [], causeTotalCents: 0,
+      };
+    }
+  }
+
   return {
+    negativeBalance,
     truncated,
     payout: {
       id: payout.id,

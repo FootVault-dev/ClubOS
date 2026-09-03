@@ -4829,6 +4829,44 @@ export async function registerRoutes(
           return res.status(409).json({ message: "That works out to nothing owing. Check the programme's fee and term dates." });
         }
 
+        // ── Agreed price (Olga, 2026-08-18, item 6) ─────────────────────────
+        // "Payment page. I don't have option to change price." The total was
+        // read-only, so a family with an agreed discount could only be recorded
+        // as a SHORT PAYMENT — which leaves the registration `pending` and the
+        // family looking like debtors in her reconciliation forever.
+        //
+        // 🔴 It can only ever go DOWN. Charging more than the published fee at a
+        // counter is a different decision with consumer-law weight, and a late
+        // fee is already its own field. 🔴 A reason is REQUIRED and is written
+        // into the notes with the amount, because "why is this one $140" is
+        // exactly the question Victor asks three months later.
+        // 🔴 `subtotal_cents` keeps the LIST price and the difference lands in
+        // `discount_cents` — those columns already mean this, and overwriting
+        // the subtotal would lose what the programme actually charges.
+        let priceSubtotal = quote.subtotalCents;
+        let priceDiscount = quote.discountCents;
+        let priceTotal = quote.totalCents;
+        let priceNote = "";
+        const overrideRaw = body.priceOverrideCents;
+        if (overrideRaw != null && String(overrideRaw).trim() !== "") {
+          const want = Math.round(Number(overrideRaw));
+          if (!Number.isFinite(want) || want < 0) {
+            return res.status(400).json({ message: "That agreed price isn't a valid amount." });
+          }
+          if (want > quote.totalCents) {
+            return res.status(400).json({
+              message: `The agreed price can't be more than the programme's ${(quote.totalCents / 100).toFixed(2)}. Reduce it, or change the programme.`,
+            });
+          }
+          const reason = String(body.priceOverrideReason ?? "").trim();
+          if (!reason) {
+            return res.status(400).json({ message: "Say why the price was changed — it goes on the registration." });
+          }
+          priceTotal = want;
+          priceDiscount = priceSubtotal - want;
+          priceNote = `Price adjusted from ${(quote.totalCents / 100).toFixed(2)} to ${(want / 100).toFixed(2)} — ${reason}`;
+        }
+
         const seasonYear: number = program.seasonYear ?? Number(nzTodayIso().slice(0, 4));
         const eligibility = checkAcademyEligibility(playerDob, seasonYear, program.ageMin, program.ageMax);
 
@@ -4990,7 +5028,11 @@ export async function registerRoutes(
           } as any);
         }
 
-        const { fullyPaid, fields } = paymentFieldsFor(quote.totalCents);
+        // 🔴 priceTotal, not quote.totalCents. Against the list price a family
+        // paying their AGREED $140 of a $160 fee reads as short-paid and the
+        // registration would be saved `pending` — the exact bug the agreed
+        // price exists to remove.
+        const { fullyPaid, fields } = paymentFieldsFor(priceTotal);
 
         // Consent is evidence, and evidence is never auto-ticked to make a form
         // pass. Stamped only when staff confirm the parent actually agreed.
@@ -5006,13 +5048,15 @@ export async function registerRoutes(
           paymentMode: "upfront",
           academyPaymentPlan: plan,
           seasonYear,
-          subtotalCents: quote.subtotalCents,
-          discountCents: quote.discountCents,
-          totalCents: quote.totalCents,
+          subtotalCents: priceSubtotal,
+          discountCents: priceDiscount,
+          totalCents: priceTotal,
           currency: "NZD",
           registrationLocation: "cufc_office",
           source: "admin_manual",
-          notes: typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null,
+          // The price note is appended, never replaces what staff typed.
+          notes: [typeof body.notes === "string" ? body.notes.trim() : "", priceNote]
+            .filter(Boolean).join(" · ") || null,
           policyAcceptedAt: policyAccepted ? now : null,
           policyVersion: policyAccepted ? ACADEMY_POLICY_VERSION : null,
           nzfConsentAt: policyAccepted ? now : null,
