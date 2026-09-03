@@ -540,15 +540,31 @@ export default function PrintDtfPage() {
               <p className="mt-2 text-[14px] leading-relaxed text-slate-700">{price.lines[0].message}</p>
             ) : null}
 
+            {/* 🔴 The primary action has to BUY, or this is a lead form with a
+                mockup on it. It hands off to the shop's existing
+                configure → Stripe checkout, which is the path that already
+                takes money and creates a real print order.
+
+                It does NOT pretend the spec above carries across — the
+                checkout asks for quantity again, and the copy says so. A
+                handoff that silently drops the sizes somebody just typed is
+                worse than one that admits it. */}
             <a
-              href={`https://unitedprints.co.nz/contact?product=dtf-tee&qty=${totalQty}&width=${printWidthMm}&colour=${colour.id}`}
+              href={`/print/configure/${garment.slug}`}
               className="mt-5 inline-flex min-h-[52px] w-full items-center justify-center rounded-full bg-[#33cc00] px-6 text-[15px] font-bold uppercase tracking-wide text-white transition hover:brightness-95"
             >
-              {totalQty > 0 ? "Send this order through" : "Talk to us about your order"}
+              Order and pay online
             </a>
             <p className="mt-2 text-center text-[12px] leading-relaxed text-slate-500">
-              We'll confirm sizes, stock and artwork before anything is charged.
+              You'll confirm quantity and pay by card on the next step. We check your artwork
+              before anything is printed.
             </p>
+            <a
+              href={`https://unitedprints.co.nz/contact?product=dtf-tee&qty=${totalQty}&width=${printWidthMm}&colour=${colour.id}`}
+              className="mt-3 block text-center text-[14px] font-semibold text-[#043bcb] underline-offset-4 hover:underline"
+            >
+              Or send us the spec and we'll quote it
+            </a>
           </section>
         </div>
       </div>
