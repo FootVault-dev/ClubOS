@@ -17,6 +17,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Link, useLocation } from "wouter";
 
+// 🔴 WHITE INK IS WRITTEN AS AN EXPLICIT HEX, NEVER `text-white`.
+//
+// ClubOS's generated light theme DARKENS bare `text-white` by default and only
+// restores it on grounds it recognises as "still a colour". It restored it on
+// the royal hero (#043bcb) and did NOT on the navy footer (#012583) — so the
+// footer shipped as dark navy text on a dark navy panel, unreadable, and the
+// same happened to the navy custom-tee card on the shop front. Arbitrary-value
+// classes like `text-[#ffffff]/75` are not matched by that rule, so they
+// survive. See the light-theme standing rule in CLAUDE.md.
+
+
 export const UP = {
   royal: "#043bcb",
   navy: "#012583",
@@ -84,21 +95,21 @@ export function UpNav() {
 
 export function UpFooter() {
   return (
-    <footer className="mt-20 bg-[#012583] px-5 py-14 text-white sm:px-8">
+    <footer className="mt-20 bg-[#012583] px-5 py-14 text-[#ffffff] sm:px-8">
       <div className="mx-auto max-w-6xl">
         <img src="/up/logo.svg" alt="United Prints" className="h-6 w-auto brightness-0 invert" />
-        <p className="mt-5 max-w-md text-[15px] leading-relaxed text-white/75">
+        <p className="mt-5 max-w-md text-[15px] leading-relaxed text-[#ffffff]/75">
           Every time you print with us, you invest directly in youth sport across New Zealand.
         </p>
         <div className="mt-8 flex flex-wrap gap-x-8 gap-y-3 text-sm font-semibold">
-          <a href="/print" className="text-white/80 hover:text-white">Products</a>
-          <a href="/print/studio" className="text-white/80 hover:text-white">Custom tees</a>
-          <a href="/account" className="text-white/80 hover:text-white">My account</a>
-          <a href={`${SITE}/contact`} className="text-white/80 hover:text-white">Contact</a>
+          <a href="/print" className="text-[#ffffff]/80 hover:text-[#ffffff]">Products</a>
+          <a href="/print/studio" className="text-[#ffffff]/80 hover:text-[#ffffff]">Custom tees</a>
+          <a href="/account" className="text-[#ffffff]/80 hover:text-[#ffffff]">My account</a>
+          <a href={`${SITE}/contact`} className="text-[#ffffff]/80 hover:text-[#ffffff]">Contact</a>
         </div>
-        <div className="mt-8 border-t border-white/15 pt-6 text-[13px] leading-relaxed text-white/55">
-          466 Yaldhurst Road, Hornby, Christchurch · <a href="tel:0800800199" className="hover:text-white">0800 800 199</a> ·{" "}
-          <a href="mailto:orders@unitedprints.co.nz" className="hover:text-white">orders@unitedprints.co.nz</a>
+        <div className="mt-8 border-t border-white/15 pt-6 text-[13px] leading-relaxed text-[#ffffff]/55">
+          466 Yaldhurst Road, Hornby, Christchurch · <a href="tel:0800800199" className="hover:text-[#ffffff]">0800 800 199</a> ·{" "}
+          <a href="mailto:orders@unitedprints.co.nz" className="hover:text-[#ffffff]">orders@unitedprints.co.nz</a>
           <br />
           2025 © United Prints is a trading name of Christchurch United Football Club.
         </div>

@@ -50,7 +50,7 @@ export default function PrintHub() {
   return (
     <UpShell>
       {/* ── Hero, in the site's own royal-blue-with-stripes treatment ── */}
-      <section className="relative overflow-hidden bg-[#043bcb] px-5 pb-20 pt-16 text-white sm:px-8 sm:pb-28 sm:pt-24">
+      <section className="relative overflow-hidden bg-[#043bcb] px-5 pb-20 pt-16 text-[#ffffff] sm:px-8 sm:pb-28 sm:pt-24">
         <div
           className="pointer-events-none absolute inset-0"
           style={{
@@ -64,7 +64,7 @@ export default function PrintHub() {
             <br />
             <span className="mt-2 inline-block bg-[#adff00] px-3 text-[#012583]">Quoted instantly.</span>
           </h1>
-          <p className="mt-6 max-w-xl text-base leading-relaxed text-white/85 sm:text-lg">
+          <p className="mt-6 max-w-xl text-base leading-relaxed text-[#ffffff]/85 sm:text-lg">
             Made in Christchurch. Pickup from Yaldhurst or delivered. No "fill out a form and
             wait" — pick what you need, see the price, order online.
           </p>
@@ -97,12 +97,12 @@ export default function PrintHub() {
         <section className="mx-auto max-w-6xl px-5 pt-16 sm:px-8 sm:pt-20">
           <a
             href="/print/studio"
-            className="group grid gap-7 overflow-hidden rounded-3xl bg-[#012583] p-7 text-white transition hover:brightness-110 sm:grid-cols-[1fr_auto] sm:items-center sm:p-10"
+            className="group grid gap-7 overflow-hidden rounded-3xl bg-[#012583] p-7 text-[#ffffff] transition hover:brightness-110 sm:grid-cols-[1fr_auto] sm:items-center sm:p-10"
           >
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#adff00]">New · design it yourself</p>
               <h2 className={`${upDisplay} mt-3 text-3xl sm:text-4xl`}>Custom printed tees</h2>
-              <p className="mt-3 max-w-lg text-[15px] leading-relaxed text-white/80">
+              <p className="mt-3 max-w-lg text-[15px] leading-relaxed text-[#ffffff]/80">
                 Your photo, your logo or your words on a quality cotton tee. Design it in the
                 studio, see it on the shirt, send it through. Good for Christmas, team gear,
                 birthdays and staff uniforms.

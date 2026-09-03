@@ -77,6 +77,12 @@ const PANEL_MM = 400;
 // The garment occupies this box in SVG user units.
 const PANEL = { x: 148, y: 150, w: 204, h: 258 };
 
+// The visible window onto the garment. The tee itself lives between y≈84 and
+// y≈500, so a 0-620 box left a third of the card empty under the hem and made
+// the shirt look small in its own preview. Cropped to the garment plus room for
+// its cast shadow.
+const VB = { x: 34, y: 52, w: 432, h: 486 };
+
 export function TeeMockup({
   colour,
   artwork,
@@ -115,8 +121,10 @@ export function TeeMockup({
     svg.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent) => {
       const r = svg.getBoundingClientRect();
-      const ux = ((ev.clientX - r.left) / r.width) * 500;
-      const uy = ((ev.clientY - r.top) / r.height) * 620;
+      // Through the viewBox, not a hardcoded 500×620 — the two drifted apart
+      // the moment the box was cropped, and a drag would land in the wrong place.
+      const ux = VB.x + ((ev.clientX - r.left) / r.width) * VB.w;
+      const uy = VB.y + ((ev.clientY - r.top) / r.height) * VB.h;
       onPlacementChange({
         ...placement,
         // Clamped so the print can never be dragged off the garment.
@@ -137,7 +145,7 @@ export function TeeMockup({
 
   return (
     <svg
-      viewBox="0 0 500 620"
+      viewBox={`${VB.x} ${VB.y} ${VB.w} ${VB.h}`}
       className={`w-full select-none ${onPlacementChange && artwork.kind !== "none" ? "cursor-move touch-none" : ""}`}
       onPointerDown={startDrag}
       role="img"
@@ -201,7 +209,7 @@ export function TeeMockup({
 
         <g clipPath={`url(#${id("body")})`}>
           {/* 2 — grain */}
-          <rect x="0" y="0" width="500" height="620" filter={`url(#${id("weave")})`} fill="#808080" opacity="0.5" />
+          <rect x={VB.x} y={VB.y} width={VB.w} height={VB.h} filter={`url(#${id("weave")})`} fill="#808080" opacity="0.5" />
 
           {/* 3 — the print, pressed into the weave */}
           {artwork.kind !== "none" && (
