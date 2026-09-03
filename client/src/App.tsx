@@ -210,6 +210,7 @@ import WarehouseUniformStocktake from "@/pages/warehouse-uniform-stocktake";
 import PrintHub from "@/pages/print-hub";
 import PrintAccountPage from "@/pages/print-account";
 import PrintDtfPage from "@/pages/print-dtf";
+import PrintStudioPage from "@/pages/print-studio";
 import PrintConfigure from "@/pages/print-configure";
 import PrintCheckout from "@/pages/print-checkout";
 import PrintOrderStatus from "@/pages/print-order-status";
@@ -861,6 +862,9 @@ function App() {
             {/* DTF / printed tees, with a live placement mockup. Same origin as
                 the account portal, so a signed-in trade customer is priced at
                 their own rate with no CORS involved. */}
+            {/* The custom tee studio — design with your own image or words,
+                see it on the shirt, send the order. */}
+            <Route path="/print/studio" component={PrintStudioPage} />
             <Route path="/print/dtf" component={PrintDtfPage} />
             <Route path="/print" component={PrintHub} />
             <Route path="/print/configure/:slug" component={PrintConfigure} />

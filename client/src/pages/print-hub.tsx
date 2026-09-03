@@ -1,10 +1,14 @@
+// The United Prints shop front — shop.unitedprints.co.nz (and /print anywhere else).
+//
+// Wears the same brand as unitedprints.co.nz (royal/navy/grass, Poppins, the
+// white pill nav) via components/up-shell.tsx, so a customer moving between the
+// marketing site and the shop never notices a seam. Every product tile comes
+// from the Materials tab in ClubOS, so Dima adds a product and it appears here
+// with no deploy.
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import type { PrintMaterial } from "@shared/schema";
-
-// Public hub page for United Prints. Lists every active material as a tile.
-// Lives at /print on app.usg.co.nz and at the root of order.unitedprints.co.nz
-// once the subdomain is connected.
+import { UpShell, upBtn, upDisplay } from "@/components/up-shell";
 
 const CATEGORY_LABEL: Record<string, string> = {
   banner: "Banner",
@@ -18,206 +22,148 @@ const CATEGORY_LABEL: Record<string, string> = {
   custom: "Custom",
 };
 
-const CATEGORY_ACCENT: Record<string, string> = {
-  banner: "from-orange-500/15 to-orange-500/5 border-orange-500/20",
-  corflute: "from-yellow-500/15 to-yellow-500/5 border-yellow-500/20",
-  vinyl_decal: "from-violet-500/15 to-violet-500/5 border-violet-500/20",
-  aluminium: "from-slate-500/15 to-slate-500/5 border-slate-500/20",
-  garment: "from-emerald-500/15 to-emerald-500/5 border-emerald-500/20",
-  rollup: "from-blue-500/15 to-blue-500/5 border-blue-500/20",
-  poster: "from-rose-500/15 to-rose-500/5 border-rose-500/20",
-  sticker: "from-pink-500/15 to-pink-500/5 border-pink-500/20",
-  custom: "from-amber-500/15 to-amber-500/5 border-amber-500/20",
-};
-
 function priceFromLabel(m: PrintMaterial): string {
-  if (m.pricingMethod === "per_m2" && m.baseRateCents > 0) {
-    return `From $${(m.baseRateCents / 100).toFixed(0)}/m²`;
-  }
+  if (m.pricingMethod === "per_m2" && m.baseRateCents > 0) return `From $${(m.baseRateCents / 100).toFixed(0)}/m²`;
   if (m.pricingMethod === "per_piece_tiered") {
     const tiers = (m.sizeTiersJson as Array<{ priceCents: number }>) ?? [];
-    if (tiers.length > 0) {
-      const min = Math.min(...tiers.map(t => t.priceCents));
-      return `From $${(min / 100).toFixed(0)}`;
-    }
+    if (tiers.length > 0) return `From $${(Math.min(...tiers.map((t) => t.priceCents)) / 100).toFixed(0)}`;
   }
-  if (m.pricingMethod === "garment_decoration") {
-    return `From $${(m.baseRateCents / 100).toFixed(0)}/piece`;
-  }
-  if (m.pricingMethod === "per_piece" && m.baseRateCents > 0) {
-    return `From $${(m.baseRateCents / 100).toFixed(0)}/piece`;
-  }
+  if (m.pricingMethod === "garment_decoration") return `From $${(m.baseRateCents / 100).toFixed(0)}/piece`;
+  if (m.pricingMethod === "per_piece" && m.baseRateCents > 0) return `From $${(m.baseRateCents / 100).toFixed(0)}/piece`;
   return "Get a quote";
 }
 
 export default function PrintHub() {
   const [, setLocation] = useLocation();
-  const { data: materials = [], isLoading } = useQuery<PrintMaterial[]>({
+  const { data: materials = [], isLoading, isError } = useQuery<PrintMaterial[]>({
     queryKey: ["/api/print/materials"],
-    queryFn: () => fetch("/api/print/materials").then(r => r.json()),
+    queryFn: () =>
+      fetch("/api/print/materials").then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      }),
   });
 
-  return (
-    <div className="min-h-screen bg-white text-zinc-900">
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-zinc-900 flex items-center justify-center">
-              <span className="text-white font-black text-sm">UP</span>
-            </div>
-            <div>
-              <div className="font-bold text-base">United Prints</div>
-              <div className="text-[10px] text-zinc-500 -mt-0.5">Christchurch</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <a href="/account" className="text-sm font-semibold text-zinc-900 hover:text-zinc-600">
-              My account
-            </a>
-            <a href="tel:0800800199" className="hidden text-sm font-medium text-zinc-900 hover:text-zinc-600 sm:block">
-              0800 800 199
-            </a>
-          </div>
-        </div>
-      </header>
+  const garment = materials.find((m) => m.pricingMethod === "garment_decoration" || m.category === "garment");
+  const rest = materials.filter((m) => m !== garment);
 
-      <section className="border-b border-zinc-200">
-        <div className="max-w-6xl mx-auto px-6 py-16 sm:py-24">
-          <h1 className="text-4xl sm:text-6xl font-black tracking-tight max-w-4xl">
-            Custom signs & banners.<br />
-            <span className="text-zinc-500">Quoted instantly.</span>
+  return (
+    <UpShell>
+      {/* ── Hero, in the site's own royal-blue-with-stripes treatment ── */}
+      <section className="relative overflow-hidden bg-[#043bcb] px-5 pb-20 pt-16 text-white sm:px-8 sm:pb-28 sm:pt-24">
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(115deg, rgba(255,255,255,.05) 0px, rgba(255,255,255,.05) 2px, transparent 2px, transparent 26px)",
+          }}
+        />
+        <div className="relative mx-auto max-w-6xl">
+          <h1 className={`${upDisplay} max-w-3xl text-4xl sm:text-6xl`}>
+            Signs, banners <span className="whitespace-nowrap">&amp; tees.</span>
+            <br />
+            <span className="mt-2 inline-block bg-[#adff00] px-3 text-[#012583]">Quoted instantly.</span>
           </h1>
-          <p className="mt-6 text-lg text-zinc-600 max-w-2xl">
-            Made in Christchurch. Pickup from Yaldhurst or delivered. No "fill out a form and wait" — pick what you need, see the price, pay online.
+          <p className="mt-6 max-w-xl text-base leading-relaxed text-white/85 sm:text-lg">
+            Made in Christchurch. Pickup from Yaldhurst or delivered. No "fill out a form and
+            wait" — pick what you need, see the price, order online.
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <a
-              href="#products"
-              className="px-6 py-3 rounded-full bg-zinc-900 text-white font-semibold hover:bg-zinc-800 transition"
-            >
-              Get a quote →
-            </a>
-            <a
-              href="/print/dtf"
-              className="px-6 py-3 rounded-full bg-[#33cc00] text-white font-semibold hover:brightness-95 transition"
-            >
-              Printed tees →
-            </a>
-            <a
-              href="tel:0800800199"
-              className="px-6 py-3 rounded-full bg-white text-zinc-900 font-semibold border border-zinc-300 hover:border-zinc-900 transition"
-            >
-              Talk to us
-            </a>
+          <div className="mt-9 flex flex-wrap gap-3">
+            <a href="/print/studio" className={upBtn.green}>Design a custom tee →</a>
+            <a href="#products" className={upBtn.white}>See all products</a>
           </div>
         </div>
       </section>
 
-      <section className="border-b border-zinc-200 bg-zinc-50">
-        <div className="max-w-6xl mx-auto px-6 py-8 grid grid-cols-2 md:grid-cols-4 gap-6">
+      {/* ── Trust strip, the same four claims the site makes ── */}
+      <section className="border-b border-[#cbd1de]/60 bg-white">
+        <div className="mx-auto grid max-w-6xl gap-6 px-5 py-9 sm:grid-cols-2 sm:px-8 lg:grid-cols-4">
           {[
-            { label: "Made in Christchurch", sub: "466 Yaldhurst Road, Hornby" },
-            { label: "Quoted instantly", sub: "No forms, no waiting" },
-            { label: "Pickup or delivery", sub: "Free pickup from our shop" },
-            { label: "Reprint guarantee", sub: "100% reprint if it's our fault" },
-          ].map((item) => (
-            <div key={item.label}>
-              <div className="text-sm font-semibold text-zinc-900">{item.label}</div>
-              <div className="text-xs text-zinc-500 mt-0.5">{item.sub}</div>
+            ["Made in Christchurch", "466 Yaldhurst Road, Hornby"],
+            ["Quoted instantly", "No forms, no waiting"],
+            ["Pickup or delivery", "Free pickup from our shop"],
+            ["Backs youth football", "Every order funds the club"],
+          ].map(([t, s]) => (
+            <div key={t}>
+              <p className="text-[14px] font-extrabold text-[#012583]">{t}</p>
+              <p className="mt-0.5 text-[13px] text-[#4a5265]">{s}</p>
             </div>
           ))}
         </div>
       </section>
 
-      <section id="products" className="max-w-6xl mx-auto px-6 py-16 sm:py-24">
-        <div className="mb-8 sm:mb-12">
-          <h2 className="text-3xl sm:text-4xl font-black tracking-tight">Pick your product</h2>
-          <p className="mt-2 text-zinc-500">Live pricing, made-to-size, NZ-wide delivery.</p>
-        </div>
+      {/* ── Custom tees, given its own billing ── */}
+      {garment && (
+        <section className="mx-auto max-w-6xl px-5 pt-16 sm:px-8 sm:pt-20">
+          <a
+            href="/print/studio"
+            className="group grid gap-7 overflow-hidden rounded-3xl bg-[#012583] p-7 text-white transition hover:brightness-110 sm:grid-cols-[1fr_auto] sm:items-center sm:p-10"
+          >
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#adff00]">New · design it yourself</p>
+              <h2 className={`${upDisplay} mt-3 text-3xl sm:text-4xl`}>Custom printed tees</h2>
+              <p className="mt-3 max-w-lg text-[15px] leading-relaxed text-white/80">
+                Your photo, your logo or your words on a quality cotton tee. Design it in the
+                studio, see it on the shirt, send it through. Good for Christmas, team gear,
+                birthdays and staff uniforms.
+              </p>
+              <span className={`${upBtn.green} mt-6`}>Open the studio →</span>
+            </div>
+            {/* A drawn tee, not a stock photo — same reason as the mockup itself. */}
+            <svg viewBox="0 0 200 220" className="mx-auto h-40 w-auto opacity-90 sm:h-52" aria-hidden="true">
+              <path
+                d="M70 26 L44 40 L28 76 L52 88 L58 74 L58 196 Q58 202 64 202 L136 202 Q142 202 142 196 L142 74 L148 88 L172 76 L156 40 L130 26 Q124 22 118 22 Q114 36 100 36 Q86 36 82 22 Q76 22 70 26 Z"
+                fill="#ffffff" fillOpacity="0.14" stroke="#adff00" strokeWidth="2"
+              />
+              <rect x="76" y="82" width="48" height="46" fill="none" stroke="#adff00" strokeWidth="1.6" strokeDasharray="5 4" />
+            </svg>
+          </a>
+        </section>
+      )}
 
+      {/* ── Everything else ── */}
+      <section id="products" className="mx-auto max-w-6xl px-5 pt-16 sm:px-8 sm:pt-20">
+        <h2 className={`${upDisplay} text-3xl text-[#012583] sm:text-4xl`}>Pick your product</h2>
+        <p className="mt-2 text-[15px]">Live pricing, made to size, NZ-wide delivery.</p>
+
+        {/* 🔴 Four states, never 200-with-zeros: loading, failed, genuinely
+            empty, and real products. An empty catalogue is a real answer. */}
         {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-64 rounded-2xl bg-zinc-100 animate-pulse" />
-            ))}
+          <p className="py-16 text-center text-[15px] text-[#4a5265]/70">Loading products…</p>
+        ) : isError ? (
+          <div className="mt-6 rounded-2xl border border-[#cbd1de] bg-white p-8 text-center">
+            <p className="font-bold text-[#012583]">We couldn't load the products</p>
+            <p className="mt-2 text-[14px]">That's on our end. Give us a call on 0800 800 199 and we'll sort it.</p>
+          </div>
+        ) : rest.length === 0 ? (
+          <div className="mt-6 rounded-2xl border border-dashed border-[#cbd1de] bg-white p-8 text-center">
+            <p className="font-bold text-[#012583]">Nothing listed just yet</p>
+            <p className="mt-2 text-[14px]">Tell us what you need and we'll quote it the same day.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {materials.map((m) => (
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {rest.map((m) => (
               <button
                 key={m.id}
                 onClick={() => setLocation(`/print/configure/${m.slug}`)}
-                className={`group text-left rounded-2xl border bg-gradient-to-br ${CATEGORY_ACCENT[m.category] ?? "from-zinc-50 to-white border-zinc-200"} p-6 hover:shadow-lg hover:scale-[1.01] transition-all`}
+                className="group rounded-2xl border border-[#cbd1de]/70 bg-white p-6 text-left transition hover:-translate-y-0.5 hover:border-[#043bcb] hover:shadow-[0_12px_28px_-14px_rgba(1,37,131,.35)]"
               >
-                <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-3">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#043bcb]">
                   {CATEGORY_LABEL[m.category] ?? m.category}
-                </div>
-                <h3 className="text-xl font-bold text-zinc-900 mb-2">{m.name}</h3>
-                <p className="text-sm text-zinc-600 line-clamp-3 mb-4 min-h-[3.6em]">
-                  {m.description}
                 </p>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-zinc-900">{priceFromLabel(m)}</span>
-                  <span className="text-sm font-medium text-zinc-500 group-hover:text-zinc-900 transition">
-                    Configure →
-                  </span>
+                <h3 className="mt-2 text-[19px] font-extrabold leading-tight text-[#012583]">{m.name}</h3>
+                {m.description && (
+                  <p className="mt-2 line-clamp-3 text-[14px] leading-relaxed text-[#4a5265]">{m.description}</p>
+                )}
+                <div className="mt-5 flex items-center justify-between">
+                  <span className="text-[15px] font-extrabold text-[#012583]">{priceFromLabel(m)}</span>
+                  <span className="text-[13px] font-bold text-[#33cc00] transition group-hover:translate-x-0.5">Configure →</span>
                 </div>
               </button>
             ))}
-
-            <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-6 flex flex-col">
-              <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-3">
-                Anything else
-              </div>
-              <h3 className="text-xl font-bold text-zinc-900 mb-2">Custom job</h3>
-              <p className="text-sm text-zinc-600 mb-4">
-                Vehicle wraps, oversized signs, or something we haven't listed? Tell us what you need.
-              </p>
-              <a
-                href="mailto:orders@unitedprints.co.nz"
-                className="text-sm font-medium text-zinc-900 hover:underline mt-auto"
-              >
-                Email us →
-              </a>
-            </div>
           </div>
         )}
       </section>
-
-      <section className="border-t border-zinc-200 bg-zinc-50">
-        <div className="max-w-6xl mx-auto px-6 py-12 grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div>
-            <div className="text-sm font-bold mb-3">United Prints</div>
-            <p className="text-sm text-zinc-600">
-              466 Yaldhurst Road<br />
-              Hornby, Christchurch<br />
-              0800 800 199<br />
-              orders@unitedprints.co.nz
-            </p>
-          </div>
-          <div>
-            <div className="text-sm font-bold mb-3">Hours</div>
-            <p className="text-sm text-zinc-600">
-              Monday – Friday · 8:30am – 5pm<br />
-              Saturday · By appointment<br />
-              Closed Sundays + public holidays
-            </p>
-          </div>
-          <div>
-            <div className="text-sm font-bold mb-3">A brand of</div>
-            <p className="text-sm text-zinc-600">
-              Christchurch United Football Club Inc.<br />
-              Established 1976. Christchurch's home for sport.
-            </p>
-          </div>
-        </div>
-        <div className="border-t border-zinc-200">
-          <div className="max-w-6xl mx-auto px-6 py-4 text-xs text-zinc-500 flex flex-wrap items-center justify-between gap-2">
-            <span>© 2026 Christchurch United Football Club Inc.</span>
-            <span>Made in Christchurch · Reprint guarantee · Pay securely with Stripe</span>
-          </div>
-        </div>
-      </section>
-    </div>
+    </UpShell>
   );
 }
