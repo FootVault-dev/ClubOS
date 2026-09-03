@@ -24,6 +24,15 @@ export interface ItemConfig {
   sides?: number;
   selectedAddonIds?: string[];
   rush?: boolean;
+  /**
+   * Whole-percent account (trade) discount for the signed-in customer, 0-100.
+   *
+   * 🔴 SERVER-SUPPLIED ONLY. This is read from the customer's own row by
+   * whoever calls the engine — it must never be taken from a request body, or
+   * a browser could name its own discount. The public quote endpoint resolves
+   * it from the session cookie; an anonymous visitor gets 0.
+   */
+  accountDiscountPct?: number;
   // For garment_decoration: { method, colours, decorationLocation, hasArtwork }
   // For per_piece_tiered / bundle: { tierId } (matched to size_tiers_json)
   extra?: Record<string, unknown>;
@@ -38,6 +47,8 @@ export interface QuoteResult {
   ok: true;
   unitPriceCents: number;        // before qty discount, addons
   qtyDiscountCents: number;      // negative is implicit; this is positive (the discount amount)
+  /** Trade/account discount actually applied, in cents. 0 for a visitor. */
+  accountDiscountCents: number;
   addonsTotalCents: number;
   rushFeeCents: number;
   subtotalCents: number;          // pre-GST line subtotal
@@ -257,6 +268,29 @@ export function quotePrintItem(material: PrintMaterial, config: ItemConfig): Quo
   // Subtotal so far (pre-rush, pre-min-charge)
   let subtotalCents = unitPriceCents - qtyDiscountCents + addonsTotalCents;
 
+  // Account (trade) discount ───────────────────────────────────────────────
+  // 🔴 WHERE this sits is a commercial decision, not a formatting one.
+  //
+  // It comes off AFTER the quantity discount and the add-ons — so a trade
+  // customer's discount applies to the whole job, decoration included — but
+  // BEFORE the shop minimum, so it can never take a job under the floor. The
+  // minimum exists because a tiny job costs the same to set up and run as a
+  // slightly larger one; a discount that walked through it would sell the
+  // shop's setup time at a loss.
+  //
+  // A consequence worth stating plainly: on a job already at the minimum, a
+  // trade customer sees NO discount. That is correct, and the breakdown says
+  // so rather than showing a discount line that changes nothing.
+  const accountPct = Math.min(100, Math.max(0, Math.round(Number(config.accountDiscountPct ?? 0) || 0)));
+  let accountDiscountCents = 0;
+  if (accountPct > 0 && subtotalCents > 0) {
+    accountDiscountCents = Math.round((subtotalCents * accountPct) / 100);
+    // Clamp so the discount can never exceed the subtotal it is taken from.
+    accountDiscountCents = Math.min(accountDiscountCents, subtotalCents);
+    subtotalCents -= accountDiscountCents;
+    breakdown.push({ label: `Account pricing (−${accountPct}%)`, cents: -accountDiscountCents });
+  }
+
   // Minimum charge ─────────────────────────────────────────────────────────
   if (subtotalCents < material.minChargeCents) {
     const topUp = material.minChargeCents - subtotalCents;
@@ -282,6 +316,7 @@ export function quotePrintItem(material: PrintMaterial, config: ItemConfig): Quo
     ok: true,
     unitPriceCents,
     qtyDiscountCents,
+    accountDiscountCents,
     addonsTotalCents,
     rushFeeCents,
     subtotalCents,

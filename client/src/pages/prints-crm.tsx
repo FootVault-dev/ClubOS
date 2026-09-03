@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Plus, X, Search, Users, Mail, Phone, Building2, Trash2, Edit } from "lucide-react";
 import type { PrintContact } from "@shared/schema";
+import PrintCustomerAccounts from "@/components/print-customer-accounts";
 
 export default function PrintsCRM() {
   const { currentOrg } = useWorkspace();
@@ -172,6 +173,13 @@ export default function PrintsCRM() {
           </div>
         </div>
       )}
+
+      {/* Customers who sign in to the portal themselves. Sits below the CRM
+          contact list rather than in a tab of its own — a tab needs registering
+          in three separate places and getting one wrong empties a sidebar. */}
+      <div className="mt-10 border-t border-white/[0.08] pt-8">
+        <PrintCustomerAccounts />
+      </div>
     </div>
   );
 }

@@ -215,3 +215,34 @@ export async function emailDimaNewOrder(order: PrintOrder, item: PrintOrderItem 
     await sendEmail({ to: "orders@unitedprints.co.nz", from: FROM, subject: `New order ${order.orderNumber} — ${money(order.totalCents)}`, html: shell("New order", body) });
   } catch (e) { console.error("[Print email] dima notification failed:", e); }
 }
+
+// ── Customer account sign-in code ───────────────────────────────────────────
+// The one email in this file that is NOT fire-and-forget.
+//
+// 🔴 Every other template here logs a failure and returns, which is right for a
+// status update: the order still exists and the customer can be told later.
+// This one IS the sign-in. If the send fails and we swallow it, the customer
+// waits at a code box for an email that is never coming, and the portal looks
+// broken rather than degraded. So it THROWS, and the route decides.
+export async function sendPrintAccountLoginCode(params: {
+  to: string;
+  firstName: string | null;
+  code: string;
+  minutes: number;
+}): Promise<void> {
+  const hello = params.firstName ? `Hi ${params.firstName},` : "Hi,";
+  const body = `
+    <p style="font-size:15px;line-height:1.6;margin:0 0 20px">${hello}</p>
+    <p style="font-size:15px;line-height:1.6;margin:0 0 8px">Here's your code to sign in to your United Prints account:</p>
+    <p style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:34px;font-weight:800;letter-spacing:8px;color:#043bcb;margin:24px 0;padding:16px 0;text-align:center;background:#f2f6ff;border-radius:12px">${params.code}</p>
+    <p style="font-size:14px;line-height:1.6;color:#555;margin:0 0 8px">It expires in ${params.minutes} minutes and can only be used once.</p>
+    <p style="font-size:14px;line-height:1.6;color:#555;margin:0">If you didn't ask for this, you can ignore this email — nobody can get into your account without the code.</p>`;
+
+  await sendEmail({
+    to: params.to,
+    from: FROM,
+    replyTo: "orders@unitedprints.co.nz",
+    subject: `${params.code} is your United Prints sign-in code`,
+    html: shell("Your sign-in code", body),
+  });
+}

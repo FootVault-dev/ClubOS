@@ -358,7 +358,18 @@ export function registerParentRoutes(app: Express) {
   // Without this, /account falls through to the one-segment /:slug route and a
   // parent gets "Camp not found" — which is exactly what it did. Server-side
   // so it works with no JS, and 301 because the move is permanent.
-  app.get("/account", (_req, res) => res.redirect(301, "https://cufc.co.nz/account"));
+  // 🔴 HOST-AWARE. This used to redirect /account on EVERY host ClubOS serves,
+  // which is fine while cufc is the only brand with a portal — and wrong the
+  // moment a second one exists. join.unitedprints.co.nz/account is the United
+  // Prints customer portal (server/print-account-routes.ts); without this guard
+  // a print customer clicking "Log in" lands on the football club's parent
+  // sign-in. Only cufc hosts are bounced; everything else falls through to the
+  // SPA, which routes /account by hostname.
+  app.get("/account", (req, res, next) => {
+    const host = String(req.hostname || "").toLowerCase();
+    if (host.includes("cufc.co.nz")) return res.redirect(301, "https://cufc.co.nz/account");
+    return next();
+  });
 
   // ── Request a code ─────────────────────────────────────────────────────────
   // 🔴 Always answers the same way, whether or not the address is known. The

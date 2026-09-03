@@ -28,6 +28,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import crypto from "crypto";
 import type { Express, Request, Response } from "express";
+import { currentPrintCustomer } from "./print-account-routes";
+import { accountDiscountPct } from "@shared/print-account";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireTab } from "./auth";
@@ -229,6 +231,13 @@ function matchStockTier(material: PrintMaterial, widthMm: number | null, heightM
 async function priceQuoteLines(
   orgId: number,
   rawItems: any[],
+  /**
+   * The signed-in customer's account discount, resolved SERVER-SIDE from their
+   * session row. Never from the request body — see ItemConfig.accountDiscountPct.
+   * An anonymous visitor is 0, which is also the default for every account
+   * until Dima sets a real number.
+   */
+  accountDiscountPct = 0,
 ): Promise<{ lines: PricedLine[]; subtotalCents: number; gstCents: number; totalCents: number; needsHumanQuote: boolean }> {
   const available = await websiteQuoteMaterials(orgId);
   const bySlug = new Map(available.map((m) => [m.slug, m]));
@@ -267,6 +276,7 @@ async function priceQuoteLines(
       heightMm: heightMm ?? undefined,
       quantity,
       sides: 1,
+      accountDiscountPct,
       ...(tierId ? { extra: { tierId } } : {}),
     });
 
@@ -339,8 +349,29 @@ export function registerPrintQuoteRoutes(app: Express) {
       const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
       if (!rawItems.length) return res.status(400).json({ message: "At least one item is required." });
 
-      const priced = await priceQuoteLines(UNITED_PRINTS_ORG_ID, rawItems);
+      // 🔴 The discount comes from the SESSION, never the body.
+      //
+      // A note on where this does and does not take effect, because it is
+      // load-bearing rather than an oversight: the cookie is `__Host-` scoped
+      // to join.unitedprints.co.nz, so a call from the marketing site (a
+      // different origin, sent without credentials by design) resolves to no
+      // customer and prices at list. The SAME endpoint, called from the signed-in
+      // portal on the same origin, carries the cookie and prices at their rate.
+      //
+      // That is deliberate. Making the marketing site's quote account-aware
+      // would mean credentialed CORS on an allowlist that currently reflects any
+      // *.vercel.app origin — which would let any Vercel page price, and act, as
+      // a signed-in customer. The portal is where a customer sees their price.
+      const customer = await currentPrintCustomer(req);
+      const priced = await priceQuoteLines(
+        UNITED_PRINTS_ORG_ID,
+        rawItems,
+        accountDiscountPct(customer),
+      );
       res.json({
+        accountPricing: customer
+          ? { applied: accountDiscountPct(customer) > 0, discountPct: accountDiscountPct(customer), tier: customer.tier }
+          : null,
         lines: priced.lines.map((l) => ({
           index: l.index,
           ok: l.ok,

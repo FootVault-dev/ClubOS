@@ -70,9 +70,14 @@ export default function PrintHub() {
               <div className="text-[10px] text-zinc-500 -mt-0.5">Christchurch</div>
             </div>
           </div>
-          <a href="tel:0800800199" className="text-sm font-medium text-zinc-900 hover:text-zinc-600">
-            0800 800 199
-          </a>
+          <div className="flex items-center gap-4">
+            <a href="/account" className="text-sm font-semibold text-zinc-900 hover:text-zinc-600">
+              My account
+            </a>
+            <a href="tel:0800800199" className="hidden text-sm font-medium text-zinc-900 hover:text-zinc-600 sm:block">
+              0800 800 199
+            </a>
+          </div>
         </div>
       </header>
 
@@ -91,6 +96,12 @@ export default function PrintHub() {
               className="px-6 py-3 rounded-full bg-zinc-900 text-white font-semibold hover:bg-zinc-800 transition"
             >
               Get a quote →
+            </a>
+            <a
+              href="/print/dtf"
+              className="px-6 py-3 rounded-full bg-[#33cc00] text-white font-semibold hover:brightness-95 transition"
+            >
+              Printed tees →
             </a>
             <a
               href="tel:0800800199"
