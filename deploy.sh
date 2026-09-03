@@ -216,6 +216,23 @@ npx tsx --env-file=.env script/_verify-checkout-live.ts || {
   exit 1
 }
 
+echo ""
+echo "── Post-deploy: does every page still RENDER? ──"
+# Daniel, 2026-09-04: "white screen error again... make sure this never happens
+# again as it's happening all the time, particularly around new updates."
+#
+# tsc passes, the build passes and route probes return 200 while a page is
+# white — the failures are at RUNTIME in the browser. Three reached production
+# recently: an un-imported icon, a prop named `ref` stripped by React 18, and a
+# useMutation below an early return. This opens the real pages in a real browser
+# and fails on a blank one.
+npx tsx --env-file=.env script/_verify-pages-render.ts || {
+  echo ""
+  echo "🔴 A page is WHITE-SCREENING on production. Fix it or roll back now —"
+  echo "   staff are looking at a blank screen."
+  exit 1
+}
+
 # Only now — a deploy that landed AND verified — is this the state production
 # serves. The next run diffs against it to show what is going out.
 git rev-parse HEAD > .last-deployed-sha 2>/dev/null || true

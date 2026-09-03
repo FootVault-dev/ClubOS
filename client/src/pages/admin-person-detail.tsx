@@ -463,6 +463,28 @@ export default function AdminPersonDetail() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/people", personKeyParam] }),
   });
 
+  // 🔴 ABOVE the early returns. React counts hooks per render, so a useMutation
+  // placed after `if (isLoading) return …` is skipped on the first render and
+  // called on the second — "Rendered more hooks than during the previous
+  // render" (#310), which white-screens the whole page. That is exactly what
+  // shipped in v499. `isPlayer` is not known this early, so it is passed in.
+  const saveEdits = useMutation({
+    mutationFn: async (vars: { isPlayer: boolean }) => {
+      const payload: Record<string, string> = { firstName: eFirst, lastName: eLast };
+      if (vars.isPlayer) payload.school = eSchool;
+      else { payload.email = eEmail; payload.phone = ePhone; }
+      const res = await apiRequest("PATCH", `/api/admin/people/${personKeyParam}`, payload);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Could not save");
+      return res.json();
+    },
+    onSuccess: () => {
+      setEditing(false); setSaveErr(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/people"] });
+      toast({ title: "Details updated" });
+    },
+    onError: (e: Error) => setSaveErr(e.message),
+  });
+
   if (isLoading) {
     return (
       <div className="p-4 sm:p-8 max-w-3xl mx-auto space-y-6">
@@ -489,22 +511,6 @@ export default function AdminPersonDetail() {
   const children: any[] = data.children || [];
   const regs: any[] = data.registrations || [];
   const isPlayer = p.type === "player";
-
-  const saveEdits = useMutation({
-    mutationFn: async () => {
-      const payload: Record<string, string> = { firstName: eFirst, lastName: eLast };
-      if (isPlayer) payload.school = eSchool; else { payload.email = eEmail; payload.phone = ePhone; }
-      const res = await apiRequest("PATCH", `/api/admin/people/${personKeyParam}`, payload);
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Could not save");
-      return res.json();
-    },
-    onSuccess: () => {
-      setEditing(false); setSaveErr(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/people"] });
-      toast({ title: "Details updated" });
-    },
-    onError: (e: Error) => setSaveErr(e.message),
-  });
 
   const startEditing = () => {
     setEFirst(p.firstName || ""); setELast(p.lastName || "");
@@ -592,7 +598,7 @@ export default function AdminPersonDetail() {
             <p className="text-[12.5px] text-red-500 mt-3" data-testid="text-edit-error">{saveErr}</p>
           )}
           <div className="flex gap-2 mt-4">
-            <Button size="sm" onClick={() => saveEdits.mutate()} disabled={saveEdits.isPending || !eFirst.trim()} data-testid="button-save-details">
+            <Button size="sm" onClick={() => saveEdits.mutate({ isPlayer })} disabled={saveEdits.isPending || !eFirst.trim()} data-testid="button-save-details">
               {saveEdits.isPending ? "Saving…" : "Save"}
             </Button>
             <Button size="sm" variant="outline" onClick={() => { setEditing(false); setSaveErr(null); }} data-testid="button-cancel-edit">
