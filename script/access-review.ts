@@ -18,6 +18,13 @@
  */
 import pg from "pg";
 import { canAccessTab, SUPER_ADMIN_ONLY_TABS, tabsForOrgSlug } from "../shared/tabs.js";
+import { HIDDEN_GLOBAL, HIDDEN_BY_WORKSPACE } from "../shared/sidebar-hidden.js";
+
+/** A tab clears TWO gates to be visible: may this person reach it, AND do we
+ *  draw it at all? Permission alone over-reports — Studio is unlocked for
+ *  everyone and drawn for nobody. */
+const drawn = (ws: string, slug: string) =>
+  !HIDDEN_GLOBAL.includes(slug) && !(HIDDEN_BY_WORKSPACE[ws] ?? []).includes(slug);
 
 const FULL = process.argv.includes("--full");
 const WHO = process.argv[process.argv.indexOf("--who") + 1];
@@ -51,7 +58,7 @@ for (const [, rs] of byUser) {
   console.log(`\n${name}  <${rs[0].email}>   global_role=${rs[0].gr}`);
   for (const w of rs) {
     const defs = tabsForOrgSlug(w.ws);
-    const vis = defs.filter((t) =>
+    const vis = defs.filter((t) => drawn(w.ws, t.slug) &&
       canAccessTab({ globalRole: w.gr, membershipRole: w.mr, membershipTabs: w.tabs,
                      membershipUnlockedTabs: w.un, tabSlug: t.slug }));
     let note = "";
@@ -67,7 +74,7 @@ for (const [, rs] of byUser) {
 const unreachable = new Map<string, string[]>();
 for (const ws of [...new Set(rows.map((r) => r.ws))].sort()) {
   for (const t of tabsForOrgSlug(ws)) {
-    const anyone = rows.some((w) => w.ws === ws && w.gr !== "super_admin" &&
+    const anyone = rows.some((w) => w.ws === ws && w.gr !== "super_admin" && drawn(ws, t.slug) &&
       canAccessTab({ globalRole: w.gr, membershipRole: w.mr, membershipTabs: w.tabs,
                      membershipUnlockedTabs: w.un, tabSlug: t.slug }));
     if (!anyone) {
@@ -81,7 +88,8 @@ console.log("\n" + "=".repeat(60));
 console.log(`\nLOCKED TO THE SUPER ADMIN (${SUPER_ADMIN_ONLY_TABS.size} slugs):`);
 console.log("  " + [...SUPER_ADMIN_ONLY_TABS].sort().join(", "));
 
-console.log(`\nTABS NO ORDINARY STAFF MEMBER CAN REACH (${unreachable.size}):`);
+console.log(`\nTABS NO ORDINARY STAFF MEMBER CAN REACH (${unreachable.size})`);
+console.log("  (either locked to the super admin, or not drawn in the sidebar at all)");
 if (!unreachable.size) console.log("  none — every tab is reachable by at least one non-super-admin");
 for (const [title, wss] of [...unreachable].sort()) console.log(`  ${title.padEnd(24)} ${wss.join(", ")}`);
 
