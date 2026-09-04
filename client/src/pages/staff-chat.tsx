@@ -46,7 +46,7 @@ interface ChannelSummary {
 }
 interface Attachment { url: string; name: string; contentType: string; size: number; kind: "image" | "voice" | "file"; durationSec?: number }
 interface ChatMessage {
-  id: number; channelId: number; authorId: number; authorName: string; body: string;
+  id: number; channelId: number; authorId: number; authorName: string; authorAvatarUrl?: string | null; body: string;
   attachments: Attachment[] | null; clientMessageId: string | null; requiresAck: boolean;
   editedAt: string | null; deleted: boolean; createdAt: string;
   reactions: { emoji: string; userIds: number[] }[]; ackCount: number; ackedByMe: boolean;
@@ -84,6 +84,45 @@ const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join("") || "?";
 
 const avatarHue = (id: number) => (id * 137.508) % 360; // golden-angle spread
+
+/**
+ * A face in chat: the staff photo when there is one, initials when there isn't.
+ *
+ * Daniel, 2026-09-04: "make sure profile pics are showing here not default
+ * shit." The photos have existed since v389 and the message list simply never
+ * asked for them — it drew initials for everyone, including the three people
+ * who had actually uploaded one.
+ *
+ * 🔴 Initials are the fallback, not a stock silhouette. Most of the team has no
+ * photo, and a coloured monogram tells you who it is; a grey outline of a head
+ * tells you nothing. `onError` falls back too, so a deleted upload degrades to
+ * the monogram instead of a broken-image icon.
+ */
+function Face({ id, name, src, size, rounded = "rounded-xl", text }: {
+  id: number; name: string; src?: string | null; size: string; rounded?: string; text: string;
+}) {
+  const [broken, setBroken] = useState(false);
+  if (src && !broken) {
+    return (
+      <img
+        src={src}
+        alt={name}
+        onError={() => setBroken(true)}
+        className={`${size} ${rounded} object-cover shrink-0`}
+        data-testid={`avatar-${id}`}
+      />
+    );
+  }
+  return (
+    <div
+      className={`${size} ${rounded} flex items-center justify-center ${text} font-bold shrink-0`}
+      style={{ background: `hsl(${avatarHue(id)} 42% 30%)`, color: "rgba(255,255,255,0.92)" }}
+      data-testid={`avatar-${id}`}
+    >
+      {initials(name)}
+    </div>
+  );
+}
 
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-NZ", { hour: "numeric", minute: "2-digit", hour12: true }).toLowerCase();
@@ -1089,11 +1128,9 @@ function MessageRow(props: {
       style={msg.requiresAck ? { borderColor: "rgba(201,164,62,0.35)", background: "rgba(201,164,62,0.045)" } : {}}
     >
       {!grouped || msg.requiresAck ? (
-        <div
-          className="w-9 h-9 rounded-xl flex items-center justify-center text-[12px] font-bold shrink-0 mt-0.5"
-          style={{ background: `hsl(${avatarHue(msg.authorId)} 42% 30%)` }}
-        >
-          {initials(msg.authorName)}
+        <div className="mt-0.5">
+          <Face id={msg.authorId} name={msg.authorName} src={msg.authorAvatarUrl}
+                size="w-9 h-9" text="text-[12px]" />
         </div>
       ) : (
         <div className="w-9 shrink-0 text-right">
@@ -1782,9 +1819,8 @@ function Composer(props: {
               onMouseDown={(e) => { e.preventDefault(); pickMention(m); }}
               className={`w-full flex items-center gap-2.5 px-3 py-2 text-left ${i === mentionIdx ? "bg-white/[0.08]" : "hover:bg-white/[0.05]"}`}
             >
-              <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold" style={{ background: `hsl(${avatarHue(m.userId)} 42% 30%)` }}>
-                {initials(m.name)}
-              </div>
+              <Face id={m.userId} name={m.name} src={(m as any).avatarUrl}
+                    size="w-6 h-6" rounded="rounded-lg" text="text-[10px]" />
               <span className="text-[13px]">{m.name}</span>
             </button>
           ))}
@@ -1981,9 +2017,8 @@ function NewDmDialog(props: { open: boolean; onClose: () => void; users: Person[
                 onClick={() => picked.length < 8 && setPicked((cur) => [...cur, u])}
                 className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl hover:bg-white/[0.05] text-left"
               >
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-bold" style={{ background: `hsl(${avatarHue(u.id)} 42% 30%)` }}>
-                  {initials(u.name)}
-                </div>
+                <Face id={u.id} name={u.name} src={(u as any).avatarUrl}
+                      size="w-7 h-7" rounded="rounded-lg" text="text-[11px]" />
                 <div className="min-w-0 flex-1">
                   <p className="text-[13.5px] truncate">{u.name}</p>
                   <p className="text-[11px] text-white/35 truncate">{u.email}</p>
@@ -2122,9 +2157,8 @@ function MembersDialog(props: {
         <div className="p-4 max-h-[26rem] overflow-y-auto">
           {members.map((m) => (
             <div key={m.userId} className="flex items-center gap-2.5 py-1.5">
-              <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-bold" style={{ background: `hsl(${avatarHue(m.userId)} 42% 30%)` }}>
-                {initials(m.name)}
-              </div>
+              <Face id={m.userId} name={m.name} src={(m as any).avatarUrl}
+                    size="w-7 h-7" rounded="rounded-lg" text="text-[11px]" />
               <span className="text-[13.5px] flex-1 truncate">{m.name}</span>
               {m.role === "owner" && <span className="text-[10px] uppercase font-bold tracking-wider text-white/30">owner</span>}
             </div>
@@ -2141,9 +2175,8 @@ function MembersDialog(props: {
             />
             {addable.slice(0, 8).map((u) => (
               <div key={u.id} className="flex items-center gap-2.5 py-1.5">
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-bold" style={{ background: `hsl(${avatarHue(u.id)} 42% 30%)` }}>
-                  {initials(u.name)}
-                </div>
+                <Face id={u.id} name={u.name} src={(u as any).avatarUrl}
+                      size="w-7 h-7" rounded="rounded-lg" text="text-[11px]" />
                 <span className="text-[13.5px] flex-1 truncate">{u.name}</span>
                 <button
                   disabled={busy === u.id}

@@ -448,7 +448,7 @@ async function hydrateMessages(msgIds: number[], viewerId: number) {
 
 function shapeMessage(
   m: typeof staffMessages.$inferSelect,
-  author: { firstName: string | null; lastName: string | null } | null,
+  author: { firstName: string | null; lastName: string | null; avatarUrl?: string | null } | null,
   h: Awaited<ReturnType<typeof hydrateMessages>>,
 ) {
   const deleted = m.deletedAt != null;
@@ -457,6 +457,10 @@ function shapeMessage(
     channelId: m.channelId,
     authorId: m.authorId,
     authorName: author ? fullName(author) : "Unknown",
+    // The staff photo, so chat shows a face instead of initials. Null is a real
+    // answer — most of the team hasn't set one, and initials are the honest
+    // fallback rather than a stock silhouette.
+    authorAvatarUrl: author?.avatarUrl ?? null,
     body: deleted ? "" : m.body,
     attachments: deleted ? null : (m.attachments as StaffChatAttachment[] | null),
     clientMessageId: m.clientMessageId,
@@ -571,7 +575,7 @@ export function registerStaffChatRoutes(app: Express) {
         ? and(eq(staffMessages.channelId, channelId), notAReply, sql`${staffMessages.id} < ${before}`)
         : and(eq(staffMessages.channelId, channelId), notAReply);
       const page = await db
-        .select({ message: staffMessages, author: { firstName: usersTable.firstName, lastName: usersTable.lastName } })
+        .select({ message: staffMessages, author: { firstName: usersTable.firstName, lastName: usersTable.lastName, avatarUrl: usersTable.avatarUrl } })
         .from(staffMessages)
         .leftJoin(usersTable, eq(usersTable.id, staffMessages.authorId))
         .where(where)
@@ -587,6 +591,7 @@ export function registerStaffChatRoutes(app: Express) {
           role: staffChannelMembers.role,
           firstName: usersTable.firstName,
           lastName: usersTable.lastName,
+          avatarUrl: usersTable.avatarUrl,
         })
         .from(staffChannelMembers)
         .innerJoin(usersTable, eq(usersTable.id, staffChannelMembers.userId))
@@ -1189,7 +1194,7 @@ export function registerStaffChatRoutes(app: Express) {
       if (!channel || !(await canRead(channel, userId))) return res.status(403).json({ message: "Not your conversation" });
 
       const members = await db
-        .select({ userId: staffChannelMembers.userId, firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .select({ userId: staffChannelMembers.userId, firstName: usersTable.firstName, lastName: usersTable.lastName, avatarUrl: usersTable.avatarUrl })
         .from(staffChannelMembers)
         .innerJoin(usersTable, eq(usersTable.id, staffChannelMembers.userId))
         .where(and(eq(staffChannelMembers.channelId, msg.channelId), isNull(staffChannelMembers.leftAt)));
