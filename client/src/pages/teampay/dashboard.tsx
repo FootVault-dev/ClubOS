@@ -185,7 +185,11 @@ export default function TeampayDashboard() {
         <Button brand={brand} onClick={() => setShowAdd((v) => !v)}>
           <UserPlus size={16} className="mr-2" /> Add players
         </Button>
-        <Button
+        {/* 🔴 Hidden, not disabled, in whole mode. A greyed "Remind everyone
+            unpaid (0)" is a control that can never do anything on this team —
+            nobody is ever going to owe a share — and dead UI makes a manager
+            wonder what they have got wrong. */}
+        {!isWhole && <Button
           brand={brand}
           variant="ghost"
           disabled={!outstanding.length || busy === "nudge-all"}
@@ -199,7 +203,7 @@ export default function TeampayDashboard() {
         >
           {busy === "nudge-all" ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Bell size={16} className="mr-2" />}
           Remind everyone unpaid ({outstanding.length})
-        </Button>
+        </Button>}
         {competition.fillinsOpen && (
           <Button brand={brand} variant="ghost" onClick={() => setShowFillins(true)}>
             <Search size={16} className="mr-2" /> Find a fill-in

@@ -1,0 +1,92 @@
+// Open (or close) Ethnic Cup team entries and payment.
+//
+//   npx tsx --env-file=.env script/open-ethnic-cup-entries.ts             (show state)
+//   npx tsx --env-file=.env script/open-ethnic-cup-entries.ts --open      (entries + payment ON)
+//   npx tsx --env-file=.env script/open-ethnic-cup-entries.ts --close     (both OFF)
+//
+// These same switches are in ClubOS at CIC workspace → Ethnic → Team Entries.
+// This script exists so the state is repeatable and reversible from one place,
+// and so turning it OFF in a hurry is one command rather than a hunt through a
+// UI — which is what you want on the day something goes wrong with a fixture.
+//
+// 🔴 fillins_open is deliberately NOT touched. The fill-in marketplace is a
+// separate product surface — strangers listing themselves to be picked up by
+// teams — and Daniel asked for payment, not for that. Open it with
+// --fillins if and when that is a decision somebody has actually made.
+import pg from "pg";
+
+const SLUG = "ethnic-cup-2026";
+
+const OPEN = process.argv.includes("--open");
+const CLOSE = process.argv.includes("--close");
+const FILLINS = process.argv.includes("--fillins");
+
+/**
+ * 🔴 The blurb is the last thing a manager reads before they pay, so it carries
+ * the two facts that matter and are not otherwise on the page: that they choose
+ * how to pay, and that the venue is not announced yet. Entries opening before a
+ * confirmed ground is the club's call (Daniel, 2026-09-04); saying so plainly
+ * is what makes it a fair one.
+ */
+const BLURB =
+  "An eleven-a-side tournament for teams representing Christchurch's communities. " +
+  "Pay the $800 team fee yourself, or split it across your squad so every player pays " +
+  "their own share on their own card — you choose, and you can change your mind until " +
+  "it is paid. The venue is still being confirmed; it will be in Christchurch and every " +
+  "entered team will hear as soon as it is locked in.";
+
+async function main() {
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+
+  const before = await client.query(
+    `select id, name, fee_cents, default_squad_size, entries_open, payments_enabled,
+            fillins_open, blurb
+       from teampay_competitions where slug = $1`, [SLUG]);
+  if (!before.rowCount) {
+    console.error(`\n  No competition with slug '${SLUG}'.\n`);
+    process.exit(1);
+  }
+  const c = before.rows[0];
+
+  const show = (r: any, label: string) =>
+    console.log(
+      `  ${label.padEnd(7)} entries ${r.entries_open ? "OPEN " : "shut "}` +
+      `· payments ${r.payments_enabled ? "ON  " : "OFF "}` +
+      `· fill-ins ${r.fillins_open ? "OPEN" : "shut"}`);
+
+  console.log(`\n  ${c.name} — $${(c.fee_cents / 100).toFixed(2)} per team, squad of ${c.default_squad_size}\n`);
+  show(c, "now:");
+
+  if (!OPEN && !CLOSE) {
+    console.log(`\n  Nothing changed. Pass --open or --close.\n`);
+    await client.end();
+    return;
+  }
+
+  const entries = OPEN;
+  const payments = OPEN;
+  const fillins = FILLINS ? OPEN : c.fillins_open;
+
+  const [after] = (await client.query(
+    `update teampay_competitions
+        set entries_open = $2, payments_enabled = $3, fillins_open = $4,
+            blurb = $5, updated_at = now()
+      where slug = $1
+      returning entries_open, payments_enabled, fillins_open`,
+    [SLUG, entries, payments, fillins, BLURB])).rows;
+
+  show(after, "after:");
+
+  // Read it back rather than trusting the UPDATE's own RETURNING — cheap, and
+  // it is the difference between "we wrote it" and "it is true".
+  const check = await client.query(
+    `select entries_open, payments_enabled from teampay_competitions where slug = $1`, [SLUG]);
+  const good = check.rows[0].entries_open === entries && check.rows[0].payments_enabled === payments;
+  console.log(good ? `\n  ✓ confirmed by read-back\n` : `\n  ✗ read-back disagrees — check by hand\n`);
+
+  await client.end();
+  process.exit(good ? 0 : 1);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });

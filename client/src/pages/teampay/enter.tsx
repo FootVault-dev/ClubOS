@@ -153,6 +153,18 @@ export default function TeampayEnterPage() {
             </>
           )}
         </p>
+        {/* 🔴 The competition's own blurb, rendered where the money decision is
+            made. It is the only place the Ethnic Cup's venue caveat reaches a
+            manager on this page — entries opened before the ground was
+            announced, and somebody about to put $800 on a card is entitled to
+            read that first, not find out afterwards. Staff edit it in ClubOS. */}
+        {comp.blurb && (
+          <p className="mt-4 border-t pt-4 text-[13px] leading-relaxed"
+             style={{ borderColor: brand.line, color: brand.mute }}>
+            {comp.blurb}
+          </p>
+        )}
+
         {!comp.paymentsEnabled && (
           <div className="mt-4">
             <Notice brand={brand} tone="warn">
