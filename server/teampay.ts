@@ -23,9 +23,10 @@ import {
 import {
   shareCents, playerStatus, entryMoney, nudgeGate, isNudgeable,
   countsTowardsSquad, brandFor, withinNudgeHoursNz,
+  playerChargeCents, teamChargeCents, isPaymentMode,
   FILLIN_HOLD_HOURS, FILLIN_MAX_CONCURRENT_HOLDS, FILLIN_REASK_COOLDOWN_DAYS,
   RELEASE_CONTACT_ON_REQUEST, MIN_SQUAD_SIZE, MAX_SQUAD_SIZE, TOKEN_BYTES,
-  type FillinPublic,
+  type FillinPublic, type PaymentMode,
 } from "@shared/teampay";
 import { createCardPaymentIntent, getOrCreateCustomer, retrievePaymentIntent } from "./stripe";
 import { sendEmail } from "./email";
@@ -148,6 +149,8 @@ export async function createEntry(input: {
   squadSize?: number | null;
   /** The manager pays a share like everyone else, so they get a roster row. */
   managerPlays?: boolean;
+  /** 'split' (default) or 'whole' — see PAYMENT_MODES. */
+  paymentMode?: string | null;
 }): Promise<{ error?: string; entry?: TeampayEntry; dashboardUrl?: string }> {
   const comp = await competitionBySlug(input.slug);
   if (!comp) return { error: "That competition isn't open for entries." };
@@ -165,6 +168,12 @@ export async function createEntry(input: {
     return { error: `Squad size needs to be between ${MIN_SQUAD_SIZE} and ${MAX_SQUAD_SIZE}.` };
   }
 
+  // 🔴 An unrecognised mode falls back to 'split' rather than being rejected.
+  // The alternative is a form that refuses a team over a field the manager
+  // cannot see; and 'split' is the safe default because it keeps asking players
+  // rather than quietly deciding the fee is somebody else's problem.
+  const paymentMode: PaymentMode = isPaymentMode(input.paymentMode) ? input.paymentMode : "split";
+
   const organiserToken = token();
   const [entry] = await db.insert(teampayEntries).values({
     competitionId: comp.id,
@@ -178,6 +187,7 @@ export async function createEntry(input: {
     // fee next week must not silently re-price a squad that is halfway paid.
     feeCents: comp.feeCents,
     squadSize,
+    paymentMode,
     organiserToken,
   }).returning();
 
@@ -195,7 +205,7 @@ export async function createEntry(input: {
     });
   }
 
-  await logEvent({ entryId: entry.id, kind: "entry_created", actor: "manager", detail: { teamName, squadSize } });
+  await logEvent({ entryId: entry.id, kind: "entry_created", actor: "manager", detail: { teamName, squadSize, paymentMode } });
 
   const url = dashboardUrl(organiserToken);
   await sendEmail({
@@ -241,6 +251,7 @@ export async function dashboardView(organiserToken: string) {
   const players = await playersOf(entry.id);
   const now = new Date();
   const share = shareCents(entry.feeCents, entry.squadSize);
+  const teamMoney = entryMoney(entry, players);
 
   const holds = await db.select({
     id: teampayFillinHolds.id,
@@ -268,11 +279,24 @@ export async function dashboardView(organiserToken: string) {
       status: entry.status,
       paidUpAt: entry.paidUpAt,
       createdAt: entry.createdAt,
+      paymentMode: (entry.paymentMode === "whole" ? "whole" : "split") as PaymentMode,
+      teamPaidCents: entry.teamPaidCents,
+      teamPaidAt: entry.teamPaidAt,
     },
     shareCents: share,
-    money: entryMoney(entry, players),
-    /** 🔴 Squad size is frozen by a database trigger once anyone has paid. */
-    canResize: players.every((p) => !p.paidAt),
+    money: teamMoney,
+    /**
+     * What the manager's own "pay the team fee" button would charge right now.
+     * Recomputed on every read, so two players paying while the page is open
+     * changes the button rather than the manager over-paying.
+     */
+    teamChargeCents: teamChargeCents(teamMoney),
+    /**
+     * 🔴 Squad size is frozen by a database trigger once ANY money has landed —
+     * a player's share or the manager's team payment. The button has to agree
+     * with the trigger or the manager gets a 500 instead of a disabled control.
+     */
+    canResize: players.every((p) => !p.paidAt) && !entry.teamPaidAt,
     players: players.map((p) => ({
       id: p.id,
       name: p.name,
@@ -491,6 +515,9 @@ export async function playerView(inviteToken: string) {
       community: entry.community,
       managerName: entry.managerName,
       squadSize: entry.squadSize,
+      /** So the page can say who is paying, rather than showing a dead button. */
+      paymentMode: m.paymentMode,
+      isPaidUp: m.isPaidUp,
     },
     you: {
       name: player.name,
@@ -499,6 +526,13 @@ export async function playerView(inviteToken: string) {
       paidCents: player.paidCents,
       /** What you owe — derived from the team fee and the squad size, always. */
       shareCents: m.shareCents,
+      /**
+       * 🔴 What you will ACTUALLY be charged, which is not always your share:
+       * zero when the manager is covering the fee, and the remainder when you
+       * are the last one paying into a nearly-settled balance. The page must
+       * show this figure, not shareCents, or the button lies about the amount.
+       */
+      chargeCents: playerChargeCents(m),
     },
     squad: {
       paidCount: m.paidCount,
@@ -561,7 +595,24 @@ export async function payIntent(inviteToken: string): Promise<{ error?: string; 
   if (player.paidAt) return { error: "already_paid" };
   if (player.removedAt) return { error: "You're not on this squad any more." };
 
-  const amountCents = shareCents(entry.feeCents, entry.squadSize);
+  /**
+   * 🔴 The amount comes from the entry's live balance, not from fee ÷ squad.
+   *
+   * Two reasons, both of which end in a refund if this is got wrong:
+   *   1. In 'whole' mode the manager is settling the fee. Charging this player
+   *      a share as well takes the money twice for one seat.
+   *   2. Even in 'split' mode the balance can already be covered — a manager
+   *      who gave up chasing and paid the remainder themselves is the whole
+   *      point of the team-pay button. The last player to open a stale link
+   *      must not be charged into an over-collection.
+   */
+  const players = await playersOf(entry.id);
+  const m = entryMoney(entry, players);
+  const amountCents = playerChargeCents(m);
+
+  if (amountCents <= 0) {
+    return { error: m.paymentMode === "whole" ? "manager_paying" : "team_paid_up" };
+  }
   // Stripe will not take less than roughly 50c in NZD.
   if (amountCents < 50) return { error: "That amount is too small to charge." };
 
@@ -652,23 +703,162 @@ export async function confirmPayment(inviteToken: string): Promise<{ error?: str
 
 /** The Stripe webhook's teampay branch. Idempotent. */
 export async function markPaidByPaymentIntent(pi: any): Promise<boolean> {
+  // 🔴 Two kinds of teampay payment now ride this webhook. A team payment
+  // carries no teampayPlayerId, and treating it as a player's would silently
+  // fail to record $800.
+  if (pi?.metadata?.teampayKind === "team") return markTeamPaidByPaymentIntent(pi);
   const playerId = Number(pi?.metadata?.teampayPlayerId);
   if (!Number.isInteger(playerId)) return false;
   return markPaidOnce(playerId, pi.id, pi.amount_received || pi.amount);
+}
+
+// ── the manager settles the team fee ─────────────────────────────────────────
+
+/**
+ * How the team pays. Offered at entry and changeable from the dashboard.
+ *
+ * 🔴 Deliberately NOT frozen once money has landed, unlike squad size. Switching
+ * mode re-prices nobody: both routes settle the same balance, and every charge
+ * is capped at what is still outstanding. The case this exists for is real and
+ * common — a manager splits it, three players never pay, and after two weeks of
+ * chasing they give up and put the rest on their own card.
+ */
+export async function setPaymentMode(
+  organiserToken: string,
+  mode: string,
+): Promise<{ error?: string; paymentMode?: PaymentMode }> {
+  if (!isPaymentMode(mode)) return { error: "That isn't a way to pay." };
+  const entry = await entryByToken(organiserToken);
+  if (!entry) return { error: "not_found" };
+  if (entry.status !== "active") return { error: "This team has been withdrawn." };
+  if (entry.paidUpAt) return { error: "This team is already paid up." };
+
+  await db.update(teampayEntries)
+    .set({ paymentMode: mode, updatedAt: new Date() })
+    .where(eq(teampayEntries.id, entry.id));
+  await logEvent({ entryId: entry.id, kind: "payment_mode_changed", actor: "manager", detail: { paymentMode: mode } });
+  return { paymentMode: mode };
+}
+
+/**
+ * Mint the manager's PaymentIntent for whatever the team still owes.
+ *
+ * 🔴 Same rule as the player path: the amount is computed here from the entry,
+ * and the browser sends a token and nothing else.
+ */
+export async function teamPayIntent(
+  organiserToken: string,
+): Promise<{ error?: string; clientSecret?: string | null; amountCents?: number }> {
+  const entry = await entryByToken(organiserToken);
+  if (!entry) return { error: "not_found" };
+  const comp = await competitionById(entry.competitionId);
+  if (!comp) return { error: "not_found" };
+
+  if (!comp.paymentsEnabled) return { error: "Payment isn't open yet." };
+  if (entry.status !== "active") return { error: "This team has been withdrawn." };
+
+  const players = await playersOf(entry.id);
+  const m = entryMoney(entry, players);
+  const amountCents = teamChargeCents(m);
+
+  if (amountCents <= 0) return { error: "already_paid" };
+  if (amountCents < 50) return { error: "That amount is too small to charge." };
+
+  let customerId = entry.teamStripeCustomerId ?? undefined;
+  if (!customerId) {
+    try {
+      const c = await getOrCreateCustomer({
+        email: entry.managerEmail, name: entry.managerName, phone: entry.managerPhone ?? undefined,
+      });
+      customerId = c.id;
+    } catch (e) { console.error("[teampay] team customer failed:", e); }
+  }
+
+  const pi = await createCardPaymentIntent({
+    amountCents,
+    currency: comp.currency,
+    receiptEmail: entry.managerEmail,
+    description: `${comp.name} — ${entry.teamName} — team fee`,
+    metadata: {
+      kind: "teampay",
+      // 🔴 What tells the webhook this is a whole-team payment. Without it the
+      // player branch looks for a teampayPlayerId, finds none, and drops it.
+      teampayKind: "team",
+      teampayEntryId: String(entry.id),
+    },
+    customerId,
+    // Keyed on the entry AND the amount, for the same reason the player key is:
+    // a manager who opens the page at $800, has two players pay, and comes back
+    // to a $700 balance is a genuinely different charge, not a retry.
+    idempotencyKey: `teampay-team-${entry.id}-${amountCents}`,
+  });
+
+  await db.update(teampayEntries)
+    .set({
+      teamStripePaymentIntentId: pi.id,
+      ...(customerId ? { teamStripeCustomerId: customerId } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(teampayEntries.id, entry.id));
+
+  return { clientSecret: pi.client_secret, amountCents };
+}
+
+/**
+ * Record the team payment, once.
+ *
+ * 🔴 Atomic on `team_paid_at IS NULL`, so the browser's confirm racing the
+ * webhook produces one payment and one no-op — the same guard the player path
+ * uses, and for the same reason.
+ */
+async function markTeamPaidOnce(entryId: number, paymentIntentId: string, amountCents: number): Promise<boolean> {
+  const r = await db.update(teampayEntries)
+    .set({
+      teamPaidAt: new Date(), teamPaidCents: amountCents,
+      teamStripePaymentIntentId: paymentIntentId, updatedAt: new Date(),
+    })
+    .where(and(eq(teampayEntries.id, entryId), isNull(teampayEntries.teamPaidAt)))
+    .returning({ id: teampayEntries.id });
+  if (!r.length) return false;
+  await logEvent({ entryId, kind: "team_paid", actor: "manager", detail: { amountCents, paymentIntentId } });
+  await afterPayment(entryId, null);
+  return true;
+}
+
+/** Read the truth back from Stripe. Never trust the browser for paid state. */
+export async function confirmTeamPayment(organiserToken: string): Promise<{ error?: string; paid?: boolean }> {
+  const entry = await entryByToken(organiserToken);
+  if (!entry) return { error: "not_found" };
+  if (entry.teamPaidAt) return { paid: true };
+  if (!entry.teamStripePaymentIntentId) return { error: "No payment to confirm." };
+
+  const pi = await retrievePaymentIntent(entry.teamStripePaymentIntentId);
+  if (pi.status !== "succeeded") return { paid: false };
+  await markTeamPaidOnce(entry.id, pi.id, pi.amount_received || pi.amount);
+  return { paid: true };
+}
+
+/** The webhook's team branch. Idempotent. */
+export async function markTeamPaidByPaymentIntent(pi: any): Promise<boolean> {
+  const entryId = Number(pi?.metadata?.teampayEntryId);
+  if (!Number.isInteger(entryId)) return false;
+  return markTeamPaidOnce(entryId, pi.id, pi.amount_received || pi.amount);
 }
 
 /**
  * Everything that happens after a share lands: tell the player, and if that was
  * the last one, tell the manager their team is paid up.
  */
-async function afterPayment(entryId: number, playerId: number) {
+async function afterPayment(entryId: number, playerId: number | null) {
   try {
     const [entry] = await db.select().from(teampayEntries).where(eq(teampayEntries.id, entryId));
     if (!entry) return;
     const comp = await competitionById(entry.competitionId);
     if (!comp) return;
     const players = await playersOf(entryId);
-    const me = players.find((p) => p.id === playerId);
+    // null when the manager settled the whole fee — there is no one player to
+    // send a share receipt to, and the paid-up branch below covers the manager.
+    const me = playerId === null ? undefined : players.find((p) => p.id === playerId);
     const m = entryMoney(entry, players);
 
     if (me?.email) {
@@ -695,8 +885,14 @@ async function afterPayment(entryId: number, playerId: number) {
           from: fromFor(entry.organizationId, comp),
           to: entry.managerEmail,
           subject: `${entry.teamName} is paid up 🎉`,
-          html: shell(comp, "Everyone's paid",
-            `<p>Every share for <strong>${escapeHtml(entry.teamName)}</strong> is in — ${money(m.paidCents)} of ${money(entry.feeCents)}.</p>
+          // The manager who just put $800 on their own card should not be told
+          // "everyone's paid" — nobody else paid anything, and it reads as the
+          // system having lost their payment.
+          html: shell(comp, m.playersPaidCents === 0 ? "You're paid up" : "Everyone's paid",
+            `<p>${m.playersPaidCents === 0
+                ? `The team fee for <strong>${escapeHtml(entry.teamName)}</strong> is in`
+                : `Every share for <strong>${escapeHtml(entry.teamName)}</strong> is in`
+              } — ${money(m.paidCents)} of ${money(entry.feeCents)}.</p>
              <p>Nothing else to chase. We'll be in touch with the draw.</p>`,
             { label: "Open your team page", href: dashboardUrl(entry.organiserToken) }),
         });

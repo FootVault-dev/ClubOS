@@ -24,6 +24,8 @@ interface Registration {
   status: string;
   notes: string | null;
   createdAt: string;
+  /** Set once this registration has been turned into a real team entry. */
+  teampayEntryId: number | null;
 }
 interface Payload {
   rows: Registration[];
@@ -57,12 +59,30 @@ function fmtDate(iso: string): string {
 export default function EthnicCupRegistrations() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<string>("all");
+  const [notice, setNotice] = useState<{ tone: "good" | "error"; text: string } | null>(null);
   const { data, isLoading } = useQuery<Payload>({ queryKey: ["/api/admin/ethnic-cup/registrations"] });
 
   const patch = useMutation({
     mutationFn: async ({ id, body }: { id: number; body: Record<string, unknown> }) =>
       apiRequest("PATCH", `/api/admin/ethnic-cup/registrations/${id}`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/admin/ethnic-cup/registrations"] }),
+  });
+
+  /**
+   * Turn a registration into a payable team entry.
+   *
+   * 🔴 Confirmed first, because it emails a member of the public. The dialog is
+   * the only thing between a mis-click on the wrong row and a stranger being
+   * told their team is entered in a tournament.
+   */
+  const createEntry = useMutation({
+    mutationFn: async (id: number) =>
+      apiRequest("POST", `/api/admin/ethnic-cup/registrations/${id}/create-entry`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/ethnic-cup/registrations"] });
+      setNotice({ tone: "good", text: "Entry created — their team page link is on its way to them." });
+    },
+    onError: (e: any) => setNotice({ tone: "error", text: e?.message || "Could not create that entry." }),
   });
 
   const rows = data?.rows ?? [];
@@ -78,9 +98,28 @@ export default function EthnicCupRegistrations() {
         </h1>
         <p className="mt-1 text-sm text-white/50">
           From ethniccup.com. 14–15 November 2026 · $800 per team. Registering is free and is not an
-          entry — entries and payment open once the venue is confirmed.
+          entry — use <strong className="text-white/70">Create entry &amp; send link</strong> to turn
+          one into a real team that can pay.
         </p>
       </div>
+
+      {notice && (
+        <div
+          data-testid="ethnic-notice"
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            notice.tone === "good"
+              ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
+              : "border-red-400/25 bg-red-400/10 text-red-200"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <span>{notice.text}</span>
+            <button onClick={() => setNotice(null)} className="shrink-0 opacity-60 hover:opacity-100">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* counts are derived server-side from the rows, never stored */}
       <div className="flex flex-wrap gap-2">
@@ -151,17 +190,49 @@ export default function EthnicCupRegistrations() {
                   {r.message && <p className="mt-3 max-w-2xl text-sm text-white/60">{r.message}</p>}
                 </div>
 
-                <select
-                  value={r.status}
-                  disabled={patch.isPending}
-                  onChange={(e) => patch.mutate({ id: r.id, body: { status: e.target.value } })}
-                  data-testid={`status-${r.id}`}
-                  className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
-                >
-                  {statuses.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <select
+                    value={r.status}
+                    disabled={patch.isPending}
+                    onChange={(e) => patch.mutate({ id: r.id, body: { status: e.target.value } })}
+                    data-testid={`status-${r.id}`}
+                    className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
+                  >
+                    {statuses.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+
+                  {/* 🔴 An entry already made is a FACT, not a status word — so
+                      the button becomes a statement and cannot be pressed again.
+                      The server refuses a second one too; this just stops the
+                      staff member finding that out via an error. */}
+                  {r.teampayEntryId ? (
+                    <span
+                      className="flex items-center gap-1.5 rounded-lg border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300"
+                      data-testid={`entered-${r.id}`}
+                    >
+                      <ClipboardCheck className="h-3.5 w-3.5" /> Entry #{r.teampayEntryId}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={createEntry.isPending || !r.community}
+                      title={r.community ? undefined : "No community or team name on this registration"}
+                      onClick={() => {
+                        const who = [r.firstName, r.lastName].filter(Boolean).join(" ");
+                        if (!window.confirm(
+                          `Create a team entry for "${r.community}" and email ${who} (${r.email}) their team page link?`,
+                        )) return;
+                        createEntry.mutate(r.id);
+                      }}
+                      data-testid={`create-entry-${r.id}`}
+                      className="rounded-lg border border-sky-400/25 bg-sky-400/10 px-2.5 py-1.5 text-[11px] font-semibold text-sky-300 hover:bg-sky-400/20 disabled:opacity-40"
+                    >
+                      Create entry &amp; send link
+                    </button>
+                  )}
+                </div>
               </div>
 
               <details className="mt-3">

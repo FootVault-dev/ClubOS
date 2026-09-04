@@ -36,6 +36,34 @@ export function collectableCents(feeCents: number, squadSize: number): number {
   return Math.min(feeCents, shareCents(feeCents, squadSize) * squadSize);
 }
 
+// ── how the team pays ─────────────────────────────────────────────────────────
+
+/**
+ * 'split' — every player pays their own share. The original design.
+ * 'whole' — the manager settles the team fee on one card.
+ *
+ * Daniel, 2026-09-04. A team that already has the money hands one person the
+ * job of paying it, and that person collects from their mates by whatever means
+ * they already use. Split-only had no route for that at all.
+ *
+ * 🔴 The mode decides WHO IS ASKED, never what is owed. Both paths settle the
+ * same balance — fee minus everything already collected — so switching mode
+ * halfway can neither double-charge a team nor forgive a debt.
+ */
+export type PaymentMode = "split" | "whole";
+
+export const PAYMENT_MODES: readonly PaymentMode[] = ["split", "whole"] as const;
+
+/** Validated here rather than by a DB CHECK — a stale CHECK 500'd the MFL checkout. */
+export function isPaymentMode(v: unknown): v is PaymentMode {
+  return typeof v === "string" && (PAYMENT_MODES as readonly string[]).includes(v);
+}
+
+export const PAYMENT_MODE_LABEL: Record<PaymentMode, string> = {
+  split: "Everyone pays their own share",
+  whole: "I'll pay the whole team fee",
+};
+
 // ── the three statuses Isaac asked for ────────────────────────────────────────
 
 export type PlayerStatus = "paid" | "opened" | "invited" | "declined" | "removed";
@@ -93,8 +121,13 @@ export interface EntryMoney {
   feeCents: number;
   squadSize: number;
   shareCents: number;
+  paymentMode: PaymentMode;
   /** Sum of what was actually charged — a fact, read off the paid rows. */
   paidCents: number;
+  /** Of that, what the manager settled on behalf of the whole team. */
+  teamPaidCents: number;
+  /** Of that, what the squad paid share by share. */
+  playersPaidCents: number;
   paidCount: number;
   /** Players on the roster who still owe (excludes declined/removed). */
   outstandingCount: number;
@@ -111,7 +144,13 @@ export interface EntryMoney {
  * stating four different figures for one term; a stored total is how that happens.
  */
 export function entryMoney(
-  entry: { feeCents: number; squadSize: number },
+  entry: {
+    feeCents: number;
+    squadSize: number;
+    paymentMode?: PaymentMode | string | null;
+    /** What the manager settled for the whole team, if anything. */
+    teamPaidCents?: number | null;
+  },
   players: Array<PlayerFacts & { paidCents?: number | null }>,
 ): EntryMoney {
   const share = shareCents(entry.feeCents, entry.squadSize);
@@ -120,17 +159,32 @@ export function entryMoney(
 
   // Sum what was CHARGED, not shares × count — a share can change between an
   // entry being created and a player paying, and the charge is the fact.
-  const paidCents = paid.reduce((sum, p) => sum + (p.paidCents ?? 0), 0);
-  const outstanding = active.filter((p) => !p.paidAt);
+  const playersPaidCents = paid.reduce((sum, p) => sum + (p.paidCents ?? 0), 0);
+
+  // 🔴 ONE balance, fed from both directions. A team that split $250 and then
+  // had its manager settle the rest owes nothing; a team whose manager paid in
+  // full owes nothing even though not one player row says "paid".
+  const teamPaidCents = entry.teamPaidCents ?? 0;
+  const paidCents = playersPaidCents + teamPaidCents;
+
+  // An entry created before this column existed reads 'split', which is what it
+  // was. Anything unrecognised also reads 'split' — the safe direction, because
+  // it keeps asking players rather than silently deciding nobody owes anything.
+  const paymentMode: PaymentMode = entry.paymentMode === "whole" ? "whole" : "split";
+
+  const unpaid = active.filter((p) => !p.paidAt);
   const emptySlots = Math.max(0, entry.squadSize - active.length);
 
   return {
     feeCents: entry.feeCents,
     squadSize: entry.squadSize,
     shareCents: share,
+    paymentMode,
     paidCents,
+    teamPaidCents,
+    playersPaidCents,
     paidCount: paid.length,
-    outstandingCount: outstanding.length,
+    outstandingCount: unpaid.length,
     // What is still owed against the TEAM FEE, never against the roster —
     // an under-filled squad still owes the whole fee.
     outstandingCents: Math.max(0, entry.feeCents - paidCents),
@@ -138,6 +192,40 @@ export function entryMoney(
     isPaidUp: paidCents >= entry.feeCents,
     percentPaid: entry.feeCents > 0 ? Math.min(100, Math.round((paidCents / entry.feeCents) * 100)) : 0,
   };
+}
+
+// ── what a given link may charge, right now ───────────────────────────────────
+
+/**
+ * 🔴 The two functions below are the ONLY places an amount is decided, and both
+ * are bounded by the outstanding balance. Every charge in this system is the
+ * outcome of one of them, computed on the server, from the entry — the browser
+ * sends a token and never an amount.
+ *
+ * The cap is what makes the two payment paths safe to mix. Without it, a
+ * manager settling the balance and a player paying their share at the same
+ * moment collect the fee twice, and the club is refunding a customer for its
+ * own bug.
+ */
+
+/** What one player's invite link should charge. 0 means: ask them for nothing. */
+export function playerChargeCents(money: EntryMoney): number {
+  // In whole mode the manager owes the fee. A player asked for $50 here would
+  // be paying a second time for a seat their manager is already covering.
+  if (money.paymentMode === "whole") return 0;
+  return Math.max(0, Math.min(money.shareCents, money.outstandingCents));
+}
+
+/**
+ * What the manager's "pay the team fee" button should charge.
+ *
+ * Deliberately the whole outstanding balance and not the whole fee: a manager
+ * whose squad already chipped in $250 should be asked for $550, not $800.
+ * This is why the button is offered in split mode too — it is how a team that
+ * gave up on chasing three stragglers actually finishes paying.
+ */
+export function teamChargeCents(money: EntryMoney): number {
+  return Math.max(0, money.outstandingCents);
 }
 
 // ── nudging ───────────────────────────────────────────────────────────────────

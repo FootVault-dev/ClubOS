@@ -61,29 +61,46 @@ export default function TeampayPlayerPage() {
 
   const { competition, team, you, squad } = data;
 
+  /**
+   * Nothing to pay, for either of the two reasons that can be true:
+   * the manager is covering the fee, or the team is already settled.
+   * A player who has ALREADY paid is a different case, handled below —
+   * they get their receipt, not "nothing to pay".
+   */
+  const managerPaying = you.status !== "paid" && (you.chargeCents ?? you.shareCents) <= 0;
+
   return (
     <TeampayShell brand={brand} eyebrow={competition.name} title={team.name}>
       <Card brand={brand} className="mb-5 p-5 sm:p-6">
         <p className="text-[15px] leading-relaxed">
           Hi {you.name.split(" ")[0]} — you're in <strong>{team.name}</strong>
-          {team.community ? ` (${team.community})` : ""}. The team fee is split{" "}
-          {team.squadSize} ways.
+          {team.community ? ` (${team.community})` : ""}.{" "}
+          {managerPaying
+            ? `${team.managerName} is paying the team fee.`
+            : `The team fee is split ${team.squadSize} ways.`}
         </p>
 
-        <div className="mt-5 flex items-baseline justify-between">
-          <span className="text-[13px]" style={{ color: brand.mute }}>Your share</span>
-          <span className="text-[34px] font-bold leading-none"
-                style={{ fontFamily: brand.fontHeading, color: brand.accent }}>
-            {money(you.shareCents)}
-          </span>
-        </div>
-
-        <div className="mt-5">
-          <Progress brand={brand} percent={squad.percentPaid} />
-          <div className="mt-2 text-[12px]" style={{ color: brand.mute }}>
-            {squad.paidCount} of {squad.squadSize} teammates have paid
+        {/* 🔴 Never show an amount when nothing is owed. A "$50" next to "your
+            manager is paying" is the sentence a player acts on, and they pay
+            twice for one seat. */}
+        {!managerPaying && (
+          <div className="mt-5 flex items-baseline justify-between">
+            <span className="text-[13px]" style={{ color: brand.mute }}>Your share</span>
+            <span className="text-[34px] font-bold leading-none"
+                  style={{ fontFamily: brand.fontHeading, color: brand.accent }}>
+              {money(you.chargeCents ?? you.shareCents)}
+            </span>
           </div>
-        </div>
+        )}
+
+        {!managerPaying && (
+          <div className="mt-5">
+            <Progress brand={brand} percent={squad.percentPaid} />
+            <div className="mt-2 text-[12px]" style={{ color: brand.mute }}>
+              {squad.paidCount} of {squad.squadSize} teammates have paid
+            </div>
+          </div>
+        )}
       </Card>
 
       {you.status === "paid" ? (
@@ -108,6 +125,19 @@ export default function TeampayPlayerPage() {
             Your manager has taken you off the team sheet. Talk to them if that's a mistake.
           </p>
         </Card>
+      ) : managerPaying ? (
+        <Card brand={brand} className="p-6 text-center">
+          <CheckCircle2 size={40} className="mx-auto mb-3" style={{ color: "#34C759" }} />
+          <div className="text-[19px] font-semibold">Nothing to pay</div>
+          <p className="mt-2 text-[14px]" style={{ color: brand.mute }}>
+            {team.paymentMode === "whole"
+              ? `${team.managerName} is covering the whole team fee, so there's nothing for you to pay. You're on the squad — see you there.`
+              : `Your team's fee is fully paid, so there's nothing left for you to pay. You're on the squad — see you there.`}
+          </p>
+          <div className="mt-5 border-t pt-4" style={{ borderColor: brand.line }}>
+            <DeclineButton brand={brand} token={token} onDone={refetch} />
+          </div>
+        </Card>
       ) : !competition.paymentsEnabled ? (
         <>
           <Notice brand={brand} tone="warn">
@@ -123,7 +153,10 @@ export default function TeampayPlayerPage() {
           Card payments aren't available on this page right now. Please tell your team manager.
         </Notice>
       ) : (
-        <PayBlock brand={brand} token={token} amountCents={you.shareCents} onPaid={refetch} />
+        // 🔴 chargeCents, not shareCents. They differ for the last player to pay
+        // into a nearly-settled balance, and the button must say the number the
+        // card is actually charged.
+        <PayBlock brand={brand} token={token} amountCents={you.chargeCents ?? you.shareCents} onPaid={refetch} />
       )}
     </TeampayShell>
   );

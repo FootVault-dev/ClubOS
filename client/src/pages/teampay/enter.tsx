@@ -10,7 +10,7 @@ import { useMemo, useState } from "react";
 import { useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { brandFor, shareCents } from "@shared/teampay";
+import { brandFor, shareCents, type PaymentMode } from "@shared/teampay";
 import {
   Button, Card, Field, Loading, NotFoundPage, Notice, TeampayShell, inputStyle, money,
 } from "./shell";
@@ -21,6 +21,46 @@ const api = async (url: string, init?: RequestInit) => {
   if (!r.ok) throw new Error(body?.message || "Something went wrong.");
   return body;
 };
+
+/**
+ * One of the two ways to pay.
+ *
+ * 🔴 A radio, not a toggle — two named choices where neither is a "setting" the
+ * other is the absence of. And the whole card is the tap target (56px, well over
+ * the 44px floor), because this is read on a phone with one thumb.
+ */
+function ModeChoice({
+  brand, checked, onSelect, title, detail,
+}: {
+  brand: ReturnType<typeof brandFor>;
+  checked: boolean;
+  onSelect: () => void;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <label
+      className="flex cursor-pointer items-start gap-3 rounded-[10px] border p-3.5 transition-colors"
+      style={{
+        minHeight: 56,
+        borderColor: checked ? brand.accent : brand.line,
+        background: checked ? `${brand.accent}14` : "transparent",
+      }}
+    >
+      <input
+        type="radio"
+        name="paymentMode"
+        checked={checked}
+        onChange={onSelect}
+        style={{ width: 20, height: 20, flexShrink: 0, marginTop: 2, accentColor: brand.accent }}
+      />
+      <span className="min-w-0">
+        <span className="block text-[14px] font-semibold" style={{ color: brand.ink }}>{title}</span>
+        <span className="mt-0.5 block text-[13px] leading-snug" style={{ color: brand.mute }}>{detail}</span>
+      </span>
+    </label>
+  );
+}
 
 export default function TeampayEnterPage() {
   const [, params] = useRoute("/enter/:slug");
@@ -37,6 +77,9 @@ export default function TeampayEnterPage() {
   const [form, setForm] = useState({
     teamName: "", community: "", managerName: "", managerEmail: "", managerPhone: "",
     squadSize: "", managerPlays: true,
+    // Split is the default because it is the one that needs no money on the
+    // day — a manager who has not collected from anyone yet can still enter.
+    paymentMode: "split" as PaymentMode,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,12 +98,14 @@ export default function TeampayEnterPage() {
         <Card brand={brand} className="p-6">
           <p className="text-[15px] leading-relaxed">
             <strong>{form.teamName}</strong> is in. We've emailed{" "}
-            <strong>{form.managerEmail}</strong> a link to your team page — that's where you add
-            your squad and see who has paid.
+            <strong>{form.managerEmail}</strong> a link to your team page — that's where{" "}
+            {form.paymentMode === "whole"
+              ? "you pay the team fee and add your squad."
+              : "you add your squad and see who has paid."}
           </p>
           <div className="mt-5">
             <Button brand={brand} onClick={() => { window.location.href = done; }} className="w-full">
-              Open your team page
+              {form.paymentMode === "whole" ? "Open your team page and pay" : "Open your team page"}
             </Button>
           </div>
           <p className="mt-3 text-[12px]" style={{ color: brand.mute }}>
@@ -94,9 +139,19 @@ export default function TeampayEnterPage() {
           </span>
         </div>
         <p className="mt-3 text-[14px] leading-relaxed" style={{ color: brand.mute }}>
-          Split across your squad — <strong style={{ color: brand.accent }}>{money(per)} each</strong>{" "}
-          for {size} players. <strong style={{ color: brand.ink }}>Nothing to pay now.</strong> Enter
-          your team, add your squad, and everyone pays their own share on their own card.
+          {form.paymentMode === "whole" ? (
+            <>
+              You're paying the <strong style={{ color: brand.accent }}>{money(comp.feeCents)}</strong>{" "}
+              team fee yourself. <strong style={{ color: brand.ink }}>Nothing to pay now.</strong> Enter
+              your team, then pay it from your team page whenever you're ready.
+            </>
+          ) : (
+            <>
+              Split across your squad — <strong style={{ color: brand.accent }}>{money(per)} each</strong>{" "}
+              for {size} players. <strong style={{ color: brand.ink }}>Nothing to pay now.</strong> Enter
+              your team, add your squad, and everyone pays their own share on their own card.
+            </>
+          )}
         </p>
         {!comp.paymentsEnabled && (
           <div className="mt-4">
@@ -150,8 +205,31 @@ export default function TeampayEnterPage() {
                    style={inputStyle(brand)} autoComplete="email" />
           </Field>
 
+          {/* 🔴 Asked BEFORE squad size, because it decides whether the squad
+              size is a price at all. In whole mode it is just a roster count. */}
+          <Field brand={brand} label="How do you want to pay?">
+            <div className="space-y-2">
+              <ModeChoice
+                brand={brand}
+                checked={form.paymentMode === "split"}
+                onSelect={() => set("paymentMode", "split")}
+                title="Everyone pays their own share"
+                detail={`Each player pays ${money(per)} on their own card. You'll see who has paid and can chase the stragglers.`}
+              />
+              <ModeChoice
+                brand={brand}
+                checked={form.paymentMode === "whole"}
+                onSelect={() => set("paymentMode", "whole")}
+                title="I'll pay the whole team fee"
+                detail={`One payment of ${money(comp.feeCents)} from you. Nobody on your squad gets asked for anything.`}
+              />
+            </div>
+          </Field>
+
           <Field brand={brand} label="How many players in your squad?"
-                 hint={`${money(comp.feeCents)} ÷ ${size} = ${money(per)} each. You can change this until someone pays.`}>
+                 hint={form.paymentMode === "whole"
+                   ? "Just so we know how many to expect — it doesn't change what you pay."
+                   : `${money(comp.feeCents)} ÷ ${size} = ${money(per)} each. You can change this until someone pays.`}>
             <input type="number" inputMode="numeric" min={1} max={40}
                    value={form.squadSize} placeholder={String(comp.defaultSquadSize)}
                    onChange={(e) => set("squadSize", e.target.value)} style={inputStyle(brand)} />
@@ -163,7 +241,11 @@ export default function TeampayEnterPage() {
             <input type="checkbox" checked={form.managerPlays}
                    onChange={(e) => set("managerPlays", e.target.checked)}
                    style={{ width: 22, height: 22, flexShrink: 0, accentColor: brand.accent }} />
-            <span>I'm playing too — put me on the squad and give me a share to pay.</span>
+            <span>
+              {form.paymentMode === "whole"
+                ? "I'm playing too — put me on the team sheet."
+                : "I'm playing too — put me on the squad and give me a share to pay."}
+            </span>
           </label>
 
           {error && <Notice brand={brand} tone="error">{error}</Notice>}

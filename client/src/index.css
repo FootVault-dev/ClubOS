@@ -602,10 +602,16 @@ html:not(.dark) .text-yellow-600 { color: #a16207 !important; }
 
 /* 5. bare `text-white`: dark by default, white again on a coloured ground */
 html:not(.dark) .text-white { color: rgb(15 23 42) !important; }
+html:not(.dark) .text-white.bg-\[\#0033cc\]:not([class*="bg-[#0033cc]/"]) { color: #fff !important; }
+html:not(.dark) .bg-\[\#0033cc\]:not([class*="bg-[#0033cc]/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-\[\#012583\]:not([class*="bg-[#012583]/"]) { color: #fff !important; }
+html:not(.dark) .bg-\[\#012583\]:not([class*="bg-[#012583]/"]) .text-white { color: #fff !important; }
 html:not(.dark) .text-white.bg-\[\#013590\]:not([class*="bg-[#013590]/"]) { color: #fff !important; }
 html:not(.dark) .bg-\[\#013590\]:not([class*="bg-[#013590]/"]) .text-white { color: #fff !important; }
 html:not(.dark) .text-white.bg-\[\#0143b0\]:not([class*="bg-[#0143b0]/"]) { color: #fff !important; }
 html:not(.dark) .bg-\[\#0143b0\]:not([class*="bg-[#0143b0]/"]) .text-white { color: #fff !important; }
+html:not(.dark) .text-white.bg-\[\#043bcb\]:not([class*="bg-[#043bcb]/"]) { color: #fff !important; }
+html:not(.dark) .bg-\[\#043bcb\]:not([class*="bg-[#043bcb]/"]) .text-white { color: #fff !important; }
 html:not(.dark) .text-white.bg-\[\#0a8fc4\]:not([class*="bg-[#0a8fc4]/"]) { color: #fff !important; }
 html:not(.dark) .bg-\[\#0a8fc4\]:not([class*="bg-[#0a8fc4]/"]) .text-white { color: #fff !important; }
 html:not(.dark) .text-white.bg-\[\#635BFF\]:not([class*="bg-[#635BFF]/"]) { color: #fff !important; }
@@ -720,7 +726,7 @@ html:not(.dark) .text-white.from-violet-500:not([class*="from-violet-500/"]) { c
 html:not(.dark) .from-violet-500:not([class*="from-violet-500/"]) .text-white { color: #fff !important; }
 html:not(.dark) .text-white.from-violet-600:not([class*="from-violet-600/"]) { color: #fff !important; }
 html:not(.dark) .from-violet-600:not([class*="from-violet-600/"]) .text-white { color: #fff !important; }
-/* 59 coloured grounds keep their white ink */
+/* 62 coloured grounds keep their white ink */
 
 /* Design tokens re-declared at higher specificity so a third-party
    `:root` block (a browser extension's theme, say) cannot silently

@@ -4073,6 +4073,15 @@ export const ethnicCupRegistrations = pgTable("ethnic_cup_registrations", {
   sourceUrl: text("source_url"),
   status: text("status").notNull().default("new"), // new | contacted | entered | declined | archived
   notes: text("notes"),           // staff notes, never shown to the registrant
+  /**
+   * The team entry this registration became, once somebody actually entered.
+   *
+   * 🔴 Before this, 'entered' was a word a staff member typed with nothing
+   * behind it. This makes it checkable: a registration is entered when it
+   * points at a real entry, and the tab can show that team's payment progress
+   * instead of asking someone to go and look it up.
+   */
+  teampayEntryId: integer("teampay_entry_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -8765,6 +8774,26 @@ export const teampayEntries = pgTable("teampay_entries", {
 
   /** Stamped once, when the money first covers the fee. A fact, not a status. */
   paidUpAt: timestamp("paid_up_at"),
+
+  /**
+   * 'split' — every player pays their own share.  'whole' — the manager pays
+   * the team fee on one card. Validated in app code (PAYMENT_MODES in
+   * shared/teampay.ts), never by a DB CHECK.
+   *
+   * 🔴 This decides who is ASKED, not what is owed. Both routes settle the same
+   * balance, so it can be changed mid-flight without re-pricing anybody.
+   */
+  paymentMode: text("payment_mode").notNull().default("split"),
+
+  /**
+   * What the manager settled on behalf of the whole team — read back off a
+   * Stripe PaymentIntent, never trusted from the browser. NULL means no
+   * team-level payment has been taken, which is not the same as $0.
+   */
+  teamPaidCents: integer("team_paid_cents"),
+  teamPaidAt: timestamp("team_paid_at"),
+  teamStripePaymentIntentId: text("team_stripe_payment_intent_id"),
+  teamStripeCustomerId: text("team_stripe_customer_id"),
 
   /** Staff notes. Never shown to the manager. */
   notes: text("notes"),

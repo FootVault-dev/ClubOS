@@ -103,6 +103,7 @@ export function registerTeampayRoutes(app: Express) {
         managerPhone: req.body?.managerPhone ?? null,
         squadSize: req.body?.squadSize ?? null,
         managerPlays: req.body?.managerPlays !== false,
+        paymentMode: req.body?.paymentMode ?? null,
       });
       if (r.error) return res.status(400).json({ message: r.error });
       // 🔴 The dashboard link comes back in the response AND by email. The MFL
@@ -141,6 +142,48 @@ export function registerTeampayRoutes(app: Express) {
     if (r.error === "not_found") return notFound(res);
     if (r.error) return res.status(400).json({ message: r.error });
     res.json(r);
+  });
+
+  // ── how this team pays, and the manager settling it ────────────────────────
+  //
+  // 🔴 All three are authorised by the organiser token alone — the same 128-bit
+  // secret that already exposes the squad's names, emails and phone numbers.
+  // Anyone holding it is the manager as far as this system is concerned, which
+  // is the design, and is why the token is never enumerable and never indexed.
+
+  app.patch("/api/public/teampay/team/:token/payment-mode", async (req, res) => {
+    setCors(req, res);
+    const r = await tp.setPaymentMode(String(req.params.token), String(req.body?.paymentMode || ""));
+    if (r.error === "not_found") return notFound(res);
+    if (r.error) return res.status(400).json({ message: r.error });
+    res.json(r);
+  });
+
+  app.post("/api/public/teampay/team/:token/pay-intent", async (req, res) => {
+    setCors(req, res);
+    try {
+      const r = await tp.teamPayIntent(String(req.params.token));
+      if (r.error === "not_found") return notFound(res);
+      if (r.error === "already_paid") return res.status(409).json({ message: "This team is already paid up." });
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) {
+      console.error("[teampay team intent]", e?.message || e);
+      res.status(500).json({ message: "Couldn't start that payment. Please try again." });
+    }
+  });
+
+  app.post("/api/public/teampay/team/:token/pay-confirm", async (req, res) => {
+    setCors(req, res);
+    try {
+      const r = await tp.confirmTeamPayment(String(req.params.token));
+      if (r.error === "not_found") return notFound(res);
+      if (r.error) return res.status(400).json({ message: r.error });
+      res.json(r);
+    } catch (e: any) {
+      console.error("[teampay team confirm]", e?.message || e);
+      res.status(500).json({ message: "Couldn't confirm that payment." });
+    }
   });
 
   app.delete("/api/public/teampay/team/:token/players/:id", async (req, res) => {
@@ -268,6 +311,16 @@ export function registerTeampayRoutes(app: Express) {
       const r = await tp.payIntent(String(req.params.token));
       if (r.error === "not_found") return notFound(res);
       if (r.error === "already_paid") return res.status(409).json({ message: "You've already paid." });
+      // 🔴 Both of these mean "we are not taking your money", and neither is an
+      // error the player did anything to cause. 409 rather than 400 so the page
+      // can tell them plainly instead of showing a card form that would
+      // double-charge their team.
+      if (r.error === "manager_paying") {
+        return res.status(409).json({ message: "Your manager is paying the team fee — there's nothing for you to pay." });
+      }
+      if (r.error === "team_paid_up") {
+        return res.status(409).json({ message: "Your team is fully paid — there's nothing left to pay." });
+      }
       if (r.error) return res.status(400).json({ message: r.error });
       res.json(r);
     } catch (e: any) {

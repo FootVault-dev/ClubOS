@@ -12,14 +12,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import {
-  Bell, Check, Copy, Loader2, Plus, Search, Trash2, UserPlus, Users, X,
+  Bell, Check, Copy, CreditCard, Loader2, Lock, Plus, Search, Trash2, UserPlus, Users, X,
 } from "lucide-react";
 import { brandFor, PLAYER_STATUS_LABEL, type FillinPublic } from "@shared/teampay";
 import {
   Button, Card, Field, Loading, NotFoundPage, Notice, Progress, StatusPill,
   TeampayShell, inputStyle, money,
 } from "./shell";
+
+const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
+const stripePromise = STRIPE_PK ? loadStripe(STRIPE_PK) : null;
 
 const api = async (url: string, init?: RequestInit) => {
   const r = await fetch(url, {
@@ -57,7 +62,8 @@ export default function TeampayDashboard() {
   if (isLoading) return <TeampayShell brand={brand}><Loading brand={brand} /></TeampayShell>;
   if (isError || !data) return <NotFoundPage />;
 
-  const { competition, entry, players, money: m, shareCents, canResize, holds } = data;
+  const { competition, entry, players, money: m, shareCents, canResize, holds, teamChargeCents } = data;
+  const isWhole = entry.paymentMode === "whole";
 
   const run = async (key: string, fn: () => Promise<any>, ok?: string) => {
     setBusy(key);
@@ -72,7 +78,12 @@ export default function TeampayDashboard() {
     }
   };
 
-  const outstanding = players.filter((p: any) => p.status === "invited" || p.status === "opened");
+  // 🔴 Empty in whole mode by definition. Nobody on this squad was ever asked
+  // for money, so "Remind everyone unpaid (14)" would send fourteen people a
+  // demand for a share their manager has already covered.
+  const outstanding = isWhole
+    ? []
+    : players.filter((p: any) => p.status === "invited" || p.status === "opened");
   const liveHolds = holds.filter((h: any) => h.live);
 
   return (
@@ -103,10 +114,10 @@ export default function TeampayDashboard() {
           </div>
           <div className="text-right">
             <div className="text-[13px]" style={{ color: brand.mute }}>
-              {entry.squadSize} players &middot; each pays
+              {isWhole ? "You're paying" : `${entry.squadSize} players · each pays`}
             </div>
             <div className="text-[26px] font-bold" style={{ fontFamily: brand.fontHeading, color: brand.accent }}>
-              {money(shareCents)}
+              {money(isWhole ? entry.feeCents : shareCents)}
             </div>
           </div>
         </div>
@@ -116,17 +127,55 @@ export default function TeampayDashboard() {
           <div className="mt-2.5 flex flex-wrap justify-between gap-x-4 text-[13px]" style={{ color: brand.mute }}>
             <span>
               <strong style={{ color: brand.ink }}>{money(m.paidCents)}</strong> in
-              {" · "}{m.paidCount} of {entry.squadSize} paid
+              {/* In whole mode "0 of 16 paid" is a lie about a team whose fee is
+                  settled — nobody was ever going to pay a share. */}
+              {!isWhole && <>{" · "}{m.paidCount} of {entry.squadSize} paid</>}
             </span>
             <span>{money(m.outstandingCents)} to go</span>
           </div>
         </div>
 
-        {m.isPaidUp && (
+        {m.isPaidUp ? (
           <div className="mt-4">
             <Notice brand={brand} tone="good">
               <strong>You're paid up.</strong> Nothing left to chase.
             </Notice>
+          </div>
+        ) : competition.paymentsEnabled && teamChargeCents > 0 ? (
+          <div className="mt-5 border-t pt-5" style={{ borderColor: brand.line }}>
+            <TeamPayPanel
+              brand={brand}
+              token={token}
+              amountCents={teamChargeCents}
+              isWhole={isWhole}
+              onPaid={() => { refetch(); setFlash({ tone: "good", text: "Payment received — thank you." }); }}
+            />
+          </div>
+        ) : null}
+
+        {/* Changing your mind is allowed right up until the fee is settled.
+            Switching re-prices nobody — both routes settle the same balance. */}
+        {!m.isPaidUp && (
+          <div className="mt-4 text-center">
+            <button
+              className="text-[13px] underline underline-offset-2"
+              style={{ color: brand.mute, minHeight: 44 }}
+              disabled={busy === "mode"}
+              onClick={() => run(
+                "mode",
+                () => api(`/api/public/teampay/team/${token}/payment-mode`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ paymentMode: isWhole ? "split" : "whole" }),
+                }),
+                isWhole
+                  ? `Switched — your squad will each be asked for ${money(shareCents)}.`
+                  : "Switched — you're paying the team fee and nobody else will be asked.",
+              )}
+            >
+              {isWhole
+                ? "Actually, split it across the squad instead"
+                : "Actually, I'll pay the whole fee myself"}
+            </button>
           </div>
         )}
       </Card>
@@ -302,6 +351,175 @@ export default function TeampayDashboard() {
 // ── copy one player's link ────────────────────────────────────────────────────
 // The manager's real workflow is pasting a link into a WhatsApp thread. It has
 // to be one tap, and it has to say it worked.
+/**
+ * The manager paying, from their own dashboard.
+ *
+ * 🔴 Shown in BOTH modes, and that is the point. In whole mode it is the only
+ * way the fee gets paid. In split mode it is the escape hatch for a manager who
+ * has spent two weeks chasing three players and would rather just settle it —
+ * which is the single most-requested thing about splitting a bill.
+ *
+ * The amount is whatever the server says is outstanding, re-read on every load.
+ * The page never computes a price.
+ */
+function TeamPayPanel({
+  brand, token, amountCents, isWhole, onPaid,
+}: { brand: any; token: string; amountCents: number; isWhole: boolean; onPaid: () => void }) {
+  const [open, setOpen] = useState(isWhole);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setError(null);
+    api(`/api/public/teampay/team/${token}/pay-intent`, { method: "POST" })
+      .then((r) => { if (live) setSecret(r.clientSecret); })
+      .catch((e) => { if (live) setError(e.message); });
+    return () => { live = false; };
+    // 🔴 amountCents is a dependency: two players paying while this panel sits
+    // open changes what is owed, and a stale intent would charge the old figure.
+  }, [open, token, amountCents]);
+
+  if (!open) {
+    return (
+      <div>
+        <Button brand={brand} variant="ghost" onClick={() => setOpen(true)} className="w-full">
+          <CreditCard size={16} className="mr-2" />
+          Pay the rest yourself ({money(amountCents)})
+        </Button>
+        <p className="mt-2 text-center text-[12px]" style={{ color: brand.mute }}>
+          Clears what's left on your card. Anyone who's already paid keeps their payment.
+        </p>
+      </div>
+    );
+  }
+
+  if (!STRIPE_PK) {
+    return (
+      <Notice brand={brand} tone="error">
+        Card payments aren't available on this page right now. Please get in touch with us.
+      </Notice>
+    );
+  }
+  if (error) {
+    return (
+      <div className="space-y-3">
+        <Notice brand={brand} tone="error">{error}</Notice>
+        {!isWhole && (
+          <Button brand={brand} variant="quiet" onClick={() => setOpen(false)} className="w-full">
+            Never mind
+          </Button>
+        )}
+      </div>
+    );
+  }
+  if (!secret) {
+    return (
+      <div className="p-2 text-center text-[14px]" style={{ color: brand.mute }}>
+        <Loader2 size={18} className="mx-auto mb-2 animate-spin" />
+        Getting the payment ready…
+      </div>
+    );
+  }
+
+  return (
+    <Elements
+      stripe={stripePromise}
+      options={{
+        clientSecret: secret,
+        // Pinned dark for the same reason the player page pins it: left to
+        // Stripe's default, the card inputs are near-invisible on black.
+        appearance: {
+          theme: "night",
+          variables: {
+            colorPrimary: brand.accent,
+            colorBackground: brand.bg,
+            colorText: brand.ink,
+            colorTextPlaceholder: brand.mute,
+            colorDanger: "#FF6961",
+            fontFamily: "Inter, system-ui, sans-serif",
+            borderRadius: "10px",
+          },
+        },
+      }}
+    >
+      <TeamPayForm
+        brand={brand} token={token} amountCents={amountCents}
+        isWhole={isWhole} onPaid={onPaid} onCancel={() => setOpen(false)}
+      />
+    </Elements>
+  );
+}
+
+function TeamPayForm({
+  brand, token, amountCents, isWhole, onPaid, onCancel,
+}: {
+  brand: any; token: string; amountCents: number;
+  isWhole: boolean; onPaid: () => void; onCancel: () => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!stripe || !elements) return;
+    setBusy(true);
+    setError(null);
+
+    const { error: err } = await stripe.confirmPayment({
+      elements,
+      redirect: "if_required",
+      confirmParams: { return_url: window.location.href },
+    });
+    if (err) {
+      setError(err.message || "That card was declined. Try another one.");
+      setBusy(false);
+      return;
+    }
+
+    // 🔴 Ask OUR server, which asks Stripe. The browser saying "it worked" is
+    // not evidence that money moved.
+    try {
+      const r = await api(`/api/public/teampay/team/${token}/pay-confirm`, { method: "POST" });
+      if (r.paid) onPaid();
+      else setError("Your bank is still processing that. Give it a moment and refresh.");
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div>
+      <div className="mb-4 text-[13px]" style={{ color: brand.mute }}>
+        Paying <strong style={{ color: brand.ink }}>{money(amountCents)}</strong>
+        {isWhole ? " — the whole team fee." : " — everything still owing on your team."}
+      </div>
+      <PaymentElement options={{ layout: "tabs" }} />
+      {error && <div className="mt-4"><Notice brand={brand} tone="error">{error}</Notice></div>}
+      <div className="mt-5">
+        <Button brand={brand} onClick={submit} disabled={!stripe || busy} className="w-full">
+          {busy ? <Loader2 size={17} className="mr-2 animate-spin" /> : <Lock size={15} className="mr-2" />}
+          Pay {money(amountCents)}
+        </Button>
+      </div>
+      <p className="mt-3 text-center text-[12px]" style={{ color: brand.mute }}>
+        Card details go straight to Stripe. We never see or store them.
+      </p>
+      {!isWhole && (
+        <div className="mt-3 text-center">
+          <button className="text-[13px] underline underline-offset-2"
+                  style={{ color: brand.mute, minHeight: 44 }} onClick={onCancel}>
+            Never mind — I'll keep chasing
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CopyLink({ brand, url }: { brand: any; url: string }) {
   const [done, setDone] = useState(false);
   return (
