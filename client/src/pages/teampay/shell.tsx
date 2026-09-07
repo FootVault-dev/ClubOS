@@ -9,6 +9,7 @@
 import { useEffect, type ReactNode } from "react";
 import type { TeampayBrand } from "@shared/teampay";
 import { DEFAULT_BRAND } from "@shared/teampay";
+import { initPixel } from "@/lib/meta-pixel";
 
 export function money(cents: number | null | undefined): string {
   return `$${((cents ?? 0) / 100).toFixed(2)}`;
@@ -41,6 +42,15 @@ export function TeampayShell({
   wide?: boolean;
 }) {
   useBrandFonts();
+  // Meta pixel (2026-09-08). Team Pay was the one paid flow in ClubOS with no
+  // conversion tracking on either side. The browser half is PageView only —
+  // enough for a paid click's fbclid to become a _fbc cookie on this host — and
+  // Purchase is fired SERVER-SIDE in afterPayment(), which is authoritative.
+  // initPixel() is a no-op when fbq already exists or the id is unset.
+  useEffect(() => {
+    const pixelId = (import.meta as any).env?.VITE_META_PIXEL_ID;
+    if (pixelId) initPixel(pixelId);
+  }, []);
   useEffect(() => {
     // The viewer's own page background, not the admin app's.
     const prev = document.body.style.background;

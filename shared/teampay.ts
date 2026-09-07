@@ -422,6 +422,20 @@ export const TEAMPAY_BRANDS: Record<string, TeampayBrand> = {
     fontHeading: "'Anton', system-ui, sans-serif",
     fontBody: "'Inter', system-ui, sans-serif",
   },
+  // CIC Summer 7's — volt on midnight navy, verbatim from apps/cic7s-website
+  // tailwind.config.js (lime #cffd5a · navy #0a1122 · coal #10131C · line
+  // #252A38). A manager arriving from cic7s.com must not land on a gold page.
+  cic7s: {
+    bg: "#0A1122",
+    ink: "#FFFFFF",
+    accent: "#CFFD5A",
+    onAccent: "#0A1122",
+    mute: "#9AA3B2",
+    card: "#10131C",
+    line: "#252A38",
+    fontHeading: "'Kanit', system-ui, sans-serif",
+    fontBody: "'Inter', system-ui, sans-serif",
+  },
 };
 
 export const DEFAULT_BRAND: TeampayBrand = TEAMPAY_BRANDS.ethniccup;

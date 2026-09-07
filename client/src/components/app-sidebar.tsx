@@ -322,6 +322,10 @@ const tournamentSecondary = [
 // CIC 7's view (toggled from the youth tournament via the Youth/7's switcher).
 const tournament7sNav = [
   { tab: "cic7s-registrations", title: "Registrations", url: "/admin/cic7s-registrations", icon: ClipboardCheck },
+  // Team Pay's staff board lists every competition under the CIC org, so the
+  // 7's teams sit on the same page as the Ethnic Cup's. Without this line the
+  // 7's view had no way to reach them (2026-09-08).
+  { tab: "team-entries", title: "Team Entries", url: "/admin/team-entries", icon: Users },
   { tab: "cic-mailer", title: "Mailer", url: "/admin/cic-mailer", icon: Mail },
 ];
 

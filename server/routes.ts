@@ -23,6 +23,8 @@ import { sunriseSunsetLocal } from "./solar";
 import { createPaymentIntent, retrievePaymentIntent, constructWebhookEvent, createRefund, retrieveRefund, getOrCreateCustomer, createOffSessionPaymentIntent } from "./stripe";
 import { sendPurchaseEvent, sendLeadEvent, sendVenuePurchaseEvent } from "./meta-capi";
 import { purchaseEventId } from "@shared/meta-events";
+import * as tp from "./teampay";
+import { teampayEntries } from "@shared/schema";
 import { sendEmail, sendConfirmationEmail, sendLeagueConfirmationEmail, sendLeagueSignupNotification, sendLeagueBalancePaidEmail, sendLeagueBalanceFailedEmail, sendBookingRequestNotificationEmail, sendBookingRequestConfirmedEmail, sendBookingRequestDeclinedEmail, sendSplitTeamConfirmedEmail, sendLeagueBroadcastEmail, sendMflContactNotification, sendFootballInstituteApplicationNotification, sendCic7sRegistrationNotification, sendCicContactNotification, sendCugcContactNotification, sendCugcEnrolmentConfirmation, sendCugcEnrolmentNotification, sendCugcFreeSessionConfirmation, sendCugcFreeSessionNotification, sendClubLogoConsentNotification, sendCicBroadcastEmail, sendMflWaitlistConfirmation, sendMflWaitlistNotification, sendLeaguePaymentReminderEmail, sendMembershipWelcomeEmail, sendMembershipNotificationEmail, sendChatNewConversationNotification, sendChatReplyNotification, sendCicInterestNotification, sendCufcContactNotification, sendCufcBroadcastEmail, sendCugcBroadcastEmail, sendCicVolunteerNotification, sendClubLogoLicenceCopy, sendRefundConfirmationEmail } from "./email";
 import { cugcStripe, constructCugcWebhookEvent } from "./cugc-stripe";
 import { computeCugcEnrolPrice, CUGC_PROGRAMS, CUGC_TERM, CUGC_DISCOUNT_CODES } from "./cugc-pricing";
@@ -22055,6 +22057,10 @@ export async function registerRoutes(
     res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
   };
+  // The Team Pay competition the sales page enters teams into. One row in
+  // teampay_competitions (script/seed-teampay-cic7s.ts); switches in
+  // script/open-cic7s-entries.ts.
+  const CIC7S_TEAMPAY_SLUG = "cic-summer-7s-2027";
   app.options("/api/public/cic7s/register-interest", (req, res) => { setCic7sCors(req, res); res.sendStatus(204); });
   app.post("/api/public/cic7s/register-interest", async (req, res) => {
     setCic7sCors(req, res);
@@ -22069,12 +22075,17 @@ export async function registerRoutes(
 
       const orgId = await skillsOrgId(); // CIC org — CIC 7's lives under it
       const cic7sAttribution = await buildConversionAttribution(req, { email, firstName, lastName, phone });
-      await db.insert(cic7sRegistrations).values({
+      // 🔴 The token is what the sales page on cic7s.com spends to turn this
+      // registration into a Team Pay entry. 128 random bits; the row id is
+      // never accepted there because it is guessable.
+      const enterToken = crypto.randomBytes(16).toString("hex");
+      const [row] = await db.insert(cic7sRegistrations).values({
         organizationId: orgId, firstName, lastName: lastName || null, email,
         location: location || null, phone: phone || null, category: category || null,
         sourceUrl: String(req.body.sourceUrl || "cic7s.com"), status: "new",
+        enterToken,
         ...cic7sAttribution,
-      });
+      }).returning({ id: cic7sRegistrations.id });
       try {
         await sendCic7sRegistrationNotification({
           to: "info@cic7s.com", firstName, lastName: lastName || undefined, email,
@@ -22082,8 +22093,95 @@ export async function registerRoutes(
           sourceUrl: String(req.body.sourceUrl || ""),
         });
       } catch (e) { console.error("[CIC7s register] email failed:", e); }
-      res.json({ ok: true });
+      // Server-side Lead for the ads that brought them (2026-09-08). Shares the
+      // browser's eventId so Meta counts one lead, not two; best-effort.
+      sendLeadEvent({
+        eventId: String(req.body.eventId || `cic7s-lead-${row.id}`),
+        email, phone: phone || undefined, firstName, lastName: lastName || undefined,
+        fbp: cic7sAttribution.fbp ?? undefined, fbc: cic7sAttribution.fbc ?? undefined,
+        userAgent: req.headers["user-agent"], ipAddress: req.ip,
+        sourceUrl: String(req.body.sourceUrl || "https://cic7s.com/"),
+        contentName: "CIC Summer 7's — register interest", contentIds: [CIC7S_TEAMPAY_SLUG],
+      }).catch((e) => console.error("[CIC7s register] meta lead failed:", e));
+      res.json({ ok: true, token: enterToken });
     } catch (e: any) { console.error("[CIC7s register] error:", e); res.status(400).json({ message: e.message }); }
+  });
+
+  // ── CIC 7's: interest → paid team entry, from the sales page (2026-09-08) ──
+  // Daniel: "after registrations of interest once they submit they immediately
+  // get redirected to sales page to pay for whole team or player pay … all
+  // linked with clubos backend." The browser sends the token it was handed plus
+  // a team name and a payment mode; everything else about the manager comes
+  // from the registration row, server-side. No personal detail rides in a URL.
+  //
+  // Idempotent: a second tap opens the same team page. The claim UPDATE below
+  // is what makes two simultaneous taps safe — only one of them wins the row,
+  // the other is told to try again in a moment (or, once the first has
+  // finished, is handed the existing entry). The partial unique index on
+  // teampay_entry_id is the second wall.
+  app.options("/api/public/cic7s/register-interest/:token/enter", (req, res) => { setCic7sCors(req, res); res.sendStatus(204); });
+  app.post("/api/public/cic7s/register-interest/:token/enter", async (req, res) => {
+    setCic7sCors(req, res);
+    try {
+      const token = String(req.params.token || "").trim();
+      if (!/^[a-f0-9]{32}$/.test(token)) return res.status(404).json({ message: "Not found" });
+      const [reg] = await db.select().from(cic7sRegistrations).where(eq(cic7sRegistrations.enterToken, token));
+      if (!reg) return res.status(404).json({ message: "Not found" });
+
+      const existingUrl = async (entryId: number) => {
+        const [entry] = await db.select().from(teampayEntries).where(eq(teampayEntries.id, entryId));
+        return entry ? tp.dashboardUrl(entry.organiserToken) : null;
+      };
+      if (reg.teampayEntryId) {
+        const url = await existingUrl(reg.teampayEntryId);
+        if (url) return res.json({ ok: true, entryId: reg.teampayEntryId, dashboardUrl: url, existing: true });
+      }
+
+      const teamName = String(req.body?.teamName || "").trim();
+      if (!teamName) return res.status(400).json({ message: "Your team needs a name." });
+      const paymentMode = req.body?.paymentMode === "whole" ? "whole" : "split";
+
+      // Claim the row. One UPDATE with its own conditions is atomic in Postgres.
+      const claimed = await db.update(cic7sRegistrations)
+        .set({ status: "entering" })
+        .where(and(eq(cic7sRegistrations.id, reg.id), isNull(cic7sRegistrations.teampayEntryId), ne(cic7sRegistrations.status, "entering")))
+        .returning({ id: cic7sRegistrations.id });
+      if (!claimed.length) {
+        const [again] = await db.select().from(cic7sRegistrations).where(eq(cic7sRegistrations.id, reg.id));
+        const url = again?.teampayEntryId ? await existingUrl(again.teampayEntryId) : null;
+        if (url) return res.json({ ok: true, entryId: again!.teampayEntryId, dashboardUrl: url, existing: true });
+        return res.status(409).json({ message: "Hang on — your team is being set up. Try again in a moment." });
+      }
+
+      let r: Awaited<ReturnType<typeof tp.createEntry>>;
+      try {
+        r = await tp.createEntry({
+          slug: CIC7S_TEAMPAY_SLUG,
+          teamName,
+          // The tournament category (Mens / Masters / Social) sits in the slot
+          // the Ethnic Cup uses for the community a team represents — it is the
+          // one fact the staff board needs beside the team name.
+          community: reg.category,
+          managerName: [reg.firstName, reg.lastName].filter(Boolean).join(" "),
+          managerEmail: reg.email,
+          managerPhone: reg.phone,
+          squadSize: null,          // the competition's default (14); the manager can change it on their page
+          paymentMode,
+          managerPlays: req.body?.managerPlays !== false,
+        });
+      } catch (e) {
+        await db.update(cic7sRegistrations).set({ status: "new" }).where(eq(cic7sRegistrations.id, reg.id));
+        throw e;
+      }
+      if (r.error || !r.entry) {
+        await db.update(cic7sRegistrations).set({ status: "new" }).where(eq(cic7sRegistrations.id, reg.id));
+        return res.status(400).json({ message: r.error || "Could not create that entry." });
+      }
+      await db.update(cic7sRegistrations)
+        .set({ teampayEntryId: r.entry.id, status: "entered" })
+        .where(eq(cic7sRegistrations.id, reg.id));
+      res.json({ ok: true, entryId: r.entry.id, dashboardUrl: r.dashboardUrl });
+    } catch (e: any) { console.error("[CIC7s enter] error:", e); res.status(500).json({ message: e.message }); }
   });
 
   // Web admin: list CIC 7's registrations (Tournament workspace → CIC 7's view → Registrations).

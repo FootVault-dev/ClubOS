@@ -15,6 +15,8 @@ interface Registration {
   category: string | null;
   sourceUrl: string | null;
   status: string;
+  /** Set when the sales page on cic7s.com turned this interest into a Team Pay entry. */
+  teampayEntryId: number | null;
   createdAt: string;
 }
 
@@ -57,6 +59,9 @@ export default function Cic7sRegistrations() {
           <span className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/10 text-white/70">
             {regos.length} total
           </span>
+          <span className="px-3 py-1.5 rounded-lg border text-lime-300 bg-lime-400/10 border-lime-400/25">
+            {regos.filter((r) => r.teampayEntryId).length} entered a team
+          </span>
           {(["Mens", "Masters", "Social"] as const).map((c) => (
             <span key={c} className={`px-3 py-1.5 rounded-lg border ${CATEGORY_STYLE[c]}`}>
               {counts[c]} {c}
@@ -82,6 +87,7 @@ export default function Cic7sRegistrations() {
                 <th className="px-4 py-3 font-semibold">Contact</th>
                 <th className="px-4 py-3 font-semibold">Location</th>
                 <th className="px-4 py-3 font-semibold">Category</th>
+                <th className="px-4 py-3 font-semibold">Team entry</th>
                 <th className="px-4 py-3 font-semibold">Received</th>
               </tr>
             </thead>
@@ -117,6 +123,15 @@ export default function Cic7sRegistrations() {
                       </span>
                     ) : (
                       <span className="text-white/25">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    {r.teampayEntryId ? (
+                      <a href="/admin/team-entries" className="px-2.5 py-1 rounded-md border text-xs font-medium text-lime-300 bg-lime-400/10 border-lime-400/25 hover:bg-lime-400/20 transition-colors">
+                        Entry #{r.teampayEntryId}
+                      </a>
+                    ) : (
+                      <span className="text-white/25">interest only</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-white/45 whitespace-nowrap">{fmtDate(r.createdAt)}</td>

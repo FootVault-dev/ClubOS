@@ -4096,7 +4096,15 @@ export const cic7sRegistrations = pgTable("cic7s_registrations", {
   phone: text("phone"),
   category: text("category"), // "Mens" | "Masters" | "Social"
   sourceUrl: text("source_url"),
-  status: text("status").notNull().default("new"), // "new" | "contacted" | "confirmed" | "archived"
+  status: text("status").notNull().default("new"), // "new" | "contacted" | "entered" | "confirmed" | "archived"
+  // ── Team Pay bridge (2026-09-08) ──────────────────────────────────────────
+  // The form hands the browser a random token; the sales page on cic7s.com
+  // spends it once to turn this registration into a paid-for team entry. The
+  // token is the ONLY key the public route accepts — never the row id, which is
+  // guessable and would let anyone enter a team under someone else's details.
+  enterToken: text("enter_token"),
+  teampayEntryId: integer("teampay_entry_id"),
+  notes: text("notes"),
   // ── AttributionOS (additive, T3) ──────────────────────────────────────────
   visitorId: text("visitor_id"),
   clickId: text("click_id"),

@@ -30,6 +30,7 @@ import {
 } from "@shared/teampay";
 import { createCardPaymentIntent, getOrCreateCustomer, retrievePaymentIntent } from "./stripe";
 import { sendEmail } from "./email";
+import { sendPurchaseEvent } from "./meta-capi";
 import { workspaceDomainByOrgId } from "@shared/org-domains";
 
 const PUBLIC_BASE_URL = process.env.TEAMPAY_PUBLIC_URL || "https://app.usg.co.nz";
@@ -860,6 +861,31 @@ async function afterPayment(entryId: number, playerId: number | null) {
     // send a share receipt to, and the paid-up branch below covers the manager.
     const me = playerId === null ? undefined : players.find((p) => p.id === playerId);
     const m = entryMoney(entry, players);
+
+    // Meta Purchase, server-side (2026-09-08). Team Pay took real money for a
+    // week with no conversion tracking at all — the one paid flow in ClubOS
+    // without it — so ads pointed at it reported nothing. The event id is
+    // deterministic per payment (one per player seat, one per team payment), so
+    // a webhook retry is deduplicated by Meta rather than counted twice. Match
+    // quality comes from the hashed email + phone; there is no browser half.
+    try {
+      const paidCents = me ? (me.paidCents ?? 0) : (entry.teamPaidCents ?? 0);
+      if (paidCents > 0) {
+        const who = me ?? { name: entry.managerName, email: entry.managerEmail, phone: entry.managerPhone };
+        const [first = "", ...rest] = (who.name || "").trim().split(/\s+/);
+        await sendPurchaseEvent({
+          registrationId: 0, campId: 0,            // not a camp registration — logged as null
+          totalCents: paidCents, currency: "NZD",
+          email: who.email || entry.managerEmail, phone: who.phone ?? undefined,
+          firstName: first, lastName: rest.join(" "),
+          eventId: me ? `teampay-player-${me.id}` : `teampay-team-${entry.id}`,
+          sourceUrl: dashboardUrl(entry.organiserToken),
+          contentName: `${comp.name} — team entry`, contentIds: [comp.slug],
+        });
+      }
+    } catch (e) {
+      console.error("[teampay] meta purchase event failed:", e);
+    }
 
     if (me?.email) {
       await sendEmail({

@@ -108,6 +108,11 @@ const CANARIES: Canary[] = [
   // a bad slug 404s.
   { feature: "team pay competition", path: "/api/public/teampay/competition/ethnic-cup-2026", expect: [200] },
   { feature: "team pay admin",       path: "/api/admin/teampay/overview",                     expect: [401] },
+  // CIC 7's (2026-09-08): cic7s.com's register-interest form hands back a token
+  // and its sales page spends it here to create a paid Team Pay entry. If a
+  // deploy drops either, every paid ad click dead-ends after the form.
+  { feature: "cic 7s team pay competition", path: "/api/public/teampay/competition/cic-summer-7s-2027", expect: [200] },
+  { feature: "cic 7s enter bridge",  path: "/api/public/cic7s/register-interest/probe/enter", method: "OPTIONS", expect: [204] },
   // The rebuilt dashboard's only endpoint. Silent if it goes: the page falls
   // back to nothing and every workspace's revenue simply stops appearing,
   // which is indistinguishable from a quiet month.
