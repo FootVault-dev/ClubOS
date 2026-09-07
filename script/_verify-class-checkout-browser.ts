@@ -106,7 +106,7 @@ for (const [label, w, h] of [["phone", 390, 844], ["desktop", 1440, 900]] as con
       if (!tapped) await new Promise((r) => setTimeout(r, 500));
     }
     tapped ? ok("tapped the Card option in the accordion") : console.log("  note no collapsed Card option found (tabs layout?) — looking for the input directly");
-    const deadline = Date.now() + 25000;
+    const deadline = Date.now() + 40000;
     let found = false;
     while (Date.now() < deadline && !found) {
       for (const f of page.frames()) {
@@ -117,12 +117,17 @@ for (const [label, w, h] of [["phone", 390, 844], ["desktop", 1440, 900]] as con
     }
     found ? ok("card number field is present and reachable") : bad("Stripe mounted but NO card number input");
   }
-  const text1 = await page.evaluate(() => document.body.innerText);
+  // Stripe swaps its iframes while the Payment Element settles, and puppeteer
+  // throws "detached Frame" if an evaluate lands mid-swap — retry, never crash,
+  // because a crash here skips the cleanup below and leaves probe rows on prod.
+  let text1 = "";
+  for (let i = 0; i < 5 && !text1; i++) {
+    try { text1 = await page.evaluate(() => document.body.innerText); } catch { await new Promise((r) => setTimeout(r, 700)); }
+  }
   const total = text1.match(/\$\d[\d,]*\.\d{2}/)?.[0] || "";
   total ? ok(`payment step shows an amount (${total})`) : bad("no amount on the payment step");
   if (errors.length) bad(`${errors.length} page error(s): ${errors[0].slice(0, 120)}`); else ok("no uncaught page errors");
-  await page.screenshot({ path: `${SHOTS}/${label}.png`, fullPage: false });
-  ok(`screenshot ${SHOTS}/${label}.png`);
+  try { await page.screenshot({ path: `${SHOTS}/${label}.png`, fullPage: false }); ok(`screenshot ${SHOTS}/${label}.png`); } catch (e: any) { bad(`screenshot failed: ${e.message.slice(0, 80)}`); }
   await page.close();
 }
 await browser.close();
