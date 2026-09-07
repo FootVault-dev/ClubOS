@@ -71,8 +71,10 @@ async function main() {
     const real = http("GET", "/api/public/teampay/competition/ethnic-cup-2026");
     check(real.status === 200, "the Ethnic Cup competition is served publicly");
     check(real.json?.feeCents === 80000, `the team fee is $800 (got ${real.json?.feeCents})`);
-    check(real.json?.paymentsEnabled === false,
-      "🔴 payments are OFF on the real Cup — no money until the venue is confirmed");
+    // Daniel opened entries AND payments on 2026-09-04 (project_clubos_teampay). Until
+    // 2026-09-08 this asserted OFF and failed on every run after the go-live.
+    check(real.json?.paymentsEnabled === true,
+      "payments are ON on the real Cup (Daniel's go-live, 2026-09-04)");
     check(real.json?.brand === "ethniccup", "it renders in the Ethnic Cup brand");
 
     const badSlug = http("GET", "/api/public/teampay/competition/no-such-cup");
