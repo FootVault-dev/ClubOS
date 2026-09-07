@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { loadStripe } from "@stripe/stripe-js";
+import { loadStripe, type Appearance } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { ArrowLeft, Lock, CheckCircle, Calendar, Repeat, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,78 @@ import { initPixel, trackEvent } from "@/lib/meta-pixel";
 import { purchaseEventId } from "@shared/meta-events";
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "");
+
+// Brand. join.minifootball.co.nz sells the Ballers Youth League and a parent
+// arrives from the black-and-gold landing page; the same route on join.cufc.co.nz
+// sells CUFC term programmes and keeps its neutral look. Detected the way
+// App.tsx detects the MFL host, so nothing here depends on a data field the
+// quote endpoint does not return. Anton is already loaded in client/index.html.
+const MFL = typeof window !== "undefined" && window.location.host.includes("minifootball");
+// The only MFL class programme today. "Back" from the first step must land on
+// the page the parent came from, not a ClubOS route this host never renders.
+const MFL_LANDING = "https://minifootball.co.nz/ballers";
+const GOLD = "#d1b96e";
+const T = MFL ? {
+  page: "min-h-screen bg-[#0a0a0a] text-white",
+  loading: "min-h-screen bg-[#0a0a0a] flex items-center justify-center",
+  header: "border-b border-white/10 bg-[#0a0a0a]",
+  back: "flex items-center gap-2 text-sm font-medium text-white/60 hover:text-white",
+  headerTitle: "text-sm font-medium text-white/80 flex items-center gap-2.5",
+  h1: "font-['Anton'] uppercase tracking-wide text-4xl sm:text-5xl leading-none mb-3",
+  muted: "text-white/60",
+  label: "text-[11px] font-bold text-[#d1b96e] uppercase tracking-[0.18em] mb-3",
+  input: "h-11 bg-white/[0.04] border-white/10 text-white placeholder:text-white/40 focus-visible:ring-[#d1b96e]/50",
+  textarea: "w-full px-3 py-2.5 rounded-lg bg-white/[0.04] border border-white/10 text-white placeholder:text-white/40 focus:border-[#d1b96e]/60 focus:outline-none min-h-[80px]",
+  cta: "w-full bg-[#d1b96e] hover:bg-[#c4ab5f] text-black font-bold text-base py-6 rounded-full",
+  pay: "w-full py-3.5 rounded-full bg-[#d1b96e] text-black font-bold hover:bg-[#c4ab5f] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2",
+  card: "rounded-2xl border border-white/10 bg-white/[0.04]",
+  cardLabel: "text-[10px] uppercase tracking-[0.18em] font-semibold text-[#d1b96e] mb-2",
+  cardTitle: "font-bold text-white mb-1",
+  cardText: "text-sm text-white/80 mb-1",
+  cardMuted: "text-xs text-white/50 mb-3",
+  divider: "border-white/10",
+  line: "text-white/60",
+  total: "text-white",
+  optionSel: "border-[#d1b96e] bg-[#d1b96e]/10",
+  optionIdle: "border-white/10 bg-white/[0.03] hover:border-white/30",
+  chipSel: "border-[#d1b96e] bg-[#d1b96e]/10 text-white",
+  chipIdle: "border-white/10 text-white/70 hover:border-white/30",
+  error: "p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-200",
+  note: "text-[11px] text-center text-white/50",
+  prefill: "rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200",
+} : {
+  page: "min-h-screen bg-zinc-50 text-zinc-900",
+  loading: "min-h-screen bg-white flex items-center justify-center",
+  header: "border-b border-zinc-200 bg-white",
+  back: "flex items-center gap-2 text-sm font-medium text-zinc-500 hover:text-zinc-900",
+  headerTitle: "text-sm font-medium text-zinc-700 flex items-center gap-2.5",
+  h1: "text-3xl font-black tracking-tight mb-2",
+  muted: "text-zinc-500",
+  label: "text-sm font-bold text-zinc-700 uppercase tracking-wider mb-3",
+  input: "",
+  textarea: "w-full px-3 py-2.5 rounded-lg border border-zinc-300 focus:border-zinc-900 focus:outline-none min-h-[80px]",
+  cta: "w-full bg-blue-600 hover:bg-blue-700 text-white text-base py-6 rounded-xl",
+  pay: "w-full py-3.5 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:bg-zinc-300 disabled:cursor-not-allowed transition flex items-center justify-center gap-2",
+  card: "rounded-2xl border border-zinc-200 bg-white",
+  cardLabel: "text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-2",
+  cardTitle: "font-bold text-zinc-900 mb-1",
+  cardText: "text-sm text-zinc-700 mb-1",
+  cardMuted: "text-xs text-zinc-500 mb-3",
+  divider: "border-zinc-200",
+  line: "text-zinc-600",
+  total: "text-zinc-900",
+  optionSel: "border-blue-500 bg-blue-50",
+  optionIdle: "border-zinc-200 bg-white hover:border-zinc-400",
+  chipSel: "border-blue-500 bg-blue-50 text-blue-900",
+  chipIdle: "border-zinc-200 text-zinc-700 hover:border-zinc-400",
+  error: "p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800",
+  note: "text-[11px] text-center text-zinc-500",
+  prefill: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900",
+};
+// Stripe's Payment Element draws its own inputs; it is themed here, not by CSS.
+const APPEARANCE: Appearance = MFL
+  ? { theme: "night", variables: { colorPrimary: GOLD, colorBackground: "#141414", colorText: "#ffffff", colorTextSecondary: "#a1a1aa", borderRadius: "12px", fontFamily: "Inter, system-ui, sans-serif" } }
+  : { theme: "stripe" };
 
 function money(cents: number): string {
   return `$${(cents / 100).toLocaleString("en-NZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -115,11 +187,11 @@ function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly, 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <PaymentElement />
-      {error && <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">{error}</div>}
+      {error && <div className={T.error}>{error}</div>}
       <button
         type="submit"
         disabled={!stripe || processing}
-        className="w-full py-3.5 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:bg-zinc-300 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+        className={T.pay}
       >
         {processing
           ? "Processing..."
@@ -127,7 +199,7 @@ function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly, 
             ? <><Lock className="w-4 h-4" /> Start subscription — {money(totalCents)}/week</>
             : <><Lock className="w-4 h-4" /> Pay {money(totalCents)}</>}
       </button>
-      <p className="text-[11px] text-center text-zinc-500">
+      <p className={T.note}>
         {isWeekly
           ? "Today's $X will be charged now. Future weeks charge automatically."
           : "Secured by Stripe. Your card is never stored on our servers."}
@@ -280,11 +352,11 @@ export default function ClassBookingPage() {
   };
 
   if (quoteLoading || optionsLoading) {
-    return <div className="min-h-screen bg-white flex items-center justify-center"><Skeleton className="w-80 h-32 rounded-xl" /></div>;
+    return <div className={T.loading}><Skeleton className="w-80 h-32 rounded-xl" /></div>;
   }
   if (!quoteData) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className={T.loading}>
         <div className="text-center">
           <h2 className="text-2xl font-bold mb-2">Class not found</h2>
           <button onClick={() => setLocation("/")} className="text-blue-600 underline">Go home</button>
@@ -321,20 +393,21 @@ export default function ClassBookingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-900">
-      <header className="border-b border-zinc-200 bg-white">
+    <div className={T.page}>
+      <header className={T.header}>
         <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
           <button
             onClick={() => {
               if (step === "payment") setStep("details");
               else if (step === "details" && options.length > 1) setStep("options");
+              else if (MFL) window.location.href = MFL_LANDING;
               else setLocation(`/${slug}`);
             }}
-            className="flex items-center gap-2 text-sm font-medium text-zinc-500 hover:text-zinc-900"
+            className={T.back}
           >
             <ArrowLeft className="w-4 h-4" /> Back
           </button>
-          <div className="text-sm font-medium text-zinc-700">{program.name}</div>
+          <div className={T.headerTitle}>{MFL && <img src="/logos/mini-football-leagues.png" alt="" className="h-7 w-7" />}{program.name}</div>
         </div>
       </header>
 
@@ -342,8 +415,8 @@ export default function ClassBookingPage() {
         {/* Step 1: Pick option */}
         {step === "options" && hasOptions && (
           <>
-            <h1 className="text-3xl font-black tracking-tight mb-2">Pick your option</h1>
-            <p className="text-zinc-500 mb-8">
+            <h1 className={T.h1}>Pick your option</h1>
+            <p className={`${T.muted} mb-8`}>
               {term ? `${term.name ?? `Term ${term.termNumber}`} ${term.year}` : "Pick an option to continue."}
             </p>
             <div className="space-y-3">
@@ -355,7 +428,7 @@ export default function ClassBookingPage() {
                     key={opt.id}
                     onClick={() => setSelectedOption(opt)}
                     className={`w-full text-left rounded-xl border p-5 transition ${
-                      isSelected ? "border-blue-500 bg-blue-50" : "border-zinc-200 bg-white hover:border-zinc-400"
+                      isSelected ? T.optionSel : T.optionIdle
                     }`}
                   >
                     <div className="flex items-start justify-between gap-4">
@@ -377,12 +450,12 @@ export default function ClassBookingPage() {
                         {q.discount > 0 ? (
                           <>
                             <div className="text-zinc-400 line-through text-sm">{money(q.full)}</div>
-                            <div className="text-2xl font-bold text-zinc-900">{money(q.payNow)}</div>
+                            <div className={`text-2xl font-bold ${T.total}`}>{money(q.payNow)}</div>
                             <div className="text-[10px] text-emerald-600 mt-0.5">pro-rated for term</div>
                           </>
                         ) : (
                           <>
-                            <div className="text-2xl font-bold text-zinc-900">{money(q.full)}</div>
+                            <div className={`text-2xl font-bold ${T.total}`}>{money(q.full)}</div>
                             <div className="text-[10px] text-zinc-400">/term</div>
                           </>
                         )}
@@ -395,7 +468,7 @@ export default function ClassBookingPage() {
             <Button
               onClick={() => setStep("details")}
               disabled={!selectedOption}
-              className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white text-base py-6 rounded-xl"
+              className={`mt-6 ${T.cta}`}
             >
               Continue with {selectedOption?.name ?? "—"} →
             </Button>
@@ -406,19 +479,19 @@ export default function ClassBookingPage() {
         {step === "details" && selectedOption && (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr,320px] gap-8">
             <div>
-              <h1 className="text-3xl font-black tracking-tight mb-2">Register your child</h1>
-              <p className="text-zinc-500 mb-8">{selectedOption.name}{selectedOption.scheduleText ? ` · ${selectedOption.scheduleText}` : ""}</p>
+              <h1 className={T.h1}>Register your child</h1>
+              <p className={`${T.muted} mb-8`}>{selectedOption.name}{selectedOption.scheduleText ? ` · ${selectedOption.scheduleText}` : ""}</p>
 
               <section className="space-y-6">
                 {/* Payment mode picker (only if option allows weekly) */}
                 {selectedOption.allowPayWeekly && (
                   <div>
-                    <h2 className="text-sm font-bold text-zinc-700 uppercase tracking-wider mb-3">How would you like to pay?</h2>
+                    <h2 className={T.label}>How would you like to pay?</h2>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => setPaymentMode("upfront")}
                         className={`p-4 rounded-xl border text-left transition ${
-                          paymentMode === "upfront" ? "border-blue-500 bg-blue-50" : "border-zinc-200 hover:border-zinc-400"
+                          paymentMode === "upfront" ? T.optionSel : T.optionIdle
                         }`}
                       >
                         <CreditCard className="w-4 h-4 mb-1.5 text-zinc-600" />
@@ -428,7 +501,7 @@ export default function ClassBookingPage() {
                       <button
                         onClick={() => setPaymentMode("weekly")}
                         className={`p-4 rounded-xl border text-left transition ${
-                          paymentMode === "weekly" ? "border-blue-500 bg-blue-50" : "border-zinc-200 hover:border-zinc-400"
+                          paymentMode === "weekly" ? T.optionSel : T.optionIdle
                         }`}
                       >
                         <Repeat className="w-4 h-4 mb-1.5 text-zinc-600" />
@@ -442,7 +515,7 @@ export default function ClassBookingPage() {
                 )}
 
                 {prefill && (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                  <div className={T.prefill}>
                     Signed in as <strong>{prefill.parent.email}</strong> — we've filled in your details.{" "}
                     {/* Absolute: the portal lives on cufc.co.nz, this checkout on
                         join.cufc.co.nz. A relative href would 404 here. */}
@@ -451,17 +524,17 @@ export default function ClassBookingPage() {
                 )}
 
                 <div>
-                  <h2 className="text-sm font-bold text-zinc-700 uppercase tracking-wider mb-3">Parent / guardian</h2>
+                  <h2 className={T.label}>Parent / guardian</h2>
                   <div className="grid grid-cols-2 gap-3">
-                    <Input value={parentFirst} onChange={e => setParentFirst(e.target.value)} placeholder="First name" />
-                    <Input value={parentLast} onChange={e => setParentLast(e.target.value)} placeholder="Last name" />
-                    <Input type="email" value={parentEmail} onChange={e => setParentEmail(e.target.value)} placeholder="Email" className="col-span-2" />
-                    <Input value={parentPhone} onChange={e => setParentPhone(e.target.value)} placeholder="Mobile" className="col-span-2" />
+                    <Input value={parentFirst} onChange={e => setParentFirst(e.target.value)} placeholder="First name" className={T.input} />
+                    <Input value={parentLast} onChange={e => setParentLast(e.target.value)} placeholder="Last name" className={T.input} />
+                    <Input type="email" value={parentEmail} onChange={e => setParentEmail(e.target.value)} placeholder="Email" className={`col-span-2 ${T.input}`} />
+                    <Input value={parentPhone} onChange={e => setParentPhone(e.target.value)} placeholder="Mobile" className={`col-span-2 ${T.input}`} />
                   </div>
                 </div>
 
                 <div>
-                  <h2 className="text-sm font-bold text-zinc-700 uppercase tracking-wider mb-3">Your child</h2>
+                  <h2 className={T.label}>Your child</h2>
 
                   {/* A returning family picks a child we already hold, instead of
                       retyping them into a second record. Registering the same
@@ -474,9 +547,7 @@ export default function ClassBookingPage() {
                           type="button"
                           onClick={() => chooseChild(childKey === c.key ? null : c.key)}
                           className={`rounded-full border px-3.5 py-2 text-sm font-semibold transition ${
-                            childKey === c.key
-                              ? "border-blue-500 bg-blue-50 text-blue-900"
-                              : "border-zinc-200 text-zinc-700 hover:border-zinc-400"
+                            childKey === c.key ? T.chipSel : T.chipIdle
                           }`}
                         >
                           {c.firstName} {c.lastName}
@@ -487,9 +558,7 @@ export default function ClassBookingPage() {
                         type="button"
                         onClick={() => chooseChild(null)}
                         className={`rounded-full border px-3.5 py-2 text-sm font-semibold transition ${
-                          childKey === null
-                            ? "border-blue-500 bg-blue-50 text-blue-900"
-                            : "border-zinc-200 text-zinc-700 hover:border-zinc-400"
+                          childKey === null ? T.chipSel : T.chipIdle
                         }`}
                       >
                         + Another child
@@ -498,8 +567,8 @@ export default function ClassBookingPage() {
                   )}
 
                   <div className="grid grid-cols-2 gap-3">
-                    <Input value={childFirst} onChange={e => { setChildFirst(e.target.value); setChildKey(null); }} placeholder="First name" />
-                    <Input value={childLast} onChange={e => { setChildLast(e.target.value); setChildKey(null); }} placeholder="Last name" />
+                    <Input value={childFirst} onChange={e => { setChildFirst(e.target.value); setChildKey(null); }} placeholder="First name" className={T.input} />
+                    <Input value={childLast} onChange={e => { setChildLast(e.target.value); setChildKey(null); }} placeholder="Last name" className={T.input} />
                     <DatePickerInput value={childDob} onChange={e => { setChildDob(e.target.value); setChildKey(null); }} className="col-span-2" />
                   </div>
                 </div>
@@ -508,15 +577,15 @@ export default function ClassBookingPage() {
                   value={notes}
                   onChange={e => setNotes(e.target.value)}
                   placeholder="Anything we should know? (allergies, medical, etc.) — optional"
-                  className="w-full px-3 py-2.5 rounded-lg border border-zinc-300 focus:border-zinc-900 focus:outline-none min-h-[80px]"
+                  className={T.textarea}
                 />
 
-                {error && <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">{error}</div>}
+                {error && <div className={T.error}>{error}</div>}
 
                 <Button
                   onClick={proceedToPayment}
                   disabled={!formValid || submitting}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white text-base py-6 rounded-xl"
+                  className={T.cta}
                 >
                   {submitting ? "Loading payment..." : `Continue to payment →`}
                 </Button>
@@ -525,28 +594,28 @@ export default function ClassBookingPage() {
 
             {/* Order summary */}
             <aside className="lg:sticky lg:top-6 lg:self-start order-first lg:order-last">
-              <div className="rounded-2xl border border-zinc-200 bg-white p-5">
-                <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-2">Your registration</div>
-                <div className="font-bold text-zinc-900 mb-1">{program.name}</div>
-                <div className="text-sm text-zinc-700 mb-1">{selectedOption.name}</div>
-                {selectedOption.scheduleText && <div className="text-xs text-zinc-500 mb-3">{selectedOption.scheduleText}</div>}
+              <div className={`${T.card} p-5`}>
+                <div className={T.cardLabel}>Your registration</div>
+                <div className={T.cardTitle}>{program.name}</div>
+                <div className={T.cardText}>{selectedOption.name}</div>
+                {selectedOption.scheduleText && <div className={T.cardMuted}>{selectedOption.scheduleText}</div>}
 
-                <div className="pt-3 border-t border-zinc-200 space-y-1.5 text-sm">
+                <div className={`pt-3 border-t ${T.divider} space-y-1.5 text-sm`}>
                   {paymentMode === "weekly" ? (
                     <>
-                      <div className="flex justify-between text-zinc-600">
+                      <div className={`flex justify-between ${T.line}`}>
                         <span>Weekly fee</span>
                         <span className="font-mono">{money(selectedOption.weeklyPriceCents ?? Math.round(selectedOption.fullPriceCents / (selectedOption.sessionCount ?? 10)))}</span>
                       </div>
-                      <div className="flex justify-between text-zinc-600">
+                      <div className={`flex justify-between ${T.line}`}>
                         <span>Total weeks</span>
                         <span className="font-mono">{selectedOption.sessionCount ?? "—"}</span>
                       </div>
-                      <div className="flex justify-between font-bold text-base pt-2 border-t border-zinc-200 mt-2">
+                      <div className={`flex justify-between font-bold text-base pt-2 border-t ${T.divider} mt-2`}>
                         <span>Today's first payment</span>
                         <span className="font-mono">{money(selectedOption.weeklyPriceCents ?? Math.round(selectedOption.fullPriceCents / (selectedOption.sessionCount ?? 10)))}</span>
                       </div>
-                      <div className="text-[11px] text-zinc-500 pt-1">Future weeks charge automatically.</div>
+                      <div className={`text-[11px] ${T.muted} pt-1`}>Future weeks charge automatically.</div>
                     </>
                   ) : (() => {
                     const q = computeOptionQuote(selectedOption);
@@ -554,7 +623,7 @@ export default function ClassBookingPage() {
                       <>
                         {q.discount > 0 && (
                           <>
-                            <div className="flex justify-between text-zinc-600">
+                            <div className={`flex justify-between ${T.line}`}>
                               <span>Term price</span>
                               <span className="font-mono line-through">{money(q.full)}</span>
                             </div>
@@ -564,7 +633,7 @@ export default function ClassBookingPage() {
                             </div>
                           </>
                         )}
-                        <div className="flex justify-between font-bold text-base pt-2 border-t border-zinc-200 mt-2">
+                        <div className={`flex justify-between font-bold text-base pt-2 border-t ${T.divider} mt-2`}>
                           <span>You pay today</span>
                           <span className="font-mono">{money(q.payNow)}</span>
                         </div>
@@ -580,11 +649,11 @@ export default function ClassBookingPage() {
         {/* Step 3: Payment */}
         {step === "payment" && intent && (
           <div className="max-w-xl mx-auto">
-            <h1 className="text-3xl font-black tracking-tight mb-2">
+            <h1 className={T.h1}>
               {intent.paymentMode === "weekly" ? `${money(intent.quote.payNowCents)}/week` : `Pay ${money(intent.quote.payNowCents)}`}
             </h1>
-            <p className="text-zinc-500 mb-8">Receipt + confirmation will be sent to {parentEmail}.</p>
-            <Elements stripe={stripePromise} options={{ clientSecret: intent.clientSecret, appearance: { theme: "stripe" } }}>
+            <p className={`${T.muted} mb-8`}>Receipt + confirmation will be sent to {parentEmail}.</p>
+            <Elements stripe={stripePromise} options={{ clientSecret: intent.clientSecret, appearance: APPEARANCE }}>
               <PaymentForm
                 slug={slug}
                 registrationId={intent.registrationId}
@@ -599,9 +668,9 @@ export default function ClassBookingPage() {
 
         {/* No options at all — fall back to a friendly notice */}
         {step === "options" && !hasOptions && (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-12 text-center">
+          <div className={`${T.card} p-12 text-center`}>
             <h2 className="text-xl font-bold mb-2">Registration not yet available</h2>
-            <p className="text-zinc-500">This program doesn't have any options live yet. Check back soon — or get in touch.</p>
+            <p className={T.muted}>This program doesn't have any options live yet. Check back soon — or get in touch.</p>
           </div>
         )}
       </div>

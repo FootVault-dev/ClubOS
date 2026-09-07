@@ -82,6 +82,11 @@ function isPublicDarkSurface(): boolean {
     path === "/membership" ||
     // MFL's public league landing pages — gold on near-black.
     startsWithAny("/league") ||
+    // MFL's class-book checkout (Ballers Youth League) on join.minifootball.co.nz
+    // — the same route on join.cufc.co.nz is the light CUFC one, so the HOST
+    // decides, as it does for CIC. Styled in class-booking-page.tsx (2026-09-08).
+    // The /success page after it is white by design and is NOT declared.
+    (host.includes("minifootball") && path.endsWith("/class-book")) ||
     // The NZF academy registration page — navy and gold throughout.
     startsWithAny("/academy")
   );

@@ -330,12 +330,13 @@ html:not(.dark) .text-white\/95 { color: rgb(15 23 42 / 0.99) !important; }
 html:not(.dark) .to-white\/\[0\.01\] { --tw-gradient-to: rgb(15 23 42 / 0.015) var(--tw-gradient-to-position) !important; }
 html:not(.dark) .via-white\/10 { --tw-gradient-to: rgb(15 23 42 / 0); --tw-gradient-stops: var(--tw-gradient-from), rgb(15 23 42 / 0.06) var(--tw-gradient-via-position), var(--tw-gradient-to) !important; }
 
-/* 40 hardcoded dark surfaces → light card. Luminance < 0.02.
-   bg-[#011a48] (L=0.0121), bg-[#02060E] (L=0.0017), bg-[#050B16] (L=0.0033), bg-[#070C16] (L=0.0037), bg-[#0a0a0c] (L=0.0031), bg-[#0a0b0d] (L=0.0033), bg-[#0a0e17] (L=0.0044), bg-[#0a0e17]/95 (L=0.0044), bg-[#0a0e1a] (L=0.0045), bg-[#0a0e1a]/95 (L=0.0045), bg-[#0a0f1a] (L=0.0048), bg-[#0a0f1c] (L=0.0049), bg-[#0a0f1c]/95 (L=0.0049), bg-[#0b0b0c] (L=0.0034), bg-[#0b0b0c]/95 (L=0.0034), bg-[#0b0c0e] (L=0.0037), bg-[#0b0f17] (L=0.0047), bg-[#0b1120] (L=0.0058), bg-[#0c0c0e] (L=0.0037), bg-[#0d1117] (L=0.0055), bg-[#0d1120] (L=0.0059), bg-[#0d1220] (L=0.0062), bg-[#0d1424] (L=0.0071), bg-[#0e0f12] (L=0.0048), bg-[#0e1116] (L=0.0055), bg-[#0f1216] (L=0.0059), bg-[#0f1423] (L=0.0072), bg-[#101013] (L=0.0053), bg-[#101215] (L=0.0060), bg-[#12151b] (L=0.0074), bg-[#131829] (L=0.0095), bg-[#141511] (L=0.0073), bg-[#15171c] (L=0.0086), bg-[#16171a] (L=0.0086), bg-[#17181c] (L=0.0092), bg-[#1b1814] (L=0.0094), bg-[#1c1e24] (L=0.0130), from-[#0d1117] (L=0.0055), via-[#0d1117] (L=0.0055), via-[#0d1117]/40 (L=0.0055) */
+/* 41 hardcoded dark surfaces → light card. Luminance < 0.02.
+   bg-[#011a48] (L=0.0121), bg-[#02060E] (L=0.0017), bg-[#050B16] (L=0.0033), bg-[#070C16] (L=0.0037), bg-[#0a0a0a] (L=0.0030), bg-[#0a0a0c] (L=0.0031), bg-[#0a0b0d] (L=0.0033), bg-[#0a0e17] (L=0.0044), bg-[#0a0e17]/95 (L=0.0044), bg-[#0a0e1a] (L=0.0045), bg-[#0a0e1a]/95 (L=0.0045), bg-[#0a0f1a] (L=0.0048), bg-[#0a0f1c] (L=0.0049), bg-[#0a0f1c]/95 (L=0.0049), bg-[#0b0b0c] (L=0.0034), bg-[#0b0b0c]/95 (L=0.0034), bg-[#0b0c0e] (L=0.0037), bg-[#0b0f17] (L=0.0047), bg-[#0b1120] (L=0.0058), bg-[#0c0c0e] (L=0.0037), bg-[#0d1117] (L=0.0055), bg-[#0d1120] (L=0.0059), bg-[#0d1220] (L=0.0062), bg-[#0d1424] (L=0.0071), bg-[#0e0f12] (L=0.0048), bg-[#0e1116] (L=0.0055), bg-[#0f1216] (L=0.0059), bg-[#0f1423] (L=0.0072), bg-[#101013] (L=0.0053), bg-[#101215] (L=0.0060), bg-[#12151b] (L=0.0074), bg-[#131829] (L=0.0095), bg-[#141511] (L=0.0073), bg-[#15171c] (L=0.0086), bg-[#16171a] (L=0.0086), bg-[#17181c] (L=0.0092), bg-[#1b1814] (L=0.0094), bg-[#1c1e24] (L=0.0130), from-[#0d1117] (L=0.0055), via-[#0d1117] (L=0.0055), via-[#0d1117]/40 (L=0.0055) */
 html:not(.dark) .bg-\[\#011a48\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#02060E\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#050B16\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#070C16\] { background-color: hsl(var(--card)) !important; }
+html:not(.dark) .bg-\[\#0a0a0a\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0a0a0c\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0a0b0d\] { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .bg-\[\#0a0e17\] { background-color: hsl(var(--card)) !important; }
@@ -398,9 +399,9 @@ html:not(.dark) .hover\:bg-slate-800:hover { background-color: hsl(var(--card)) 
 html:not(.dark) .hover\:bg-zinc-800:hover { background-color: hsl(var(--card)) !important; }
 html:not(.dark) .hover\:border-zinc-900:hover { border-color: rgb(15 23 42 / 0.28) !important; }
 
-/* 198 pale text utilities → their family's 700, which is the
+/* 199 pale text utilities → their family's 700, which is the
    lightest shade that clears 4.5:1 on white. Families touched:
-   amber-100, amber-200, amber-300, amber-400, amber-500, amber-600, blue-100, blue-200, blue-300, blue-400, blue-500, cyan-200, cyan-300, cyan-400, emerald-100, emerald-200, emerald-300, emerald-400, emerald-500, emerald-600, green-300, green-400, green-600, indigo-100, indigo-200, indigo-300, indigo-400, orange-300, orange-400, orange-500, orange-600, pink-100, pink-200, pink-300, pink-400, purple-300, purple-400, red-200, red-300, red-400, red-50, red-500, rose-300, rose-400, sky-200, sky-300, sky-400, teal-300, violet-200, violet-300, violet-400, violet-500, yellow-300, yellow-400, yellow-500, yellow-600 */
+   amber-100, amber-200, amber-300, amber-400, amber-500, amber-600, blue-100, blue-200, blue-300, blue-400, blue-500, cyan-200, cyan-300, cyan-400, emerald-100, emerald-200, emerald-300, emerald-400, emerald-500, emerald-600, green-300, green-400, green-600, indigo-100, indigo-200, indigo-300, indigo-400, lime-300, orange-300, orange-400, orange-500, orange-600, pink-100, pink-200, pink-300, pink-400, purple-300, purple-400, red-200, red-300, red-400, red-50, red-500, rose-300, rose-400, sky-200, sky-300, sky-400, teal-300, violet-200, violet-300, violet-400, violet-500, yellow-300, yellow-400, yellow-500, yellow-600 */
 html:not(.dark) .group:hover .group-hover\:text-amber-300 { color: #b45309 !important; }
 html:not(.dark) .group:hover .group-hover\:text-blue-400\/50 { color: color-mix(in srgb, #1d4ed8 70%, transparent) !important; }
 html:not(.dark) .hover\:text-amber-100:hover { color: #b45309 !important; }
@@ -531,6 +532,7 @@ html:not(.dark) .text-indigo-200 { color: #4338ca !important; }
 html:not(.dark) .text-indigo-300 { color: #4338ca !important; }
 html:not(.dark) .text-indigo-300\/60 { color: color-mix(in srgb, #4338ca 70%, transparent) !important; }
 html:not(.dark) .text-indigo-400 { color: #4338ca !important; }
+html:not(.dark) .text-lime-300 { color: #4d7c0f !important; }
 html:not(.dark) .text-orange-300 { color: #c2410c !important; }
 html:not(.dark) .text-orange-300\/70 { color: color-mix(in srgb, #c2410c 70%, transparent) !important; }
 html:not(.dark) .text-orange-300\/80 { color: color-mix(in srgb, #c2410c 80%, transparent) !important; }

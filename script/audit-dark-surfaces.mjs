@@ -68,6 +68,8 @@ const DECLARED_DARK = {
   "pages/mfl-score-game.tsx":
     "MFL office scoring — /admin/mfl-score/:id, gold on black, renders <ForceDarkSurface />",
   "components/match-timer.tsx": "used only by the two score-game screens above",
+  "pages/class-booking-page.tsx":
+    "MFL class-book checkout (Ballers Youth League) on join.minifootball.co.nz — black + gold, chosen by HOST in isPublicDarkSurface(); the same route on join.cufc.co.nz stays light",
   "pages/academy-register-page.tsx":
     "NZF academy registration — /academy/:slug, navy and gold. Its dark surfaces come from a BRAND constant, not a literal, so the hex scan below cannot see them.",
 };
