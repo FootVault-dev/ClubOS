@@ -15,7 +15,8 @@ import pg from "pg";
 
 const ORIGIN = process.env.PROBE_ORIGIN || "https://join.cicyouth.com";
 const APP = "https://app.usg.co.nz";
-const SLUG = "cic-summer-7s-2027";
+const SLUGS = { open: "cic-summer-7s-2027-open", social: "cic-summer-7s-2027-social" };
+const FEES = { open: 70000, social: 50000 };  // Isaac's graphic, 2026-09-03
 const SITE = "https://cic7s.com";
 
 let n = 0; const fails: string[] = [];
@@ -35,15 +36,16 @@ async function req(method: string, url: string, body?: unknown, headers: Record<
 async function main() {
   console.log(`\n  CIC 7's bridge — live against ${ORIGIN}\n`);
 
-  // 1. the competition is there, open, priced, branded
-  const comp = await req("GET", `${APP}/api/public/teampay/competition/${SLUG}`);
-  check(comp.status === 200, `competition ${SLUG} answers 200 (got ${comp.status})`);
-  check(comp.json?.brand === "cic7s", `brand is cic7s (got ${comp.json?.brand})`);
-  check(comp.json?.feeCents === 99000, `fee is $990 (got ${comp.json?.feeCents})`);
-  check(comp.json?.defaultSquadSize === 14, `default squad 14 (got ${comp.json?.defaultSquadSize})`);
-  check(comp.json?.entriesOpen === true, `entries OPEN`);
-  check(comp.json?.paymentsEnabled === true, `payments ON`);
-  check(comp.json?.fillinsOpen === false, `fill-ins shut`);
+  // 1. both grades are there, open, priced, branded
+  for (const grade of ["open", "social"] as const) {
+    const comp = await req("GET", `${APP}/api/public/teampay/competition/${SLUGS[grade]}`);
+    check(comp.status === 200, `${grade}: competition answers 200 (got ${comp.status})`);
+    check(comp.json?.brand === "cic7s", `${grade}: brand is cic7s (got ${comp.json?.brand})`);
+    check(comp.json?.feeCents === FEES[grade], `${grade}: fee is $${FEES[grade] / 100} (got ${comp.json?.feeCents})`);
+    check(comp.json?.defaultSquadSize === 14, `${grade}: default squad 14 (got ${comp.json?.defaultSquadSize})`);
+    check(comp.json?.entriesOpen === true && comp.json?.paymentsEnabled === true, `${grade}: entries OPEN, payments ON`);
+    check(comp.json?.fillinsOpen === false, `${grade}: fill-ins shut`);
+  }
 
   // 2. CORS for the site
   const opt = await req("OPTIONS", `${ORIGIN}/api/public/cic7s/register-interest`);
@@ -92,7 +94,7 @@ async function main() {
     check(team.status === 200, `team API answers 200`);
     const e = team.json?.entry ?? team.json;
     check(e?.paymentMode === "whole", `payment mode is whole (got ${e?.paymentMode})`);
-    check(e?.feeCents === 99000, `entry fee copied as $990 (got ${e?.feeCents})`);
+    check(e?.feeCents === FEES.social, `a Social registration entered the Social grade at $500 (got ${e?.feeCents})`);
     check(e?.community === "Social", `category carried as community (got ${e?.community})`);
     check(e?.managerEmail === "delivered@resend.dev", `manager email from the registration`);
   }

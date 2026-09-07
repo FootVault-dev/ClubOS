@@ -47,7 +47,7 @@ async function main() {
     await page.type('input[type="email"]', EMAIL);
     await page.type('input[placeholder="Location"]', "Christchurch");
     await page.type('input[type="tel"]', "+64210000000");
-    await page.select("select", "Masters");
+    await page.select("select", "Social");
     await Promise.all([
       page.waitForFunction(() => location.pathname === "/thank-you", { timeout: 30000 }),
       page.click('form button[type="submit"]'),
@@ -76,6 +76,8 @@ async function main() {
     check(url.includes("fbclid=PROBE123"), "fbclid carried across to app.usg.co.nz");
     await page.waitForFunction((t) => document.body.innerText.includes(t), { timeout: 30000 }, TEAM);
     check(true, "team page shows the team name");
+    const fee = await page.evaluate(() => document.body.innerText.includes("$500.00"));
+    check(fee, "team page shows the Social fee $500.00 (Isaac's price, not the old $990)");
     const volt = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     check(volt === "rgb(10, 17, 34)", `Team Pay page is navy, the cic7s brand (got ${volt})`);
     await page.screenshot({ path: join(OUT, "team-page-mobile.png"), fullPage: true });

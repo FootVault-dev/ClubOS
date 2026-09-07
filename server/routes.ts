@@ -22057,10 +22057,15 @@ export async function registerRoutes(
     res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
   };
-  // The Team Pay competition the sales page enters teams into. One row in
-  // teampay_competitions (script/seed-teampay-cic7s.ts); switches in
-  // script/open-cic7s-entries.ts.
-  const CIC7S_TEAMPAY_SLUG = "cic-summer-7s-2027";
+  // The Team Pay competitions the sales page enters teams into. TWO rows in
+  // teampay_competitions (script/seed-teampay-cic7s.ts) because the two grades
+  // are priced differently — Open $700, Social $500 (Isaac Living's graphic,
+  // 2026-09-03, approved by Daniel) — and Team Pay carries one fee per
+  // competition. The registration's category decides the row; anything that is
+  // not Social (incl. the legacy Mens/Masters values) is Open.
+  const CIC7S_TEAMPAY_SLUGS = { open: "cic-summer-7s-2027-open", social: "cic-summer-7s-2027-social" } as const;
+  const cic7sSlugFor = (category: string | null | undefined) =>
+    /social/i.test(category || "") ? CIC7S_TEAMPAY_SLUGS.social : CIC7S_TEAMPAY_SLUGS.open;
   app.options("/api/public/cic7s/register-interest", (req, res) => { setCic7sCors(req, res); res.sendStatus(204); });
   app.post("/api/public/cic7s/register-interest", async (req, res) => {
     setCic7sCors(req, res);
@@ -22101,7 +22106,7 @@ export async function registerRoutes(
         fbp: cic7sAttribution.fbp ?? undefined, fbc: cic7sAttribution.fbc ?? undefined,
         userAgent: req.headers["user-agent"], ipAddress: req.ip,
         sourceUrl: String(req.body.sourceUrl || "https://cic7s.com/"),
-        contentName: "CIC Summer 7's — register interest", contentIds: [CIC7S_TEAMPAY_SLUG],
+        contentName: "CIC Summer 7's — register interest", contentIds: [cic7sSlugFor(category)],
       }).catch((e) => console.error("[CIC7s register] meta lead failed:", e));
       res.json({ ok: true, token: enterToken });
     } catch (e: any) { console.error("[CIC7s register] error:", e); res.status(400).json({ message: e.message }); }
@@ -22156,7 +22161,7 @@ export async function registerRoutes(
       let r: Awaited<ReturnType<typeof tp.createEntry>>;
       try {
         r = await tp.createEntry({
-          slug: CIC7S_TEAMPAY_SLUG,
+          slug: cic7sSlugFor(reg.category),
           teamName,
           // The tournament category (Mens / Masters / Social) sits in the slot
           // the Ethnic Cup uses for the community a team represents — it is the
