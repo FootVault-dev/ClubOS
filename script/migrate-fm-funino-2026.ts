@@ -27,8 +27,8 @@
 // reconciliation (24 rows · $3,840.00 · 17 card / 7 eftpos) that throws — and
 // so rolls back — if the numbers drift. No email is sent: this is direct SQL.
 //
-// Dry run:  npx tsx --env-file=.env script/migrate-fm-funino-2026.ts
-// Apply:    npx tsx --env-file=.env script/migrate-fm-funino-2026.ts --commit
+// Dry run:  npx tsx --env-file=.env script/migrate-fm-funino-2026.ts [--xero]
+// Apply:    npx tsx --env-file=.env script/migrate-fm-funino-2026.ts [--xero] --commit
 
 import "dotenv/config";
 import fs from "fs";
@@ -41,12 +41,25 @@ import { NZF_ETHNICITY_GROUPS } from "../shared/nzf-vocabulary";
 import { countryByName, validateNzfIdentity } from "../shared/nzf-identity";
 
 const COMMIT = process.argv.includes("--commit");
+// --xero: the SECOND pass (2026-09-08, same evening). Olga tracks office payments
+// in Xero, not FM — FM held fees for 24 of the 60, Xero held paid "FS 2026 -
+// Term 3" invoices for 31 more of them. The people still come from the FM dump
+// (full profiles + parents); only the payment evidence comes from Xero.
+const XERO = process.argv.includes("--xero");
 
 const DUMP = path.resolve(
   __dirname,
   "../../../outputs/fm-migration/2026-09-08-funino/fm-dump.json",
 );
 const REPORT_DIR = path.dirname(DUMP);
+const RECONCILE = path.join(REPORT_DIR, "xero/reconcile.json");
+// Xero spells her "Rae" like her brother Mathias; FM has "Isla Reign Law" (43351).
+const XERO_ALIASES: Record<string, string> = { "isla rae law": "43351" };
+// Xero rows that look like a FUNiño payment and are not. Evan Hao (INV-17241,
+// $160 "FS 2026 - Term 3" + a $245 overpayment) is a U9 (born 2017-11-15) whose
+// $405 Pre-Academy payment on cufc.co.nz (ClubOS #467) Olga filed against the
+// wrong programme. Registered by mistake at 21:50 and reversed at 22:05.
+const XERO_EXCLUDE: Record<string, string> = { "INV-17241": "Pre-Academy U9 payment misfiled as FS" };
 
 const PROGRAM_ID = 4; // FUNiño — First Kicks (/u4-u8), org 1
 const OPTION_ID = 7; // U4-U8 All-Access Pass, 16000 cents
@@ -54,7 +67,7 @@ const TERM_LABEL = "Term 3 2026 (20 Jul – 25 Sep)";
 const FEE_PREFIX = "Term 3 2026 - U4-8 Players: Unlimited Play";
 const PRICE_CENTS = 16000;
 const SEASON_YEAR = 2026;
-const LEGACY_SOURCE = "friendly_manager";
+const LEGACY_SOURCE = XERO ? "xero" : "friendly_manager";
 const RUN_STAMP = "2026-09-08";
 
 // Values a parent types to mean "nothing" in a free-text box. Stored as a
@@ -104,6 +117,47 @@ function paidTerm3Fee(p: FmPerson): FmFee | null {
   if (!(paid > 0) || outstanding !== 0) return null;
   return f;
 }
+
+interface Payment {
+  ref: string; paid: number; dateIso: string; dateLabel: string;
+  office: boolean; paymentMethod: string; note: string;
+}
+
+function fmPayment(p: FmPerson): Payment {
+  const fee = paidTerm3Fee(p)!;
+  const pay = fee.payments[0];
+  if (!pay || Number(pay.amount) !== Number(fee.paid)) {
+    throw new Error(`FM ${p.id}: payment rows do not add up to the fee's paid amount`);
+  }
+  const office = pay.method === "Eftpos";
+  const paymentMethod = office ? "eftpos" : pay.method === "Credit Card" ? ONLINE_PAYMENT_METHOD : null;
+  if (!paymentMethod) throw new Error(`FM ${p.id}: unknown FM payment method "${pay.method}"`);
+  return {
+    ref: fee.ref, paid: Number(fee.paid), dateIso: isoFromDmy(pay.date), dateLabel: pay.date,
+    office, paymentMethod,
+    note: `migrated from Friendly Manager fee ${fee.ref} ($${fee.paid} paid ${pay.date} by ${pay.method}${office ? " at the office" : " on FM's online gateway"})`,
+  };
+}
+
+interface XeroRow { num: string; ref: string; to: string; date: string; paid: number; due: number; status: string }
+const MONTHS: Record<string, string> = { Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06", Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12" };
+function isoFromXero(d: string): string {
+  const m = /^(\d{1,2}) ([A-Z][a-z]{2}) (\d{4})$/.exec(s(d));
+  if (!m || !MONTHS[m[2]]) throw new Error(`Unparseable Xero date "${d}"`);
+  return `${m[3]}-${MONTHS[m[2]]}-${m[1].padStart(2, "0")}`;
+}
+/** Xero says the invoice is paid and how much; it does not say the tender, so the
+ *  method is recorded as 'other' with the invoice number as the reference —
+ *  never a guessed EFTPOS/cash. Olga raises these at the office. */
+function xeroPayment(r: XeroRow): Payment {
+  return {
+    ref: r.num, paid: r.paid, dateIso: isoFromXero(r.date), dateLabel: r.date,
+    office: true, paymentMethod: "other",
+    note: `migrated from Xero invoice ${r.num} ("${r.ref}", $${r.paid.toFixed(2)} paid, invoice dated ${r.date}; Friendly Manager holds no fee for this term)`,
+  };
+}
+
+const xeroNorm = (v: string) => v.replace(/^\((FS|G|A[^)]*)\)\s*/, "").replace(/[’']/g, "'").trim().toLowerCase();
 
 function classify(p: FmPerson): string {
   const t4 = p.fees.filter((f) => f.name.startsWith("Term 4 2026"));
@@ -178,6 +232,14 @@ function structuredIdentity(f: Fields) {
 
 async function main() {
   const dump: Record<string, FmPerson> = JSON.parse(fs.readFileSync(DUMP, "utf8"));
+  // Xero mode may bring in a person who paid in Xero but is no longer in FM
+  // group 372 (Evan Hao). Their FM profile is captured the same way into
+  // xero/extra-fm-people.json, keyed by FM id, and merged here.
+  const EXTRA = path.join(REPORT_DIR, "xero/extra-fm-people.json");
+  if (XERO && fs.existsSync(EXTRA)) {
+    const extra: Record<string, FmPerson> = JSON.parse(fs.readFileSync(EXTRA, "utf8"));
+    for (const [id, p] of Object.entries(extra)) if (!dump[id]) dump[id] = p;
+  }
   const people = Object.values(dump).sort((a, b) => Number(a.id) - Number(b.id));
   console.log(`FM group 372: ${people.length} people in the dump (${DUMP})`);
 
@@ -189,12 +251,31 @@ async function main() {
   if (classes.has("TERM4_FEE_PRESENT")) {
     throw new Error("A Term 4 2026 fee appeared in the dump — this script only knows Term 3. Stop and look.");
   }
-  const toMigrate = classes.get("T3_PAID") ?? [];
+  // FM mode: the paid FM fee holders. Xero mode: FM-group people with a PAID
+  // "FS 2026 - Term 3" invoice in Xero and no FM fee (the FM-fee holders are
+  // already in, and a second registration would double-count them).
+  const xeroById = new Map<string, XeroRow>();
+  if (XERO) {
+    const rec = JSON.parse(fs.readFileSync(RECONCILE, "utf8"));
+    const byName = new Map<string, FmPerson>();
+    for (const p of people) byName.set(xeroNorm(`${s(p.fields["person[firstName]"])} ${s(p.fields["person[lastName]"])}`), p);
+    for (const row of rec.t3paid as XeroRow[]) {
+      if (XERO_EXCLUDE[row.num]) continue;
+      const key = xeroNorm(row.to);
+      const p = XERO_ALIASES[key] ? dump[XERO_ALIASES[key]] : byName.get(key);
+      if (!p) continue; // not in the FM group — reported separately, needs a human
+      if (paidTerm3Fee(p)) continue; // FM already proves this one; migrated in pass 1
+      if (xeroById.has(p.id)) throw new Error(`Two paid Xero Term 3 invoices for FM ${p.id} (${row.to}) — resolve by hand`);
+      xeroById.set(p.id, row);
+    }
+  }
+  const toMigrate = XERO ? people.filter((p) => xeroById.has(p.id)) : (classes.get("T3_PAID") ?? []);
+  const paymentFor = (p: FmPerson): Payment => XERO ? xeroPayment(xeroById.get(p.id)!) : fmPayment(p);
   console.log(`\nClassification:`);
   for (const [k, v] of [...classes.entries()].sort((a, b) => b[1].length - a[1].length)) {
     console.log(`  ${String(v.length).padStart(3)}  ${k}`);
   }
-  console.log(`\nMigrating ${toMigrate.length} paid Term 3 registrations. ${COMMIT ? "COMMIT" : "DRY RUN (rolled back)"}\n`);
+  console.log(`\nMigrating ${toMigrate.length} paid Term 3 registrations from ${XERO ? "XERO" : "FM fees"}. ${COMMIT ? "COMMIT" : "DRY RUN (rolled back)"}\n`);
 
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   await client.connect();
@@ -220,12 +301,8 @@ async function main() {
 
     for (const p of toMigrate) {
       const f = p.fields;
-      const fee = paidTerm3Fee(p)!;
-      const pay = fee.payments[0];
-      if (!pay || Number(pay.amount) !== Number(fee.paid)) {
-        throw new Error(`FM ${p.id}: payment rows do not add up to the fee's paid amount`);
-      }
-      const paidIso = isoFromDmy(pay.date);
+      const pay = paymentFor(p);
+      const paidIso = pay.dateIso;
       const firstName = s(f["person[firstName]"]), lastName = s(f["person[lastName]"]);
       const dob = nz(f["person[dateOfBirth]"]);
       const gender = f["person[gender]"] === "Male" ? "male" : f["person[gender]"] === "Female" ? "female" : null;
@@ -415,7 +492,7 @@ async function main() {
       // ── the registration ───────────────────────────────────────────────────
       const already = await q(
         `SELECT id, order_number FROM registrations WHERE legacy_source=$1 AND legacy_external_id=$2`,
-        [LEGACY_SOURCE, fee.ref]);
+        [LEGACY_SOURCE, pay.ref]);
       let regId: number, orderNumber: number;
       if (already.length) {
         stats.regsAlreadyThere++;
@@ -430,12 +507,14 @@ async function main() {
         if (dup.length) {
           throw new Error(`FM ${p.id} ${firstName} ${lastName}: already holds a paid Term 3 registration in ClubOS (#${dup[0].id}) — a second one would double-count $160`);
         }
-        const isOffice = pay.method === "Eftpos";
-        const paymentMethod = isOffice ? "eftpos" : pay.method === "Credit Card" ? ONLINE_PAYMENT_METHOD : null;
-        if (!paymentMethod) throw new Error(`FM ${p.id}: unknown FM payment method "${pay.method}"`);
-        const notes =
-          `${TERM_LABEL} · U4-8 Unlimited Play · migrated from Friendly Manager fee ${fee.ref} ` +
-          `($${fee.paid} paid ${pay.date} by ${pay.method}${isOffice ? " at the office" : " on FM's online gateway"}) on ${RUN_STAMP}`;
+        const isOffice = pay.office;
+        const paymentMethod = pay.paymentMethod;
+        // The agreed price is what was paid: a half term is $80, eight weeks
+        // $92.80. Same shape as an office entry — list price, discount, total.
+        const paidCents = Math.round(pay.paid * 100);
+        if (paidCents <= 0 || paidCents > PRICE_CENTS) throw new Error(`FM ${p.id}: paid $${pay.paid} is outside 0–$160`);
+        const priceNote = paidCents < PRICE_CENTS ? ` · Price adjusted from ${(PRICE_CENTS / 100).toFixed(2)} to ${pay.paid.toFixed(2)}` : "";
+        const notes = `${TERM_LABEL} · U4-8 Unlimited Play · ${pay.note}${priceNote} on ${RUN_STAMP}`;
         const ins = (await q(
           `INSERT INTO registrations (
              program_id, program_option_id, contact_id, guardian_id, status,
@@ -446,16 +525,16 @@ async function main() {
              legacy_source, legacy_external_id, order_number)
            VALUES ($1, $2, $3, $4, 'confirmed',
                    'upfront', 'term', $5,
-                   $6, 0, $6, 'NZD', $7,
+                   $6::int, $6::int - $17::int, $17::int, 'NZD', $7,
                    $8, $9, $10,
                    $11, $12, NULL, $13::timestamptz, $14::timestamp,
                    $15, $16, (SELECT COALESCE(MAX(order_number), 0) + 1 FROM registrations))
            RETURNING id, order_number`,
           [PROGRAM_ID, OPTION_ID, player.id, primaryGuardianId, SEASON_YEAR,
-           PRICE_CENTS, Number(fee.paid).toFixed(2),
+           PRICE_CENTS, pay.paid.toFixed(2),
            isOffice ? "cufc_office" : "online", LEGACY_SOURCE, notes,
-           paymentMethod, fee.ref, midDayNzUtc(paidIso), midDayNzUtc(paidIso),
-           LEGACY_SOURCE, fee.ref]))[0];
+           paymentMethod, pay.ref, midDayNzUtc(paidIso), midDayNzUtc(paidIso),
+           LEGACY_SOURCE, pay.ref, paidCents]))[0];
         regId = ins.id; orderNumber = ins.order_number;
         stats.regsInserted++;
 
@@ -470,23 +549,23 @@ async function main() {
             `UPDATE registrations SET status='cancelled',
                notes = COALESCE(NULLIF(notes,'') || ' · ', '') || $2
              WHERE id=$1`,
-            [row.id, `Unpaid checkout superseded by registration #${regId} (${fee.ref}, paid ${pay.date} by ${pay.method}) — closed by the FM migration on ${RUN_STAMP}`]);
+            [row.id, `Unpaid checkout superseded by registration #${regId} (${pay.ref}, $${pay.paid.toFixed(2)} paid, ${pay.dateLabel}) — closed by the ${XERO ? "Xero" : "FM"} migration on ${RUN_STAMP}`]);
           stats.pendingSuperseded++;
         }
 
         await q(
           `INSERT INTO audit_logs (user_id, action, entity, entity_id, details)
            VALUES (NULL, 'import', 'registration', $1, $2)`,
-          [regId, `FM migration (script/migrate-fm-funino-2026.ts): ${firstName} ${lastName} → ${prog.name} (${opt.name}), ${fee.paid} NZD, ${TERM_LABEL}, FM fee ${fee.ref} paid ${pay.date} by ${pay.method}; FM person ${p.id}`]);
+          [regId, `${XERO ? "Xero" : "FM"} migration (script/migrate-fm-funino-2026.ts${XERO ? " --xero" : ""}): ${firstName} ${lastName} → ${prog.name} (${opt.name}), ${pay.paid.toFixed(2)} NZD, ${TERM_LABEL}, ${pay.note}; FM person ${p.id}`]);
       }
 
       mapping.push({
         fmId: p.id, player: `${firstName} ${lastName}`, dob, contactId: player.id,
         guardians: guardianIds.map((x) => ({ fmId: x.g.fmId, name: `${x.g.firstName} ${x.g.lastName}`, contactId: x.id, primary: x.g.primary })),
-        feeRef: fee.ref, paid: fee.paid, paidOn: paidIso, method: pay.method,
+        feeRef: pay.ref, paid: pay.paid.toFixed(2), paidOn: paidIso, method: pay.paymentMethod,
         registrationId: regId, orderNumber, identityStructured: !!identity,
       });
-      console.log(`  ✓ FM ${p.id} ${firstName} ${lastName} → contact ${player.id}, reg #${regId} (order ${orderNumber}), ${fee.ref} ${pay.method} ${pay.date}${identity ? "" : "  [identity: free text only]"}`);
+      console.log(`  ✓ FM ${p.id} ${firstName} ${lastName} → contact ${player.id}, reg #${regId} (order ${orderNumber}), ${pay.ref} $${pay.paid.toFixed(2)} ${pay.paymentMethod} ${pay.dateLabel}${identity ? "" : "  [identity: free text only]"}`);
     }
 
     // ── reconcile against FM ────────────────────────────────────────────────
@@ -494,19 +573,24 @@ async function main() {
       `SELECT count(*)::int n, sum(total_cents)::int cents, sum(amount_paid)::numeric paid,
               count(*) FILTER (WHERE payment_method='eftpos')::int eftpos,
               count(*) FILTER (WHERE payment_method=$2)::int card,
+              count(*) FILTER (WHERE payment_method='other')::int other,
+              count(*) FILTER (WHERE total_cents <> round(amount_paid*100))::int total_mismatch,
               count(*) FILTER (WHERE status<>'confirmed')::int not_confirmed,
               count(*) FILTER (WHERE order_number IS NULL)::int no_order
          FROM registrations WHERE legacy_source=$1 AND program_id=$3`,
       [LEGACY_SOURCE, ONLINE_PAYMENT_METHOD, PROGRAM_ID]))[0];
-    const fmSum = toMigrate.reduce((a, p) => a + Number(paidTerm3Fee(p)!.paid), 0);
-    const fmEftpos = toMigrate.filter((p) => paidTerm3Fee(p)!.payments[0].method === "Eftpos").length;
-    console.log(`\nReconciliation — ClubOS: ${rec.n} regs · $${(rec.cents / 100).toFixed(2)} · paid $${Number(rec.paid).toFixed(2)} · ${rec.eftpos} eftpos / ${rec.card} card`);
-    console.log(`               — FM:     ${toMigrate.length} fees · $${fmSum.toFixed(2)} · ${fmEftpos} eftpos / ${toMigrate.length - fmEftpos} card`);
+    const pays = toMigrate.map(paymentFor);
+    const srcSum = pays.reduce((a, x) => a + x.paid, 0);
+    const srcCount = (m: string) => pays.filter((x) => x.paymentMethod === m).length;
+    console.log(`
+Reconciliation — ClubOS: ${rec.n} regs · $${(rec.cents / 100).toFixed(2)} · paid $${Number(rec.paid).toFixed(2)} · ${rec.eftpos} eftpos / ${rec.card} card / ${rec.other} other`);
+    console.log(`               — ${XERO ? "Xero:  " : "FM:    "} ${toMigrate.length} paid · $${srcSum.toFixed(2)} · ${srcCount("eftpos")} eftpos / ${srcCount(ONLINE_PAYMENT_METHOD)} card / ${srcCount("other")} other`);
     const bad: string[] = [];
     if (rec.n !== toMigrate.length) bad.push("count");
-    if (rec.cents !== toMigrate.length * PRICE_CENTS) bad.push("total_cents");
-    if (Number(rec.paid).toFixed(2) !== fmSum.toFixed(2)) bad.push("amount_paid");
-    if (rec.eftpos !== fmEftpos || rec.card !== toMigrate.length - fmEftpos) bad.push("tender split");
+    if ((rec.cents / 100).toFixed(2) !== srcSum.toFixed(2)) bad.push("total_cents");
+    if (Number(rec.paid).toFixed(2) !== srcSum.toFixed(2)) bad.push("amount_paid");
+    if (rec.total_mismatch) bad.push("total≠paid");
+    if (rec.eftpos !== srcCount("eftpos") || rec.card !== srcCount(ONLINE_PAYMENT_METHOD) || rec.other !== srcCount("other")) bad.push("tender split");
     if (rec.not_confirmed) bad.push("status");
     if (rec.no_order) bad.push("order_number");
     if (bad.length) throw new Error(`RECONCILIATION FAILED on: ${bad.join(", ")} — rolling back`);
@@ -517,16 +601,16 @@ async function main() {
     console.log(`\nStats: ${JSON.stringify(stats, null, 0)}`);
 
     const report = {
-      run: RUN_STAMP, mode: COMMIT ? "commit" : "dry-run", program: PROGRAM_ID, option: OPTION_ID, term: TERM_LABEL,
+      run: RUN_STAMP, source: XERO ? "xero" : "friendly_manager", mode: COMMIT ? "commit" : "dry-run", program: PROGRAM_ID, option: OPTION_ID, term: TERM_LABEL,
       migrated: mapping,
-      notMigrated: people.filter((p) => classify(p) !== "T3_PAID").map((p) => ({
+      notMigrated: people.filter((p) => classify(p) !== "T3_PAID" && !xeroById.has(p.id)).map((p) => ({
         fmId: p.id, name: `${s(p.fields["person[firstName]"])} ${s(p.fields["person[lastName]"])}`,
         why: classify(p),
         fees: p.fees.map((f) => `${f.ref} ${f.name.split(" - ")[0]} paid $${f.paid} outstanding $${f.outstanding}`),
       })),
       stats,
     };
-    fs.writeFileSync(path.join(REPORT_DIR, `report-${COMMIT ? "commit" : "dry-run"}.json`), JSON.stringify(report, null, 2));
+    fs.writeFileSync(path.join(REPORT_DIR, `report-${XERO ? "xero-" : ""}${COMMIT ? "commit" : "dry-run"}.json`), JSON.stringify(report, null, 2));
 
     if (COMMIT) {
       await client.query("COMMIT");
