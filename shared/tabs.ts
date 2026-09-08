@@ -125,7 +125,7 @@ const leagueTabs: TabDef[] = [
   // Individual-signup youth leagues (Ballers). Titled "Youth Leagues" because
   // "Academy" means nothing in this workspace — the slug has to stay `academy`
   // because that is what the route and the permission check key on.
-  { slug: "academy", title: "Youth Leagues", url: "/admin/academy" },
+  { slug: "academy", title: "Ballers Youth League", url: "/admin/academy" },
   { slug: "registrations", title: "Registrations", url: "/admin/registrations" },
   // Referee scoring app (mobile) + admin approvals/assignments/live feed.
   // Isaac (the MFL coordinator) needs both, so neither is super-admin-only.

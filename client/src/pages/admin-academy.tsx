@@ -276,8 +276,8 @@ export default function AdminAcademy() {
     <div className="p-4 sm:p-8 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between gap-4 flex-wrap animate-fade-in-up" style={{ animationDelay: '0ms', opacity: 0 }}>
         <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight" data-testid="text-page-title">{isLeague ? "Youth Leagues" : "Academy"}</h1>
-          <p className="text-blue-400/35 text-[13px] mt-1">{isLeague ? "Individual sign-up leagues by age group" : "Manage academy programs and registrations"}</p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight" data-testid="text-page-title">{isLeague ? "Ballers Youth League" : "Academy"}</h1>
+          <p className="text-blue-400/35 text-[13px] mt-1">{isLeague ? "Individual sign-up league — one list per age group, U9 to U12" : "Manage academy programs and registrations"}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button onClick={() => setShowRegister(true)} variant="outline" className="border-blue-500/20 text-blue-400 hover:bg-blue-500/10 rounded-xl h-9 text-[13px] font-medium" data-testid="button-register-player">

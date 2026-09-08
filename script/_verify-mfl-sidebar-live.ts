@@ -56,7 +56,7 @@ try {
       clone.querySelectorAll("select").forEach((el) => el.remove());
       return { text: (clone as any).innerText as string ?? clone.textContent ?? "", options };
     });
-    /Youth Leagues/.test(text) ? ok(`${path}: sidebar shows "Youth Leagues"`) : bad(`${path}: no "Youth Leagues" link`);
+    /Ballers Youth League/.test(text) ? ok(`${path}: sidebar shows "Ballers Youth League"`) : bad(`${path}: no "Ballers Youth League" link`);
     /Registrations/.test(text) ? ok(`${path}: sidebar shows "Registrations"`) : bad(`${path}: no "Registrations" link`);
     /Mini Football/i.test(text) ? ok(`${path}: Mini Football workspace`) : bad(`${path}: not the Mini Football workspace`);
     if (label === "registrations") {
