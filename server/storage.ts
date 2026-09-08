@@ -1731,9 +1731,13 @@ export class DatabaseStorage implements IStorage {
           key,
           personType: r.personType,
           personId: r.personId,
+          // The person page's own keys (Families, 2026-08-02). The old
+          // /admin/contacts/{player,parent}/:id paths still redirect, but the
+          // redirect dropped the `?from=` the Players tab attaches, so Back
+          // landed staff in the Contacts list instead of the programme.
           profilePath: r.personType === "child"
-            ? `/admin/contacts/player/${r.personId}`
-            : `/admin/contacts/parent/${r.personId}`,   // generic contact detail
+            ? `/admin/people/child-${r.personId}`
+            : `/admin/people/contact-${r.personId}`,
           firstName: r.firstName,
           lastName: r.lastName,
           dateOfBirth: r.dateOfBirth,

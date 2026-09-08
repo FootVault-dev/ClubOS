@@ -642,11 +642,14 @@ function AdminRouter() {
           ever resolved a `children` row — it 404'd on every academy child,
           which is the bug this replaces. */}
       <Route path="/admin/people/:key" component={AdminPersonDetail} />
+      {/* The redirect keeps the query string: a programme's Players tab attaches
+          `?from=` so Back returns to the programme, and dropping it here is
+          exactly how Back ended up in the Contacts list (Daniel, 2026-09-08). */}
       <Route path="/admin/contacts/parent/:id">
-        {(params: any) => <Redirect to={`/admin/people/contact-${params.id}`} />}
+        {(params: any) => <Redirect to={`/admin/people/contact-${params.id}${window.location.search}`} />}
       </Route>
       <Route path="/admin/contacts/player/:id">
-        {(params: any) => <Redirect to={`/admin/people/child-${params.id}`} />}
+        {(params: any) => <Redirect to={`/admin/people/child-${params.id}${window.location.search}`} />}
       </Route>
       <Route path="/admin/mailer" component={AdminMailer} />
       <Route path="/admin/cufc-mailer" component={CufcMailer} />

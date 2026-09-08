@@ -27,8 +27,8 @@
 // reconciliation (24 rows · $3,840.00 · 17 card / 7 eftpos) that throws — and
 // so rolls back — if the numbers drift. No email is sent: this is direct SQL.
 //
-// Dry run:  npx tsx --env-file=.env script/migrate-fm-funino-2026.ts [--xero]
-// Apply:    npx tsx --env-file=.env script/migrate-fm-funino-2026.ts [--xero] --commit
+// Dry run:  npx tsx --env-file=.env script/migrate-fm-funino-2026.ts [--programme technification] [--xero]
+// Apply:    npx tsx --env-file=.env script/migrate-fm-funino-2026.ts [--programme technification] [--xero] --commit
 
 import "dotenv/config";
 import fs from "fs";
@@ -41,31 +41,72 @@ import { NZF_ETHNICITY_GROUPS } from "../shared/nzf-vocabulary";
 import { countryByName, validateNzfIdentity } from "../shared/nzf-identity";
 
 const COMMIT = process.argv.includes("--commit");
+// --programme funino|technification (default funino). Same doctrine, second
+// programme (2026-09-08, later the same night): Technification U9–U10 and
+// U11–U12 Mondays, $150 a term, two FM groups, two ClubOS options.
+const PROGRAMME = (() => { const i = process.argv.indexOf("--programme"); return i > 0 ? process.argv[i + 1] : "funino"; })();
+interface ProgrammeConfig {
+  dir: string; programId: number; label: string; feePrefix: string; priceCents: number;
+  xeroRef: RegExp; aliases: Record<string, string>; exclude: Record<string, string>;
+  /** Xero payers with NO FM profile to import but an EXISTING ClubOS contact: invoice → contact id. */
+  direct?: Record<string, { contactId: number; why: string }>;
+  /** Which ClubOS option a person buys — decided from the FM fee name, else the FM group they sit in, else birth year. */
+  optionFor: (p: { fields: Record<string, string>; _group?: string }, feeName?: string) => number;
+}
+const PROGRAMMES: Record<string, ProgrammeConfig> = {
+  funino: {
+    dir: "2026-09-08-funino", programId: 4, label: "U4-8 Unlimited Play",
+    feePrefix: "Term 3 2026 - U4-8 Players: Unlimited Play", priceCents: 16000,
+    xeroRef: /^FS 2026 - Term 3/,
+    // Xero spells her "Rae" like her brother Mathias; FM has "Isla Reign Law" (43351).
+    aliases: { "isla rae law": "43351" },
+    // Evan Hao (INV-17241, $160 "FS" + a $245 overpayment) is a U9 (born 2017-11-15) whose
+    // $405 Pre-Academy payment on cufc.co.nz (ClubOS #467) Olga filed against the wrong
+    // programme. Registered by mistake at 21:50 and reversed at 22:05.
+    exclude: { "INV-17241": "Pre-Academy U9 payment misfiled as FS" },
+    optionFor: () => 7,
+  },
+  technification: {
+    dir: "2026-09-08-technification", programId: 5, label: "Technification (Mondays)",
+    feePrefix: "Term 3 2026 - Technification", priceCents: 15000,
+    xeroRef: /Technification.*T3|Term 3.*Technification/i,
+    aliases: {}, exclude: {},
+    direct: {
+      // Xero "(G) Quintin Gilmore" — FM knows him as "Quinn Gilmore" (same family phone); ClubOS
+      // already holds him as Quintin (36640, b. 2017-06-05) from a website booking. Registering
+      // against that record avoids minting a "Quinn" duplicate.
+      "INV-17409": { contactId: 36640, why: "ClubOS contact 36640 Quintin Gilmore (FM 'Quinn Gilmore'), b. 2017-06-05" },
+      // Xero "(G) Amir Hussaini" — ClubOS 30170 (FM 40368, b. 2017-11-27), not in an FM Technification group.
+      "INV-17133": { contactId: 30170, why: "ClubOS contact 30170 Amir Hussaini (FM 40368), b. 2017-11-27" },
+    },
+    optionFor: (p, feeName) => {
+      const band = /U11\s*-\s*U12/i.test(feeName ?? "") ? 14 : /U9\s*-\s*U10/i.test(feeName ?? "") ? 13
+        : /U11/i.test(p._group ?? "") ? 14 : /U9/i.test(p._group ?? "") ? 13 : null;
+      if (band) return band;
+      const y = Number((p.fields["person[dateOfBirth]"] ?? "").slice(0, 4));
+      if (!y) throw new Error("Technification: cannot pick U9–U10 vs U11–U12 — no fee band, no group, no birth year");
+      return 2026 - y <= 10 ? 13 : 14; // NZF grade = seasonYear − birthYear
+    },
+  },
+};
+const CFG = PROGRAMMES[PROGRAMME];
+if (!CFG) throw new Error(`Unknown --programme ${PROGRAMME}`);
 // --xero: the SECOND pass (2026-09-08, same evening). Olga tracks office payments
 // in Xero, not FM — FM held fees for 24 of the 60, Xero held paid "FS 2026 -
 // Term 3" invoices for 31 more of them. The people still come from the FM dump
 // (full profiles + parents); only the payment evidence comes from Xero.
 const XERO = process.argv.includes("--xero");
 
-const DUMP = path.resolve(
-  __dirname,
-  "../../../outputs/fm-migration/2026-09-08-funino/fm-dump.json",
-);
+const DUMP = path.resolve(__dirname, `../../../outputs/fm-migration/${CFG.dir}/fm-dump.json`);
 const REPORT_DIR = path.dirname(DUMP);
 const RECONCILE = path.join(REPORT_DIR, "xero/reconcile.json");
-// Xero spells her "Rae" like her brother Mathias; FM has "Isla Reign Law" (43351).
-const XERO_ALIASES: Record<string, string> = { "isla rae law": "43351" };
-// Xero rows that look like a FUNiño payment and are not. Evan Hao (INV-17241,
-// $160 "FS 2026 - Term 3" + a $245 overpayment) is a U9 (born 2017-11-15) whose
-// $405 Pre-Academy payment on cufc.co.nz (ClubOS #467) Olga filed against the
-// wrong programme. Registered by mistake at 21:50 and reversed at 22:05.
-const XERO_EXCLUDE: Record<string, string> = { "INV-17241": "Pre-Academy U9 payment misfiled as FS" };
+const XERO_ALIASES = CFG.aliases;
+const XERO_EXCLUDE = CFG.exclude;
 
-const PROGRAM_ID = 4; // FUNiño — First Kicks (/u4-u8), org 1
-const OPTION_ID = 7; // U4-U8 All-Access Pass, 16000 cents
+const PROGRAM_ID = CFG.programId;
 const TERM_LABEL = "Term 3 2026 (20 Jul – 25 Sep)";
-const FEE_PREFIX = "Term 3 2026 - U4-8 Players: Unlimited Play";
-const PRICE_CENTS = 16000;
+const FEE_PREFIX = CFG.feePrefix;
+const PRICE_CENTS = CFG.priceCents;
 const SEASON_YEAR = 2026;
 const LEGACY_SOURCE = XERO ? "xero" : "friendly_manager";
 const RUN_STAMP = "2026-09-08";
@@ -83,6 +124,8 @@ interface FmFee {
 interface FmPerson {
   id: string; capturedAt: string; hasFeesTab: boolean; feesStatus: string;
   totalPaid: string; outstanding: string; fields: Fields; fees: FmFee[];
+  /** FM group name the person was captured from (Technification has two). */
+  _group?: string;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -126,7 +169,18 @@ interface Payment {
 function fmPayment(p: FmPerson): Payment {
   const fee = paidTerm3Fee(p)!;
   const pay = fee.payments[0];
-  if (!pay || Number(pay.amount) !== Number(fee.paid)) {
+  // The Technification capture could not open FM's payment sub-rows (they load
+  // on a toggle the automation could not reach), so a paid fee with no payment
+  // row is recorded as tender 'other' on the fee's own date — never a guessed
+  // EFTPOS or card. Xero is the payment record either way.
+  if (!pay) {
+    return {
+      ref: fee.ref, paid: Number(fee.paid), dateIso: isoFromDmy(fee.date), dateLabel: fee.date,
+      office: true, paymentMethod: "other",
+      note: `migrated from Friendly Manager fee ${fee.ref} ($${fee.paid} paid; FM fee dated ${fee.date}, tender not captured)`,
+    };
+  }
+  if (Number(pay.amount) !== Number(fee.paid)) {
     throw new Error(`FM ${p.id}: payment rows do not add up to the fee's paid amount`);
   }
   const office = pay.method === "Eftpos";
@@ -160,7 +214,7 @@ function xeroPayment(r: XeroRow): Payment {
 const xeroNorm = (v: string) => v.replace(/^\((FS|G|A[^)]*)\)\s*/, "").replace(/[’']/g, "'").trim().toLowerCase();
 
 function classify(p: FmPerson): string {
-  const t4 = p.fees.filter((f) => f.name.startsWith("Term 4 2026"));
+  const t4 = p.fees.filter((f) => f.name.startsWith("Term 4 2026") && f.name.includes(FEE_PREFIX.replace("Term 3 2026 - ", "")));
   if (t4.length) return "TERM4_FEE_PRESENT";
   const t3 = p.fees.find((f) => f.name.startsWith(FEE_PREFIX));
   if (t3) return Number(t3.outstanding) === 0 && Number(t3.paid) > 0 ? "T3_PAID" : "T3_UNPAID";
@@ -241,7 +295,7 @@ async function main() {
     for (const [id, p] of Object.entries(extra)) if (!dump[id]) dump[id] = p;
   }
   const people = Object.values(dump).sort((a, b) => Number(a.id) - Number(b.id));
-  console.log(`FM group 372: ${people.length} people in the dump (${DUMP})`);
+  console.log(`${PROGRAMME}: ${people.length} people in the FM dump (${DUMP})`);
 
   const classes = new Map<string, FmPerson[]>();
   for (const p of people) {
@@ -295,14 +349,18 @@ async function main() {
     await client.query("BEGIN");
 
     const prog = (await q(`SELECT id, name, type, organization_id FROM programs WHERE id=$1`, [PROGRAM_ID]))[0];
-    const opt = (await q(`SELECT id, name, full_price_cents FROM program_options WHERE id=$1 AND program_id=$2`, [OPTION_ID, PROGRAM_ID]))[0];
     if (!prog || prog.type !== "academy") throw new Error(`Programme ${PROGRAM_ID} is not the academy programme expected`);
-    if (!opt || opt.full_price_cents !== PRICE_CENTS) throw new Error(`Option ${OPTION_ID} is not the $160 pass expected`);
+    const options = new Map<number, { id: number; name: string; full_price_cents: number }>();
+    for (const o of await q(`SELECT id, name, full_price_cents FROM program_options WHERE program_id=$1 AND is_active`, [PROGRAM_ID])) options.set(o.id, o);
+    for (const o of options.values()) if (o.full_price_cents !== PRICE_CENTS) throw new Error(`Option ${o.id} ${o.name} is $${o.full_price_cents / 100}, expected $${PRICE_CENTS / 100}`);
 
     for (const p of toMigrate) {
       const f = p.fields;
       const pay = paymentFor(p);
       const paidIso = pay.dateIso;
+      const optionId = CFG.optionFor(p, XERO ? undefined : paidTerm3Fee(p)?.name);
+      const opt = options.get(optionId);
+      if (!opt) throw new Error(`FM ${p.id}: option ${optionId} is not an active option of programme ${PROGRAM_ID}`);
       const firstName = s(f["person[firstName]"]), lastName = s(f["person[lastName]"]);
       const dob = nz(f["person[dateOfBirth]"]);
       const gender = f["person[gender]"] === "Male" ? "male" : f["person[gender]"] === "Female" ? "female" : null;
@@ -514,7 +572,7 @@ async function main() {
         const paidCents = Math.round(pay.paid * 100);
         if (paidCents <= 0 || paidCents > PRICE_CENTS) throw new Error(`FM ${p.id}: paid $${pay.paid} is outside 0–$160`);
         const priceNote = paidCents < PRICE_CENTS ? ` · Price adjusted from ${(PRICE_CENTS / 100).toFixed(2)} to ${pay.paid.toFixed(2)}` : "";
-        const notes = `${TERM_LABEL} · U4-8 Unlimited Play · ${pay.note}${priceNote} on ${RUN_STAMP}`;
+        const notes = `${TERM_LABEL} · ${CFG.label} · ${opt.name} · ${pay.note}${priceNote} on ${RUN_STAMP}`;
         const ins = (await q(
           `INSERT INTO registrations (
              program_id, program_option_id, contact_id, guardian_id, status,
@@ -530,7 +588,7 @@ async function main() {
                    $11, $12, NULL, $13::timestamptz, $14::timestamp,
                    $15, $16, (SELECT COALESCE(MAX(order_number), 0) + 1 FROM registrations))
            RETURNING id, order_number`,
-          [PROGRAM_ID, OPTION_ID, player.id, primaryGuardianId, SEASON_YEAR,
+          [PROGRAM_ID, optionId, player.id, primaryGuardianId, SEASON_YEAR,
            PRICE_CENTS, pay.paid.toFixed(2),
            isOffice ? "cufc_office" : "online", LEGACY_SOURCE, notes,
            paymentMethod, pay.ref, midDayNzUtc(paidIso), midDayNzUtc(paidIso),
@@ -560,12 +618,59 @@ async function main() {
       }
 
       mapping.push({
-        fmId: p.id, player: `${firstName} ${lastName}`, dob, contactId: player.id,
+        fmId: p.id, player: `${firstName} ${lastName}`, dob, contactId: player.id, optionId, option: opt.name,
         guardians: guardianIds.map((x) => ({ fmId: x.g.fmId, name: `${x.g.firstName} ${x.g.lastName}`, contactId: x.id, primary: x.g.primary })),
         feeRef: pay.ref, paid: pay.paid.toFixed(2), paidOn: paidIso, method: pay.paymentMethod,
         registrationId: regId, orderNumber, identityStructured: !!identity,
       });
       console.log(`  ✓ FM ${p.id} ${firstName} ${lastName} → contact ${player.id}, reg #${regId} (order ${orderNumber}), ${pay.ref} $${pay.paid.toFixed(2)} ${pay.paymentMethod} ${pay.dateLabel}${identity ? "" : "  [identity: free text only]"}`);
+    }
+
+    // ── Xero payers registered straight against an existing ClubOS contact ──
+    const directPays: Payment[] = [];
+    if (XERO && CFG.direct) {
+      const rec = JSON.parse(fs.readFileSync(RECONCILE, "utf8"));
+      for (const [inv, d] of Object.entries(CFG.direct)) {
+        const row = (rec.t3paid as XeroRow[]).find((r) => r.num === inv);
+        if (!row) throw new Error(`direct: ${inv} is not a paid Xero row in the reconcile file`);
+        const contact = (await q(`SELECT id, first_name, last_name, date_of_birth::text dob FROM contacts WHERE id=$1 AND type='player'`, [d.contactId]))[0];
+        if (!contact) throw new Error(`direct: contact ${d.contactId} not found`);
+        const pay = xeroPayment(row);
+        directPays.push(pay);
+        const already = await q(`SELECT id, order_number FROM registrations WHERE legacy_source=$1 AND legacy_external_id=$2`, [LEGACY_SOURCE, pay.ref]);
+        if (already.length) { stats.regsAlreadyThere++; continue; }
+        const dup = await q(`SELECT id FROM registrations WHERE contact_id=$1 AND program_id=$2 AND status IN ('confirmed','partially_refunded','refunded') AND registered_at >= '2026-06-01' AND registered_at < '2026-10-01'`, [contact.id, PROGRAM_ID]);
+        if (dup.length) throw new Error(`direct: ${contact.first_name} ${contact.last_name} already holds a paid Term 3 registration (#${dup[0].id})`);
+        const guardian = (await q(`SELECT guardian_id FROM contact_relationships WHERE player_id=$1 ORDER BY is_primary_contact DESC, id LIMIT 1`, [contact.id]))[0];
+        if (!guardian) throw new Error(`direct: contact ${contact.id} has no guardian link — cannot register a child with no parent`);
+        const optionId = CFG.optionFor({ fields: { "person[dateOfBirth]": contact.dob ?? "" } });
+        const opt = options.get(optionId);
+        if (!opt) throw new Error(`direct: option ${optionId} not active on programme ${PROGRAM_ID}`);
+        const paidCents = Math.round(pay.paid * 100);
+        if (paidCents <= 0 || paidCents > PRICE_CENTS) throw new Error(`direct: ${inv} paid $${pay.paid} outside 0–$${PRICE_CENTS / 100}`);
+        const priceNote = paidCents < PRICE_CENTS ? ` · Price adjusted from ${(PRICE_CENTS / 100).toFixed(2)} to ${pay.paid.toFixed(2)}` : "";
+        const notes = `${TERM_LABEL} · ${CFG.label} · ${opt.name} · ${pay.note} · ${d.why}${priceNote} on ${RUN_STAMP}`;
+        const ins = (await q(
+          `INSERT INTO registrations (
+             program_id, program_option_id, contact_id, guardian_id, status,
+             payment_mode, academy_payment_plan, season_year,
+             subtotal_cents, discount_cents, total_cents, currency, amount_paid,
+             registration_location, source, notes,
+             payment_method, payment_reference, served_by_user_id, paid_at, registered_at,
+             legacy_source, legacy_external_id, order_number)
+           VALUES ($1, $2, $3, $4, 'confirmed', 'upfront', 'term', $5,
+                   $6::int, $6::int - $12::int, $12::int, 'NZD', $7,
+                   'cufc_office', $8, $9, 'other', $10, NULL, $11::timestamptz, $11::timestamp,
+                   $8, $10, (SELECT COALESCE(MAX(order_number), 0) + 1 FROM registrations))
+           RETURNING id, order_number`,
+          [PROGRAM_ID, optionId, contact.id, guardian.guardian_id, SEASON_YEAR, PRICE_CENTS, pay.paid.toFixed(2),
+           LEGACY_SOURCE, notes, pay.ref, midDayNzUtc(pay.dateIso), paidCents]))[0];
+        stats.regsInserted++;
+        await q(`INSERT INTO audit_logs (user_id, action, entity, entity_id, details) VALUES (NULL, 'import', 'registration', $1, $2)`,
+          [ins.id, `Xero migration (script/migrate-fm-funino-2026.ts --programme ${PROGRAMME} --xero, direct): ${contact.first_name} ${contact.last_name} → ${prog.name} (${opt.name}), ${pay.paid.toFixed(2)} NZD, ${TERM_LABEL}, ${pay.note}; ${d.why}`]);
+        mapping.push({ fmId: null, player: `${contact.first_name} ${contact.last_name}`, dob: contact.dob, contactId: contact.id, optionId, option: opt.name, guardians: [{ contactId: guardian.guardian_id }], feeRef: pay.ref, paid: pay.paid.toFixed(2), paidOn: pay.dateIso, method: "other", registrationId: ins.id, orderNumber: ins.order_number, direct: d.why });
+        console.log(`  ✓ direct ${contact.first_name} ${contact.last_name} (contact ${contact.id}) → reg #${ins.id} (order ${ins.order_number}), ${pay.ref} $${pay.paid.toFixed(2)} ${pay.dateLabel}`);
+      }
     }
 
     // ── reconcile against FM ────────────────────────────────────────────────
@@ -579,14 +684,14 @@ async function main() {
               count(*) FILTER (WHERE order_number IS NULL)::int no_order
          FROM registrations WHERE legacy_source=$1 AND program_id=$3`,
       [LEGACY_SOURCE, ONLINE_PAYMENT_METHOD, PROGRAM_ID]))[0];
-    const pays = toMigrate.map(paymentFor);
+    const pays = [...toMigrate.map(paymentFor), ...directPays];
     const srcSum = pays.reduce((a, x) => a + x.paid, 0);
     const srcCount = (m: string) => pays.filter((x) => x.paymentMethod === m).length;
     console.log(`
 Reconciliation — ClubOS: ${rec.n} regs · $${(rec.cents / 100).toFixed(2)} · paid $${Number(rec.paid).toFixed(2)} · ${rec.eftpos} eftpos / ${rec.card} card / ${rec.other} other`);
-    console.log(`               — ${XERO ? "Xero:  " : "FM:    "} ${toMigrate.length} paid · $${srcSum.toFixed(2)} · ${srcCount("eftpos")} eftpos / ${srcCount(ONLINE_PAYMENT_METHOD)} card / ${srcCount("other")} other`);
+    console.log(`               — ${XERO ? "Xero:  " : "FM:    "} ${pays.length} paid · $${srcSum.toFixed(2)} · ${srcCount("eftpos")} eftpos / ${srcCount(ONLINE_PAYMENT_METHOD)} card / ${srcCount("other")} other`);
     const bad: string[] = [];
-    if (rec.n !== toMigrate.length) bad.push("count");
+    if (rec.n !== pays.length) bad.push("count");
     if ((rec.cents / 100).toFixed(2) !== srcSum.toFixed(2)) bad.push("total_cents");
     if (Number(rec.paid).toFixed(2) !== srcSum.toFixed(2)) bad.push("amount_paid");
     if (rec.total_mismatch) bad.push("total≠paid");
@@ -601,7 +706,7 @@ Reconciliation — ClubOS: ${rec.n} regs · $${(rec.cents / 100).toFixed(2)} · 
     console.log(`\nStats: ${JSON.stringify(stats, null, 0)}`);
 
     const report = {
-      run: RUN_STAMP, source: XERO ? "xero" : "friendly_manager", mode: COMMIT ? "commit" : "dry-run", program: PROGRAM_ID, option: OPTION_ID, term: TERM_LABEL,
+      run: RUN_STAMP, programme: PROGRAMME, source: XERO ? "xero" : "friendly_manager", mode: COMMIT ? "commit" : "dry-run", program: PROGRAM_ID, term: TERM_LABEL,
       migrated: mapping,
       notMigrated: people.filter((p) => classify(p) !== "T3_PAID" && !xeroById.has(p.id)).map((p) => ({
         fmId: p.id, name: `${s(p.fields["person[firstName]"])} ${s(p.fields["person[lastName]"])}`,

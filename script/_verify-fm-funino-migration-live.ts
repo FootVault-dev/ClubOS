@@ -1,6 +1,7 @@
 // Live verification of script/migrate-fm-funino-2026.ts against production.
 // Asserts the 24 Term 3 2026 FUNiño registrations migrated from Friendly
-// Manager on 2026-09-08, and the 32 migrated from Xero the same evening, are present, paid, visible to staff, correctly linked
+// Manager on 2026-09-08, the 32 migrated from Xero the same evening, and the 26
+// Technification registrations (4 FM + 22 Xero) migrated later that night, are present, paid, visible to staff, correctly linked
 // to their parents, and that nothing else on programme 4 was disturbed.
 //   npx tsx --env-file=.env script/_verify-fm-funino-migration-live.ts
 import pg from "pg";
@@ -10,7 +11,7 @@ async function main() {
   await c.connect();
   const q = async (s: string, p: any[] = []) => (await c.query(s, p)).rows;
   let fails = 0; const ok = (cond: boolean, msg: string) => { console.log(`${cond ? "✓" : "✗"} ${msg}`); if (!cond) fails++; };
-  const regs = await q(`select r.id, r.order_number, r.status, r.total_cents, r.amount_paid, r.payment_method, r.registration_location, r.source, r.legacy_external_id, r.paid_at, r.registered_at, r.guardian_id, r.program_option_id, r.season_year, r.academy_payment_plan, c.first_name, c.last_name, c.friendly_manager_id fm from registrations r join contacts c on c.id=r.contact_id where r.legacy_source='friendly_manager' order by r.id`);
+  const regs = await q(`select r.id, r.order_number, r.status, r.total_cents, r.amount_paid, r.payment_method, r.registration_location, r.source, r.legacy_external_id, r.paid_at, r.registered_at, r.guardian_id, r.program_option_id, r.season_year, r.academy_payment_plan, c.first_name, c.last_name, c.friendly_manager_id fm from registrations r join contacts c on c.id=r.contact_id where r.legacy_source='friendly_manager' and r.program_id=4 order by r.id`);
   ok(regs.length === 24, `24 migrated registrations (${regs.length})`);
   ok(regs.every(r => r.status === "confirmed" && r.total_cents === 16000 && r.amount_paid === "160.00" && r.program_option_id === 7 && r.season_year === 2026 && r.academy_payment_plan === "term" && r.guardian_id && r.order_number), "every row confirmed · $160 · option 7 · 2026 · term · guardian · order number");
   ok(regs.filter(r => r.payment_method === "eftpos" && r.registration_location === "cufc_office").length === 7, "7 EFTPOS at cufc_office");
@@ -44,7 +45,7 @@ async function main() {
   const iritana = (await q(`select medical_notes, ethnicity, sub_ethnicity, ethnicity_selection_ids from contacts where friendly_manager_id='43442'`))[0];
   // Her "No" medical note predates this migration (July FM history import wrote it verbatim); the migration must leave it, not overwrite it.
   ok(iritana.medical_notes === "No" && iritana.sub_ethnicity === "Ngāti Porou" && (iritana.ethnicity_selection_ids?.length === 1), `Iritana: pre-existing medical note untouched; Māori · Ngāti Porou structured → ${JSON.stringify(iritana)}`);
-  const audit = await q(`select count(*)::int n from audit_logs where action='import' and entity='registration' and details like 'FM migration (script/migrate-fm-funino-2026.ts)%'`);
+  const audit = await q(`select count(*)::int n from audit_logs where action='import' and entity='registration' and details like 'FM migration (script/migrate-fm-funino-2026.ts)%' and entity_id in (select id from registrations where program_id=4)`);
   ok(audit[0].n === 24, `24 audit rows (${audit[0].n})`);
   // ── Pass 2: Xero (same evening). Olga tracks office payments in Xero, not FM.
   const xr = await q(`select r.id, r.status, r.total_cents, r.amount_paid, r.discount_cents, r.subtotal_cents, r.payment_method, r.payment_reference, r.registration_location, r.legacy_external_id, r.paid_at, c.first_name||' '||c.last_name name from registrations r join contacts c on c.id=r.contact_id where r.legacy_source='xero' and r.program_id=4 order by r.id`);
@@ -61,7 +62,7 @@ async function main() {
   ok(isla?.fm === "43351", `Xero's 'Isla Rae Law' (INV-17397) landed on FM person 43351 (${isla?.name})`);
   const ru = (await q(`select status, notes from registrations where id=580`))[0];
   ok(ru.status === "cancelled" && /superseded by registration #\d+ \(INV-17232/.test(ru.notes), `Ruairí's abandoned checkout #580 cancelled with the Xero cross-reference → ${ru.status}`);
-  const xAudit = await q(`select count(*)::int n from audit_logs where action='import' and entity='registration' and details like 'Xero migration (script/migrate-fm-funino-2026.ts --xero)%'`);
+  const xAudit = await q(`select count(*)::int n from audit_logs where action='import' and entity='registration' and details like 'Xero migration (script/migrate-fm-funino-2026.ts --xero)%' and entity_id in (select id from registrations where program_id=4)`);
   ok(xAudit[0].n === 32, `32 Xero audit rows (${xAudit[0].n})`);
   const xHidden = await q(`select count(*)::int n from contacts c where c.id in (select contact_id from registrations where legacy_source='xero') and (EXISTS (SELECT 1 FROM registrations r WHERE (r.contact_id = c.id OR r.guardian_id = c.id) AND r.status = 'pending') AND NOT EXISTS (SELECT 1 FROM registrations r WHERE (r.contact_id = c.id OR r.guardian_id = c.id) AND r.status IN ('confirmed','refunded','partially_refunded')) AND c.friendly_manager_id IS NULL)`);
   ok(xHidden[0].n === 0, "no Xero-sourced player hidden by the paid-only decider");
@@ -70,6 +71,20 @@ async function main() {
   const dates = regs.map(r => [r.legacy_external_id, r.paid_at?.toISOString?.().slice(0,10), String(r.registered_at).slice(0,15)]);
   console.log("  sample dates:", JSON.stringify(dates.slice(0,3)));
   ok(regs.every(r => r.paid_at && r.paid_at.toISOString().slice(0,10) >= "2026-07-01" && r.paid_at.toISOString().slice(0,10) <= "2026-08-25"), "paid_at all within 1 Jul – 25 Aug 2026 (Term 3 window)");
+  // ── Technification (programme 5), same night: 4 from FM fees + 22 from Xero ─
+  const tech = await q(`select coalesce(legacy_source,'clubos') src, count(*)::int n, sum(amount_paid)::numeric paid from registrations where program_id=5 and status='confirmed' group by 1`);
+  const tt = tech.reduce((a: any, r: any) => (a[r.src] = { n: r.n, paid: Number(r.paid) }, a), {});
+  ok(tt.friendly_manager?.n === 4 && tt.friendly_manager.paid === 600, `Technification FM pass: 4 regs, $600 → ${JSON.stringify(tt.friendly_manager)}`);
+  ok(tt.xero?.n === 22 && tt.xero.paid === 2940, `Technification Xero pass: 22 regs, $2,940 → ${JSON.stringify(tt.xero)}`);
+  const techOpt = await q(`select r.program_option_id o, count(*)::int n from registrations r where r.program_id=5 and r.legacy_source is not null group by 1`);
+  ok(techOpt.some(r => r.o === 13 && r.n === 14) && techOpt.some(r => r.o === 14 && r.n === 12), `Technification options: 14 U9–U10 + 12 U11–U12 → ${JSON.stringify(techOpt)}`);
+  const techDirect = await q(`select c.first_name||' '||c.last_name name, r.legacy_external_id ref from registrations r join contacts c on c.id=r.contact_id where r.program_id=5 and r.legacy_external_id in ('INV-17409','INV-17133')`);
+  ok(techDirect.length === 2 && techDirect.every(r => /Quintin Gilmore|Amir Hussaini/.test(r.name)), `direct registrations against existing contacts (Quintin Gilmore, Amir Hussaini) → ${JSON.stringify(techDirect)}`);
+  const techHidden = await q(`select count(*)::int n from contacts c where c.id in (select contact_id from registrations where program_id=5 and legacy_source is not null) and (EXISTS (SELECT 1 FROM registrations r WHERE (r.contact_id = c.id OR r.guardian_id = c.id) AND r.status = 'pending') AND NOT EXISTS (SELECT 1 FROM registrations r WHERE (r.contact_id = c.id OR r.guardian_id = c.id) AND r.status IN ('confirmed','refunded','partially_refunded')) AND c.friendly_manager_id IS NULL)`);
+  ok(techHidden[0].n === 0, "no migrated Technification player hidden by the paid-only decider");
+  const techTotalMismatch = await q(`select count(*)::int n from registrations where program_id=5 and legacy_source is not null and (total_cents <> round(amount_paid*100) or subtotal_cents <> 15000 or discount_cents <> 15000 - total_cents)`);
+  ok(techTotalMismatch[0].n === 0, "every migrated Technification row: list $150, total = paid, discount = difference");
+
   console.log(fails ? `\n${fails} FAILED` : "\nALL CHECKS PASSED");
   await c.end();
   process.exit(fails ? 1 : 0);

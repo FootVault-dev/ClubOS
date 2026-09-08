@@ -1,8 +1,16 @@
 import fs from "fs";
 import pg from "pg";
-const ROOT = "/Users/danielmeyn/Desktop/AIOS/DanielMeynOS/outputs/fm-migration/2026-09-08-funino";
+// Three-way reconciliation: Xero paid invoices vs the FM group dump vs ClubOS.
+//   npx tsx --env-file=.env script/_xero-reconcile.ts [--programme funino|technification]
+const PROGRAMME = (() => { const i = process.argv.indexOf("--programme"); return i > 0 ? process.argv[i + 1] : "funino"; })();
+const CFGS: Record<string, { dir: string; xeroFile: string; ref: RegExp; programId: number; label: string }> = {
+  funino: { dir: "2026-09-08-funino", xeroFile: "xero/invoices-FS-2026-07-01-to-09-08.txt", ref: /^FS 2026 - Term 3/, programId: 4, label: "FS Term 3" },
+  technification: { dir: "2026-09-08-technification", xeroFile: "xero/invoices-technification-2026-06-15-to-09-08.txt", ref: /Technification.*T3|Term 3.*Technification/i, programId: 5, label: "Technification T3" },
+};
+const CFG = CFGS[PROGRAMME]; if (!CFG) throw new Error("unknown --programme");
+const ROOT = `/Users/danielmeyn/Desktop/AIOS/DanielMeynOS/outputs/fm-migration/${CFG.dir}`;
 const norm = (s: string) => s.replace(/^\((FS|G|A[^)]*)\)\s*/, "").replace(/[’']/g, "'").trim().toLowerCase();
-const lines = fs.readFileSync(`${ROOT}/xero/invoices-FS-2026-07-01-to-09-08.txt`, "utf8").split("\n").filter(Boolean);
+const lines = fs.readFileSync(`${ROOT}/${CFG.xeroFile}`, "utf8").split("\n").filter(Boolean);
 type Inv = { num: string; ref: string; to: string; date: string; paid: number; due: number; status: string };
 const inv: Inv[] = [];
 for (const l of lines) {
@@ -14,21 +22,21 @@ for (const l of lines) {
     inv.push({ num: c[0], ref: c[1], to: c[2], date: c[3], paid: money(isCn ? c[4] : c[5]), due: money(isCn ? c[5] : c[6]), status: isCn ? c[6] : c[7] });
   }
 }
-const t3 = inv.filter((i) => /^FS 2026 - Term 3/.test(i.ref) && i.num.startsWith("INV-"));
+const t3 = inv.filter((i) => CFG.ref.test(i.ref) && i.num.startsWith("INV-"));
 const t3paid = t3.filter((i) => i.paid > 0 && i.status === "Paid");
 const t3other = t3.filter((i) => !(i.paid > 0 && i.status === "Paid"));
 const dump = JSON.parse(fs.readFileSync(`${ROOT}/fm-dump.json`, "utf8"));
-const report = JSON.parse(fs.readFileSync(`${ROOT}/report-commit.json`, "utf8"));
+const report = fs.existsSync(`${ROOT}/report-commit.json`) ? JSON.parse(fs.readFileSync(`${ROOT}/report-commit.json`, "utf8")) : { migrated: [] };
 const migrated = new Map(report.migrated.map((m: any) => [norm(m.player), m]));
 const fmNames = new Map(Object.values(dump).map((p: any) => [norm(p.fields["person[firstName]"] + " " + p.fields["person[lastName]"]), p.id]));
 async function main() {
   const c = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   await c.connect();
-  const clubos = (await c.query(`select r.id, r.status, r.total_cents, r.amount_paid, r.registered_at::date::text d, r.source, r.legacy_source, c.first_name||' '||c.last_name name, c.id cid from registrations r join contacts ct on ct.id=r.contact_id join contacts c on c.id=r.contact_id where r.program_id=4`)).rows;
+  const clubos = (await c.query(`select r.id, r.status, r.total_cents, r.amount_paid, r.registered_at::date::text d, r.source, r.legacy_source, c.first_name||' '||c.last_name name, c.id cid from registrations r join contacts ct on ct.id=r.contact_id join contacts c on c.id=r.contact_id where r.program_id=${CFG.programId}`)).rows;
   const byName = new Map<string, any[]>();
   for (const r of clubos) { const k = norm(r.name); byName.set(k, [...(byName.get(k) ?? []), r]); }
   const allContacts = async (n: string) => (await c.query(`select id, type, date_of_birth::text dob, friendly_manager_id fm from contacts where lower(first_name||' '||last_name)=$1`, [n])).rows;
-  console.log(`Xero FS Term 3 invoices: ${t3.length} · paid ${t3paid.length} ($${t3paid.reduce((a, i) => a + i.paid, 0).toFixed(2)}) · not paid/other ${t3other.length}`);
+  console.log(`Xero ${CFG.label} invoices: ${t3.length} · paid ${t3paid.length} ($${t3paid.reduce((a, i) => a + i.paid, 0).toFixed(2)}) · not paid/other ${t3other.length}`);
   const buckets: Record<string, string[]> = { "A. already migrated from FM (Xero agrees)": [], "B. in FM group, no FM fee, PAID IN XERO → register": [], "C. not in FM group; paid in Xero; ClubOS has a confirmed reg (Olga mirrors ClubOS?)": [], "D. not in FM group, paid in Xero, NOT in ClubOS → register (needs contact details)": [] };
   const detail: any[] = [];
   for (const i of t3paid) {
@@ -45,7 +53,7 @@ async function main() {
     detail.push({ xero: i, fmId: fm ?? null, migrated: !!m, clubos: regs.map((r) => ({ id: r.id, status: r.status, source: r.source, amount: r.amount_paid })), contacts: fm ? undefined : await allContacts(n), bucket: bucket[0] });
   }
   for (const [k, v] of Object.entries(buckets)) { console.log(`\n${k} (${v.length})`); v.forEach((x) => console.log("  " + x)); }
-  console.log(`\nXero FS Term 3 rows NOT counted as paid (${t3other.length}):`); t3other.forEach((i) => console.log(`  ${i.num} ${i.to} ${i.date} paid $${i.paid} due $${i.due} ${i.status} · ${i.ref}`));
+  console.log(`\nXero ${CFG.label} rows NOT counted as paid (${t3other.length}):`); t3other.forEach((i) => console.log(`  ${i.num} ${i.to} ${i.date} paid $${i.paid} due $${i.due} ${i.status} · ${i.ref}`));
   const migratedNotInXero = report.migrated.filter((m: any) => !t3paid.some((i) => norm(i.to) === norm(m.player)));
   console.log(`\nMigrated from FM but NO Xero FS Term 3 invoice (${migratedNotInXero.length}):`); migratedNotInXero.forEach((m: any) => console.log(`  ${m.player} · ${m.feeRef} ${m.method} ${m.paidOn}`));
   const fmUnpaidStill = Object.values(dump).filter((p: any) => !migrated.has(norm(p.fields["person[firstName]"] + " " + p.fields["person[lastName]"])) && !t3paid.some((i) => norm(i.to) === norm(p.fields["person[firstName]"] + " " + p.fields["person[lastName]"])));
