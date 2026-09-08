@@ -1,6 +1,7 @@
 import { useState, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useWorkspace } from "@/lib/workspace-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
@@ -149,6 +150,14 @@ function CreateAcademyModal({ open, onClose }: { open: boolean; onClose: () => v
   );
 }
 
+// NZ Football grades, not year spans: a programme for nine-year-olds is "U9",
+// not "9–9 yrs" (Daniel, 2026-09-09, the Ballers age groups).
+function ageLabel(p: { ageMin?: number | null; ageMax?: number | null }): string {
+  if (p.ageMin && p.ageMax) return p.ageMin === p.ageMax ? `U${p.ageMin}` : `U${p.ageMin}–U${p.ageMax}`;
+  if (p.ageMin) return `U${p.ageMin}+`;
+  return "—";
+}
+
 function ProgramTable({ programs, regCounts, navigate, emptyMessage }: {
   programs: AcademyProgram[];
   regCounts: Record<number, number>;
@@ -199,7 +208,7 @@ function ProgramTable({ programs, regCounts, navigate, emptyMessage }: {
                 </td>
                 <td className="px-5 py-3.5 hidden lg:table-cell">
                   <span className="text-[12px] text-white/40">
-                    {program.ageMin && program.ageMax ? `${program.ageMin}–${program.ageMax} yrs` : program.ageMin ? `${program.ageMin}+ yrs` : "—"}
+                    {ageLabel(program)}
                   </span>
                 </td>
                 <td className="px-5 py-3.5 text-center">
@@ -234,6 +243,11 @@ function ProgramTable({ programs, regCounts, navigate, emptyMessage }: {
 export default function AdminAcademy() {
   const search = useSearch();
   const [, navigate] = useLocation();
+  // Mini Football's copy of this page is "Youth Leagues": one list of age
+  // groups (U9–U12), no Core / Additional / Holiday Camps split — those are
+  // CUFC academy concepts and rendered three empty boxes here (Daniel, 2026-09-09).
+  const { currentOrg } = useWorkspace();
+  const isLeague = currentOrg?.slug === "mini-football-leagues";
   const [showCreate, setShowCreate] = useState(search.includes("action=new"));
   const [showRegister, setShowRegister] = useState(false);
   const [filter, setFilter] = useState("");
@@ -250,6 +264,7 @@ export default function AdminAcademy() {
     p.slug?.toLowerCase().includes(filter.toLowerCase())
   );
 
+  const leaguePrograms = [...(filtered || [])].sort((a, b) => (a.ageMin ?? 0) - (b.ageMin ?? 0) || a.name.localeCompare(b.name));
   const corePrograms = filtered?.filter(p => (p.academySection || "core") === "core") || [];
   const additionalPrograms = filtered?.filter(p => p.academySection === "additional") || [];
   const campPrograms = (camps ?? []).filter(c =>
@@ -261,8 +276,8 @@ export default function AdminAcademy() {
     <div className="p-4 sm:p-8 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between gap-4 flex-wrap animate-fade-in-up" style={{ animationDelay: '0ms', opacity: 0 }}>
         <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight" data-testid="text-page-title">Academy</h1>
-          <p className="text-blue-400/35 text-[13px] mt-1">Manage academy programs and registrations</p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight" data-testid="text-page-title">{isLeague ? "Youth Leagues" : "Academy"}</h1>
+          <p className="text-blue-400/35 text-[13px] mt-1">{isLeague ? "Individual sign-up leagues by age group" : "Manage academy programs and registrations"}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button onClick={() => setShowRegister(true)} variant="outline" className="border-blue-500/20 text-blue-400 hover:bg-blue-500/10 rounded-xl h-9 text-[13px] font-medium" data-testid="button-register-player">
@@ -300,6 +315,22 @@ export default function AdminAcademy() {
             <div className="p-4 space-y-3">
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full rounded-xl bg-blue-500/[0.04]" />)}
             </div>
+          </div>
+        ) : isLeague ? (
+          <div className="glass-card rounded-2xl overflow-hidden">
+            <div className="px-5 py-3 border-b border-blue-500/[0.08] flex items-center gap-2">
+              <GraduationCap className="w-4 h-4 text-blue-400/40" />
+              <h2 className="text-[13px] font-semibold text-white/60">Age Groups</h2>
+              <Badge variant="outline" className="text-[9px] text-blue-400/50 border-blue-500/15 bg-blue-500/5 ml-auto no-default-hover-elevate no-default-active-elevate">
+                {leaguePrograms.length}
+              </Badge>
+            </div>
+            <ProgramTable
+              programs={leaguePrograms}
+              regCounts={regCounts || {}}
+              navigate={navigate}
+              emptyMessage="No youth leagues yet. Create one to get started."
+            />
           </div>
         ) : (
           <Fragment>
