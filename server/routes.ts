@@ -6601,6 +6601,33 @@ export async function registerRoutes(
     }
   });
 
+  // Field size for a manual (admin-entered) booking. Same vocabulary the public
+  // site sells and the checkout stores — shared/field-cells.ts decides conflicts
+  // for both — and the facility must actually offer that size, or a "half"
+  // lands on a pitch that is never split. Full/blank stores NULL, which is what
+  // every manual row carried before this existed (occupiedCells() treats "full"
+  // and null the same, so nothing about conflicts changes for old rows).
+  const normaliseFieldSize = (
+    rawSize: unknown,
+    rawPos: unknown,
+    facility: { name: string; halfFull: boolean | null; quarterField: boolean | null },
+  ): { halfFull: "half" | "quarter" | null; halfPosition: string | null } | { error: string } => {
+    const size = typeof rawSize === "string" ? rawSize : null;
+    const pos = typeof rawPos === "string" ? rawPos : null;
+    if (!size || size === "full") return { halfFull: null, halfPosition: null };
+    if (size === "half") {
+      if (!facility.halfFull) return { error: `${facility.name} can't be booked as a half pitch` };
+      if (pos !== "front" && pos !== "back") return { error: "Choose the front or back half" };
+      return { halfFull: "half", halfPosition: pos };
+    }
+    if (size === "quarter") {
+      if (!facility.quarterField) return { error: `${facility.name} can't be booked as a quarter pitch` };
+      if (!["q1", "q2", "q3", "q4"].includes(pos || "")) return { error: "Choose which quarter (Q1–Q4)" };
+      return { halfFull: "quarter", halfPosition: pos };
+    }
+    return { error: `Unknown field size "${size}"` };
+  };
+
   app.post("/api/admin/venue/bookings", requireAuth, async (req, res) => {
     try {
       const orgId = parseInt(req.body?.organizationId);
@@ -6628,6 +6655,12 @@ export async function registerRoutes(
         }
       }
       const allFacilityIds = [facId, ...additionalFacilityIds];
+
+      // Size applies to the PRIMARY facility only. An "additional" facility is a
+      // different pitch and is booked whole — a half of S1 plus all of S2.
+      const sizeCheck = normaliseFieldSize(req.body?.halfFull, req.body?.halfPosition, fac);
+      if ("error" in sizeCheck) return res.status(400).json({ message: sizeCheck.error });
+      const { halfFull: primaryHalfFull, halfPosition: primaryHalfPosition } = sizeCheck;
 
       // Recurrence expansion. We accept a small "repeat" config and expand into
       // individual rows so the existing calendar (which reads single-day rows)
@@ -6750,6 +6783,8 @@ export async function registerRoutes(
             //   metadata so the UI can show the group at a glance; all rows still
             //   have their own facilityId.
             additionalFacilityIds: fid === facId && additionalFacilityIds.length > 0 ? additionalFacilityIds : null,
+            halfFull: fid === facId ? primaryHalfFull : null,
+            halfPosition: fid === facId ? primaryHalfPosition : null,
             recurrenceRule,
             recurrenceEndDate,
           });
@@ -6813,6 +6848,17 @@ export async function registerRoutes(
         if (!newFac || newFac.organizationId !== existing.organizationId) {
           return res.status(400).json({ message: "Facility does not belong to this organization" });
         }
+      }
+      // A size edit is checked against the facility the row will END UP on —
+      // moving a "back half" onto the meeting room must be refused, not stored.
+      if (patch.halfFull !== undefined || patch.halfPosition !== undefined) {
+        const targetFacilityId = patch.facilityId !== undefined ? parseInt(patch.facilityId) : existing.facilityId;
+        const targetFac = await storage.getFacility(targetFacilityId);
+        if (!targetFac) return res.status(400).json({ message: "Facility not found" });
+        const sizeCheck = normaliseFieldSize(patch.halfFull, patch.halfPosition, targetFac);
+        if ("error" in sizeCheck) return res.status(400).json({ message: sizeCheck.error });
+        patch.halfFull = sizeCheck.halfFull;
+        patch.halfPosition = sizeCheck.halfPosition;
       }
       // Same cross-org check for additionalFacilityIds — keeps the multi-facility model honest.
       if (Array.isArray(patch.additionalFacilityIds)) {

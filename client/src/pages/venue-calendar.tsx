@@ -11,6 +11,7 @@ import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { TimePickerInput } from "@/components/ui/time-picker-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { FacilityBooking, Facility } from "@shared/schema";
+import { QUARTER_POSITIONS, cellsOverlap, type FieldSize } from "@shared/field-cells";
 
 type BookingWithFacility = FacilityBooking & { facility?: Facility };
 
@@ -58,7 +59,7 @@ type EditFormState = {
   color: string;
   notes: string;
   status: string;
-};
+} & SizeState;
 
 const emptyForm = {
   customerName: "",
@@ -73,7 +74,107 @@ const emptyForm = {
   repeatFreq: "none" as RepeatFreq,
   repeatByDay: [] as number[],
   repeatUntil: "",
+  fieldSize: "full" as FieldSize,
+  halfPosition: "front" as "front" | "back",
+  quarterPos: "q1" as QuarterPos,
 };
+
+// Field size for a manual booking — the same full / half / quarter vocabulary
+// the public site sells, offered only where the facility is actually split
+// (facilities.half_full / quarter_field). Conflicts are decided by the shared
+// cell model in shared/field-cells.ts, so a half entered here and a half sold
+// online can never disagree about whether they collide.
+type QuarterPos = "q1" | "q2" | "q3" | "q4";
+type SizeState = { fieldSize: FieldSize; halfPosition: "front" | "back"; quarterPos: QuarterPos };
+
+function sizeFromBooking(b: { halfFull: string | null; halfPosition: string | null }): SizeState {
+  const fieldSize: FieldSize = b.halfFull === "half" || b.halfFull === "quarter" ? b.halfFull : "full";
+  const quarterPos: QuarterPos = (["q1", "q2", "q3", "q4"] as const).includes(b.halfPosition as QuarterPos) ? (b.halfPosition as QuarterPos) : "q1";
+  return { fieldSize, halfPosition: b.halfPosition === "back" ? "back" : "front", quarterPos };
+}
+
+// What the server stores. Full is NULL, matching every manual row before the
+// picker existed; the cell model treats "full" and null identically.
+function sizePayload(s: SizeState): { halfFull: FieldSize | null; halfPosition: string | null } {
+  if (s.fieldSize === "half") return { halfFull: "half", halfPosition: s.halfPosition };
+  if (s.fieldSize === "quarter") return { halfFull: "quarter", halfPosition: s.quarterPos };
+  return { halfFull: null, halfPosition: null };
+}
+
+function FieldSizePicker({ facility, value, onChange, extrasNote, testPrefix }: {
+  facility: Facility | undefined;
+  value: SizeState;
+  onChange: (patch: Partial<SizeState>) => void;
+  extrasNote?: boolean;
+  testPrefix: string;
+}) {
+  if (!facility || (!facility.halfFull && !facility.quarterField)) return null;
+  const options = (["full", "half", "quarter"] as FieldSize[]).filter(o =>
+    o === "full" || (o === "half" && facility.halfFull) || (o === "quarter" && facility.quarterField));
+  const btn = (active: boolean) =>
+    `flex-1 px-3 py-2 rounded-lg text-sm border transition-colors capitalize ${active ? "bg-blue-600 border-blue-500 text-white" : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"}`;
+  return (
+    <div className="mt-3" data-testid={`${testPrefix}-field-size`}>
+      <label className="text-xs text-white/40 mb-1 block">Field size</label>
+      <div className="flex gap-2">
+        {options.map(o => (
+          <button key={o} type="button" onClick={() => onChange({ fieldSize: o })} className={btn(value.fieldSize === o)} data-testid={`button-${testPrefix}-size-${o}`}>
+            {o === "full" ? "Full pitch" : o === "half" ? "½ Half" : "¼ Quarter"}
+          </button>
+        ))}
+      </div>
+      {value.fieldSize === "half" && (
+        <div className="mt-2">
+          <label className="text-xs text-white/40 mb-1 block">Which half?</label>
+          <div className="flex gap-2">
+            {(["front", "back"] as const).map(p => (
+              <button key={p} type="button" onClick={() => onChange({ halfPosition: p })} className={btn(value.halfPosition === p)} data-testid={`button-${testPrefix}-half-${p}`}>
+                {p} half
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-white/40 mt-1">The other half stays free to book.</p>
+        </div>
+      )}
+      {value.fieldSize === "quarter" && (
+        <div className="mt-2">
+          <label className="text-xs text-white/40 mb-1 block">Which quarter?</label>
+          <div className="grid grid-cols-2 gap-2">
+            {QUARTER_POSITIONS.map(q => (
+              <button key={q.value} type="button" onClick={() => onChange({ quarterPos: q.value })} className={btn(value.quarterPos === q.value)} data-testid={`button-${testPrefix}-quarter-${q.value}`}>
+                {q.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-white/40 mt-1">Q1–Q2 are the front half, Q3–Q4 the back half. The rest stays free to book.</p>
+        </div>
+      )}
+      {extrasNote && value.fieldSize !== "full" && (
+        <p className="text-[10px] text-amber-300/80 mt-1">Size applies to {facility.name} only — any added facility is booked whole.</p>
+      )}
+    </div>
+  );
+}
+
+// Existing bookings a manual entry would sit on top of — same pitch, same day,
+// overlapping time, and the shared cell model says the areas collide. A
+// heads-up, deliberately not a block: staff enter bookings over internal
+// blocks on purpose (the CIC widening left team bookings under it).
+function manualOverlaps(
+  bookings: BookingWithFacility[],
+  form: { facilityId: string; bookingDate: string; startTime: string; endTime: string; repeatFreq: RepeatFreq } & SizeState,
+): BookingWithFacility[] {
+  if (!form.facilityId || !form.bookingDate || !form.startTime || !form.endTime || form.repeatFreq !== "none") return [];
+  const fid = parseInt(form.facilityId);
+  const mine = sizePayload(form);
+  return bookings.filter(b =>
+    b.facilityId === fid &&
+    b.bookingDate === form.bookingDate &&
+    b.status !== "cancelled" &&
+    b.startTime < form.endTime && b.endTime > form.startTime &&
+    cellsOverlap(b.halfFull, b.halfPosition, mine.halfFull, mine.halfPosition),
+  );
+}
 
 // "· front half" / "· quarter Q3" suffix for a booking's field size. Empty for
 // full-field or non-divisible facilities.
@@ -257,6 +358,7 @@ export default function VenueCalendar() {
       color: b.color || "",
       notes: b.notes || "",
       status: b.status,
+      ...sizeFromBooking(b),
     });
   };
 
@@ -844,7 +946,7 @@ export default function VenueCalendar() {
                   </div>
                   <div>
                     <label className="text-xs text-white/40 mb-1 block">Facility</label>
-                    <Select value={editForm.facilityId} onValueChange={v => setEditForm({ ...editForm, facilityId: v })}>
+                    <Select value={editForm.facilityId} onValueChange={v => setEditForm({ ...editForm, facilityId: v, fieldSize: "full" })}>
                       <SelectTrigger className="bg-white/5 border-white/10 text-white" data-testid="select-edit-facility"><SelectValue placeholder="Select facility" /></SelectTrigger>
                       <SelectContent>
                         {facs
@@ -853,6 +955,12 @@ export default function VenueCalendar() {
                           .map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
+                    <FieldSizePicker
+                      facility={facs.find(f => String(f.id) === editForm.facilityId)}
+                      value={editForm}
+                      onChange={patch => setEditForm({ ...editForm, ...patch })}
+                      testPrefix="edit"
+                    />
                   </div>
                   <div className="grid grid-cols-3 gap-3">
                     <div>
@@ -942,6 +1050,7 @@ export default function VenueCalendar() {
                             color: editForm.color || null,
                             notes: editForm.notes.trim() || null,
                             status: editForm.status,
+                            ...sizePayload(editForm),
                           },
                         });
                       }}
@@ -1083,7 +1192,7 @@ export default function VenueCalendar() {
               {/* Facility (primary + optional additional) */}
               <div>
                 <label className="text-xs text-white/40 mb-1 block">Facility</label>
-                <Select value={newBooking.facilityId} onValueChange={v => setNewBooking({ ...newBooking, facilityId: v })}>
+                <Select value={newBooking.facilityId} onValueChange={v => setNewBooking({ ...newBooking, facilityId: v, fieldSize: "full" })}>
                   <SelectTrigger className="bg-white/5 border-white/10 text-white" data-testid="select-booking-facility"><SelectValue placeholder="Select facility" /></SelectTrigger>
                   <SelectContent>
                     {facs
@@ -1091,6 +1200,13 @@ export default function VenueCalendar() {
                       .map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                <FieldSizePicker
+                  facility={facs.find(f => String(f.id) === newBooking.facilityId)}
+                  value={newBooking}
+                  onChange={patch => setNewBooking({ ...newBooking, ...patch })}
+                  extrasNote={newBooking.additionalFacilityIds.some(Boolean)}
+                  testPrefix="booking"
+                />
 
                 {newBooking.additionalFacilityIds.map((extraId, idx) => (
                   <div key={idx} className="flex items-center gap-2 mt-2">
@@ -1150,6 +1266,21 @@ export default function VenueCalendar() {
                   <TimePickerInput value={newBooking.endTime} onChange={e => setNewBooking({ ...newBooking, endTime: e.target.value })} className="bg-white/5 border-white/10 text-white" data-testid="input-booking-end" />
                 </div>
               </div>
+
+              {(() => {
+                const hits = manualOverlaps(bookings, newBooking);
+                if (hits.length === 0) return null;
+                return (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200" data-testid="manual-booking-overlap">
+                    <div className="font-medium">Overlaps an existing booking on that pitch</div>
+                    {hits.slice(0, 3).map(h => (
+                      <div key={h.id} className="text-amber-200/80">{h.customerName || h.facility?.name || "Booking"}{sizeLabel(h)} · {h.startTime}–{h.endTime}</div>
+                    ))}
+                    {hits.length > 3 && <div className="text-amber-200/60">+{hits.length - 3} more</div>}
+                    <div className="text-amber-200/60 mt-1">You can still create it — this is a heads-up, not a block.</div>
+                  </div>
+                );
+              })()}
 
               {/* Repeat */}
               <div>
@@ -1268,6 +1399,7 @@ export default function VenueCalendar() {
                     color: newBooking.color || undefined,
                     repeat: repeatPayload,
                     gstAmount: String(Number(newBooking.totalAmount) * 3 / 23),
+                    ...sizePayload(newBooking),
                   });
                 }}
                 disabled={
