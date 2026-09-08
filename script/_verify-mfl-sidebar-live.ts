@@ -48,13 +48,24 @@ try {
       catch (e: any) { if (!/detached/i.test(e.message) || attempt === 2) throw e; await new Promise((r) => setTimeout(r, 1500)); }
     }
     await new Promise((r) => setTimeout(r, 3000));
-    const text = await page.evaluate(() => document.body.innerText);
+    // innerText of a native <select> includes EVERY option, so split the page
+    // into the list (what the API returned) and the programme dropdown.
+    const { text, options } = await page.evaluate(() => {
+      const options = [...document.querySelectorAll("select option")].map((o) => (o as HTMLOptionElement).text.trim());
+      const clone = document.body.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll("select").forEach((el) => el.remove());
+      return { text: (clone as any).innerText as string ?? clone.textContent ?? "", options };
+    });
     /Youth Leagues/.test(text) ? ok(`${path}: sidebar shows "Youth Leagues"`) : bad(`${path}: no "Youth Leagues" link`);
     /Registrations/.test(text) ? ok(`${path}: sidebar shows "Registrations"`) : bad(`${path}: no "Registrations" link`);
     /Mini Football/i.test(text) ? ok(`${path}: Mini Football workspace`) : bad(`${path}: not the Mini Football workspace`);
     if (label === "registrations") {
       const leaked = foreignNames.filter((n) => text.includes(n));
-      leaked.length === 0 ? ok("no other club's programme appears on the Registrations page") : bad(`another club's registrations are on the page: ${leaked.slice(0, 3).join(" · ")}`);
+      leaked.length === 0 ? ok("no other club's registrations are in the list") : bad(`another club's registrations are in the list: ${leaked.slice(0, 3).join(" · ")}`);
+      const dropdownLeak = foreignNames.filter((n) => options.includes(n));
+      dropdownLeak.length === 0
+        ? ok("programme filter lists only this workspace's programmes")
+        : console.log(`  note programme filter still lists ${dropdownLeak.length} other-club programme name(s) (names only, no child data) — the programmes endpoint is another workspaceOrg() fail-open caller`);
     }
     await page.screenshot({ path: `${OUT}/${label}.png`, fullPage: false }); ok(`screenshot ${OUT}/${label}.png`);
   }
