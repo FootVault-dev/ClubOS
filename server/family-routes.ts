@@ -1,3 +1,4 @@
+import { REAL_STATUS_SQL, contactHiddenSql, childHiddenSql } from "./registration-visibility";
 // ─────────────────────────────────────────────────────────────────────────────
 // FAMILIES — parents and children, visible from both sides.
 //
@@ -88,6 +89,7 @@ async function regsByContactId(ids: number[]): Promise<Map<number, RegistrationS
     FROM registrations r
     JOIN programs p ON p.id = r.program_id
     WHERE r.contact_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})
+      AND r.status IN ${REAL_STATUS_SQL}
     ORDER BY r.registered_at DESC NULLS LAST`);
   const map = emptyMap();
   for (const row of rows.rows as any[]) {
@@ -114,6 +116,7 @@ async function regsByChildId(ids: number[]): Promise<Map<number, RegistrationSum
     JOIN registrations r ON r.id = ri.registration_id
     JOIN programs p ON p.id = r.program_id
     WHERE ri.child_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})
+      AND r.status IN ${REAL_STATUS_SQL}
     ORDER BY ri.child_id, r.id, r.registered_at DESC NULLS LAST`);
   const map = emptyMap();
   for (const row of rows.rows as any[]) {
@@ -258,7 +261,8 @@ export async function resolveFamily(kind: PersonKind, id: number): Promise<Famil
     UNION
     SELECT c.*, NULL AS relationship, 'registration'::text AS src
     FROM registrations r JOIN contacts c ON c.id = r.guardian_id
-    WHERE r.contact_id = ${id} AND r.guardian_id IS NOT NULL AND r.guardian_id <> ${id}`);
+    WHERE r.contact_id = ${id} AND r.guardian_id IS NOT NULL AND r.guardian_id <> ${id}
+      AND r.status IN ${REAL_STATUS_SQL}`);
   for (const row of gRows.rows as any[]) {
     upsertLink(guardians, {
       key: personKey("contact", Number(row.id)), kind: "contact", id: Number(row.id),
@@ -277,7 +281,8 @@ export async function resolveFamily(kind: PersonKind, id: number): Promise<Famil
     UNION
     SELECT c.*, NULL AS relationship, 'registration'::text AS src
     FROM registrations r JOIN contacts c ON c.id = r.contact_id
-    WHERE r.guardian_id = ${id} AND r.contact_id <> ${id}`);
+    WHERE r.guardian_id = ${id} AND r.contact_id <> ${id}
+      AND r.status IN ${REAL_STATUS_SQL}`);
   const childContactIds: number[] = [];
   for (const row of cRows.rows as any[]) {
     const cid = Number(row.id);
@@ -422,7 +427,7 @@ export async function searchPeople(q: string, filter: SearchFilter, limit: numbe
                                  similarity(lower(c.first_name || ' ' || c.last_name), lower(${q})))`
                   : sql`0`} AS score
     FROM contacts c
-    WHERE c.type <> 'staff' ${typeWhere} ${contactWhere}`;
+    WHERE c.type <> 'staff' AND NOT ${contactHiddenSql("c")} ${typeWhere} ${contactWhere}`;
 
   const childSel = sql`
     SELECT 'child'::text AS kind, ch.id, ch.first_name, ch.last_name, 'player'::text AS type,
@@ -431,7 +436,7 @@ export async function searchPeople(q: string, filter: SearchFilter, limit: numbe
                                  similarity(lower(ch.last_name), lower(${q})))`
                   : sql`0`} AS score
     FROM children ch
-    WHERE 1=1 ${childWhere}`;
+    WHERE NOT ${childHiddenSql("ch")} ${childWhere}`;
 
   const union = includeCampChildren ? sql`${contactSel} UNION ALL ${childSel}` : contactSel;
 
@@ -474,6 +479,7 @@ async function familySummaries(rows: any[]): Promise<Map<string, { parents: stri
         UNION
         SELECT r.contact_id, r.guardian_id FROM registrations r
         WHERE r.contact_id IN (${ids}) AND r.guardian_id IS NOT NULL AND r.guardian_id <> r.contact_id
+          AND r.status IN ${REAL_STATUS_SQL}
       ) x JOIN contacts g ON g.id = x.guardian_id`);
     for (const row of parents.rows as any[]) {
       const k = personKey("contact", Number(row.person_id));
@@ -492,6 +498,7 @@ async function familySummaries(rows: any[]): Promise<Map<string, { parents: stri
         SELECT r.guardian_id, c.first_name, c.last_name
           FROM registrations r JOIN contacts c ON c.id = r.contact_id
           WHERE r.guardian_id IN (${ids}) AND r.contact_id <> r.guardian_id
+          AND r.status IN ${REAL_STATUS_SQL}
         UNION
         SELECT ch.parent_id, ch.first_name, ch.last_name
           FROM children ch WHERE ch.parent_id IN (${ids})

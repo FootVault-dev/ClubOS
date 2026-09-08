@@ -1,3 +1,4 @@
+import { REAL_REGISTRATION_STATUSES } from "@shared/registrations";
 // ─────────────────────────────────────────────────────────────────────────────
 // Rambo — the Knowledge Base assistant.
 //
@@ -27,7 +28,7 @@
 //      signal worth having.
 // ─────────────────────────────────────────────────────────────────────────────
 import Anthropic from "@anthropic-ai/sdk";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
 import {
@@ -326,6 +327,9 @@ async function runRegistrationCounts(_viewer: Viewer, input: any): Promise<ToolR
     if (orgId == null) return { text: `No workspace found for brand "${input?.brand}".` };
     conds.push(eq(programs.organizationId, orgId));
   }
+  // Paid registrations only — an unfinished checkout is not a registration
+  // and Rambo must not report one (@shared/registrations).
+  conds.push(inArray(registrations.status, [...REAL_REGISTRATION_STATUSES]));
 
   const rows = await db
     .select({
@@ -351,7 +355,7 @@ async function runRegistrationCounts(_viewer: Viewer, input: any): Promise<ToolR
     text:
       `Registration counts by programme and status:\n` +
       Array.from(byProgramme.entries()).map(([p, s]) => `- ${p}: ${s.join(", ")}`).join("\n") +
-      `\n\nThese are registration rows, not a headcount of distinct children — one child enrolled in two programmes appears twice.`,
+      `\n\nPaid registrations only — unfinished online checkouts are never counted. These are registration rows, not a headcount of distinct children — one child enrolled in two programmes appears twice.`,
   };
 }
 

@@ -253,7 +253,7 @@ export const RAMBO_TOOLS: RamboToolDef[] = [
     name: "registration_counts",
     title: "Registration numbers",
     description:
-      "How many registrations exist per programme, broken down by status (confirmed, pending, cancelled). " +
+      "How many paid registrations exist per programme, broken down by status (confirmed, refunded). Unfinished online checkouts are not registrations and are never counted. " +
       "Use for questions about how many players or children are signed up.",
     requiredTab: "registrations",
     inputSchema: {

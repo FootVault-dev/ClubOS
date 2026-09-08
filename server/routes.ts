@@ -1,3 +1,5 @@
+import { REAL_REGISTRATION_STATUS_SQL } from "@shared/registrations";
+import { hiddenContactIds, hiddenChildIds, contactHiddenSql } from "./registration-visibility";
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
@@ -5249,9 +5251,12 @@ export async function registerRoutes(
       const allContacts = await storage.getContacts();
       const allChildren = await storage.getAllChildren();
       const allPrograms = await storage.getPrograms();
+      // People whose only tie to the club is an unfinished checkout are not
+      // contacts (@shared/registrations · registration-visibility.ts).
+      const [hiddenContacts, hiddenChildren] = await Promise.all([hiddenContactIds(), hiddenChildIds()]);
 
       const parentList = allContacts
-        .filter(c => c.type === "guardian")
+        .filter(c => c.type === "guardian" && !hiddenContacts.has(c.id))
         .map(c => ({
           id: c.id,
           personType: "parent" as const,
@@ -5263,7 +5268,7 @@ export async function registerRoutes(
           createdAt: c.createdAt,
         }));
 
-      const playerList = allChildren.map(c => {
+      const playerList = allChildren.filter(c => !hiddenChildren.has(c.id)).map(c => {
         const parent = allContacts.find(p => p.id === c.parentId);
         return {
           id: c.id,
@@ -6222,7 +6227,7 @@ export async function registerRoutes(
     // child's camp booking could not be answered from the search bar. Sublabel
     // resolves the parent so the result answers "whose child?" on sight.
     { type: "camp_child", table: "children", labelSql: "(first_name||' '||last_name)", sublabelSql: "COALESCE((SELECT g.first_name||' '||g.last_name FROM contacts g WHERE g.id = children.parent_id), 'No parent linked')", orgCol: null, cols: ["first_name","last_name"], leadershipOnly: true },
-    { type: "registration", table: "registrations", labelSql: "COALESCE(team_name, 'Order #'||order_number)", sublabelSql: "COALESCE(source, referral_source)", orgCol: null, cols: ["order_number","team_name","notes"], leadershipOnly: true },
+    { type: "registration", table: "registrations", labelSql: "COALESCE(team_name, 'Order #'||order_number)", sublabelSql: "COALESCE(source, referral_source)", orgCol: null, cols: ["order_number","team_name","notes"], leadershipOnly: true, extraWhere: `status IN ${REAL_REGISTRATION_STATUS_SQL}` },
   ];
 
   const runEntitySearch = async (e: SearchEntity, q: string, like: string, orgIds: number[], isSuperAdmin: boolean, perLimit: number) => {
@@ -26560,9 +26565,12 @@ async function resolveCufcAudience(orgId: number): Promise<CufcContact[]> {
     add({ name: e.fullName || "", email: e.email || "", phone: e.phone || "", role: "Play Predictor", source: e.source || "" });
   }
 
+  // A parent whose only tie to the club is an unfinished checkout is not a
+  // contact and is not mailed (@shared/registrations).
   const guardians = await db.select().from(contacts).where(and(
     eq(contacts.type, "guardian"),
     sql`${contacts.email} IS NOT NULL AND ${contacts.email} != ''`,
+    sql`NOT ${contactHiddenSql("contacts")}`,
   ));
   for (const c of guardians) {
     add({ name: `${c.firstName || ""} ${c.lastName || ""}`.trim(), email: c.email || "", phone: c.phone || "", role: "Contact", source: "" });

@@ -1,3 +1,4 @@
+import { REAL_REGISTRATION_STATUSES } from "@shared/registrations";
 import { db } from "./db";
 import { eq, desc, sql, and, ilike, or, inArray, asc, isNull, isNotNull, ne, gt } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -1121,7 +1122,10 @@ export class DatabaseStorage implements IStorage {
    */
   async getRegistrationsForContact(contactId: number): Promise<(Registration & { program?: Program })[]> {
     const regs = await db.select().from(registrations)
-      .where(or(eq(registrations.contactId, contactId), eq(registrations.guardianId, contactId)))
+      .where(and(
+        or(eq(registrations.contactId, contactId), eq(registrations.guardianId, contactId)),
+        inArray(registrations.status, [...REAL_REGISTRATION_STATUSES]),
+      ))
       .orderBy(desc(registrations.registeredAt));
     if (regs.length === 0) return [];
     const programIds = Array.from(new Set(regs.map(r => r.programId)));
@@ -1361,7 +1365,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCampRegistrationStats(campId: number): Promise<{ totalRegistrations: number; confirmedRegistrations: number; totalRevenueCents: number; totalSessions: number }> {
-    const regs = await db.select().from(registrations).where(eq(registrations.programId, campId));
+    // Real registrations only (@shared/registrations): the "Total" tile used to
+    // count unfinished checkouts, which read as 119 registrations against 90
+    // paid — the exact confusion Daniel called out.
+    const regs = await db.select().from(registrations).where(and(eq(registrations.programId, campId), inArray(registrations.status, [...REAL_REGISTRATION_STATUSES])));
     const totalRegistrations = regs.length;
     const confirmedRegistrations = regs.filter(r => r.status === "confirmed").length;
     const totalRevenueCents = regs.filter(r => r.status === "confirmed").reduce((sum, r) => sum + (r.totalCents || 0), 0);
@@ -1587,12 +1594,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getProgramPlayers(campId: number): Promise<ProgramPlayer[]> {
-    // Both shapes are queried — see the ProgramPlayer docblock. Cancelled and
-    // pending rows are kept: the question is "who has signed up", and the
-    // status column says where each one sits.
+    // Both shapes are queried — see the ProgramPlayer docblock. Only REAL
+    // registrations (money landed — @shared/registrations) are read: a pending
+    // row is an unfinished checkout, not a player, and Daniel's rule is that it
+    // never reaches a staff screen. Refunded rows stay — they were registered.
     //
-    // A confirmed registration outranks pending, which outranks cancelled, so
-    // someone who re-registered after a cancellation reads as confirmed.
+    // A confirmed registration outranks a refunded one, so someone who
+    // re-registered after a refund reads as confirmed.
     const rank: Record<string, number> = {
       confirmed: 5, paid: 5, pending: 4, waitlisted: 3, partially_refunded: 2, refunded: 1, cancelled: 0,
     };
@@ -1643,7 +1651,7 @@ export class DatabaseStorage implements IStorage {
       .from(registrations)
       .innerJoin(contacts, eq(registrations.contactId, contacts.id))
       .leftJoin(guardian, eq(registrations.guardianId, guardian.id))
-      .where(and(eq(registrations.programId, campId), eq(contacts.type, "player")));
+      .where(and(eq(registrations.programId, campId), eq(contacts.type, "player"), inArray(registrations.status, [...REAL_REGISTRATION_STATUSES])));
 
     // Shape 2 — camps: one registration_items line per child per day.
     const childRows = await db.select({
@@ -1667,7 +1675,7 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(registrations, eq(registrationItems.registrationId, registrations.id))
       .innerJoin(children, eq(registrationItems.childId, children.id))
       .leftJoin(contacts, eq(children.parentId, contacts.id))
-      .where(eq(registrations.programId, campId));
+      .where(and(eq(registrations.programId, campId), inArray(registrations.status, [...REAL_REGISTRATION_STATUSES])));
 
     const rows: Row[] = [
       ...contactRows.map((r): Row => ({

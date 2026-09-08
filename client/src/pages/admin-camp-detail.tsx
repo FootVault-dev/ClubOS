@@ -1548,7 +1548,7 @@ function StatsHeader({ campId }: { campId: number }) {
   }
 
   const statItems = [
-    { label: "Total Registrations", value: stats?.totalRegistrations || 0, icon: Users, color: "text-blue-400" },
+    { label: "Registrations", value: stats?.totalRegistrations || 0, icon: Users, color: "text-blue-400" },
     { label: "Confirmed", value: stats?.confirmedRegistrations || 0, icon: TrendingUp, color: "text-emerald-400" },
     { label: "Revenue", value: formatCurrency(stats?.totalRevenueCents || 0, { fromCents: true, decimals: 0 }), icon: DollarSign, color: "text-amber-400" },
     { label: "Avg Occupancy", value: `${avgOccupancy}%`, icon: BarChart3, color: "text-purple-400" },
@@ -1872,9 +1872,11 @@ function PlayersTab({ campId, camp, detailPath }: { campId: number; camp?: any; 
 
   const chips: { key: string; label: string; count: number }[] = [
     { key: "all", label: "All", count: all.length },
-    ...["confirmed", "pending", "cancelled"]
+    // Paid registrations only reach this list (server rule, @shared/registrations)
+    // — there is no "Pending" chip because an unfinished checkout is not a player.
+    ...(["confirmed", "partially_refunded", "refunded"] as const)
       .filter(s => counts[s])
-      .map(s => ({ key: s, label: s.charAt(0).toUpperCase() + s.slice(1), count: counts[s] })),
+      .map(s => ({ key: s, label: s === "partially_refunded" ? "Part refunded" : s.charAt(0).toUpperCase() + s.slice(1), count: counts[s] })),
   ];
 
   return (

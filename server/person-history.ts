@@ -1,3 +1,4 @@
+import { REAL_STATUS_SQL } from "./registration-visibility";
 // ─────────────────────────────────────────────────────────────────────────────
 // PROGRAMME & PAYMENT HISTORY — every term a person signed up for, and every
 // dollar actually recorded against them.
@@ -131,6 +132,7 @@ export async function resolvePeopleHistory(
                WHERE ri.registration_id = r.id AND ri.child_id IS NOT NULL) AS child_count
       FROM registrations r JOIN programs p ON p.id = r.program_id
       WHERE r.contact_id IN (${idList(cIds)})
+        AND r.status IN ${REAL_STATUS_SQL}
       ORDER BY r.registered_at DESC NULLS LAST`) : { rows: [] as any[] },
 
     kIds.length ? db.execute(sql`
@@ -145,6 +147,7 @@ export async function resolvePeopleHistory(
       JOIN registrations r ON r.id = ri.registration_id
       JOIN programs p ON p.id = r.program_id
       WHERE ri.child_id IN (${idList(kIds)})
+        AND r.status IN ${REAL_STATUS_SQL}
       ORDER BY ri.child_id, r.id, r.registered_at DESC NULLS LAST`) : { rows: [] as any[] },
   ]);
 
