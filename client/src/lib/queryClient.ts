@@ -1,3 +1,4 @@
+import { getActiveWorkspaceSlug } from "./workspace-slug";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 async function throwIfResNotOk(res: Response) {
@@ -7,11 +8,13 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-// Reads the current workspace slug from localStorage (set by workspace-context).
-// Sent on every request so the server can scope tab-permission checks.
+// The workspace header. THIS TAB's workspace first (set by workspace-context);
+// localStorage only before the context has resolved one — it is shared across
+// tabs, and reading it on every request is how a CUFC tab ended up asking for
+// Mini Football's data after another tab switched (2026-09-09).
 function workspaceHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {};
-  const slug = localStorage.getItem("clubos_workspace");
+  const slug = getActiveWorkspaceSlug() ?? localStorage.getItem("clubos_workspace");
   return slug ? { "X-Workspace-Slug": slug } : {};
 }
 

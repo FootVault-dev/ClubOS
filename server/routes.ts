@@ -1369,9 +1369,9 @@ export async function registerRoutes(
 
   app.get("/api/admin/camps", requireAuth, async (req, res) => {
     try {
-      const org = await workspaceOrg(req);
+      const scope = await registrationOrgScope(req);
       const all = await storage.getPrograms();
-      const camps = all.filter(p => p.type === "holiday_camp" && (!org || p.organizationId === org.id));
+      const camps = all.filter(p => p.type === "holiday_camp" && inRegistrationScope(scope, p.organizationId));
       res.json(camps);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1866,8 +1866,10 @@ export async function registerRoutes(
     try {
       const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : null;
       const type = req.query.type as string | undefined;
+      const scope = await registrationOrgScope(req);   // never every club's programmes
       const all = await storage.getPrograms();
       const filtered = all.filter(p => {
+        if (!inRegistrationScope(scope, p.organizationId)) return false;
         if (orgId && p.organizationId !== orgId) return false;
         if (type && p.type !== type) return false;
         return true;
@@ -3595,9 +3597,9 @@ export async function registerRoutes(
 
   app.get("/api/admin/academy", requireAuth, async (req, res) => {
     try {
-      const org = await workspaceOrg(req);
+      const scope = await registrationOrgScope(req);
       const all = await storage.getPrograms();
-      const academy = all.filter(p => p.type === "academy" && (!org || p.organizationId === org.id));
+      const academy = all.filter(p => p.type === "academy" && inRegistrationScope(scope, p.organizationId));
       const sectionRows = await db.execute(sql`SELECT id, academy_section FROM programs WHERE type = 'academy'`);
       const sectionMap: Record<number, string> = {};
       for (const row of sectionRows.rows) {

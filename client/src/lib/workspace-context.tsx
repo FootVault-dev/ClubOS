@@ -1,3 +1,4 @@
+import { setActiveWorkspaceSlug } from "./workspace-slug";
 import { createContext, useContext, useState, useEffect } from "react";
 
 type Org = {
@@ -46,7 +47,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const setCurrentOrg = (org: Org) => {
     setCurrentOrgState(org);
-    localStorage.setItem("clubos_workspace", org.slug);
+    setActiveWorkspaceSlug(org.slug);           // this tab's header, always
+    localStorage.setItem("clubos_workspace", org.slug);  // the next tab's starting point
   };
 
   const setCicView = (v: CicView) => {

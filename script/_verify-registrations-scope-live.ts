@@ -56,6 +56,13 @@ try {
     r = await get(`/api/admin/registrations/${cufc[0].id}`);
     r.status === 404 ? ok(`…and 404 with no header`) : bad(`…but ${r.status} with no header`);
   }
+  // 4b. Programme lists fail closed the same way.
+  for (const path of ["/api/admin/academy", "/api/admin/camps", "/api/admin/programs"]) {
+    const a = await get(path); const la = Array.isArray(a.body) ? a.body : [];
+    la.every((x: any) => x.organizationId === 3) ? ok(`${path} no header: ${la.length} rows, all org 3`) : bad(`${path} no header leaked orgs ${[...new Set(la.map((x: any) => x.organizationId))].join(",")}`);
+    const b = await get(path, { "x-workspace-slug": "christchurch-united" }); const lb = Array.isArray(b.body) ? b.body : [];
+    lb.length === 0 ? ok(`${path} CUFC header as a non-member: 0 rows`) : bad(`${path} CUFC header as a non-member returned ${lb.length} rows`);
+  }
   // 5. An MFL registration by id → 200 (the scope must not block a member).
   const { rows: mfl } = await pool.query(`select r.id from registrations r join programs p on p.id=r.program_id where p.organization_id=3 order by r.id desc limit 1`);
   if (mfl[0]) {
