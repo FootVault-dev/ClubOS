@@ -254,6 +254,12 @@ app.use(attributionCookieMiddleware);
   const { registerTeampayRoutes } = await import("./teampay-routes");
   registerTeampayRoutes(app);
 
+  // Club Events — ticketed club events (first: the CUFC Club Dinner, 13 Nov
+  // 2026). Public pages by slug/token, no login; the staff tab is gated by
+  // requireTab("club-events"); refunds by requireRefundPermission.
+  const { registerClubEventRoutes } = await import("./club-events-routes");
+  registerClubEventRoutes(app);
+
   // Maintenance — the United Sports Centre's cleaning/consumable supplies and
   // its machines & equipment. Admin-only, gated by requireTab("maintenance") to
   // the venue workspace. Sibling of Housing, built for Riley (grounds staff).

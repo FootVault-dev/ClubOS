@@ -360,8 +360,8 @@ export async function sendCicBroadcastEmail(params: {
 // ── CUFC (Christchurch United) branded email helpers ──────────────────────────
 // The first-team brand — navy + blue on dark, from the verified cufc.co.nz
 // sending domain (matches fromForOrg(1)).
-const CUFC_FROM = "Christchurch United <noreply@cufc.co.nz>";
-const CUFC_REPLY_TO = "info@cufc.co.nz";
+export const CUFC_FROM = "Christchurch United <noreply@cufc.co.nz>";
+export const CUFC_REPLY_TO = "info@cufc.co.nz";
 
 /**
  * CUFC website contact notification → info@cufc.co.nz. Same shape as the CIC
@@ -409,7 +409,7 @@ export async function sendCufcContactNotification(params: {
 // staff notification to the academy office, and the approval confirmation.
 // Same navy shell as the contact notification above.
 
-const cufcShellWrap = (heading: string, inner: string) => `
+export const cufcShellWrap = (heading: string, inner: string) => `
   <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#030711;padding:36px 16px;">
     <div style="max-width:560px;margin:0 auto;">
       <div style="text-align:center;padding:4px 0 22px;">
@@ -425,7 +425,7 @@ const cufcShellWrap = (heading: string, inner: string) => `
     </div>
   </div>`;
 
-const cufcInfoRow = (label: string, value: string) =>
+export const cufcInfoRow = (label: string, value: string) =>
   `<tr><td style="padding:6px 0;color:#7d8ba8;font-size:13px;width:130px;vertical-align:top;">${label}</td><td style="padding:6px 0;color:#ffffff;font-size:14px;font-weight:600;">${value}</td></tr>`;
 
 const esc = (v: string) => String(v || "").replace(/</g, "&lt;");

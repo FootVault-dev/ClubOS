@@ -72,6 +72,9 @@ const campsTabs: TabDef[] = [
   // U9–U20 (2026-07-21). CUFC-only: filtered out of SIU's sidebar like
   // fm-history; the routes are org-scoped to CUFC regardless.
   { slug: "open-trainings", title: "Open Trainings", url: "/admin/open-trainings" },
+  // Ticketed club events — the club dinner, and whatever comes next. Not
+  // "events": that slug is SIU's Community Events.
+  { slug: "club-events", title: "Events", url: "/admin/club-events" },
   // Sporty / NZ Football NRS — push confirmed registrations into the national
   // register (the Friendly Manager / Club Hub pathway, NZF-approved 2026-07-20).
   { slug: "sporty", title: "Sporty NRS", url: "/admin/sporty" },

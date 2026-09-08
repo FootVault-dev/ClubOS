@@ -110,6 +110,10 @@ import LeagueLoyalty from "@/pages/league-loyalty";
 import FmHistory from "@/pages/fm-history";
 import FmCompetitions from "@/pages/fm-competitions";
 import CufcOpenTrainings from "@/pages/cufc-open-trainings";
+import ClubEventsAdmin from "@/pages/club-events";
+import ClubEventDetailAdmin from "@/pages/club-event-detail";
+import ClubEventPage from "@/pages/events/event-page";
+import ClubEventOrderPage from "@/pages/events/order-page";
 import SportySync from "@/pages/sporty-sync";
 import LeagueAnalytics from "@/pages/league-analytics";
 import LeagueInbox from "@/pages/league-inbox";
@@ -652,6 +656,9 @@ function AdminRouter() {
       <Route path="/admin/fm-history" component={FmHistory} />
       <Route path="/admin/fm-competitions" component={FmCompetitions} />
       <Route path="/admin/open-trainings" component={CufcOpenTrainings} />
+      {/* Ticketed club events — the club dinner. Tab slug club-events. */}
+      <Route path="/admin/club-events" component={ClubEventsAdmin} />
+      <Route path="/admin/club-events/:id" component={ClubEventDetailAdmin} />
       {/* Sporty / NZ Football NRS push — same default Switch as fm-history
           (CUFC has no is* flag, so it lands here; SIU shares this Switch too
           since it has no dedicated branch above). */}
@@ -880,6 +887,12 @@ function App() {
                 matches "reply" as a competition slug and a player answering an
                 invitation lands on a signup form. Same trap as the View As
                 /view-as/stop route, which locked people inside a staff account. */}
+            {/* ── Club Events ────────────────────────────────────────────────
+                Ticketed club events (join.cufc.co.nz/events/{slug}). Public,
+                no login; the order page is authenticated by its token. The
+                order route precedes the slug route so "order" is never a slug. */}
+            <Route path="/events/:slug/order/:token" component={ClubEventOrderPage} />
+            <Route path="/events/:slug" component={ClubEventPage} />
             <Route path="/enter/:slug" component={TeampayEnterPage} />
             <Route path="/team/:token" component={TeampayDashboard} />
             <Route path="/pay/:token" component={TeampayPlayerPage} />

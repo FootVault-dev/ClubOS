@@ -118,6 +118,11 @@ const CANARIES: Canary[] = [
   // back to nothing and every workspace's revenue simply stops appearing,
   // which is indistinguishable from a quiet month.
   { feature: "dashboard revenue",    path: "/api/admin/dashboard/revenue",                    expect: [401] },
+  // Club Events (2026-09-08): the club dinner's ticket page is linked from
+  // cufc.co.nz/dinner and the S1 board. A deploy that dropped it would 404 in
+  // front of every parent who tapped it. 200: the event is public information.
+  { feature: "club events (dinner)", path: "/api/public/club-events/club-dinner-2026", expect: [200] },
+  { feature: "club events admin",    path: "/api/admin/club-events",                    expect: [401] },
 ];
 
 /** Where each canary's route is declared, so we can tell whether THIS tree
@@ -153,6 +158,8 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/coding-budget":             { file: "server/coding-budget-routes.ts", needle: "/api/admin/coding-budget" },
   "/api/public/teampay/competition/ethnic-cup-2026": { file: "server/teampay-routes.ts", needle: "/api/public/teampay/competition/:slug" },
   "/api/admin/teampay/overview":          { file: "server/teampay-routes.ts",      needle: "/api/admin/teampay/overview" },
+  "/api/public/club-events/club-dinner-2026": { file: "server/club-events-routes.ts", needle: "/api/public/club-events/:slug" },
+  "/api/admin/club-events":               { file: "server/club-events-routes.ts",  needle: "/api/admin/club-events" },
 };
 
 import { readFileSync, existsSync } from "fs";

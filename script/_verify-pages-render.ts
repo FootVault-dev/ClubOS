@@ -67,6 +67,7 @@ try {
     ["/admin/knowledge-base", "Knowledge Base"],
     ["/admin/task-tracker", "Task Tracker"],
     ["/admin/qr-codes", "QR Code Generator"],
+    ["/admin/club-events", "Events (club dinner)"],
   ];
 
   browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox"] });

@@ -17791,7 +17791,11 @@ export async function registerRoutes(
         const paymentIntent = event.data.object as any;
         const regType = paymentIntent.metadata?.registrationType;
         const registrationId = parseInt(paymentIntent.metadata?.registrationId);
-        if (paymentIntent.metadata?.kind === "teampay" && paymentIntent.metadata?.teampayPlayerId) {
+        if (paymentIntent.metadata?.kind === "club_event" && paymentIntent.metadata?.clubEventOrderId) {
+          // Club Events (ticketed dinners etc.). Idempotent: an atomic status flip.
+          const { markPaidByPaymentIntent } = await import("./club-events");
+          await markPaidByPaymentIntent(paymentIntent);
+        } else if (paymentIntent.metadata?.kind === "teampay" && paymentIntent.metadata?.teampayPlayerId) {
           // Team Pay: one squad member's share cleared. Idempotent — the flip is
           // an atomic UPDATE ... WHERE paid_at IS NULL, so a webhook retry racing
           // the browser's own confirm call produces one paid row, not two.

@@ -9000,3 +9000,139 @@ export const teampayEvents = pgTable("teampay_events", {
   entryIdx: index("teampay_events_entry_idx").on(t.entryId, t.createdAt),
 }));
 export type TeampayEvent = typeof teampayEvents.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Club Events — ticketed events (first: the CUFC Club Dinner, Fri 13 Nov 2026).
+// Migration: migrations/2026-09-08_club_events.sql. Rules and invariants are
+// documented there; this is the typed view. Money is integer cents.
+// ═══════════════════════════════════════════════════════════════════════════
+const tz = { withTimezone: true } as const;
+
+export const clubEvents = pgTable("club_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  slug: text("slug").notNull(),
+  /** Prefix of every ticket reference: DIN26-0001. */
+  shortCode: text("short_code").notNull(),
+  name: text("name").notNull(),
+  tagline: text("tagline"),
+  description: text("description"),
+  /** "What's included" bullets. */
+  includes: jsonb("includes").$type<string[]>().notNull().default([]),
+  brand: text("brand").notNull().default("cufc"),
+  venueName: text("venue_name"),
+  venueAddress: text("venue_address"),
+  startsAt: timestamp("starts_at", tz).notNull(),
+  endsAt: timestamp("ends_at", tz),
+  /** NULL = no cap. Enforced by a trigger, not the page. */
+  capacity: integer("capacity"),
+  tableSize: integer("table_size").notNull().default(10),
+  maxPerOrder: integer("max_per_order").notNull().default(10),
+  ageRestriction: text("age_restriction"),
+  /** draft | open | closed — CLUB_EVENT_STATUSES in shared/club-events.ts. */
+  status: text("status").notNull().default("draft"),
+  /** 'club' | 'trust' — which Stripe account collects. */
+  stripeAccount: text("stripe_account").notNull().default("club"),
+  currency: text("currency").notNull().default("NZD"),
+  contactEmail: text("contact_email"),
+  paymentNote: text("payment_note"),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", tz).defaultNow().notNull(),
+}, (t) => ({
+  slugUnique: uniqueIndex("club_events_slug_unique").on(t.slug),
+  orgIdx: index("club_events_org_idx").on(t.organizationId),
+}));
+export type ClubEvent = typeof clubEvents.$inferSelect;
+
+export const clubEventTicketTypes = pgTable("club_event_ticket_types", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  eventId: integer("event_id").notNull().references(() => clubEvents.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  priceCents: integer("price_cents").notNull(),
+  /** NULL = open-ended. The server picks the type whose window holds `now`. */
+  salesStart: timestamp("sales_start", tz),
+  salesEnd: timestamp("sales_end", tz),
+  quantityCap: integer("quantity_cap"),
+  sort: integer("sort").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", tz).defaultNow().notNull(),
+}, (t) => ({
+  eventIdx: index("club_event_ticket_types_event_idx").on(t.eventId),
+}));
+export type ClubEventTicketType = typeof clubEventTicketTypes.$inferSelect;
+
+export const clubEventOrders = pgTable("club_event_orders", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  eventId: integer("event_id").notNull().references(() => clubEvents.id, { onDelete: "restrict" }),
+  ticketTypeId: integer("ticket_type_id").notNull().references(() => clubEventTicketTypes.id, { onDelete: "restrict" }),
+  /** DIN26-0001 — set by a DB trigger on insert. */
+  ref: text("ref").notNull(),
+  /** The buyer's order page. 128 random bits. */
+  token: text("token").notNull(),
+  buyerName: text("buyer_name").notNull(),
+  buyerEmail: text("buyer_email").notNull(),
+  buyerPhone: text("buyer_phone"),
+  quantity: integer("quantity").notNull(),
+  unitPriceCents: integer("unit_price_cents").notNull(),
+  totalCents: integer("total_cents").notNull(),
+  /** pending | paid | cancelled | refunded. */
+  status: text("status").notNull().default("pending"),
+  paymentMethod: text("payment_method"),
+  paymentReference: text("payment_reference"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  stripeCustomerId: text("stripe_customer_id"),
+  paidAt: timestamp("paid_at", tz),
+  paidCents: integer("paid_cents"),
+  refundedCents: integer("refunded_cents").notNull().default(0),
+  refundedAt: timestamp("refunded_at", tz),
+  refundReason: text("refund_reason"),
+  stripeRefundId: text("stripe_refund_id"),
+  servedByUserId: integer("served_by_user_id").references(() => users.id, { onDelete: "restrict" }),
+  tableName: text("table_name"),
+  buyerNotes: text("buyer_notes"),
+  staffNotes: text("staff_notes"),
+  source: text("source"),
+  sourceUrl: text("source_url"),
+  fbp: text("fbp"),
+  fbc: text("fbc"),
+  userAgent: text("user_agent"),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", tz).defaultNow().notNull(),
+}, (t) => ({
+  refUnique: uniqueIndex("club_event_orders_ref_unique").on(t.ref),
+  tokenUnique: uniqueIndex("club_event_orders_token_unique").on(t.token),
+  eventIdx: index("club_event_orders_event_idx").on(t.eventId, t.status),
+}));
+export type ClubEventOrder = typeof clubEventOrders.$inferSelect;
+
+export const clubEventGuests = pgTable("club_event_guests", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  orderId: integer("order_id").notNull().references(() => clubEventOrders.id, { onDelete: "cascade" }),
+  seatNo: integer("seat_no").notNull(),
+  fullName: text("full_name"),
+  dietary: text("dietary"),
+  checkedInAt: timestamp("checked_in_at", tz),
+  checkedInByUserId: integer("checked_in_by_user_id").references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", tz).defaultNow().notNull(),
+}, (t) => ({
+  seatUnique: uniqueIndex("club_event_guests_seat_unique").on(t.orderId, t.seatNo),
+}));
+export type ClubEventGuest = typeof clubEventGuests.$inferSelect;
+
+export const clubEventLog = pgTable("club_event_log", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  eventId: integer("event_id").notNull().references(() => clubEvents.id, { onDelete: "cascade" }),
+  orderId: integer("order_id").references(() => clubEventOrders.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  actor: text("actor").notNull(),
+  actorUserId: integer("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+  detail: jsonb("detail"),
+  at: timestamp("at", tz).defaultNow().notNull(),
+}, (t) => ({
+  orderIdx: index("club_event_log_order_idx").on(t.orderId),
+  eventIdx: index("club_event_log_event_idx").on(t.eventId, t.at),
+}));
+export type ClubEventLogRow = typeof clubEventLog.$inferSelect;
