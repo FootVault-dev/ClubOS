@@ -64,6 +64,21 @@ for (const [label, w, h] of [["phone", 390, 844], ["desktop", 1440, 900]] as con
   await firsts[1].type("ZZCHILD"); await lasts[1].type("PROBE");
   // Date of birth is optional client-side here (formValid does not require it) — left blank on purpose.
 
+  // CLASS_PLAN=deposit: pick the "Pay $X now" (deposit-weekly) option and assert
+  // the summary promises the deposit + the weekly schedule before paying.
+  if (process.env.CLASS_PLAN === "deposit") {
+    let picked = false;
+    for (const bEl of await page.$$("button")) {
+      const t = (await page.evaluate((el) => el.textContent || "", bEl)).trim();
+      if (/^Pay \$[\d.,]+ now/i.test(t)) { await bEl.click(); picked = true; break; }
+    }
+    picked ? ok("picked the deposit-weekly option") : bad("no 'Pay $X now' deposit option on the form");
+    const summary = await page.evaluate(() => document.body.innerText);
+    /Deposit today/.test(summary) && /Then weekly/.test(summary) && /Term total/.test(summary)
+      ? ok(`summary shows deposit + weekly schedule (${summary.match(/You pay today\s*\$[\d.,]+/)?.[0]?.replace(/\s+/g, " ")})`)
+      : bad("summary does not show the deposit-weekly breakdown");
+  }
+
   const btn = (await page.$$('button')).filter(async () => true);
   let clicked = false;
   for (const bEl of await page.$$('button')) {
@@ -126,6 +141,11 @@ for (const [label, w, h] of [["phone", 390, 844], ["desktop", 1440, 900]] as con
   }
   const total = text1.match(/\$\d[\d,]*\.\d{2}/)?.[0] || "";
   total ? ok(`payment step shows an amount (${total})`) : bad("no amount on the payment step");
+  if (process.env.CLASS_PLAN === "deposit") {
+    /Pay \$[\d.,]+ deposit/i.test(text1) ? ok("payment step is headed as a deposit") : bad("payment step does not say deposit");
+    /Then \$[\d.,]+\/week for \d+ weeks from /.test(text1) ? ok(`weekly schedule stated: ${text1.match(/Then \$[\d.,]+\/week for \d+ weeks from [^,]+/)?.[0]}`) : bad("weekly schedule missing under the pay button");
+    /Klarna/.test(text1) ? bad("Klarna offered on a saved-card plan") : ok("cards only on the deposit plan (no Klarna)");
+  }
   if (errors.length) bad(`${errors.length} page error(s): ${errors[0].slice(0, 120)}`); else ok("no uncaught page errors");
   try { await page.screenshot({ path: `${SHOTS}/${label}.png`, fullPage: false }); ok(`screenshot ${SHOTS}/${label}.png`); } catch (e: any) { bad(`screenshot failed: ${e.message.slice(0, 80)}`); }
   await page.close();
