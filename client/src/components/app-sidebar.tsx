@@ -257,6 +257,12 @@ const leagueNav = [
   { tab: "competitions", title: "Terms", url: "/admin/competitions", icon: Trophy },
   { tab: "teams", title: "Teams", url: "/admin/teams", icon: UsersRound },
   { tab: "payments", title: "Payments", url: "/admin/payments", icon: CreditCard },
+  // Ballers Youth League — the individual sign-up product on the academy
+  // engine. Both tabs existed in shared/tabs.ts and both routes in App.tsx
+  // since 2026-08-03, but this array is what draws the link, and neither was
+  // here — so the workspace had two pages nobody could reach (Daniel, 2026-09-09).
+  { tab: "academy", title: "Youth Leagues", url: "/admin/academy", icon: GraduationCap },
+  { tab: "registrations", title: "Registrations", url: "/admin/registrations", icon: ClipboardCheck },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
   { tab: "inbox", title: "Inbox", url: "/admin/inbox", icon: Inbox },

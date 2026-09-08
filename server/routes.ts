@@ -2072,6 +2072,29 @@ export async function registerRoutes(
       if (paymentMode === "weekly" && !option?.allowPayWeekly) {
         return res.status(400).json({ message: "Weekly payment isn't available for this option" });
       }
+      // Deposit-weekly ("$20 now, then $10 a week for 8 weeks" — Ballers, 2026-09-09).
+      // The programme declares the plan (payment_plan/deposit_cents/num_weekly_payments),
+      // the option carries the weekly price. Same engine as the MFL league deposit
+      // plan: the deposit lands today on a SAVED card, a weekly subscription is
+      // anchored to the first week of the term and cancelled after the last week.
+      // The three numbers must add up to the term price exactly — a plan that
+      // sells a cent short or over is refused, never silently honoured.
+      const planDepositCents = (program as any).depositCents ?? 0;
+      const planWeeks = (program as any).numWeeklyPayments ?? 0;
+      const planWeeklyCents = option?.weeklyPriceCents ?? 0;
+      const isDepositWeekly = !!isWeekly && (program as any).paymentPlan === "deposit_weekly";
+      if (isDepositWeekly) {
+        if (planDepositCents <= 0 || planWeeks <= 0 || planWeeklyCents <= 0
+            || planDepositCents + planWeeks * planWeeklyCents !== (option?.fullPriceCents ?? -1)) {
+          console.error(`[Class deposit-weekly] ${programSlug}: $${planDepositCents / 100} + ${planWeeks} × $${planWeeklyCents / 100} ≠ option $${(option?.fullPriceCents ?? 0) / 100} — refusing`);
+          return res.status(400).json({ message: "The weekly plan isn't set up for this programme yet — please pay in full." });
+        }
+        // Priced against the FULL term: once the term has started the quote
+        // pro-rates and the plan's arithmetic no longer holds.
+        if (quote.payNowCents !== option!.fullPriceCents) {
+          return res.status(400).json({ message: "The weekly plan is only available before the term starts — please pay in full." });
+        }
+      }
 
       // Create / find guardian + child contacts.
       // NB (2026-07-09): these two calls used to read `storage.getContactByEmail?.()`
@@ -2133,14 +2156,16 @@ export async function registerRoutes(
       const reg = await storage.createRegistration({
         programId: program.id,
         programOptionId: option?.id ?? null,
-        paymentMode: isWeekly ? "weekly" : "upfront",
+        paymentMode: isDepositWeekly ? "deposit_weekly" : isWeekly ? "weekly" : "upfront",
         contactId: child.id,
         guardianId: guardian.id,
         status: "pending",
         amountPaid: "0",
-        subtotalCents: isWeekly ? weeklyPriceCents : quote.payNowCents,
+        subtotalCents: isDepositWeekly ? quote.payNowCents : isWeekly ? weeklyPriceCents : quote.payNowCents,
         discountCents: quote.discountCents,
-        totalCents: isWeekly ? weeklyPriceCents : quote.payNowCents,
+        // Deposit-weekly owes the whole term; the deposit is what lands today.
+        totalCents: isDepositWeekly ? quote.payNowCents : isWeekly ? weeklyPriceCents : quote.payNowCents,
+        ...(isDepositWeekly ? { depositCents: planDepositCents, weeklyAmountCents: planWeeklyCents, weeksTotal: planWeeks, weeksPaid: 0, balanceStatus: "scheduled" } : {}),
         currency: "NZD",
         notes: notes || null,
         utmSource: utm?.source || null,
@@ -2168,7 +2193,31 @@ export async function registerRoutes(
       let paymentIntentId: string | null = null;
       let subscriptionId: string | null = null;
 
-      if (isWeekly) {
+      if (isDepositWeekly) {
+        // Deposit on a saved card. Cards only: the weekly charges run off-session
+        // on this payment method, which Klarna and the like cannot do.
+        const customer = await stripe.customers.create({
+          email,
+          name: `${firstName} ${lastName}`,
+          metadata: sharedMetadata,
+        });
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: planDepositCents,
+          currency: "nzd",
+          customer: customer.id,
+          setup_future_usage: "off_session",
+          payment_method_types: ["card"],
+          receipt_email: email,
+          description: `${program.name}${optionLabel} — $${(planDepositCents / 100).toFixed(2)} deposit, then $${(planWeeklyCents / 100).toFixed(2)}/week × ${planWeeks}`,
+          metadata: { ...sharedMetadata, plan: "deposit_weekly" },
+        });
+        clientSecret = paymentIntent.client_secret;
+        paymentIntentId = paymentIntent.id;
+        await storage.updateRegistration(reg.id, {
+          stripePaymentIntentId: paymentIntent.id,
+          stripeCustomerId: customer.id,
+        } as any);
+      } else if (isWeekly) {
         // Stripe Subscription — bills `weeklyPriceCents` every week for
         // up to `totalSessions` cycles. Customer charged immediately for
         // week 1; subsequent weeks auto-charge.
@@ -2228,18 +2277,29 @@ export async function registerRoutes(
         clientSecret,
         paymentIntentId,
         subscriptionId,
-        paymentMode: isWeekly ? "weekly" : "upfront",
+        paymentMode: isDepositWeekly ? "deposit_weekly" : isWeekly ? "weekly" : "upfront",
         quote: {
           fullPriceCents: quote.fullPriceCents,
-          payNowCents: isWeekly ? weeklyPriceCents : quote.payNowCents,
+          payNowCents: isDepositWeekly ? planDepositCents : isWeekly ? weeklyPriceCents : quote.payNowCents,
           discountCents: quote.discountCents,
           sessionsRemaining: quote.sessionsRemaining,
           totalSessions: quote.totalSessions,
-          reason: isWeekly
-            ? `${weeklyPriceCents > 0 ? `$${(weeklyPriceCents / 100).toFixed(2)}/week` : ""} × ${option?.sessionCount ?? quote.totalSessions} weeks`
-            : quote.reason,
+          reason: isDepositWeekly
+            ? `$${(planDepositCents / 100).toFixed(2)} today, then $${(planWeeklyCents / 100).toFixed(2)}/week × ${planWeeks}`
+            : isWeekly
+              ? `${weeklyPriceCents > 0 ? `$${(weeklyPriceCents / 100).toFixed(2)}/week` : ""} × ${option?.sessionCount ?? quote.totalSessions} weeks`
+              : quote.reason,
           weeklyPriceCents,
         },
+        // Mirrors createLeagueWeeklySubscription's anchor rule (term start, or
+        // two days out if that has passed) so the page promises the date Stripe
+        // will actually use.
+        plan: isDepositWeekly ? (() => {
+          const now = Date.now();
+          const start = term?.startDate ? new Date(term.startDate + "T00:00:00Z").getTime() : now + 7 * 86400000;
+          return { depositCents: planDepositCents, weeklyAmountCents: planWeeklyCents, weeksTotal: planWeeks,
+                   firstChargeDate: new Date(Math.max(start, now + 2 * 86400000)).toISOString().slice(0, 10) };
+        })() : null,
         option: option ? { id: option.id, name: option.name, scheduleText: option.scheduleText } : null,
         program: { name: program.name, slug: program.slug },
         term: term ? { name: term.name, termNumber: term.termNumber, year: term.year, startDate: term.startDate, endDate: term.endDate } : null,
@@ -3392,6 +3452,11 @@ export async function registerRoutes(
           // The client mirrors the pro-rata maths to price each option live;
           // without this it would show a discount the server won't honour.
           prorataGraceWeeks: program.prorataGraceWeeks ?? 0,
+          // Deposit-weekly plan, if the programme declares one (Ballers): the
+          // checkout needs these before any intent exists to offer the choice.
+          paymentPlan: (program as any).paymentPlan ?? null,
+          depositCents: (program as any).depositCents ?? null,
+          numWeeklyPayments: (program as any).numWeeklyPayments ?? null,
         },
         term: term ? { id: term.id, year: term.year, termNumber: term.termNumber, name: term.name, startDate: term.startDate, endDate: term.endDate } : null,
         quote,
@@ -25544,7 +25609,9 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
   // deposit has been collected at this point — record the deposit as amount
   // paid, not the full total. The weekly cron advances amountPaid as charges land.
   const isLeagueTeam = metadata?.registrationType === "league_team";
-  const paidCents = (isLeagueTeam && (reg.paymentMode === "installment" || reg.paymentMode === "deposit_weekly"))
+  // A class registration on the deposit-weekly plan (Ballers) has the same
+  // shape as the league one: only the deposit has landed at this point.
+  const paidCents = ((isLeagueTeam && reg.paymentMode === "installment") || reg.paymentMode === "deposit_weekly")
     ? (reg.depositCents ?? reg.totalCents ?? 0)
     : (reg.totalCents ?? 0);
 
@@ -25662,13 +25729,50 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
     const program = await storage.getProgram(reg.programId);
     const child = await storage.getContact(reg.contactId);
     const guardian = reg.guardianId ? await storage.getContact(reg.guardianId) : null;
+
+    // Deposit-weekly: the deposit has just landed on a saved card — start the
+    // weekly subscription now, anchored to the first week of the term. Same
+    // engine as the MFL league plan; advanceLeagueWeekly moves weeks_paid on
+    // every invoice.paid and cancels after the last week (its league_teams
+    // update is a no-op here because a class has no team). A failure to start
+    // the plan is recorded as balance_status=failed for staff to chase — the
+    // registration itself stays confirmed, the deposit was real.
+    let planFirstCharge: string | null = null;
+    if (reg.paymentMode === "deposit_weekly" && program && !(reg as any).stripeSubscriptionId) {
+      try {
+        const { stripe } = await import("./stripe");
+        const pi = reg.stripePaymentIntentId ? await stripe.paymentIntents.retrieve(reg.stripePaymentIntentId) : null;
+        const paymentMethodId = typeof pi?.payment_method === "string" ? pi.payment_method : (pi?.payment_method as any)?.id;
+        const customerId = (typeof pi?.customer === "string" ? pi.customer : (pi?.customer as any)?.id) || (reg as any).stripeCustomerId;
+        let anchorDate: string | null = null;
+        if (program.termId) {
+          const [t] = await db.select().from(terms).where(eq(terms.id, program.termId));
+          anchorDate = (t?.startDate as any) ?? null;
+        }
+        if (paymentMethodId && customerId) {
+          planFirstCharge = await createLeagueWeeklySubscription({
+            reg, program, customerId, paymentMethodId, anchorDate,
+            label: `${child?.firstName ?? ""} ${child?.lastName ?? ""}`.trim() || "player",
+          });
+        } else {
+          console.error(`[Class deposit-weekly] reg ${registrationId}: PI ${reg.stripePaymentIntentId} carries no saved card/customer — weekly plan NOT started`);
+          await storage.updateRegistration(registrationId, { balanceStatus: "failed" } as any);
+        }
+      } catch (e: any) {
+        console.error(`[Class deposit-weekly] reg ${registrationId}: subscription failed:`, e?.message || e);
+        await storage.updateRegistration(registrationId, { balanceStatus: "failed" } as any);
+      }
+    }
+    const nzDate = (iso: string) => new Date(iso + "T12:00:00+12:00").toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+    const isMflProgram = program?.organizationId === 3;
+
     if (program && guardian && guardian.email) {
       try {
         const { sendEmail } = await import("./email");
         await sendEmail({
           to: guardian.email,
-          from: "ClubOS <noreply@cufc.co.nz>",
-          replyTo: "info@cufc.co.nz",
+          from: isMflProgram ? "Mini Football Leagues <noreply@minifootball.co.nz>" : "ClubOS <noreply@cufc.co.nz>",
+          replyTo: isMflProgram ? "info@minifootball.co.nz" : "info@cufc.co.nz",
           subject: `${program.name} — registration confirmed`,
           html: `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:560px;margin:0 auto;padding:20px;color:#111">
             <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:32px;border-radius:16px 16px 0 0;text-align:center;color:#fff">
@@ -25683,7 +25787,11 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
               <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin:0 0 20px">
                 <table style="width:100%;border-collapse:collapse">
                   <tr><td style="color:#94a3b8;font-size:12px;text-transform:uppercase;padding:6px 0">Order #</td><td style="padding:6px 0;text-align:right;font-family:monospace">${reg.orderNumber ?? registrationId}</td></tr>
-                  <tr><td style="color:#94a3b8;font-size:12px;text-transform:uppercase;padding:6px 0">Total paid</td><td style="padding:6px 0;text-align:right;font-weight:600">$${((reg.totalCents ?? 0) / 100).toFixed(2)} NZD</td></tr>
+                  ${reg.paymentMode === "deposit_weekly"
+                    ? `<tr><td style="color:#94a3b8;font-size:12px;text-transform:uppercase;padding:6px 0">Paid today</td><td style="padding:6px 0;text-align:right;font-weight:600">$${((reg.depositCents ?? 0) / 100).toFixed(2)} NZD deposit</td></tr>
+                  <tr><td style="color:#94a3b8;font-size:12px;text-transform:uppercase;padding:6px 0">Then</td><td style="padding:6px 0;text-align:right">$${((reg.weeklyAmountCents ?? 0) / 100).toFixed(2)}/week × ${reg.weeksTotal ?? 0}${planFirstCharge ? ` from ${nzDate(planFirstCharge)}` : ""}, charged to the same card</td></tr>
+                  <tr><td style="color:#94a3b8;font-size:12px;text-transform:uppercase;padding:6px 0">Term total</td><td style="padding:6px 0;text-align:right">$${((reg.totalCents ?? 0) / 100).toFixed(2)} NZD</td></tr>`
+                    : `<tr><td style="color:#94a3b8;font-size:12px;text-transform:uppercase;padding:6px 0">Total paid</td><td style="padding:6px 0;text-align:right;font-weight:600">$${((reg.totalCents ?? 0) / 100).toFixed(2)} NZD</td></tr>`}
                   <tr><td style="color:#94a3b8;font-size:12px;text-transform:uppercase;padding:6px 0">Child</td><td style="padding:6px 0;text-align:right">${child?.firstName} ${child?.lastName}</td></tr>
                 </table>
               </div>
@@ -25718,7 +25826,8 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
         await sendPurchaseEvent({
           registrationId,
           campId: program.id,
-          totalCents: reg.totalCents ?? 0,
+          // Deposit-weekly reports what landed today, matching the browser pixel.
+          totalCents: reg.paymentMode === "deposit_weekly" ? (reg.depositCents ?? 0) : (reg.totalCents ?? 0),
           currency: reg.currency || "NZD",
           email: guardian.email,
           phone: guardian.phone || undefined,
@@ -25868,21 +25977,25 @@ async function handlePaymentSuccess(registrationId: number, stripeSessionId?: st
 // final weeks). The invoice.paid webhook advances weeks_paid and cancels the
 // subscription precisely when fully paid; cancel_at is a generous backstop.
 async function createLeagueWeeklySubscription(opts: {
-  reg: any; program: any; customerId: string; paymentMethodId: string; competitionId: number;
-}) {
-  const { reg, program, customerId, paymentMethodId, competitionId } = opts;
+  reg: any; program: any; customerId: string; paymentMethodId: string;
+  competitionId?: number;       // league: anchor on the competition's start date
+  anchorDate?: string | null;   // class (Ballers): anchor on the term's start, ISO yyyy-mm-dd
+  label?: string;               // Stripe product label; the league gets the team name by default
+}): Promise<string | null> {
+  const { reg, program, customerId, paymentMethodId, competitionId, anchorDate, label } = opts;
   const weeklyCents = reg.weeklyAmountCents ?? 0;
   const weeksTotal = reg.weeksTotal ?? 0;
-  if (weeklyCents <= 0 || weeksTotal <= 0) return;
+  if (weeklyCents <= 0 || weeksTotal <= 0) return null;
 
   const { stripe } = await import("./stripe");
-  const comp = await storage.getLeagueCompetition(competitionId);
+  const comp = competitionId ? await storage.getLeagueCompetition(competitionId) : null;
+  const startDate: string | null = anchorDate ?? (comp?.startDate as any) ?? null;
   const nowSec = Math.floor(Date.now() / 1000);
   // First weekly charge at term start; if the term has no start yet or has
   // already begun, start one week out (Stripe needs trial_end ≥ ~now).
   let trialEnd = nowSec + 7 * 86400;
-  if (comp?.startDate) {
-    const startSec = Math.floor(new Date(comp.startDate + "T00:00:00Z").getTime() / 1000);
+  if (startDate) {
+    const startSec = Math.floor(new Date(startDate + "T00:00:00Z").getTime() / 1000);
     trialEnd = Math.max(startSec, nowSec + 2 * 86400);
   }
   // The precise stop is the invoice.paid webhook, which cancels the moment
@@ -25894,7 +26007,7 @@ async function createLeagueWeeklySubscription(opts: {
 
   // This Stripe API version rejects inline `product_data` on a subscription's
   // price_data — create the product first and reference it by id.
-  const weeklyProduct = await stripe.products.create({ name: `${program.name} — weekly (${reg.teamName || "team"})` });
+  const weeklyProduct = await stripe.products.create({ name: `${program.name} — weekly (${label || reg.teamName || "team"})` });
   const subscription = await stripe.subscriptions.create({
     customer: customerId,
     items: [{ price_data: {
@@ -25920,6 +26033,7 @@ async function createLeagueWeeklySubscription(opts: {
     weeklyFirstChargeDate: new Date(trialEnd * 1000).toISOString().slice(0, 10),
   } as any);
   console.log(`[MFL weekly] reg ${reg.id}: subscription ${subscription.id} — $${(weeklyCents / 100).toFixed(2)}/wk × ${weeksTotal}, first charge ${new Date(trialEnd * 1000).toISOString().slice(0, 10)}`);
+  return new Date(trialEnd * 1000).toISOString().slice(0, 10);
 }
 
 // Advance a deposit_weekly registration when a weekly invoice is paid. Counts

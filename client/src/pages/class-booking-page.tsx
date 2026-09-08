@@ -109,9 +109,19 @@ interface OptionsResponse {
 }
 
 interface QuoteResponse {
-  program: { id: number; name: string; slug: string; scheduleType: string; startDate: string; endDate: string; sessionCount: number | null };
+  program: { id: number; name: string; slug: string; scheduleType: string; startDate: string; endDate: string; sessionCount: number | null;
+             paymentPlan?: string | null; depositCents?: number | null; numWeeklyPayments?: number | null };
   term: { id: number; year: number; termNumber: number; name: string | null; startDate: string; endDate: string } | null;
   quote: { fullPriceCents: number; payNowCents: number; discountCents: number; sessionsRemaining: number; totalSessions: number; reason: string };
+}
+
+// "14 Oct" from an ISO date without a Date round-trip — a bare ISO string read
+// as UTC midnight is the previous evening in New Zealand.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function nzShortDate(iso?: string | null): string {
+  if (!iso) return "";
+  const [, m, d] = iso.split("-");
+  return `${parseInt(d, 10)} ${MONTHS[parseInt(m, 10) - 1] ?? ""}`;
 }
 
 /** GET /api/public/parent/prefill, when a family is signed in. */
@@ -126,16 +136,17 @@ interface IntentResponse {
   clientSecret: string;
   paymentIntentId: string | null;
   subscriptionId: string | null;
-  paymentMode: "upfront" | "weekly";
+  paymentMode: "upfront" | "weekly" | "deposit_weekly";
   quote: { fullPriceCents: number; payNowCents: number; discountCents: number; sessionsRemaining: number; totalSessions: number; reason: string; weeklyPriceCents: number };
+  plan?: { depositCents: number; weeklyAmountCents: number; weeksTotal: number; firstChargeDate: string } | null;
   option: { id: number; name: string; scheduleText: string | null } | null;
   program: { name: string; slug: string };
   term: any;
 }
 
-function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly, programName }: {
+function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly, programName, plan }: {
   slug: string; registrationId: number; totalCents: number; parentEmail: string; isWeekly: boolean;
-  programName: string;
+  programName: string; plan?: IntentResponse["plan"];
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -195,14 +206,18 @@ function PaymentForm({ slug, registrationId, totalCents, parentEmail, isWeekly, 
       >
         {processing
           ? "Processing..."
-          : isWeekly
-            ? <><Lock className="w-4 h-4" /> Start subscription — {money(totalCents)}/week</>
-            : <><Lock className="w-4 h-4" /> Pay {money(totalCents)}</>}
+          : plan
+            ? <><Lock className="w-4 h-4" /> Pay {money(totalCents)} deposit</>
+            : isWeekly
+              ? <><Lock className="w-4 h-4" /> Start subscription — {money(totalCents)}/week</>
+              : <><Lock className="w-4 h-4" /> Pay {money(totalCents)}</>}
       </button>
       <p className={T.note}>
-        {isWeekly
-          ? "Today's $X will be charged now. Future weeks charge automatically."
-          : "Secured by Stripe. Your card is never stored on our servers."}
+        {plan
+          ? `Then ${money(plan.weeklyAmountCents)}/week for ${plan.weeksTotal} weeks from ${nzShortDate(plan.firstChargeDate)}, charged to this card automatically. Secured by Stripe.`
+          : isWeekly
+            ? "Today's $X will be charged now. Future weeks charge automatically."
+            : "Secured by Stripe. Your card is never stored on our servers."}
       </p>
     </form>
   );
@@ -483,8 +498,12 @@ export default function ClassBookingPage() {
               <p className={`${T.muted} mb-8`}>{selectedOption.name}{selectedOption.scheduleText ? ` · ${selectedOption.scheduleText}` : ""}</p>
 
               <section className="space-y-6">
-                {/* Payment mode picker (only if option allows weekly) */}
-                {selectedOption.allowPayWeekly && (
+                {/* Payment mode picker (only if option allows weekly). A deposit-weekly
+                    plan is priced against the FULL term, so it is offered only while the
+                    quote is still the full price — the server refuses it otherwise. */}
+                {selectedOption.allowPayWeekly
+                  && (program.paymentPlan !== "deposit_weekly"
+                      || ((program.depositCents ?? 0) > 0 && computeOptionQuote(selectedOption).discount === 0)) && (
                   <div>
                     <h2 className={T.label}>How would you like to pay?</h2>
                     <div className="grid grid-cols-2 gap-2">
@@ -494,9 +513,9 @@ export default function ClassBookingPage() {
                           paymentMode === "upfront" ? T.optionSel : T.optionIdle
                         }`}
                       >
-                        <CreditCard className="w-4 h-4 mb-1.5 text-zinc-600" />
+                        <CreditCard className={`w-4 h-4 mb-1.5 ${T.line}`} />
                         <div className="font-semibold text-sm">Pay upfront</div>
-                        <div className="text-xs text-zinc-500 mt-0.5">{money(computeOptionQuote(selectedOption).payNow)} now</div>
+                        <div className={`text-xs ${T.muted} mt-0.5`}>{money(computeOptionQuote(selectedOption).payNow)} now</div>
                       </button>
                       <button
                         onClick={() => setPaymentMode("weekly")}
@@ -504,10 +523,14 @@ export default function ClassBookingPage() {
                           paymentMode === "weekly" ? T.optionSel : T.optionIdle
                         }`}
                       >
-                        <Repeat className="w-4 h-4 mb-1.5 text-zinc-600" />
-                        <div className="font-semibold text-sm">Pay weekly</div>
-                        <div className="text-xs text-zinc-500 mt-0.5">
-                          {money(selectedOption.weeklyPriceCents ?? Math.round(selectedOption.fullPriceCents / (selectedOption.sessionCount ?? 10)))}/week
+                        <Repeat className={`w-4 h-4 mb-1.5 ${T.line}`} />
+                        <div className="font-semibold text-sm">
+                          {program.paymentPlan === "deposit_weekly" ? `Pay ${money(program.depositCents ?? 0)} now` : "Pay weekly"}
+                        </div>
+                        <div className={`text-xs ${T.muted} mt-0.5`}>
+                          {program.paymentPlan === "deposit_weekly"
+                            ? `then ${money(selectedOption.weeklyPriceCents ?? 0)}/week × ${program.numWeeklyPayments ?? 0}${term ? ` from ${nzShortDate(term.startDate)}` : ""}`
+                            : `${money(selectedOption.weeklyPriceCents ?? Math.round(selectedOption.fullPriceCents / (selectedOption.sessionCount ?? 10)))}/week`}
                         </div>
                       </button>
                     </div>
@@ -601,7 +624,27 @@ export default function ClassBookingPage() {
                 {selectedOption.scheduleText && <div className={T.cardMuted}>{selectedOption.scheduleText}</div>}
 
                 <div className={`pt-3 border-t ${T.divider} space-y-1.5 text-sm`}>
-                  {paymentMode === "weekly" ? (
+                  {paymentMode === "weekly" && program.paymentPlan === "deposit_weekly" ? (
+                    <>
+                      <div className={`flex justify-between ${T.line}`}>
+                        <span>Deposit today</span>
+                        <span className="font-mono">{money(program.depositCents ?? 0)}</span>
+                      </div>
+                      <div className={`flex justify-between ${T.line}`}>
+                        <span>Then weekly{term ? ` from ${nzShortDate(term.startDate)}` : ""}</span>
+                        <span className="font-mono">{money(selectedOption.weeklyPriceCents ?? 0)} × {program.numWeeklyPayments ?? 0}</span>
+                      </div>
+                      <div className={`flex justify-between ${T.line}`}>
+                        <span>Term total</span>
+                        <span className="font-mono">{money(selectedOption.fullPriceCents)}</span>
+                      </div>
+                      <div className={`flex justify-between font-bold text-base pt-2 border-t ${T.divider} mt-2`}>
+                        <span>You pay today</span>
+                        <span className="font-mono">{money(program.depositCents ?? 0)}</span>
+                      </div>
+                      <div className={`text-[11px] ${T.muted} pt-1`}>Weekly payments charge to the same card automatically.</div>
+                    </>
+                  ) : paymentMode === "weekly" ? (
                     <>
                       <div className={`flex justify-between ${T.line}`}>
                         <span>Weekly fee</span>
@@ -650,7 +693,9 @@ export default function ClassBookingPage() {
         {step === "payment" && intent && (
           <div className="max-w-xl mx-auto">
             <h1 className={T.h1}>
-              {intent.paymentMode === "weekly" ? `${money(intent.quote.payNowCents)}/week` : `Pay ${money(intent.quote.payNowCents)}`}
+              {intent.paymentMode === "deposit_weekly"
+                ? `Pay ${money(intent.quote.payNowCents)} deposit`
+                : intent.paymentMode === "weekly" ? `${money(intent.quote.payNowCents)}/week` : `Pay ${money(intent.quote.payNowCents)}`}
             </h1>
             <p className={`${T.muted} mb-8`}>Receipt + confirmation will be sent to {parentEmail}.</p>
             <Elements stripe={stripePromise} options={{ clientSecret: intent.clientSecret, appearance: APPEARANCE }}>
@@ -661,6 +706,7 @@ export default function ClassBookingPage() {
                 parentEmail={parentEmail}
                 isWeekly={intent.paymentMode === "weekly"}
                 programName={program.name}
+                plan={intent.plan ?? null}
               />
             </Elements>
           </div>
