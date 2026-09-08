@@ -18,6 +18,7 @@
 // maths uses `today` from the API response, never the browser clock.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { getActiveWorkspaceSlug } from "@/lib/workspace-slug";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -538,7 +539,7 @@ function FineDetail({
         method: "POST",
         body,
         credentials: "include",
-        headers: { "X-Workspace-Slug": localStorage.getItem("clubos_workspace") || "united-sports-group" },
+        headers: { "X-Workspace-Slug": getActiveWorkspaceSlug() ?? localStorage.getItem("clubos_workspace") ?? "united-sports-group" },
       });
       if (!res.ok) {
         const msg = await res.json().catch(() => ({}));
