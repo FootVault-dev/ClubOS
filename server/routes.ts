@@ -1334,6 +1334,29 @@ export async function registerRoutes(
     return org ? { id: org.id, slug: org.slug } : null;
   }
 
+  // Which organisations' REGISTRATIONS may this request see? A registration
+  // carries a child's name, date of birth and medical notes, so this fails
+  // CLOSED, unlike workspaceOrg()'s "no header → no filter":
+  //   · super admin → the workspace named in the header, or every org with no header
+  //   · anyone else → the named workspace only if they are a MEMBER of it, or all
+  //                   of their own workspaces when no header is sent
+  // 2026-09-09: an admin whose only membership was Mini Football fetched 567
+  // rows across two clubs with no header (a fresh browser sends none until the
+  // workspace context has written localStorage), and all 524 CUFC rows by
+  // naming CUFC in the header. Found by screenshotting the MFL Registrations
+  // page as an ordinary MFL admin — the CUFC holiday camps were on it.
+  async function registrationOrgScope(req: Request): Promise<number[] | "all"> {
+    const user = req.session.userId ? await storage.getUser(req.session.userId) : null;
+    if (!user) return [];
+    const org = await workspaceOrg(req);
+    if (user.role === "super_admin") return org ? [org.id] : "all";
+    const mine = (await storage.getUserOrganizations(user.id)).map((o) => o.id);
+    if (org) return mine.includes(org.id) ? [org.id] : [];
+    return mine;
+  }
+  const inRegistrationScope = (scope: number[] | "all", orgId: number | null | undefined) =>
+    scope === "all" || (orgId != null && scope.includes(orgId));
+
   app.get("/api/admin/stats", requireAuth, async (req, res) => {
     try {
       const org = await workspaceOrg(req);
@@ -4347,18 +4370,16 @@ export async function registerRoutes(
   app.get("/api/admin/registrations", requireAuth, async (req, res) => {
     try {
       const campId = req.query.campId ? parseInt(req.query.campId as string) : undefined;
-      const org = await workspaceOrg(req);
+      const scope = await registrationOrgScope(req);
 
       // One batched read instead of ~5 queries per row. The old per-row
       // Promise.all fan-out exhausted the 15-connection pooler on CUFC's
       // ~450 registrations and 500'd this page with EMAXCONNSESSION.
       let regs = await storage.getRegistrationsForList({ programId: campId });
 
-      if (org) {
-        // A camp filter from another workspace returns nothing rather than
-        // leaking cross-club registrations.
-        regs = regs.filter((r: any) => !r.program?.organizationId || r.program.organizationId === org.id);
-      }
+      // Fail closed: a row whose programme has no organisation is nobody's to
+      // see, and a workspace the caller is not a member of yields nothing.
+      regs = regs.filter((r: any) => inRegistrationScope(scope, r.program?.organizationId));
       res.json(regs);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -4369,9 +4390,13 @@ export async function registerRoutes(
     try {
       const reg = await storage.getRegistration(parseInt(req.params.id));
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      const program = await storage.getProgram(reg.programId);
+      // Out of the caller's workspaces → 404, not 403: the id must not confirm existence.
+      if (!inRegistrationScope(await registrationOrgScope(req), program?.organizationId)) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
       const items = await storage.getRegistrationItems(reg.id);
       const contact = await storage.getContact(reg.contactId);
-      const program = await storage.getProgram(reg.programId);
       const servedBy = reg.servedByUserId ? await storage.getUser(reg.servedByUserId) : null;
       res.json({
         ...reg,
@@ -4390,6 +4415,10 @@ export async function registerRoutes(
       const regId = parseInt(req.params.id);
       const reg = await storage.getRegistration(regId);
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      const program = await storage.getProgram(reg.programId);
+      if (!inRegistrationScope(await registrationOrgScope(req), program?.organizationId)) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
       await storage.deleteRegistration(regId);
       res.json({ ok: true });
     } catch (error: any) {
@@ -4406,6 +4435,12 @@ export async function registerRoutes(
       const regId = parseInt(req.params.id);
       const reg = await storage.getRegistration(regId);
       if (!reg) return res.status(404).json({ message: "Registration not found" });
+      {
+        const program = await storage.getProgram(reg.programId);
+        if (!inRegistrationScope(await registrationOrgScope(req), program?.organizationId)) {
+          return res.status(404).json({ message: "Registration not found" });
+        }
+      }
 
       if (reg.status === "refunded") {
         return res.status(400).json({ message: "Registration is already fully refunded" });
