@@ -34,14 +34,31 @@ const SALES_ACCOUNT_CODE = process.env.XERO_SALES_ACCOUNT_CODE || "";
 const CLEARING_ACCOUNT_CODE = process.env.XERO_CLEARING_ACCOUNT_CODE || "";
 
 const REDIRECT_URI = process.env.XERO_REDIRECT_URI || "https://app.usg.co.nz/api/integrations/xero/callback";
+// 🔴 This Xero app is on Xero's GRANULAR scopes, so the BROAD ones are refused
+// with `invalid_scope` at the consent screen — the user never even reaches the
+// Allow button. Probed one at a time against the live authorize endpoint on
+// 2026-09-09: `accounting.transactions`, `accounting.transactions.read`,
+// `accounting.reports.read` and `accounting.journals.read` are all rejected,
+// while `accounting.settings`, `accounting.contacts` and `accounting.attachments`
+// are fine. The list below is the exact set that was granted.
+//
+// The rejected scopes are the ones this file asked for until now, which is why
+// the built-in connect flow had never successfully connected anything.
 const SCOPES = [
-  "openid", "profile", "email",
-  // Invoice push (existing — paid print orders)
-  "accounting.transactions", "accounting.contacts",
-  // Budget actuals (Phase 5a)
-  "accounting.reports.read",
+  "openid", "profile", "email", "offline_access",
+  // Writes a Receive Money for a Stripe payout — the granular replacement for
+  // the refused `accounting.transactions`.
+  "accounting.banktransactions",
+  // The chart of accounts, tracking categories and tax rates.
   "accounting.settings.read",
-  "offline_access",
+  // The contact a payout document is filed against.
+  "accounting.contacts",
+  // Budget actuals. NOT `accounting.reports.read`, which this app refuses.
+  "accounting.reports.profitandloss.read",
+  "accounting.invoices.read",
+  "accounting.payments.read",
+  // Term-fee deferral journals, later.
+  "accounting.manualjournals",
 ];
 
 function buildClient(): XeroClient {

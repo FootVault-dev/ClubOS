@@ -61,11 +61,27 @@ Category totals and the sheet for Victor: `category-map-for-victor.csv`.
 - ⚠️ **Two registrations share one PaymentIntent** (`pi_3Tpm22…`) — logged as a
   double match. Worth a look; it is a duplicate registration, not a posting bug.
 
-## The two gates before anything posts
+## The gates
 
-1. **Daniel: re-consent Xero** with `accounting.settings` + `accounting.transactions`.
-   The DataOS token is P&L-read-only and ClubOS has never been connected at all
-   (`org_integrations` holds no xero row).
+1. 🟢 **DONE 2026-09-09 — ClubOS is connected to Xero.** `script/connect-xero.ts`,
+   proven by `script/_verify-xero-connection.ts` (10/10): the chart reads back
+   359 accounts, 14 bank accounts, Victor's 10 new ones, the Funding tracking
+   category and 8 tax rates, all through the same `getXeroForOrg()` the poster
+   will use.
+   - 🔴 **This app is on Xero's GRANULAR scopes.** The broad ones are refused with
+     `invalid_scope` before the user can even press Allow:
+     `accounting.transactions`, `accounting.transactions.read`,
+     `accounting.reports.read`, `accounting.journals.read`. Those are exactly what
+     `server/xero.ts` asked for, which is why its built-in connect flow had never
+     connected anything. The write scope for a Receive Money is
+     **`accounting.banktransactions`**.
+   - 🔴 **The refresh token lives in `org_integrations`, not `.env`.** ClubOS owns
+     its own chain, so the DataOS collector's token is untouched — verified after
+     the fact: the daily P&L call still works. Two chains, neither rotating the
+     other's.
+   - ⚠️ **Deploy prerequisite:** prod ClubOS needs `XERO_CLIENT_ID` and
+     `XERO_CLIENT_SECRET` as Fly secrets or `getXeroForOrg()` cannot refresh. They
+     were added to the local `.env`; the Fly side is unverified (no CLI login).
 2. **Victor: fill in `category-map-for-victor.csv`** — an account code, a tax
    type and a tracking option per category. Eight categories carry real money;
    the rest are tiny or zero.
