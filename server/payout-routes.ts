@@ -88,6 +88,27 @@ const nzWhen = (unixSeconds: number) => NZ_WHEN.format(new Date(unixSeconds * 10
 // print the following day. (Deliberate exception to the usual NZ conversion.)
 const arrivalIso = (unixSeconds: number) => new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 
+/** The next banking day AFTER an ISO date, weekends skipped.
+ *
+ *  Stripe's dashboard calls this column "Arrive by" and it is an estimate, not
+ *  a promise: money that became available on the 9th arrived on the 10th, and
+ *  the weekend pushes Friday's money to Monday. Verified against six real
+ *  payouts — each one carried the money whose `available_on` was the previous
+ *  banking day.
+ *
+ *  🔴 A NZ public holiday can push it one further and this does not know the
+ *  holiday calendar, which is exactly why the column is labelled "Arrive by"
+ *  and never "Arrives". Worked entirely on the y-m-d parts: putting an ISO date
+ *  through local time is how this page once printed the wrong day. */
+function nextBankingDay(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  do {
+    t.setUTCDate(t.getUTCDate() + 1);
+  } while (t.getUTCDay() === 0 || t.getUTCDay() === 6);
+  return t.toISOString().slice(0, 10);
+}
+
 interface ResolvedRef {
   source:
     | "registration"
@@ -831,8 +852,8 @@ export function registerPayoutRoutes(app: Express) {
       const client = stripeFor(account);
       if (!client) {
         return res.json({
-          account, configured: false, inFlight: [], inFlightCents: 0,
-          pending: [], available: [], schedule: null,
+          account, configured: false, inFlight: [], upcoming: [],
+          totalCents: 0, currency: "NZD", schedule: null, reconciles: true,
         });
       }
 
@@ -842,11 +863,10 @@ export function registerPayoutRoutes(app: Express) {
         client.accounts.retrieve(),
       ]);
 
-      // 🔴 Stripe's `status` query filter is SILENTLY IGNORED on this account —
-      // asking for status:"in_transit" returns the same rows as no filter at
-      // all, every one of them `paid`. Filtering server-side would have printed
-      // "on its way to the bank" over deposits that landed a fortnight ago.
-      // Filter on each row's OWN status, and never re-introduce the query param.
+      // 🔴 Stripe's `status` query filter on payouts.list is SILENTLY IGNORED on
+      // these accounts — asking for in_transit returns the same rows as no
+      // filter, every one of them `paid`. Filter on each row's OWN status, and
+      // never re-introduce the query param.
       const inFlight = list.data
         .filter((p) => p.status === "pending" || p.status === "in_transit")
         .map((p) => ({
@@ -854,15 +874,54 @@ export function registerPayoutRoutes(app: Express) {
           amountCents: p.amount,
           currency: p.currency.toUpperCase(),
           status: p.status,
-          arrivalDate: arrivalIso(p.arrival_date),
-          createdAt: nzWhen(p.created),
-          automatic: p.automatic,
-          description: p.description ?? null,
-        }))
-        .sort((a, b) => a.arrivalDate.localeCompare(b.arrivalDate));
+          arriveBy: arrivalIso(p.arrival_date),
+        }));
 
-      const money = (rows: Stripe.Balance["pending"]) =>
-        rows.map((b) => ({ currency: b.currency.toUpperCase(), amountCents: b.amount }));
+      // ── The payouts Stripe has NOT created yet ──────────────────────────────
+      // Stripe's own dashboard lists these as "Upcoming" with an amount and an
+      // "Arrive by" date, and it derives them the same way: money still sitting
+      // in the PENDING balance, grouped by the day it becomes available. Proven
+      // against the dashboard — four buckets, four amounts, to the cent.
+      //
+      // Bounded by available_on rather than walking all history: pending money
+      // is by definition about to become available.
+      const nowSec = Math.floor(Date.now() / 1000);
+      const buckets = new Map<string, { amountCents: number; count: number; currency: string }>();
+      let scanned = 0;
+      for await (const t of client.balanceTransactions.list({
+        limit: 100,
+        available_on: { gte: nowSec - 14 * 86400 },
+      } as Stripe.BalanceTransactionListParams)) {
+        if (++scanned > 2000) break; // a hard ceiling, never an open-ended walk
+        if (t.status !== "pending") continue;
+        if (t.type === "payout") continue;
+        const day = arrivalIso(t.available_on);
+        const b = buckets.get(day) ?? { amountCents: 0, count: 0, currency: t.currency.toUpperCase() };
+        b.amountCents += t.net; // net — fees already taken out, as the bank sees it
+        b.count++;
+        buckets.set(day, b);
+      }
+
+      const today = arrivalIso(nowSec);
+      const upcoming = Array.from(buckets.entries())
+        .map(([availableOn, b]) => ({
+          availableOn,
+          // Money whose available day has already passed still cannot arrive
+          // before the next banking day from today.
+          arriveBy: nextBankingDay(availableOn < today ? today : availableOn),
+          amountCents: b.amountCents,
+          currency: b.currency,
+          transactionCount: b.count,
+        }))
+        .filter((u) => u.amountCents !== 0)
+        .sort((a, b) => a.arriveBy.localeCompare(b.arriveBy));
+
+      // 🔴 The buckets are DERIVED; the balance is authoritative. If they ever
+      // disagree the page must say so rather than quietly under-report money —
+      // that is the whole safety net under deriving this at all.
+      const pendingTotal = balance.pending.reduce((t, b) => t + b.amount, 0);
+      const bucketTotal = upcoming.reduce((t, u) => t + u.amountCents, 0);
+      const reconciles = bucketTotal === pendingTotal;
 
       const sch = (acct as any)?.settings?.payouts?.schedule ?? null;
 
@@ -870,10 +929,11 @@ export function registerPayoutRoutes(app: Express) {
         account,
         configured: true,
         inFlight,
-        // Only ever the sum of REAL payouts. The balance is never folded in.
-        inFlightCents: inFlight.reduce((t, p) => t + p.amountCents, 0),
-        pending: money(balance.pending),
-        available: money(balance.available),
+        upcoming,
+        totalCents: inFlight.reduce((t, p) => t + p.amountCents, 0) + bucketTotal,
+        currency: (balance.pending[0]?.currency ?? "nzd").toUpperCase(),
+        reconciles,
+        balancePendingCents: pendingTotal,
         schedule: sch
           ? {
               interval: sch.interval ?? null,
