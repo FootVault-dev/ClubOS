@@ -686,6 +686,13 @@ export const emailCampaigns = pgTable("email_campaigns", {
   replyTo: text("reply_to"),
   segmentType: text("segment_type").notNull(),
   segmentConfig: text("segment_config"),
+  // The EDITABLE design behind `body`, so a campaign can be reopened, duplicated
+  // and used as next month's starting point. `body` stays the compiled, sendable
+  // HTML — the one thing the send path reads — so an unreadable doc can never
+  // stop an email going out. Shape: { engine:'grapesjs-mjml', version, mjml,
+  // project } from the builder, or { engine:'html', html } from its small-screen
+  // fallback. Null on every campaign sent before 2026-09-09.
+  bodyDoc: jsonb("body_doc"),
   recipientCount: integer("recipient_count").default(0),
   sentCount: integer("sent_count").default(0),
   failedCount: integer("failed_count").default(0),

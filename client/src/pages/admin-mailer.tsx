@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, useEffect, Fragment } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect, Fragment, lazy, Suspense } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -13,6 +13,26 @@ import {
   Eye, Loader2, CheckCircle2, AlertCircle, Upload, Heading1,
   Heading2, Minus, RotateCcw, Search,
 } from "lucide-react";
+
+import { useWorkspace } from "@/lib/workspace-context";
+
+// The visual builder is a ~725KB GrapesJS bundle. Lazy so the Mailer's Setup
+// and Send steps stay light and it only streams in when you reach Content.
+const EmailBuilder = lazy(() => import("@/components/marketing/EmailBuilder"));
+
+// Which brand the canvas and the starter templates dress themselves in. The
+// keys are brand-themes.ts's; an unknown workspace gets the neutral theme
+// rather than another club's colours.
+const BRAND_BY_SLUG: Record<string, string> = {
+  "christchurch-united": "cufc",
+  "south-island-united": "siu",
+  "mini-football-leagues": "mfl",
+  "united-gymnastics": "cugc",
+  "united-sports-centre": "usc",
+  "christchurch-international-cup": "cic",
+  "united-sports-group": "usg",
+  "united-prints": "prints",
+};
 
 type SegmentData = {
   campId: number;
@@ -71,13 +91,16 @@ export default function AdminMailer() {
   const [subject, setSubject] = useState("");
   const [fromEmail, setFromEmail] = useState("CUFC Camps <noreply@cufc.co.nz>");
   const [replyTo, setReplyTo] = useState("info@cufc.co.nz");
-  const [showPreview, setShowPreview] = useState(false);
-  const editorRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [hasEditorContent, setHasEditorContent] = useState(false);
+  const { currentOrg } = useWorkspace();
+  const brandKey = BRAND_BY_SLUG[currentOrg?.slug ?? ""] ?? "";
+
   const [bodyHtml, setBodyHtml] = useState("");
-  const [fontFamily, setFontFamily] = useState("Inter, sans-serif");
-  const [fontSize, setFontSize] = useState("16");
+  // The editable design behind the HTML. Kept beside `bodyHtml` rather than
+  // instead of it: the send only ever reads the compiled HTML, so a design that
+  // fails to load can never stop an email going out.
+  const [bodyDoc, setBodyDoc] = useState<unknown | null>(null);
+  const [designSavedAt, setDesignSavedAt] = useState<Date | null>(null);
   const [textColor, setTextColor] = useState("#333333");
   const [bgColor, setBgColor] = useState("#ffffff");
   const textColorRef = useRef<HTMLInputElement>(null);
@@ -141,11 +164,45 @@ export default function AdminMailer() {
     },
   });
 
+  // The builder hands back the doc, the compiled email-safe HTML and a plain-text
+  // version in one go. `hasEditorContent` gates the Next button, so it tracks the
+  // TEXT: a design of nothing but a spacer is not something to email 3,800 people.
+  const handleDesignSave = useCallback((result: { doc: unknown; html: string; text: string }) => {
+    setBodyHtml(result.html);
+    setBodyDoc(result.doc);
+    setHasEditorContent((result.text || "").trim().length > 0);
+    setDesignSavedAt(new Date());
+  }, []);
+
+  // 🔴 Nothing in this page had ever called /test-send, so there was no way to
+  // see your own email before 3,800 people did. It posts the real subject and
+  // design through the same renderer as the live send, so what arrives is what
+  // they get — unsubscribe footer and all.
+  const [testEmail, setTestEmail] = useState("");
+  const testMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/admin/mailer/test-send", {
+        to: testEmail.trim(),
+        subject,
+        body: bodyHtml,
+        fromEmail,
+        replyTo,
+      }),
+    onSuccess: () =>
+      toast({
+        title: "Test sent",
+        description: `Check ${testEmail.trim()} — it is the real email, marked [TEST].`,
+      }),
+    onError: (e: any) =>
+      toast({ title: "Test failed", description: e?.message || "Could not send the test.", variant: "destructive" }),
+  });
+
   const sendMutation = useMutation({
     mutationFn: () =>
       apiRequest("POST", "/api/admin/mailer/send", {
         subject,
         body: bodyHtml,
+        bodyDoc,
         fromEmail,
         replyTo,
         segmentType,
@@ -165,8 +222,9 @@ export default function AdminMailer() {
       });
       setStep(0);
       setSubject("");
-      if (editorRef.current) editorRef.current.innerHTML = "";
       setBodyHtml("");
+      setBodyDoc(null);
+      setDesignSavedAt(null);
       setHasEditorContent(false);
       setManualEmails([]);
       setSegmentType("all");
@@ -188,50 +246,6 @@ export default function AdminMailer() {
     setManualEmails(prev => prev.filter(e => e !== email));
   }, []);
 
-  const execCmd = useCallback((cmd: string, value?: string) => {
-    document.execCommand(cmd, false, value);
-    editorRef.current?.focus();
-    setTimeout(() => setBodyHtml(editorRef.current?.innerHTML || ""), 0);
-  }, []);
-
-  const insertLink = useCallback(() => {
-    const url = prompt("Enter URL:");
-    if (url) execCmd("createLink", url);
-  }, [execCmd]);
-
-  const handleImageUpload = useCallback(async (file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = `<img src="${e.target?.result}" style="max-width:100%;height:auto;border-radius:8px;margin:12px 0;" />`;
-      execCmd("insertHTML", img);
-    };
-    reader.readAsDataURL(file);
-  }, [execCmd]);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    const files = e.dataTransfer.files;
-    if (files.length > 0) handleImageUpload(files[0]);
-  }, [handleImageUpload]);
-
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        e.preventDefault();
-        const file = item.getAsFile();
-        if (file) handleImageUpload(file);
-        return;
-      }
-    }
-  }, [handleImageUpload]);
-
-  useEffect(() => {
-    if (step === 1 && editorRef.current && bodyHtml && !editorRef.current.innerHTML.trim()) {
-      editorRef.current.innerHTML = bodyHtml;
-    }
-  }, [step]);
 
   const selectedCamp = segments.find(s => s.campId === selectedCampId);
   const selectedDate = selectedCamp?.dates.find(d => d.id === selectedDateId);
@@ -259,7 +273,9 @@ export default function AdminMailer() {
             {i > 0 && <ChevronRight className="w-4 h-4 text-white/20" />}
             <button
               onClick={() => i <= step ? setStep(i) : undefined}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              // min-h-11 on a phone: these three pills are how you move between
+              // steps, and 38px is under the size a thumb hits reliably.
+              className={`flex items-center gap-2 px-4 py-2 min-h-11 md:min-h-0 rounded-xl text-sm font-medium transition-all ${
                 i === step
                   ? "bg-blue-500/15 text-blue-400 border border-blue-500/25"
                   : i < step
@@ -450,7 +466,7 @@ export default function AdminMailer() {
               <Button
                 onClick={() => setStep(1)}
                 disabled={!canProceedSetup}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="h-11 md:h-9 bg-blue-600 hover:bg-blue-700 text-white"
                 data-testid="button-next-content"
               >
                 Next: Content
@@ -565,202 +581,70 @@ export default function AdminMailer() {
           </div>
 
           <div className="glass-card rounded-2xl p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Email Builder</h2>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowPreview(!showPreview)}
-                className="border-white/10 text-white/50 hover:bg-white/5 text-xs"
-                data-testid="button-toggle-preview"
-              >
-                <Eye className="w-3.5 h-3.5 mr-1.5" />
-                {showPreview ? "Edit" : "Preview"}
-              </Button>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Design</h2>
+                {/* There is no left or right pane on a phone, so the phone is
+                    not told to use one. */}
+                <p className="text-xs text-white/35 mt-1 max-w-xl hidden md:block">
+                  Drag a section in from the left, click any text to edit it, and style it on the right.
+                  Hit <span className="text-white/60 font-medium">Save design</span> when it looks right —
+                  that is what gets sent.
+                </p>
+                <p className="text-xs text-white/35 mt-1 max-w-xl md:hidden">
+                  Edit the email below and hit <span className="text-white/60 font-medium">Save</span> —
+                  that is what gets sent. The drag-and-drop designer needs a laptop.
+                </p>
+              </div>
+              {designSavedAt && (
+                <span
+                  className="text-xs text-emerald-400/80 flex items-center gap-1.5 shrink-0"
+                  data-testid="text-design-saved"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Design saved {designSavedAt.toLocaleTimeString("en-NZ", { hour: "numeric", minute: "2-digit" })}
+                </span>
+              )}
             </div>
 
-            {!showPreview && (
-              <>
-                <div className="flex flex-wrap items-center gap-1 p-2 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-                  <select
-                    value={fontFamily}
-                    onChange={e => { setFontFamily(e.target.value); execCmd("fontName", e.target.value); }}
-                    className="h-8 px-2 rounded-lg bg-white/[0.05] border border-white/[0.08] text-white/70 text-xs focus:outline-none"
-                    data-testid="select-font-family"
-                  >
-                    <option value="Inter, sans-serif">Inter</option>
-                    <option value="Arial, sans-serif">Arial</option>
-                    <option value="Georgia, serif">Georgia</option>
-                    <option value="'Times New Roman', serif">Times New Roman</option>
-                    <option value="'Courier New', monospace">Courier New</option>
-                    <option value="Verdana, sans-serif">Verdana</option>
-                    <option value="Tahoma, sans-serif">Tahoma</option>
-                    <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
-                    <option value="Impact, sans-serif">Impact</option>
-                  </select>
-
-                  <select
-                    value={fontSize}
-                    onChange={e => { setFontSize(e.target.value); execCmd("fontSize", e.target.value === "12" ? "1" : e.target.value === "14" ? "2" : e.target.value === "16" ? "3" : e.target.value === "18" ? "4" : e.target.value === "24" ? "5" : e.target.value === "32" ? "6" : "7"); }}
-                    className="h-8 px-2 rounded-lg bg-white/[0.05] border border-white/[0.08] text-white/70 text-xs focus:outline-none"
-                    data-testid="select-font-size"
-                  >
-                    <option value="12">12px</option>
-                    <option value="14">14px</option>
-                    <option value="16">16px</option>
-                    <option value="18">18px</option>
-                    <option value="24">24px</option>
-                    <option value="32">32px</option>
-                    <option value="48">48px</option>
-                  </select>
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <ToolBtn icon={Bold} cmd="bold" label="Bold" onClick={() => execCmd("bold")} />
-                  <ToolBtn icon={Italic} cmd="italic" label="Italic" onClick={() => execCmd("italic")} />
-                  <ToolBtn icon={Underline} cmd="underline" label="Underline" onClick={() => execCmd("underline")} />
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <ToolBtn icon={Heading1} label="Heading 1" onClick={() => execCmd("formatBlock", "h1")} />
-                  <ToolBtn icon={Heading2} label="Heading 2" onClick={() => execCmd("formatBlock", "h2")} />
-                  <button
-                    onClick={() => execCmd("formatBlock", "p")}
-                    className="h-8 w-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/70 hover:bg-white/[0.06] transition-all"
-                    title="Paragraph"
-                  >
-                    <Type className="w-3.5 h-3.5" />
-                  </button>
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <ToolBtn icon={AlignLeft} label="Align Left" onClick={() => execCmd("justifyLeft")} />
-                  <ToolBtn icon={AlignCenter} label="Align Center" onClick={() => execCmd("justifyCenter")} />
-                  <ToolBtn icon={AlignRight} label="Align Right" onClick={() => execCmd("justifyRight")} />
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <ToolBtn icon={List} label="Bullet List" onClick={() => execCmd("insertUnorderedList")} />
-                  <ToolBtn icon={ListOrdered} label="Numbered List" onClick={() => execCmd("insertOrderedList")} />
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <ToolBtn icon={LinkIcon} label="Insert Link" onClick={insertLink} />
-                  <ToolBtn icon={Minus} label="Horizontal Line" onClick={() => execCmd("insertHorizontalRule")} />
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <div className="relative">
-                    <button
-                      onClick={() => textColorRef.current?.click()}
-                      className="h-8 w-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/70 hover:bg-white/[0.06] transition-all relative"
-                      title="Text Color"
-                    >
-                      <Palette className="w-3.5 h-3.5" />
-                      <div className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-1 rounded-full" style={{ background: textColor }} />
-                    </button>
-                    <input
-                      ref={textColorRef}
-                      type="color"
-                      value={textColor}
-                      onChange={e => { setTextColor(e.target.value); execCmd("foreColor", e.target.value); }}
-                      className="absolute opacity-0 w-0 h-0"
-                      data-testid="input-text-color"
-                    />
+            {/* A definite height, but ONLY from md up. The three-pane shell
+                (palette · canvas · inspector) collapses to nothing inside an
+                auto-height parent, so on a laptop it gets 74vh — tall enough to
+                work in, short enough to leave Back/Next on screen.
+                🔴 Below 768px the builder swaps itself for the plain-HTML
+                fallback, which is ~950px of notice + editor + preview: inside a
+                fixed 74vh box with overflow-hidden the preview was cut off
+                entirely and could not be scrolled to. Height and clipping are
+                therefore desktop-only, and `md` here MUST stay in step with
+                useIsNarrow(767) in EmailBuilder — they are the same boundary. */}
+            <div
+              className="rounded-xl border border-white/10 bg-white md:overflow-hidden md:h-[74vh] md:min-h-[560px]"
+              data-testid="email-builder"
+            >
+              <Suspense
+                fallback={
+                  <div className="h-full flex items-center justify-center gap-2 text-sm text-gray-500">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading the builder…
                   </div>
-
-                  <div className="relative">
-                    <button
-                      onClick={() => bgColorRef.current?.click()}
-                      className="h-8 w-8 rounded-lg flex items-center justify-center hover:bg-white/[0.06] transition-all relative"
-                      title="Background Color"
-                    >
-                      <div className="w-4 h-4 rounded border border-white/20" style={{ background: bgColor }} />
-                    </button>
-                    <input
-                      ref={bgColorRef}
-                      type="color"
-                      value={bgColor}
-                      onChange={e => { setBgColor(e.target.value); execCmd("hiliteColor", e.target.value); }}
-                      className="absolute opacity-0 w-0 h-0"
-                      data-testid="input-bg-color"
-                    />
-                  </div>
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="h-8 px-3 rounded-lg flex items-center gap-1.5 text-white/40 hover:text-white/70 hover:bg-white/[0.06] transition-all text-xs"
-                    title="Upload Image"
-                    data-testid="button-upload-image"
-                  >
-                    <Image className="w-3.5 h-3.5" />
-                    <Upload className="w-3 h-3" />
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={e => { if (e.target.files?.[0]) handleImageUpload(e.target.files[0]); e.target.value = ""; }}
-                  />
-
-                  <div className="w-px h-6 bg-white/10 mx-1" />
-
-                  <button
-                    onClick={() => { if (editorRef.current) { editorRef.current.innerHTML = ""; setBodyHtml(""); setHasEditorContent(false); } }}
-                    className="h-8 w-8 rounded-lg flex items-center justify-center text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-all"
-                    title="Clear All"
-                    data-testid="button-clear-editor"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                <div
-                  ref={editorRef}
-                  contentEditable
-                  suppressContentEditableWarning
-                  onDrop={handleDrop}
-                  onDragOver={e => e.preventDefault()}
-                  onPaste={handlePaste}
-                  onInput={() => {
-                    const text = editorRef.current?.innerText?.trim() || "";
-                    setHasEditorContent(text.length > 0);
-                    setBodyHtml(editorRef.current?.innerHTML || "");
-                  }}
-                  className="min-h-[400px] p-6 rounded-xl bg-white text-gray-800 border border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/30 prose prose-sm max-w-none"
-                  style={{ fontFamily, fontSize: fontSize + "px", color: "#333", lineHeight: "1.6" }}
-                  data-testid="editor-body"
+                }
+              >
+                <EmailBuilder
+                  workspaceId={currentOrg?.id ?? 1}
+                  brandKey={brandKey}
+                  initialDoc={bodyDoc}
+                  initialHtml={bodyHtml}
+                  onSave={handleDesignSave}
+                  onDirty={() => setDesignSavedAt(null)}
                 />
-                <p className="text-xs text-white/30">Drag and drop images directly into the editor, or use the upload button. Paste images from clipboard.</p>
-              </>
-            )}
+              </Suspense>
+            </div>
 
-            {showPreview && (
-              <div className="rounded-xl border border-white/10 overflow-hidden">
-                <div className="bg-gray-100 p-3 border-b border-gray-200 flex items-center gap-2">
-                  <div className="flex gap-1.5">
-                    <div className="w-3 h-3 rounded-full bg-red-400" />
-                    <div className="w-3 h-3 rounded-full bg-yellow-400" />
-                    <div className="w-3 h-3 rounded-full bg-green-400" />
-                  </div>
-                  <span className="text-xs text-gray-500 ml-2">Email Preview</span>
-                </div>
-                <div className="bg-gray-50 p-4">
-                  <div className="max-w-[600px] mx-auto bg-white rounded-lg shadow-sm p-6 border border-gray-100">
-                    <div className="text-xs text-gray-400 mb-1">Subject: <span className="text-gray-700 font-medium">{subject || "(no subject)"}</span></div>
-                    <div className="text-xs text-gray-400 mb-4">From: {fromEmail}</div>
-                    <hr className="border-gray-100 mb-4" />
-                    <div
-                      className="prose prose-sm max-w-none"
-                      style={{ fontFamily, color: "#333", lineHeight: "1.6" }}
-                      dangerouslySetInnerHTML={{ __html: bodyHtml }}
-                    />
-                  </div>
-                </div>
-              </div>
+            {!designSavedAt && bodyHtml.trim().length > 0 && (
+              <p className="text-xs text-amber-400/70 flex items-center gap-1.5" data-testid="text-design-unsaved">
+                <AlertCircle className="w-3.5 h-3.5" />
+                You have changes that are not saved yet — press Save design in the builder.
+              </p>
             )}
           </div>
 
@@ -768,7 +652,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => setStep(0)}
               variant="outline"
-              className="border-white/10 text-white/60 hover:bg-white/5"
+              className="h-11 md:h-9 border-white/10 text-white/60 hover:bg-white/5"
               data-testid="button-back-setup"
             >
               <ChevronLeft className="w-4 h-4 mr-2" />
@@ -777,7 +661,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => setStep(2)}
               disabled={!canSend}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className="h-11 md:h-9 bg-blue-600 hover:bg-blue-700 text-white"
               data-testid="button-next-send"
             >
               Next: Review & Send
@@ -819,14 +703,50 @@ export default function AdminMailer() {
 
             <div className="rounded-xl border border-white/10 overflow-hidden">
               <div className="bg-gray-50 p-4">
-                <div className="max-w-[600px] mx-auto bg-white rounded-lg shadow-sm p-6 border border-gray-100">
-                  <div
-                    className="prose prose-sm max-w-none"
-                    style={{ fontFamily, color: "#333", lineHeight: "1.6" }}
-                    dangerouslySetInnerHTML={{ __html: bodyHtml }}
-                  />
-                </div>
+                {/* An iframe, not a div. The builder compiles a COMPLETE email
+                    document; dropping one into a div makes the browser discard
+                    its html/head/body and leaks the email's CSS into the admin,
+                    so the review would not show what the recipient gets. */}
+                <iframe
+                  title="Email preview"
+                  srcDoc={bodyHtml}
+                  sandbox=""
+                  className="w-full max-w-[640px] mx-auto block bg-white rounded-lg shadow-sm border border-gray-100"
+                  style={{ height: 560 }}
+                  data-testid="iframe-review-preview"
+                />
               </div>
+            </div>
+          </div>
+
+          <div className="glass-card rounded-2xl p-4 space-y-2">
+            <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Send yourself a test first</h2>
+            <p className="text-xs text-white/35">
+              The same email the list gets, subject prefixed with [TEST]. Worth doing every time —
+              it is the only place a broken image or an ugly line break shows up before it is too late.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Input
+                type="email"
+                value={testEmail}
+                onChange={(e) => setTestEmail(e.target.value)}
+                placeholder="you@cufc.co.nz"
+                className="premium-input text-white/80 flex-1 min-w-[220px]"
+                data-testid="input-test-email"
+              />
+              <Button
+                variant="outline"
+                onClick={() => testMutation.mutate()}
+                disabled={!testEmail.includes("@") || !bodyHtml.trim() || testMutation.isPending}
+                className="h-11 md:h-9 border-white/10 text-white/70 hover:bg-white/5"
+                data-testid="button-send-test"
+              >
+                {testMutation.isPending ? (
+                  <><Loader2 className="w-4 h-4 animate-spin mr-2" />Sending…</>
+                ) : (
+                  <><Eye className="w-4 h-4 mr-2" />Send test</>
+                )}
+              </Button>
             </div>
           </div>
 
@@ -834,7 +754,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => setStep(1)}
               variant="outline"
-              className="border-white/10 text-white/60 hover:bg-white/5"
+              className="h-11 md:h-9 border-white/10 text-white/60 hover:bg-white/5"
               data-testid="button-back-content"
             >
               <ChevronLeft className="w-4 h-4 mr-2" />
@@ -843,7 +763,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => sendMutation.mutate()}
               disabled={sendMutation.isPending}
-              className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white px-6"
+              className="h-11 md:h-9 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white px-6"
               data-testid="button-send-campaign"
             >
               {sendMutation.isPending ? (
