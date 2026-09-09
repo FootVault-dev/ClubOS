@@ -148,6 +148,44 @@ try {
       ok("the full builder mounted", m.hasGrapes || m.contentH > 0, `grapes=${m.hasGrapes}`);
     }
 
+    // Not clipped is not the same as reachable. ClubOS's admin scrolls in an
+    // inner pane, not the document, so this finds whatever actually scrolls and
+    // drives it to the bottom — the preview and the Next button have to be
+    // somewhere a thumb can get to.
+    if (mobile) {
+      const reach: any = await page.evaluate(`(function () {
+        var box = document.querySelector('[data-testid="email-builder"]');
+        var el = box ? box.parentElement : null;
+        var scroller = null;
+        while (el) {
+          var st = getComputedStyle(el);
+          if ((st.overflowY === "auto" || st.overflowY === "scroll") && el.scrollHeight > el.clientHeight + 4) { scroller = el; break; }
+          el = el.parentElement;
+        }
+        if (!scroller && document.scrollingElement && document.scrollingElement.scrollHeight > window.innerHeight + 4) scroller = document.scrollingElement;
+        if (!scroller) return { scrolled: false };
+        scroller.scrollTop = scroller.scrollHeight;
+        var iframe = box ? box.querySelector("iframe") : null;
+        var next = document.querySelector('[data-testid="button-next-send"]');
+        var ir = iframe ? iframe.getBoundingClientRect() : null;
+        var nr = next ? next.getBoundingClientRect() : null;
+        return {
+          scrolled: true,
+          previewOnScreen: !!ir && ir.top < window.innerHeight && ir.bottom > 0,
+          nextOnScreen: !!nr && nr.top < window.innerHeight && nr.bottom > 0,
+          nextTop: nr ? Math.round(nr.top) : null,
+          viewport: window.innerHeight
+        };
+      })()`);
+      await new Promise((r) => setTimeout(r, 600));
+      ok("the page scrolls", reach.scrolled === true);
+      ok("the live preview can be scrolled to", reach.previewOnScreen === true);
+      ok("Next: Review & Send can be reached", reach.nextOnScreen === true,
+        `top ${reach.nextTop} of ${reach.viewport}`);
+      await page.screenshot({ path: join(OUT, `${label}-scrolled.png`) });
+      console.log(`  → ${join(OUT, `${label}-scrolled.png`)}`);
+    }
+
     const shot = join(OUT, `${label}.png`);
     await page.screenshot({ path: shot, fullPage: false });
     console.log(`  → ${shot}`);
