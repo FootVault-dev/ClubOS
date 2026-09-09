@@ -186,6 +186,34 @@ function buildPrintOptions(printDollars: number): PrintOptions {
   };
 }
 
+/**
+ * The product slug is a CUSTOMER-FACING URL, so three inherited Shopify handles
+ * do not survive the move. They are duplication accidents from the Shopify
+ * admin, not names anybody chose:
+ *   "…-copy"  — someone duplicated the adult jersey to make the youth one
+ *   "…-1"     — a second product created over a deleted first one
+ * A shopper should never be sent to /2026-player-home-jersey-copy.
+ *
+ * Everything else keeps its Shopify handle deliberately, so the two stores
+ * describe products by the same name while both exist.
+ *
+ * NOTE the image FILES on disk are named from the original Shopify handle
+ * (that is how they were downloaded), so only `slug` is remapped here — never
+ * the `file` above, or the catalogue would point at images that do not exist.
+ */
+const SLUG_OVERRIDES: Record<string, string> = {
+  "2026-player-home-jersey-copy": "2026-player-home-jersey-youth",
+  "2026-player-third-jersey-youth-1": "2026-player-third-jersey-youth",
+  "fan-scarf-1": "2026-fan-scarf",
+  // Its youth sibling is already "2026-retro-collar-jersey-youth"; the adult
+  // one being "retro-kit" makes the pair look unrelated in a URL bar.
+  "retro-kit": "2026-retro-collar-jersey",
+};
+
+function publicSlug(handle: string): string {
+  return SLUG_OVERRIDES[handle] ?? handle;
+}
+
 function buildProduct(p: RawProduct, flags: string[]): BuildProduct {
   const hasPrinting = p.options.some((o) => o.name === "Printing");
   const sizeOption = p.options.find((o) => o.name === "Size");
@@ -243,7 +271,7 @@ function buildProduct(p: RawProduct, flags: string[]): BuildProduct {
   }));
 
   return {
-    slug: p.handle,
+    slug: publicSlug(p.handle),
     title: p.title,
     description: buildDescription(p),
     type: typeFor(p),
