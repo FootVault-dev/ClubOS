@@ -26,6 +26,16 @@ COPY . .
 RUN npm run build
 
 FROM node:20-slim AS runner
+
+# 🔴 The commit this image was built from, read at RUNTIME by GET /api/version
+# so deploy.sh can ask PRODUCTION what it runs instead of trusting a local
+# .last-deployed-sha (which is gitignored, so every worktree carries its own
+# and they disagree — that is how a live feature was deleted on 2026-09-09).
+# It MUST be declared here as well as in the builder: an ENV set in one stage
+# does not cross into another, so the builder's copy never reaches the running
+# container and the endpoint answered {"sha":null}.
+ARG GIT_SHA
+ENV BUILD_SHA=$GIT_SHA
 WORKDIR /app
 ENV NODE_ENV=production
 
