@@ -1,5 +1,6 @@
 /**
- * Store — MFL native e-commerce admin (Shopify replacement pilot).
+ * Store — native e-commerce admin (Shopify replacement pilot). Shared by
+ * every shop_* brand (MFL, CIC, CUFC…) — org-aware via useWorkspace().
  *
  * Three sections: Products (catalogue with colours, per-colour images and the
  * size/stock matrix), Orders (the fulfilment pipeline), Settings (shipping
@@ -163,7 +164,7 @@ export default function LeagueStore() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white" data-testid="text-store-title">Store</h1>
-          <p className="text-sm text-white/40 mt-1">Native MFL e-commerce — products, orders and fulfilment. Pilot replacement for Shopify.</p>
+          <p className="text-sm text-white/40 mt-1">Native e-commerce — products, orders and fulfilment. Pilot replacement for Shopify.</p>
         </div>
         <div className="flex items-center gap-3">
           {[
@@ -416,7 +417,7 @@ function ProductModal({ orgId, product, onCreated, onClose }: {
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2">
               <label className="text-xs text-white/40 mb-1 block">Title</label>
-              <Input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} className="premium-input text-white" placeholder="MFL Kit 2026" data-testid="input-product-title" />
+              <Input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} className="premium-input text-white" placeholder="2026 Home Shirt" data-testid="input-product-title" />
             </div>
             <div>
               <label className="text-xs text-white/40 mb-1 block">Type</label>
