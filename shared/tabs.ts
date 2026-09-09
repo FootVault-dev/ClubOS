@@ -345,12 +345,25 @@ const siuExtraTabs: TabDef[] = [
   { slug: "membership", title: "Membership", url: "/admin/membership" },
 ];
 
+// CUFC's native retail shop (2026-09) — the third brand on the shop_* engine
+// after MFL and CIC. CUFC-only: SIU shares the "camps" workspace type but
+// must NOT gain this tab (nor must United Gymnastics, a different workspace
+// type entirely).
+const cufcExtraTabs: TabDef[] = [
+  { slug: "store", title: "Store", url: "/admin/store" },
+];
+
 export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
   const base = TABS_BY_WORKSPACE_TYPE[workspaceTypeFor(orgSlug)];
   if (orgSlug === "south-island-united") {
     const main = base.filter((t) => !t.secondary);
     const secondary = base.filter((t) => t.secondary);
     return [...main, ...siuExtraTabs, ...secondary];
+  }
+  if (orgSlug === "christchurch-united") {
+    const main = base.filter((t) => !t.secondary);
+    const secondary = base.filter((t) => t.secondary);
+    return [...main, ...cufcExtraTabs, ...secondary];
   }
   return base;
 }

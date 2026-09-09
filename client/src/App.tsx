@@ -671,6 +671,11 @@ function AdminRouter() {
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
       <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
       <Route path="/admin/discounts" component={AdminDiscounts} />
+      {/* CUFC Store — the third brand on the shop_* engine (org 1), after
+          MFL and CIC. Tab slug "store", CUFC-only (see cufcExtraTabs in
+          shared/tabs.ts) — same route component the other two brands use,
+          it's already org-aware via useWorkspace().currentOrg.id. */}
+      <Route path="/admin/store" component={LeagueStore} />
       <Route path="/admin/domains" component={AdminDomainSettings} />
       <Route path="/admin/settings" component={AdminSettings} />
       <Route path="/admin/team" component={AdminTeam} />
