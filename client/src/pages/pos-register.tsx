@@ -183,6 +183,7 @@ export default function PosRegister() {
   const [openingForPlayer, setOpeningForPlayer] = useState(false);
   const [floatDollars, setFloatDollars] = useState("100.00");
   const [recentOpen, setRecentOpen] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
 
   const register = useMemo(() => boot.data?.registers.find((r) => r.id === registerId) ?? boot.data?.registers[0] ?? null, [boot.data, registerId]);
   useEffect(() => { if (register && register.id !== registerId) { setRegisterId(register.id); ls.set("clubos_pos_register", String(register.id)); } }, [register, registerId]);
@@ -304,15 +305,15 @@ export default function PosRegister() {
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-[#ededed] text-neutral-900" data-testid="pos-register">
       {/* Header */}
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 bg-white border-b border-neutral-200">
+      <div className="flex items-center gap-2 px-3 py-2.5 bg-white border-b border-neutral-200">
         <ShoppingBag className="h-5 w-5 text-neutral-700" />
-        <div className="mr-auto">
-          <div className="text-[15px] font-semibold leading-tight">{register.name}</div>
-          <div className="text-[12px] text-neutral-500">{shift ? `Shift open · ${shift.openedByName ?? "staff"} · float ${$(shift.openingFloatCents)}` : "No shift open"}</div>
+        <div className="mr-auto min-w-0 flex-1">
+          <div className="text-[15px] font-semibold leading-tight truncate">{register.name}</div>
+          <div className="text-[12px] text-neutral-500 truncate">{shift ? `Shift open · ${shift.openedByName ?? "staff"} · float ${$(shift.openingFloatCents)}` : "No shift open"}</div>
         </div>
-        {shift && <button className={btnGhost} onClick={() => setRecentOpen(true)} data-testid="pos-recent"><Receipt className="h-4 w-4" />Sales</button>}
-        {shift && <button className={btnGhost} onClick={() => setDeclineOpen(true)} data-testid="pos-decline"><AlertTriangle className="h-4 w-4" />Couldn't pay</button>}
-        {shift && <button className={btnGhost} onClick={() => setCashupOpen(true)} data-testid="pos-cashup"><Banknote className="h-4 w-4" />Cash up</button>}
+        {shift && <button className={`${btnGhost} px-3`} onClick={() => setRecentOpen(true)} data-testid="pos-recent" title="This shift's sales"><Receipt className="h-4 w-4" /><span className="hidden sm:inline">Sales</span></button>}
+        {shift && <button className={`${btnGhost} px-3`} onClick={() => setDeclineOpen(true)} data-testid="pos-decline" title="Couldn't pay"><AlertTriangle className="h-4 w-4" /><span className="hidden sm:inline">Couldn't pay</span></button>}
+        {shift && <button className={`${btnGhost} px-3`} onClick={() => setCashupOpen(true)} data-testid="pos-cashup" title="Cash up"><Banknote className="h-4 w-4" /><span className="hidden sm:inline">Cash up</span></button>}
       </div>
 
       {!shift ? (
@@ -324,7 +325,7 @@ export default function PosRegister() {
           <button className={`${btnPrimary} w-full mt-4`} disabled={openShift.isPending} onClick={() => openShift.mutate()} data-testid="pos-open-shift-btn">{openShift.isPending && <Loader2 className="h-4 w-4 animate-spin" />}Open shift</button>
         </div>
       ) : (
-        <div className="grid md:grid-cols-[1fr_400px] gap-3 p-3">
+        <div className="grid md:grid-cols-[1fr_400px] gap-3 p-3 pb-28 md:pb-3">
           {/* ── Left: what's for sale ── */}
           <div className="min-w-0">
             <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1">
@@ -378,8 +379,11 @@ export default function PosRegister() {
             {tab === "custom" && <CustomLine brands={brands.filter((b) => b.slug !== "sandbox")} defaultOrg={brand ?? register.defaultOrgId ?? 1} onAdd={(body) => addLine.mutate(body)} pending={addLine.isPending} />}
           </div>
 
-          {/* ── Right: the cart ── */}
-          <div className="md:sticky md:top-3 self-start">
+          {/* ── Right: the cart. On a phone it lives in a sheet reached from
+                 the fixed bottom bar, because a merch stand cannot scroll past
+                 the whole catalogue to take money. ── */}
+          <div className={`md:sticky md:top-3 self-start ${cartOpen ? "fixed inset-x-0 top-14 h-[calc(100%-3.5rem)] z-50 overflow-y-auto bg-[#ededed] p-3 pb-24 md:static md:h-auto md:z-auto md:p-0" : "hidden md:block"}`}>
+            {cartOpen && <button className={`${btnGhost} w-full mb-2 md:hidden`} onClick={() => setCartOpen(false)} data-testid="pos-cart-close"><X className="h-4 w-4" />Back to the products</button>}
             <div className="bg-white rounded-2xl border border-neutral-200 shadow-sm overflow-hidden" data-testid="pos-cart">
               <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-100">
                 <div className="text-[13px] font-semibold">{s ? s.saleNumber : done ? done.saleNumber : "New sale"}{s && <span className="ml-2 text-[11px] font-normal text-neutral-500">{boot.data.brands.find((b) => b.account === s.moneyAccount && b.slug !== "sandbox") ? (s.moneyAccount === "club" ? "club account" : s.moneyAccount === "cugc" ? "gymnastics account" : "trust account") : s.moneyAccount}</span>}</div>
@@ -443,6 +447,21 @@ export default function PosRegister() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Phone: total and Charge always under the thumb. */}
+      {shift && (
+        <div className="md:hidden fixed inset-x-0 bottom-0 z-40 bg-white border-t border-neutral-200 px-3 py-2.5 flex items-center gap-3" style={{ paddingBottom: "calc(0.625rem + env(safe-area-inset-bottom))" }} data-testid="pos-bottom-bar">
+          <button className="text-left min-w-0 flex-1" onClick={() => setCartOpen(true)} data-testid="pos-bottom-cart">
+            <div className="text-[11px] text-neutral-500">{s ? `${s.lines.length} item${s.lines.length === 1 ? "" : "s"} · tap to review` : done ? done.saleNumber : "No sale yet"}</div>
+            <div className="text-[18px] font-bold leading-tight">{$(s ? s.remainingCents : done ? done.totalCents : 0)}</div>
+          </button>
+          {done
+            ? <button className={btnPrimary} onClick={() => { setSaleId(null); ls.set("clubos_pos_sale", null); }} data-testid="pos-bottom-new">New sale</button>
+            : s && s.lines.length > 0 && s.totalCents === 0
+              ? <button className={btnPrimary} disabled={complete.isPending} onClick={() => complete.mutate()} data-testid="pos-bottom-complete"><CheckCircle2 className="h-5 w-5" />Finish</button>
+              : <button className={btnPrimary} disabled={!s || s.lines.length === 0} onClick={() => setTenderOpen(true)} data-testid="pos-bottom-charge"><CreditCard className="h-5 w-5" />Charge</button>}
         </div>
       )}
 
