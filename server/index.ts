@@ -283,6 +283,12 @@ app.use(attributionCookieMiddleware);
   const { registerFinesRoutes } = await import("./fines-routes");
   registerFinesRoutes(app);
 
+  // POS — one register for every brand, every programme, every counter. Gated by
+  // requireTab("pos"); NOT super-admin-locked (Olga, Travis, Zach, Isaac). Money
+  // rules live in Postgres (migrations/2026-09-09_pos.sql).
+  const { registerPosRoutes } = await import("./pos-routes");
+  registerPosRoutes(app);
+
   // Coding Budget — Victor's FY2026 chart of accounts (882 codes) and the
   // transactions mapped against it. Locked to super admins: code 21 names
   // eleven staff against their salaries.

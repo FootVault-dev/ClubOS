@@ -138,13 +138,23 @@ export function RegisterPlayerModal({
   open,
   onClose,
   scope = "all",
+  posSaleId,
+  onRegistered,
 }: {
   open: boolean;
   onClose: () => void;
   scope?: "academy" | "camp" | "all";
+  /**
+   * Opened from the ClubOS register (2026-09-09): the registration is created
+   * PENDING and linked to this sale, and the register takes the money — so the
+   * payment step here is fixed to "not paid yet" and cannot be flipped.
+   */
+  posSaleId?: number;
+  onRegistered?: (data: { registrationId: number; totalCents: number; status: string }) => void;
 }) {
   const { toast } = useToast();
   const [step, setStep] = useState(0);
+  const fromRegister = typeof posSaleId === "number" && posSaleId > 0;
 
   const [selectedProgramId, setSelectedProgramId] = useState<number | null>(null);
 
@@ -196,6 +206,7 @@ export function RegisterPlayerModal({
 
   // ── Payment (both shapes) ─────────────────────────────────────────────────
   const [isPaid, setIsPaid] = useState(true);
+  useEffect(() => { if (open && fromRegister) setIsPaid(false); }, [open, fromRegister]);
   const [method, setMethod] = useState<string>("eftpos");
   const [amountDollars, setAmountDollars] = useState("");
   const [amountTouched, setAmountTouched] = useState(false);
@@ -316,11 +327,12 @@ export function RegisterPlayerModal({
   const registerMutation = useMutation({
     mutationFn: async () => {
       const payment = {
-        isPaid,
-        method: isPaid ? method : null,
+        isPaid: fromRegister ? false : isPaid,
+        method: !fromRegister && isPaid ? method : null,
         reference: reference.trim() || null,
-        amountPaidCents: isPaid ? paidCents : 0,
+        amountPaidCents: !fromRegister && isPaid ? paidCents : 0,
       };
+      const posLink = fromRegister ? { posSaleId } : {};
 
       if (shape === "academy") {
         const res = await apiRequest("POST", "/api/admin/registrations/manual", {
@@ -360,6 +372,7 @@ export function RegisterPlayerModal({
           priceOverrideReason: priceApplies ? priceReason.trim() : undefined,
           payment,
           servedByUserId: servedById,
+          ...posLink,
         });
         return res.json();
       }
@@ -380,6 +393,7 @@ export function RegisterPlayerModal({
         items: expandedItems,
         payment,
         servedByUserId: servedById,
+        ...posLink,
       });
       return res.json();
     },
@@ -404,6 +418,7 @@ export function RegisterPlayerModal({
           description: `Missing: ${data.nzfMissing.join(", ")}. Add them on the player's contact record before the audit.`,
         });
       }
+      if (fromRegister && onRegistered) onRegistered({ registrationId: data.registrationId, totalCents: data.totalCents, status: data.status });
       resetForm();
       onClose();
     },
@@ -1110,7 +1125,12 @@ export function RegisterPlayerModal({
                 )}
               </div>
 
-              <div className="flex gap-2">
+              {fromRegister && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px]" data-testid="pos-paid-at-register">
+                  Payment is taken at the register once this is saved — the registration is created unpaid and confirmed when the sale is paid.
+                </div>
+              )}
+              <div className={`flex gap-2 ${fromRegister ? "hidden" : ""}`}>
                 <button
                   onClick={() => setIsPaid(true)}
                   className={`flex-1 px-3 py-2.5 rounded-lg border text-[12px] transition-colors ${isPaid ? "bg-emerald-500/10 border-emerald-500/30 text-white/85" : "bg-background border-input text-foreground"}`}

@@ -4850,6 +4850,17 @@ export async function registerRoutes(
        * A short payment is allowed (part-payments happen at a counter) but it
        * never confirms the registration: only paying the full amount does.
        */
+      // Started from the ClubOS register (2026-09-09): the registration is
+      // created PENDING and linked to the sale; the register's payment confirms
+      // it with the tender, reference and who served, in fulfilPaidSale().
+      // A pending row is checkout scaffolding, hidden from staff by the
+      // unpaid-is-not-registered rule until the money lands.
+      const posSaleIdRaw = Number(body.posSaleId);
+      const posLink: Record<string, unknown> = Number.isFinite(posSaleIdRaw) && posSaleIdRaw > 0 ? { posSaleId: posSaleIdRaw } : {};
+      if (Object.keys(posLink).length && isPaid) {
+        return res.status(400).json({ message: "A registration started from the register is paid AT the register — leave it unpaid here." });
+      }
+
       const paymentFieldsFor = (totalCents: number) => {
         const requested = Number(payment.amountPaidCents);
         const paidCents = isPaid
@@ -5167,6 +5178,7 @@ export async function registerRoutes(
           policyVersion: policyAccepted ? ACADEMY_POLICY_VERSION : null,
           nzfConsentAt: policyAccepted ? now : null,
           ...fields,
+          ...posLink,
         } as any);
 
         if (fullyPaid) await storage.assignOrderNumber(reg.id);
@@ -5296,7 +5308,8 @@ export async function registerRoutes(
         registrationLocation: "cufc_office",
         source: "admin_manual",
         ...fields,
-      });
+        ...posLink,
+      } as any);
 
       if (fullyPaid) {
         await storage.assignOrderNumber(registration.id);
@@ -17898,7 +17911,14 @@ export async function registerRoutes(
         const paymentIntent = event.data.object as any;
         const regType = paymentIntent.metadata?.registrationType;
         const registrationId = parseInt(paymentIntent.metadata?.registrationId);
-        if (paymentIntent.metadata?.kind === "club_event" && paymentIntent.metadata?.clubEventOrderId) {
+        if (paymentIntent.metadata?.kind === "pos_sale" && paymentIntent.metadata?.posSaleId) {
+          // Register (POS) card payment through a Stripe reader. Idempotent —
+          // the register's own confirm call and this webhook race to the same
+          // `WHERE status = 'pending'` flip, and fulfilment stamps fulfilled_at
+          // once. MUST precede the generic registrationId branch.
+          const { markPosPaymentSucceededByIntent } = await import("./pos-routes");
+          await markPosPaymentSucceededByIntent(paymentIntent);
+        } else if (paymentIntent.metadata?.kind === "club_event" && paymentIntent.metadata?.clubEventOrderId) {
           // Club Events (ticketed dinners etc.). Idempotent: an atomic status flip.
           const { markPaidByPaymentIntent } = await import("./club-events");
           await markPaidByPaymentIntent(paymentIntent);

@@ -494,6 +494,8 @@ export const registrations = pgTable("registrations", {
   // Who took the money. ON DELETE RESTRICT: deleting a staff member must never
   // erase the record of who handled a cash payment. Deactivate, don't delete.
   servedByUserId: integer("served_by_user_id").references(() => users.id, { onDelete: "restrict" }),
+  /** The register sale this was paid in, when paid at the ClubOS POS (2026-09-09). FK lives in the migration. */
+  posSaleId: integer("pos_sale_id"),
   // When the money changed hands — distinct from registeredAt, which is when
   // the row was typed in. A till reconciliation needs the payment's clock.
   // withTimezone because a bare timestamp read back through a JS Date is
@@ -9136,3 +9138,154 @@ export const clubEventLog = pgTable("club_event_log", {
   eventIdx: index("club_event_log_event_idx").on(t.eventId, t.at),
 }));
 export type ClubEventLogRow = typeof clubEventLog.$inferSelect;
+
+
+// ─── POS — one register for every brand (migrations/2026-09-09_pos.sql) ──────
+// Money rules (totals, paid state, refund caps, bucket consistency, frozen lines)
+// are triggers and CHECKs in the migration; these definitions only describe the
+// shape. Vocabulary in shared/pos.ts.
+export const posOrgMoneyAccounts = pgTable("pos_org_money_accounts", {
+  organizationId: integer("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  account: text("account").notNull(),
+  updatedAt: timestamp("updated_at", tz).defaultNow().notNull(),
+});
+export type PosOrgMoneyAccount = typeof posOrgMoneyAccounts.$inferSelect;
+
+export const posRegisters = pgTable("pos_registers", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  location: text("location"),
+  defaultOrgId: integer("default_org_id").references(() => organizations.id, { onDelete: "set null" }),
+  stripeLocationId: text("stripe_location_id"),
+  stripeReaderId: text("stripe_reader_id"),
+  active: boolean("active").notNull().default(true),
+  createdByUserId: integer("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", tz).defaultNow().notNull(),
+});
+export type PosRegister = typeof posRegisters.$inferSelect;
+
+export const posShifts = pgTable("pos_shifts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  registerId: integer("register_id").notNull().references(() => posRegisters.id, { onDelete: "restrict" }),
+  openedByUserId: integer("opened_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  openedAt: timestamp("opened_at", tz).defaultNow().notNull(),
+  openingFloatCents: integer("opening_float_cents").notNull().default(0),
+  closedByUserId: integer("closed_by_user_id").references(() => users.id, { onDelete: "restrict" }),
+  closedAt: timestamp("closed_at", tz),
+  closingCashCountedCents: integer("closing_cash_counted_cents"),
+  notes: text("notes"),
+}, (t) => ({
+  registerIdx: index("pos_shifts_register_idx").on(t.registerId, t.openedAt),
+}));
+export type PosShift = typeof posShifts.$inferSelect;
+
+export const posSales = pgTable("pos_sales", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  /** R-000001 — set by a DB trigger on insert. */
+  saleNumber: text("sale_number").notNull().default(""),
+  token: uuid("token").notNull().default(sql`gen_random_uuid()`),
+  registerId: integer("register_id").notNull().references(() => posRegisters.id, { onDelete: "restrict" }),
+  shiftId: integer("shift_id").notNull().references(() => posShifts.id, { onDelete: "restrict" }),
+  moneyAccount: text("money_account").notNull(),
+  /** open | paid | void | refunded | partially_refunded */
+  status: text("status").notNull().default("open"),
+  subtotalCents: integer("subtotal_cents").notNull().default(0),
+  discountCents: integer("discount_cents").notNull().default(0),
+  discountReason: text("discount_reason"),
+  roundingCents: integer("rounding_cents").notNull().default(0),
+  surchargeCents: integer("surcharge_cents").notNull().default(0),
+  totalCents: integer("total_cents").notNull().default(0),
+  gstCents: integer("gst_cents").notNull().default(0),
+  paidCents: integer("paid_cents").notNull().default(0),
+  refundedCents: integer("refunded_cents").notNull().default(0),
+  contactId: integer("contact_id").references(() => contacts.id, { onDelete: "restrict" }),
+  customerName: text("customer_name"),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+  marketingOptInAt: timestamp("marketing_opt_in_at", tz),
+  servedByUserId: integer("served_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  notes: text("notes"),
+  receiptSentAt: timestamp("receipt_sent_at", tz),
+  fulfilledAt: timestamp("fulfilled_at", tz),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", tz).defaultNow().notNull(),
+  paidAt: timestamp("paid_at", tz),
+  voidedAt: timestamp("voided_at", tz),
+  voidReason: text("void_reason"),
+}, (t) => ({
+  shiftIdx: index("pos_sales_shift_idx").on(t.shiftId, t.status),
+  registerIdx: index("pos_sales_register_idx").on(t.registerId, t.createdAt),
+}));
+export type PosSale = typeof posSales.$inferSelect;
+
+export const posSaleLines = pgTable("pos_sale_lines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  saleId: integer("sale_id").notNull().references(() => posSales.id, { onDelete: "cascade" }),
+  /** variant | registration | event_ticket | custom */
+  kind: text("kind").notNull(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "restrict" }),
+  variantId: integer("variant_id").references(() => shopVariants.id, { onDelete: "set null" }),
+  productId: integer("product_id").references(() => shopProducts.id, { onDelete: "set null" }),
+  registrationId: integer("registration_id").references(() => registrations.id, { onDelete: "restrict" }),
+  clubEventTicketTypeId: integer("club_event_ticket_type_id").references(() => clubEventTicketTypes.id, { onDelete: "restrict" }),
+  clubEventOrderId: integer("club_event_order_id").references(() => clubEventOrders.id, { onDelete: "restrict" }),
+  title: text("title").notNull(),
+  detail: text("detail"),
+  unitCents: integer("unit_cents").notNull(),
+  qty: integer("qty").notNull(),
+  lineCents: integer("line_cents").notNull(),
+  meta: jsonb("meta"),
+  sort: integer("sort").notNull().default(0),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+}, (t) => ({
+  saleIdx: index("pos_sale_lines_sale_idx").on(t.saleId, t.sort),
+}));
+export type PosSaleLine = typeof posSaleLines.$inferSelect;
+
+export const posPayments = pgTable("pos_payments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  saleId: integer("sale_id").notNull().references(() => posSales.id, { onDelete: "restrict" }),
+  /** cash | eftpos | card_present | bank_transfer | other */
+  method: text("method").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  reference: text("reference"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  /** pending | succeeded | failed | canceled */
+  status: text("status").notNull().default("succeeded"),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+  succeededAt: timestamp("succeeded_at", tz),
+}, (t) => ({
+  saleIdx: index("pos_payments_sale_idx").on(t.saleId),
+}));
+export type PosPayment = typeof posPayments.$inferSelect;
+
+export const posRefunds = pgTable("pos_refunds", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  saleId: integer("sale_id").notNull().references(() => posSales.id, { onDelete: "restrict" }),
+  paymentId: integer("payment_id").references(() => posPayments.id, { onDelete: "restrict" }),
+  method: text("method").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  reason: text("reason").notNull(),
+  stripeRefundId: text("stripe_refund_id"),
+  issuedByUserId: integer("issued_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+}, (t) => ({
+  saleIdx: index("pos_refunds_sale_idx").on(t.saleId),
+}));
+export type PosRefund = typeof posRefunds.$inferSelect;
+
+export const posDeclines = pgTable("pos_declines", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  registerId: integer("register_id").notNull().references(() => posRegisters.id, { onDelete: "restrict" }),
+  shiftId: integer("shift_id").references(() => posShifts.id, { onDelete: "restrict" }),
+  reason: text("reason").notNull(),
+  amountCents: integer("amount_cents"),
+  note: text("note"),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", tz).defaultNow().notNull(),
+}, (t) => ({
+  registerIdx: index("pos_declines_register_idx").on(t.registerId, t.createdAt),
+}));
+export type PosDecline = typeof posDeclines.$inferSelect;
