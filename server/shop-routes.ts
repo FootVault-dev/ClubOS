@@ -92,6 +92,27 @@ const SHOP_BRANDS: Record<string, ShopBrand> = {
     ],
     storefrontBase: "https://shop.cicyouth.com",
   },
+  cufc: {
+    brandKey: "cufc",
+    orgId: 1,
+    storeName: "Christchurch United Shop",
+    orderPrefix: "CUFC",
+    assetBase: "https://join.cufc.co.nz",
+    currency: "NZD",
+    adminEmail: "info@cufc.co.nz",
+    allowedOrigins: [
+      /^https:\/\/(www\.)?cufc\.co\.nz$/,
+      /^https:\/\/shop\.cufc\.co\.nz$/,
+      /^https:\/\/(www\.)?cufcshop\.com$/,
+    ],
+    // Player Pay / team-link building ONLY (coach + player-share pay links) —
+    // CUFC's retail shop has no team-kit-group-payment flow today. Points at
+    // the Shopify domain Daniel already owns so a stray link (nothing sends
+    // one today) at least resolves to a real, on-brand site instead of a
+    // storefront that doesn't exist yet.
+    // TODO cutover → replace with the real CUFC storefront once it's built.
+    storefrontBase: "https://cufcshop.com",
+  },
 };
 
 function shopBrand(brandKey: string): ShopBrand | undefined {
@@ -505,6 +526,7 @@ export async function finalizeShopOrderPaid(orderId: number, paymentIntentId: st
       totalCents: order.totalCents,
       requiresAddress,
       addressSummary,
+      brandKey: brand?.brandKey,
     });
   } catch (e) {
     console.error("[Shop] confirmation email failed:", e);
@@ -521,6 +543,7 @@ export async function finalizeShopOrderPaid(orderId: number, paymentIntentId: st
       shippingLabel: order.shippingLabel,
       requiresAddress,
       addressSummary,
+      brandKey: brand?.brandKey,
     });
   } catch (e) {
     console.error("[Shop] admin notification email failed:", e);
@@ -2035,6 +2058,7 @@ export function registerShopRoutes(app: Express) {
       }
       const items = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
       const requiresAddress = !!order.addressLine1;
+      const brand = shopBrandByOrgId(order.organizationId);
       const ok = await sendShopOrderConfirmation({
         to: order.email,
         firstName: order.firstName,
@@ -2051,6 +2075,7 @@ export function registerShopRoutes(app: Express) {
         addressSummary: requiresAddress
           ? [order.addressLine1, order.addressLine2, order.suburb, order.city, order.postcode].filter(Boolean).join(", ")
           : null,
+        brandKey: brand?.brandKey,
       });
       res.json({ ok });
     } catch (e: any) {

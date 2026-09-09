@@ -63,10 +63,13 @@ const campsTabs: TabDef[] = [
   { slug: "registrations", title: "Registrations", url: "/admin/registrations" },
   { slug: "contacts", title: "Contacts", url: "/admin/contacts" },
   { slug: "volunteers", title: "Volunteers", url: "/admin/volunteers" },
+  // ONE mailer in this workspace (Daniel, 2026-09-09). A second sender lived
+  // here as slug "cufc-mailer" / sidebar "Newsletters" (Play Predictor entrants
+  // + guardian contacts) and had sent nothing in two months, while this one had
+  // sent every real campaign — including the 3,830-recipient cancellation
+  // notice. Two boxes that both say "send an email to families" is a way to
+  // send the wrong one. Page + API remain in git history.
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },
-  // CUFC newsletter mailer (Play Predictor entrants + guardian contacts) —
-  // distinct from the camps-segment "mailer" wizard above.
-  { slug: "cufc-mailer", title: "Mailer", url: "/admin/cufc-mailer" },
   // Play Predictor — first-team score predictions, leaderboards + prizes.
   { slug: "predictor", title: "Play Predictor", url: "/admin/predictor" },
   // 10 years of Friendly Manager registrations + payments, imported 2026-07-14.
@@ -370,12 +373,25 @@ const siuExtraTabs: TabDef[] = [
   { slug: "membership", title: "Membership", url: "/admin/membership" },
 ];
 
+// CUFC's native retail shop (2026-09) — the third brand on the shop_* engine
+// after MFL and CIC. CUFC-only: SIU shares the "camps" workspace type but
+// must NOT gain this tab (nor must United Gymnastics, a different workspace
+// type entirely).
+const cufcExtraTabs: TabDef[] = [
+  { slug: "store", title: "Store", url: "/admin/store" },
+];
+
 export function tabsForOrgSlug(orgSlug: string | undefined | null): TabDef[] {
   const base = TABS_BY_WORKSPACE_TYPE[workspaceTypeFor(orgSlug)];
   if (orgSlug === "south-island-united") {
     const main = base.filter((t) => !t.secondary);
     const secondary = base.filter((t) => t.secondary);
     return [...main, ...siuExtraTabs, ...secondary];
+  }
+  if (orgSlug === "christchurch-united") {
+    const main = base.filter((t) => !t.secondary);
+    const secondary = base.filter((t) => t.secondary);
+    return [...main, ...cufcExtraTabs, ...secondary];
   }
   return base;
 }

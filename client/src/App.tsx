@@ -20,7 +20,6 @@ import AdminRegistrations from "@/pages/admin-registrations";
 import AdminContacts from "@/pages/admin-contacts";
 import AdminPersonDetail from "@/pages/admin-person-detail";
 import AdminMailer from "@/pages/admin-mailer";
-import CufcMailer from "@/pages/cufc-mailer";
 import Predictor from "@/pages/predictor";
 import FootballInstitute from "@/pages/football-institute";
 import AdminSettings from "@/pages/admin-settings";
@@ -659,7 +658,6 @@ function AdminRouter() {
         {(params: any) => <Redirect to={`/admin/people/child-${params.id}${window.location.search}`} />}
       </Route>
       <Route path="/admin/mailer" component={AdminMailer} />
-      <Route path="/admin/cufc-mailer" component={CufcMailer} />
       <Route path="/admin/predictor" component={Predictor} />
       {/* Friendly Manager History — CUFC's 10-year archive (default/camps
           workspace Switch: CUFC has no is* flag, it lands here). */}
@@ -678,6 +676,11 @@ function AdminRouter() {
       <Route path="/admin/discounts/new" component={AdminDiscountDetail} />
       <Route path="/admin/discounts/:id" component={AdminDiscountDetail} />
       <Route path="/admin/discounts" component={AdminDiscounts} />
+      {/* CUFC Store — the third brand on the shop_* engine (org 1), after
+          MFL and CIC. Tab slug "store", CUFC-only (see cufcExtraTabs in
+          shared/tabs.ts) — same route component the other two brands use,
+          it's already org-aware via useWorkspace().currentOrg.id. */}
+      <Route path="/admin/store" component={LeagueStore} />
       <Route path="/admin/domains" component={AdminDomainSettings} />
       <Route path="/admin/settings" component={AdminSettings} />
       <Route path="/admin/team" component={AdminTeam} />

@@ -238,6 +238,16 @@ const MFL_FROM = "Mini Football Leagues <noreply@minifootball.co.nz>";
 const MFL_REPLY_TO = "minifootball@cufc.co.nz";
 const MFL_LOGO_URL = "https://join.minifootball.co.nz/logos/mini-football-leagues.png";
 
+// Shop emails are shared across every shop_* brand (MFL/CIC/CUFC…) — the
+// functions below default to the MFL identity above (byte-identical output
+// for every existing caller that doesn't pass a brandKey), and switch to the
+// club's own identity only when brandKey === "cufc". CIC orders still send
+// on the MFL identity today; that's pre-existing behaviour, not something
+// this change alters.
+const CUFC_SHOP_FROM = "Christchurch United <noreply@cufc.co.nz>";
+const CUFC_SHOP_REPLY_TO = "info@cufc.co.nz";
+const CUFC_SHOP_LOGO_URL = "https://join.cufc.co.nz/logos/christchurch-united.png";
+
 function mflShell(opts: { heading: string; bodyHtml: string }): string {
   return `
   <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:#000000; padding:36px 16px;">
@@ -257,6 +267,40 @@ function mflShell(opts: { heading: string; bodyHtml: string }): string {
       </p>
     </div>
   </div>`;
+}
+
+// Christchurch United's own dark shell (royal + gold), used ONLY for
+// shop emails where brandKey === "cufc". Same structure as mflShell so the
+// mflRow() table rows underneath still read correctly against it.
+function cufcShopShell(opts: { heading: string; bodyHtml: string }): string {
+  return `
+  <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:#0b1220; padding:36px 16px;">
+    <div style="max-width: 560px; margin: 0 auto;">
+      <div style="text-align:center; padding:4px 0 26px;">
+        <img src="${CUFC_SHOP_LOGO_URL}" alt="Christchurch United" width="84" height="84" style="display:inline-block; width:84px; height:84px; margin:0 0 18px;" />
+        <h1 style="color:#ffffff; margin:0; font-size:22px; font-weight:700; letter-spacing:-0.2px;">${opts.heading}</h1>
+      </div>
+      <div style="background:#111a2e; border:1px solid #24304d; border-radius:18px; padding:28px; color:#e6e6e6;">
+        ${opts.bodyHtml}
+        <p style="color:#8a95b5; font-size:13px; line-height:1.55; margin:26px 0 0; border-top:1px solid #24304d; padding-top:18px;">
+          Questions? Just reply to this email and we'll sort you out.
+        </p>
+      </div>
+      <p style="text-align:center; color:#6b76a0; font-size:11px; line-height:1.7; margin:22px 0 0;">
+        Christchurch United Football Club<br/>United Sports Centre, Christchurch
+      </p>
+    </div>
+  </div>`;
+}
+
+/** Picks the shop email identity by brand. Anything other than "cufc" keeps
+ *  the existing MFL identity — including "cic" and undefined, so no existing
+ *  caller's output changes. */
+function shopEmailIdentity(brandKey?: string) {
+  if (brandKey === "cufc") {
+    return { from: CUFC_SHOP_FROM, replyTo: CUFC_SHOP_REPLY_TO, shell: cufcShopShell, workspaceLabel: "Christchurch United" };
+  }
+  return { from: MFL_FROM, replyTo: MFL_REPLY_TO, shell: mflShell, workspaceLabel: "Mini Football" };
 }
 
 function mflRow(label: string, value: string, emphasise = false): string {
@@ -983,7 +1027,11 @@ export async function sendShopOrderConfirmation(params: {
   totalCents: number;
   requiresAddress: boolean;
   addressSummary?: string | null;
+  /** Which shop brand this order belongs to — picks the email identity.
+   *  Omitted (or anything but "cufc") keeps the existing MFL identity. */
+  brandKey?: string;
 }): Promise<boolean> {
+  const identity = shopEmailIdentity(params.brandKey);
   const firstName = (params.firstName || "").trim() || "there";
   const lineRows = params.lines.map((l) => {
     const detail = [l.colourName, l.size].filter(Boolean).join(" · ");
@@ -1013,14 +1061,14 @@ export async function sendShopOrderConfirmation(params: {
     <p style="color:#e6e6e6; font-size:14px; line-height:1.65; margin:16px 0 0;">${fulfilment}</p>`;
   return sendEmail({
     to: params.to,
-    from: MFL_FROM,
-    replyTo: MFL_REPLY_TO,
+    from: identity.from,
+    replyTo: identity.replyTo,
     subject: `Order confirmed — ${params.orderNumber}`,
-    html: mflShell({ heading: "Order confirmed ⚽", bodyHtml }),
+    html: identity.shell({ heading: "Order confirmed ⚽", bodyHtml }),
   });
 }
 
-/** New paid order heads-up → the MFL coordinator (info@minifootball.co.nz).
+/** New paid order heads-up → the store's own admin inbox (brand.adminEmail).
  *  Reply-To is the customer so staff can reply straight from their inbox. */
 export async function sendShopOrderNotification(params: {
   to: string;
@@ -1033,7 +1081,11 @@ export async function sendShopOrderNotification(params: {
   shippingLabel?: string | null;
   requiresAddress: boolean;
   addressSummary?: string | null;
+  /** Which shop brand this order belongs to — picks the email identity.
+   *  Omitted (or anything but "cufc") keeps the existing MFL identity. */
+  brandKey?: string;
 }): Promise<boolean> {
+  const identity = shopEmailIdentity(params.brandKey);
   const rows = [
     mflRow("Order", params.orderNumber),
     mflRow("Customer", params.customerName || "—"),
@@ -1053,14 +1105,14 @@ export async function sendShopOrderNotification(params: {
       <table style="width:100%; border-collapse:collapse;">${rows}</table>
     </div>
     <p style="color:#8a8a8a; font-size:13px; line-height:1.6; margin:16px 0 0;">
-      Manage it in ClubOS → Mini Football → Store → Orders.
+      Manage it in ClubOS → ${identity.workspaceLabel} → Store → Orders.
     </p>`;
   return sendEmail({
     to: params.to,
-    from: MFL_FROM,
-    replyTo: params.email || MFL_REPLY_TO,
+    from: identity.from,
+    replyTo: params.email || identity.replyTo,
     subject: `New order ${params.orderNumber} — ${params.customerName}`,
-    html: mflShell({ heading: "New store order", bodyHtml }),
+    html: identity.shell({ heading: "New store order", bodyHtml }),
   });
 }
 

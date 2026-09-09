@@ -40,15 +40,16 @@ export const HIDDEN_GLOBAL: string[] = [
   // games, 248 placings and the CIC club-loyalty ledger unreachable in the UI.
   // It stays until that history is surfaced in the MFL and CIC workspaces.
   //
-  // 🔴 NOT hidden: "cufc-mailer" (Newsletters). It is NOT the same view as
-  // Mailer. Mailer segments on camps/programmes/sessions ("all" | "camp" |
-  // "day" | "session" | "custom", server/routes.ts getMailerSegmentEmails);
-  // Newsletters sends to resolveCufcAudience — Play Predictor entrants who
-  // gave marketing consent, PLUS guardians, deduped, minus org-1
-  // suppressions. Hiding it today would quietly drop every predictor fan who
-  // is not also a guardian off the club's reach. Merging them means adding a
-  // "newsletter" segment to Mailer's send path, which is a mass-email
-  // audience change and deserves its own verification pass.
+  // ✅ "cufc-mailer" (Newsletters) is GONE from this workspace entirely
+  // (Daniel, 2026-09-09) — removed from tabs.ts, the sidebar and App.tsx
+  // rather than hidden. The 2026-09-02 note here argued against it because
+  // Newsletters reached Play Predictor entrants that Mailer's guardian-only
+  // "all" segment misses. Measured before removal: 7 entrants have ever given
+  // marketing consent and 2 are already guardians, so the real loss was FIVE
+  // addresses, against a live risk of picking the wrong one of two boxes both
+  // labelled "email the families". Mailer had sent every real campaign;
+  // Newsletters had sent none in two months. If Play Predictor ever grows,
+  // give Mailer a "predictor" segment — do not bring back a second sender.
 ];
 
 // 🔴 Hidden in SOME workspaces only, because the same tab slug renders a
