@@ -582,10 +582,16 @@ export default function AdminMailer() {
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Design</h2>
-                <p className="text-xs text-white/35 mt-1 max-w-xl">
+                {/* There is no left or right pane on a phone, so the phone is
+                    not told to use one. */}
+                <p className="text-xs text-white/35 mt-1 max-w-xl hidden md:block">
                   Drag a section in from the left, click any text to edit it, and style it on the right.
                   Hit <span className="text-white/60 font-medium">Save design</span> when it looks right —
                   that is what gets sent.
+                </p>
+                <p className="text-xs text-white/35 mt-1 max-w-xl md:hidden">
+                  Edit the email below and hit <span className="text-white/60 font-medium">Save</span> —
+                  that is what gets sent. The drag-and-drop designer needs a laptop.
                 </p>
               </div>
               {designSavedAt && (
@@ -599,13 +605,18 @@ export default function AdminMailer() {
               )}
             </div>
 
-            {/* A definite height: the builder is a three-pane shell (palette ·
-                canvas · inspector) and collapses to nothing inside an auto-height
-                parent. 74vh keeps the canvas usable on a laptop without pushing
-                the Back/Next buttons off the screen. */}
+            {/* A definite height, but ONLY from md up. The three-pane shell
+                (palette · canvas · inspector) collapses to nothing inside an
+                auto-height parent, so on a laptop it gets 74vh — tall enough to
+                work in, short enough to leave Back/Next on screen.
+                🔴 Below 768px the builder swaps itself for the plain-HTML
+                fallback, which is ~950px of notice + editor + preview: inside a
+                fixed 74vh box with overflow-hidden the preview was cut off
+                entirely and could not be scrolled to. Height and clipping are
+                therefore desktop-only, and `md` here MUST stay in step with
+                useIsNarrow(767) in EmailBuilder — they are the same boundary. */}
             <div
-              className="rounded-xl overflow-hidden border border-white/10 bg-white"
-              style={{ height: "74vh", minHeight: 560 }}
+              className="rounded-xl border border-white/10 bg-white md:overflow-hidden md:h-[74vh] md:min-h-[560px]"
               data-testid="email-builder"
             >
               <Suspense
@@ -620,6 +631,7 @@ export default function AdminMailer() {
                   workspaceId={currentOrg?.id ?? 1}
                   brandKey={brandKey}
                   initialDoc={bodyDoc}
+                  initialHtml={bodyHtml}
                   onSave={handleDesignSave}
                   onDirty={() => setDesignSavedAt(null)}
                 />

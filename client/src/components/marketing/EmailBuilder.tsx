@@ -44,6 +44,11 @@ export interface EmailBuilderProps {
   brandKey: string;
   /** existing doc when editing a draft/template; null for blank */
   initialDoc?: unknown | null;
+  /** The already-compiled HTML for this campaign. The phone fallback edits raw
+   *  HTML, and a design built on a laptop is a GrapesJS doc with no `html` key —
+   *  without this the phone would open an EMPTY box over a real design, and
+   *  saving would blank it. */
+  initialHtml?: string | null;
   /** called with doc + compiled html/text whenever the user saves */
   onSave: (result: EmailBuilderResult) => void | Promise<void>;
   /** optional: notify parent of unsaved changes */
@@ -163,6 +168,7 @@ function LoadingSurface() {
 export default function EmailBuilder({
   brandKey,
   initialDoc,
+  initialHtml,
   onSave,
   onDirty,
 }: EmailBuilderProps) {
@@ -207,12 +213,17 @@ export default function EmailBuilder({
     startBlank();
   }, [startBlank]);
 
-  // Mobile plain-HTML fallback state (seeded from a legacy html-shaped doc).
+  // Mobile plain-HTML fallback state. Seeded from an html-shaped doc when there
+  // is one, else from the campaign's compiled HTML — a design made on a laptop
+  // is `{engine:'grapesjs-mjml', mjml, project}` and carries no `html`, so
+  // reading the doc alone opened an empty editor over real work.
   const seededHtml =
     initialDoc && typeof initialDoc === "object" && typeof (initialDoc as { html?: unknown }).html === "string"
       ? ((initialDoc as { html: string }).html)
-      : "";
+      : (initialHtml ?? "");
   const [mobileHtml, setMobileHtml] = useState<string>(seededHtml);
+  // What we opened with, so an accidental empty save cannot destroy it.
+  const hadContentOnOpen = seededHtml.trim().length > 0;
 
   const brand = getBrandMeta(brandKey);
 
@@ -260,6 +271,13 @@ export default function EmailBuilder({
   }, [commit]);
 
   const handleSaveMobile = useCallback(async () => {
+    // Saving an empty box over a design someone spent an hour on is the one
+    // thing this path must never do. Clearing on purpose is still possible —
+    // it just has to be a deliberate answer, not a stray tap.
+    if (!mobileHtml.trim() && hadContentOnOpen) {
+      setError("This would erase the current design. Add some content, or edit it on a laptop.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -273,7 +291,7 @@ export default function EmailBuilder({
     } finally {
       setSaving(false);
     }
-  }, [commit, mobileHtml]);
+  }, [commit, mobileHtml, hadContentOnOpen]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -323,7 +341,8 @@ export default function EmailBuilder({
             type="button"
             onClick={isNarrow ? handleSaveMobile : handleSaveDesktop}
             disabled={saving}
-            className="rounded-md bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            // h-11 on a phone: 44px is the smallest thing a thumb hits reliably.
+            className="h-11 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 md:h-auto md:py-1.5"
           >
             {saving ? "Saving…" : "Save"}
           </button>
