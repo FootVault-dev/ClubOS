@@ -31,11 +31,11 @@ async function main() {
   console.log(`\nPayouts "Still to come" — live against ${BASE}\n`);
 
   // ── The Stripe truth, read directly ───────────────────────────────────────
-  const s = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-06-20" as any });
+  const s2 = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-06-20" as any });
   const [rawList, rawFiltered, balance] = await Promise.all([
-    s.payouts.list({ limit: 100 }),
-    s.payouts.list({ status: "in_transit", limit: 10 }),
-    s.balance.retrieve(),
+    s2.payouts.list({ limit: 100 }),
+    s2.payouts.list({ status: "in_transit", limit: 10 }),
+    s2.balance.retrieve(),
   ]);
 
   console.log("Stripe, read directly");
@@ -86,7 +86,7 @@ async function main() {
   // 🔴 The route-order trap: with /:id registered first, Express parses
   // "upcoming" as a payout id and answers 400 "Invalid payout id".
   ok("\"upcoming\" is NOT parsed as a payout id", !/Invalid payout id/i.test(JSON.stringify(body)));
-  ok("the response is the upcoming shape", Array.isArray(body.inFlight) && Array.isArray(body.pending),
+  ok("the response is the upcoming shape", Array.isArray(body.inFlight) && Array.isArray(body.upcoming),
     Object.keys(body).join(","));
 
   console.log("\nWhat it reports");
@@ -95,25 +95,60 @@ async function main() {
     body.inFlight.map((p: any) => p.status).join(",") || "none in flight");
   ok("in-flight count matches Stripe", body.inFlight.length === notPaid.length,
     `page ${body.inFlight.length} vs Stripe ${notPaid.length}`);
-  const sum = body.inFlight.reduce((t: number, p: any) => t + p.amountCents, 0);
-  ok("the in-flight total is the sum of those payouts", body.inFlightCents === sum,
-    `${body.inFlightCents} vs ${sum}`);
-  // The whole point: the balance must never be inside the payout total.
-  ok("the balance is NOT folded into the in-flight total",
-    pendingCents === 0 || body.inFlightCents !== pendingCents,
-    `inFlight ${body.inFlightCents}, balance ${pendingCents}`);
-  const pagePending = body.pending.reduce((t: number, b: any) => t + b.amountCents, 0);
-  ok("the pending balance matches Stripe to the cent", pagePending === pendingCents,
-    `${pagePending} vs ${pendingCents}`);
+
+  // ── The derived rows, the thing Stripe's own dashboard shows ──────────────
+  // Rebuild the buckets independently here. If the endpoint and this script
+  // agree AND both equal Stripe's own balance, the figures on the page are the
+  // figures in the Stripe dashboard.
+  const mine = new Map<string, number>();
+  let scanned = 0;
+  for await (const t of s2.balanceTransactions.list({ limit: 100, available_on: { gte: Math.floor(Date.now()/1000) - 14*86400 } } as any)) {
+    if (++scanned > 2000) break;
+    if (t.status !== "pending" || t.type === "payout") continue;
+    const d = new Date(t.available_on * 1000).toISOString().slice(0, 10);
+    mine.set(d, (mine.get(d) ?? 0) + t.net);
+  }
+  const mineTotal = Array.from(mine.values()).reduce((a, b) => a + b, 0);
+
+  ok("an upcoming row exists for every pending available-day",
+    body.upcoming.length === Array.from(mine.values()).filter((v) => v !== 0).length,
+    `page ${body.upcoming.length} vs Stripe ${mine.size}`);
+  ok("every upcoming bucket matches Stripe to the cent",
+    body.upcoming.every((u: any) => mine.get(u.availableOn) === u.amountCents),
+    body.upcoming.map((u: any) => `${u.availableOn}:${u.amountCents}`).join(" "));
+  const bucketTotal = body.upcoming.reduce((t: number, u: any) => t + u.amountCents, 0);
+  ok("the buckets add up to Stripe's pending balance", bucketTotal === pendingCents,
+    `${bucketTotal} vs ${pendingCents}`);
+  ok("the endpoint says it reconciles", body.reconciles === true);
+  ok("the total is in-flight PLUS upcoming, nothing double counted",
+    body.totalCents === body.inFlight.reduce((t: number, p: any) => t + p.amountCents, 0) + bucketTotal,
+    `${body.totalCents}`);
+
+  // 🔴 The date is the whole point of Daniel's request — it must be after the
+  // money is available, and never land on a weekend.
+  ok("every arrive-by is AFTER the day the money becomes available",
+    body.upcoming.every((u: any) => u.arriveBy > u.availableOn),
+    body.upcoming.map((u: any) => `${u.availableOn}→${u.arriveBy}`).join(" "));
+  ok("no arrive-by lands on a weekend",
+    body.upcoming.every((u: any) => {
+      const [y, m, d] = u.arriveBy.split("-").map(Number);
+      const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+      return wd !== 0 && wd !== 6;
+    }),
+    body.upcoming.map((u: any) => u.arriveBy).join(" "));
+  ok("the rows are ordered soonest first",
+    body.upcoming.every((u: any, i: number) => i === 0 || body.upcoming[i - 1].arriveBy <= u.arriveBy));
   ok("a payout schedule is reported", body.schedule?.interval != null, JSON.stringify(body.schedule));
+  console.log("  page shows: " + (body.upcoming.map((u: any) => `$${(u.amountCents/100).toFixed(2)} by ${u.arriveBy}`).join(", ") || "nothing upcoming"));
 
   console.log("\nThe other account");
   const g = await get("/api/admin/payouts/upcoming?account=cugc");
   ok("gymnastics answers too", g.status === 200, `HTTP ${g.status}`);
   const gb: any = await g.json();
-  ok("gymnastics reports its OWN balance, not the club's",
-    JSON.stringify(gb.pending) !== JSON.stringify(body.pending) || pendingCents === 0,
-    `cugc ${JSON.stringify(gb.pending)}`);
+  ok("gymnastics reports its OWN upcoming rows, not the club's",
+    JSON.stringify(gb.upcoming) !== JSON.stringify(body.upcoming) || body.upcoming.length === 0,
+    `cugc total ${gb.totalCents}`);
+  ok("gymnastics reconciles too", gb.reconciles === true);
 
   console.log("\nThe gate");
   const email2 = `_payoutnotab_${Date.now()}@usg.co.nz`;

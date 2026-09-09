@@ -66,30 +66,36 @@ async function main() {
     const m: any = await page.evaluate(`(function(){
       var de = document.documentElement;
       var panel = document.querySelector('[data-testid="panel-upcoming"]');
-      var inflight = document.querySelector('[data-testid="text-inflight-total"]');
-      var bal = document.querySelector('[data-testid="text-balance-pending"]');
+      var total = document.querySelector('[data-testid="text-upcoming-total"]');
+      var rows = document.querySelectorAll('[data-testid^="row-upcoming-"]');
       var body = document.body.innerText;
+      var table = document.querySelectorAll('table')[1] || null;
+      var amounts = [];
+      for (var i = 0; i < rows.length; i++) amounts.push(rows[i].innerText.replace(/\\n/g, " | "));
       return {
         docWidth: de.scrollWidth, winWidth: window.innerWidth,
         hasPanel: !!panel,
-        inflight: inflight ? inflight.innerText.trim() : null,
-        balance: bal ? bal.innerText.trim() : null,
-        aboveTable: !!panel && !!document.querySelector('table') &&
-          panel.getBoundingClientRect().top < document.querySelector('table').getBoundingClientRect().top,
-        saysSchedule: /pays out every day/i.test(body),
-        saysNoDate: /no arrival date/i.test(body),
+        total: total ? total.innerText.trim() : null,
+        rowCount: rows.length,
+        rows: amounts,
+        headers: /amount/i.test(body) && /arrive by/i.test(body),
+        saysUpcoming: /Upcoming/.test(body),
+        saysEstimate: /Stripe's estimate/.test(body),
+        aboveHistory: !!panel && !!table && panel.getBoundingClientRect().top < table.getBoundingClientRect().top,
         loginScreen: /Sign in|Forgot password/i.test(body)
       };
     })()`);
 
     ok("the page is Payouts, not the login screen", !m.loginScreen);
     ok("the Still to come panel renders", m.hasPanel);
-    ok("it sits ABOVE the payout history", m.aboveTable);
-    ok("the in-flight figure is shown", Boolean(m.inflight), m.inflight ?? "");
-    ok("the held balance is shown", Boolean(m.balance), (m.balance ?? "").split("\n")[0]);
-    ok("the balance is stated to have NO arrival date", m.saysNoDate);
-    ok("the payout schedule is stated in plain English", m.saysSchedule);
+    ok("it sits ABOVE the payout history", m.aboveHistory);
+    ok("it uses Stripe's own columns (Amount / Arrive by)", m.headers);
+    ok("rows are listed, not one lump sum", m.rowCount > 0, `${m.rowCount} rows`);
+    ok("each row is badged Upcoming", m.saysUpcoming);
+    ok("the total is shown", Boolean(m.total), m.total ?? "");
+    ok("the date is stated as an estimate", m.saysEstimate);
     ok("no horizontal overflow", m.docWidth <= m.winWidth + 1, `${m.docWidth} vs ${m.winWidth}`);
+    for (const r of m.rows) console.log(`     ${r}`);
 
     const shot = join(OUT, `${label}.png`);
     await page.screenshot({ path: shot });
