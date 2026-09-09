@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { formatCurrency } from "@/lib/format";
 import {
   Banknote, ArrowLeft, ChevronRight, Download, Search as SearchIcon,
-  AlertTriangle, RefreshCcw, ArrowUp, ArrowDown, ChevronsUpDown,
+  AlertTriangle, RefreshCcw, ArrowUp, ArrowDown, ChevronsUpDown, Hourglass,
 } from "lucide-react";
 
 // ── Types (mirror server/payout-routes.ts) ──────────────────────────────────
@@ -46,6 +46,19 @@ interface ListResponse {
   accounts: Array<{ key: AccountKey; label: string; available: boolean }>;
   payouts: PayoutRow[];
   hasMore: boolean;
+}
+
+interface UpcomingResponse {
+  account: AccountKey;
+  configured: boolean;
+  /** Payouts Stripe HAS created that have not reached the bank yet. Facts. */
+  inFlight: PayoutRow[];
+  inFlightCents: number;
+  /** Card money Stripe holds. Real, but NOT a payout and with no arrival date. */
+  pending: { currency: string; amountCents: number }[];
+  available: { currency: string; amountCents: number }[];
+  schedule: { interval: string | null; delayDays: number | null; weeklyAnchor: string | null; monthlyAnchor: number | null } | null;
+  payoutsEnabled?: boolean;
 }
 
 interface DetailResponse {
@@ -172,6 +185,104 @@ function SortableTh({ label, k, sort, onSort, className = "", right = false }: {
 }
 
 // ── Page ────────────────────────────────────────────────────────────────────
+/** Plain English for Stripe's payout schedule object. */
+function scheduleSentence(sch: UpcomingResponse["schedule"]): string | null {
+  if (!sch) return null;
+  const after =
+    sch.delayDays === 0 ? "the same day" :
+    sch.delayDays === 1 ? "the next day" :
+    typeof sch.delayDays === "number" ? `${sch.delayDays} days later` : null;
+  const how =
+    sch.interval === "daily" ? "Stripe pays out every day" :
+    sch.interval === "weekly" ? `Stripe pays out weekly${sch.weeklyAnchor ? ` on a ${sch.weeklyAnchor}` : ""}` :
+    sch.interval === "monthly" ? `Stripe pays out monthly${sch.monthlyAnchor ? ` on the ${sch.monthlyAnchor}${sch.monthlyAnchor === 1 ? "st" : sch.monthlyAnchor === 2 ? "nd" : sch.monthlyAnchor === 3 ? "rd" : "th"}` : ""}` :
+    sch.interval === "manual" ? "Payouts are triggered by hand, not on a schedule" : null;
+  if (!how) return null;
+  return after && sch.interval !== "manual" ? `${how}, ${after} than the payment` : how;
+}
+
+/** One currency line. Both club accounts are NZD-only today, but the balance
+ *  comes back per currency and summing across currencies would be nonsense. */
+function MoneyByCurrency({ rows, empty }: { rows: { currency: string; amountCents: number }[]; empty: string }) {
+  const real = rows.filter((r) => r.amountCents !== 0);
+  if (real.length === 0) return <div className="text-white/30 text-[13px]">{empty}</div>;
+  return (
+    <>
+      {real.map((r) => (
+        <div key={r.currency} className="text-2xl font-semibold text-white/90 tabular-nums">
+          {formatCurrency(r.amountCents, { fromCents: true })}
+          {r.currency !== "NZD" ? <span className="text-[12px] text-white/40 ml-1.5">{r.currency}</span> : null}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** What Stripe still owes the bank. Deliberately TWO figures that are never
+ *  added together: payouts already on their way (a date you can trust), and card
+ *  money Stripe has not scheduled yet (no date exists). */
+function StillToCome({ data }: { data: UpcomingResponse | undefined }) {
+  if (!data || !data.configured) return null;
+  const sentence = scheduleSentence(data.schedule);
+
+  return (
+    <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 md:p-5 mb-4" data-testid="panel-upcoming">
+      <div className="flex items-center gap-2 mb-3">
+        <Hourglass className="w-4 h-4 text-amber-300/80" />
+        <h2 className="text-[13px] font-semibold uppercase tracking-wide text-white/55">Still to come</h2>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <div className="text-[12px] text-white/45 mb-1">On its way to the bank</div>
+          <div className="text-2xl font-semibold text-blue-300 tabular-nums" data-testid="text-inflight-total">
+            {formatCurrency(data.inFlightCents, { fromCents: true })}
+          </div>
+          <div className="text-[12px] text-white/35 mt-1">
+            {data.inFlight.length === 0
+              ? "No payout in flight — everything Stripe has sent has landed."
+              : `${data.inFlight.length} payout${data.inFlight.length === 1 ? "" : "s"} Stripe has already sent`}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[12px] text-white/45 mb-1">Taken, not scheduled yet</div>
+          <div data-testid="text-balance-pending">
+            <MoneyByCurrency rows={[...data.pending, ...data.available]} empty="Nothing waiting." />
+          </div>
+          {/* 🔴 This is NOT a payout and has no arrival date. Saying otherwise
+              would put a promise on the page that Stripe never made. */}
+          <div className="text-[12px] text-white/35 mt-1">
+            Card payments Stripe is still holding. It has not turned these into a payout, so there is no arrival date yet.
+          </div>
+        </div>
+      </div>
+
+      {data.inFlight.length > 0 && (
+        <div className="mt-4 rounded-xl border border-blue-500/20 bg-blue-500/[0.04] divide-y divide-white/[0.05]">
+          {data.inFlight.map((p) => (
+            <div key={p.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5" data-testid={`row-upcoming-${p.id}`}>
+              <div className="min-w-0">
+                <div className="text-[13px] text-white/85">{isoToNice(p.arrivalDate)}</div>
+                <div className="text-[11px] text-white/35 font-mono truncate">{p.id}</div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <StatusBadge status={p.status} />
+                <span className="font-medium text-blue-300 tabular-nums">{formatCurrency(p.amountCents, { fromCents: true })}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {sentence ? <div className="text-[12px] text-white/30 mt-3">{sentence}.</div> : null}
+      {data.payoutsEnabled === false ? (
+        <div className="text-[12px] text-amber-300/80 mt-2">Stripe has payouts switched off on this account.</div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function GroupPayouts() {
   const [account, setAccount] = useState<AccountKey>(() =>
     new URLSearchParams(window.location.search).get("account") === "cugc" ? "cugc" : "club",
@@ -192,6 +303,12 @@ export default function GroupPayouts() {
   const payouts = list?.payouts ?? [];
   const accounts = list?.accounts ?? [];
   const cugcAvailable = accounts.find((a) => a.key === "cugc")?.available ?? false;
+
+  // What has not landed yet. Its own call so it stays put while you page the
+  // history — "what is still coming" does not change because you looked at July.
+  const { data: upcoming } = useQuery<UpcomingResponse>({
+    queryKey: [`/api/admin/payouts/upcoming?account=${account}`],
+  });
 
   const detailUrl = selectedId ? `/api/admin/payouts/${selectedId}?account=${account}` : null;
   const { data: detail, isLoading: detailLoading, error: detailError } = useQuery<DetailResponse>({
@@ -522,6 +639,8 @@ export default function GroupPayouts() {
           </div>
         ) : null}
       </div>
+
+      <StillToCome data={upcoming} />
 
       {isLoading ? (
         <div className="text-white/30 text-sm py-16 text-center">Reading payouts from Stripe…</div>

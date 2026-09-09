@@ -26,6 +26,7 @@
 // names families next to amounts, same class of data as invoices/housing):
 //   GET /api/admin/payouts        ?account=club|cugc&starting_after=po_…
 //   GET /api/admin/payouts/:id    ?account=club|cugc
+//   GET /api/admin/payouts/upcoming ?account=club|cugc  — what has not landed yet
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Express, Request, Response } from "express";
 import type Stripe from "stripe";
@@ -804,6 +805,84 @@ export function registerPayoutRoutes(app: Express) {
           automatic: p.automatic,
           description: p.description ?? null,
         })),
+      });
+    } catch (error: any) {
+      res.status(502).json({ message: `Stripe error: ${error?.message ?? "unknown"}` });
+    }
+  });
+
+  // ── What is still to come ─────────────────────────────────────────────────
+  // 🔴 Registered BEFORE "/:id". Express matches in order, so with the
+  // parameterised route first, "upcoming" is parsed as a payout id and answered
+  // 400 "Invalid payout id" — the same trap that once left View As with no way
+  // out.
+  //
+  // Two different things, deliberately never added together:
+  //
+  //   inFlight  — payouts Stripe HAS created that have not reached the bank.
+  //               A fact, with a real amount and a real arrival date.
+  //   balance   — money taken on cards that Stripe has not turned into a payout
+  //               yet. Real money, but it has NO arrival date and is NOT a
+  //               payout. Presenting it as one would put a date on the page that
+  //               Stripe has never promised.
+  app.get("/api/admin/payouts/upcoming", requireAuth, tab, async (req: Request, res: Response) => {
+    try {
+      const account = accountFrom(req);
+      const client = stripeFor(account);
+      if (!client) {
+        return res.json({
+          account, configured: false, inFlight: [], inFlightCents: 0,
+          pending: [], available: [], schedule: null,
+        });
+      }
+
+      const [list, balance, acct] = await Promise.all([
+        client.payouts.list({ limit: 100 }),
+        client.balance.retrieve(),
+        client.accounts.retrieve(),
+      ]);
+
+      // 🔴 Stripe's `status` query filter is SILENTLY IGNORED on this account —
+      // asking for status:"in_transit" returns the same rows as no filter at
+      // all, every one of them `paid`. Filtering server-side would have printed
+      // "on its way to the bank" over deposits that landed a fortnight ago.
+      // Filter on each row's OWN status, and never re-introduce the query param.
+      const inFlight = list.data
+        .filter((p) => p.status === "pending" || p.status === "in_transit")
+        .map((p) => ({
+          id: p.id,
+          amountCents: p.amount,
+          currency: p.currency.toUpperCase(),
+          status: p.status,
+          arrivalDate: arrivalIso(p.arrival_date),
+          createdAt: nzWhen(p.created),
+          automatic: p.automatic,
+          description: p.description ?? null,
+        }))
+        .sort((a, b) => a.arrivalDate.localeCompare(b.arrivalDate));
+
+      const money = (rows: Stripe.Balance["pending"]) =>
+        rows.map((b) => ({ currency: b.currency.toUpperCase(), amountCents: b.amount }));
+
+      const sch = (acct as any)?.settings?.payouts?.schedule ?? null;
+
+      res.json({
+        account,
+        configured: true,
+        inFlight,
+        // Only ever the sum of REAL payouts. The balance is never folded in.
+        inFlightCents: inFlight.reduce((t, p) => t + p.amountCents, 0),
+        pending: money(balance.pending),
+        available: money(balance.available),
+        schedule: sch
+          ? {
+              interval: sch.interval ?? null,
+              delayDays: typeof sch.delay_days === "number" ? sch.delay_days : null,
+              weeklyAnchor: sch.weekly_anchor ?? null,
+              monthlyAnchor: typeof sch.monthly_anchor === "number" ? sch.monthly_anchor : null,
+            }
+          : null,
+        payoutsEnabled: Boolean((acct as any)?.payouts_enabled),
       });
     } catch (error: any) {
       res.status(502).json({ message: `Stripe error: ${error?.message ?? "unknown"}` });
