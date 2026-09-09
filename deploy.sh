@@ -66,10 +66,17 @@ cd "$(dirname "$0")"
 
 # Strip our own flags out of "$@" before the rest is passed through to flyctl.
 _ALLOW_BEHIND=0
+_CHECK_ONLY=0
 _ARGS=()
 for _a in "$@"; do
   case "$_a" in
     --allow-behind-prod) _ALLOW_BEHIND=1 ;;
+    # Run every pre-build safety check and STOP. There was no way to exercise
+    # this script's guards without deploying, so verifying a change to them
+    # meant shipping one — which started two real builds of the wrong tree on
+    # 2026-09-09 before they were killed. A guard you cannot test safely is a
+    # guard nobody will test.
+    --check-only) _CHECK_ONLY=1 ;;
     *) _ARGS+=("$_a") ;;
   esac
 done
@@ -137,9 +144,30 @@ if [ -f .last-deployed-sha ]; then
     # on 2026-09-09 the main checkout said 396d7d6 while a worktree still said
     # b3f654e, and a deploy from that worktree measured against the wrong
     # baseline and silently removed POS. Asking prod cannot go stale.
+    #
+    # 🔴 THREE states, and only the first two are safe. A guard that cannot tell
+    # "checked and fine" from "could not check" is not a guard — that is exactly
+    # how preflight-deploy.ts once printed "safe to deploy" while reaching none
+    # of its canaries. So the degraded state is LOUD, never a silent fallback.
     _PROD_SHA=$(curl -s -m 10 https://app.usg.co.nz/api/version 2>/dev/null \
       | sed -n 's/.*"sha":"\([0-9a-f]\{7,40\}\)".*/\1/p')
-    if [ -n "$_PROD_SHA" ] && git cat-file -e "${_PROD_SHA}^{commit}" 2>/dev/null; then
+    if [ -z "$_PROD_SHA" ]; then
+      # (3) Could not check. Do not block — an older prod legitimately has no
+      # endpoint — but never let this pass for a clean check.
+      echo "⚠️  COULD NOT ASK PRODUCTION WHAT IT RUNS (/api/version gave no sha)."
+      echo "    Falling back to .last-deployed-sha (${_LAST:0:7}), which is GITIGNORED —"
+      echo "    every worktree keeps its own copy and they drift, so it may be stale."
+      echo "    Either prod predates the endpoint, or something is wrong. Confirm by hand:"
+      echo "      git merge-base --is-ancestor <the sha prod really runs> HEAD"
+      echo ""
+    elif ! git cat-file -e "${_PROD_SHA}^{commit}" 2>/dev/null; then
+      # Prod answered with a commit this clone has never seen — someone deployed
+      # from a tree that is not here. Refusing beats guessing.
+      echo "🔴 production reports ${_PROD_SHA:0:7}, a commit this checkout does not have."
+      echo "    Somebody deployed from a tree you cannot see. Fetch it before shipping."
+      exit 1
+    else
+      # (1)/(2) Prod answered and we know the commit — this is the real baseline.
       if [ "$_PROD_SHA" != "$_LAST" ]; then
         echo "ℹ️  production reports ${_PROD_SHA:0:7}; the local stamp says ${_LAST:0:7} — trusting production."
       fi
@@ -185,6 +213,11 @@ echo "==============================================="
 echo "  ⚠️  Run any DB migration BEFORE this deploy if the schema changed."
 echo "  ⚠️  After deploy, smoke-test /t.js (must be application/javascript, not text/html)."
 echo ""
+
+if [ "$_CHECK_ONLY" = "1" ]; then
+  echo "✓ --check-only: every pre-build check passed. Nothing was built or deployed."
+  exit 0
+fi
 
 # ── CLIENT-ONLY REGRESSION GUARD (added 2026-07-27 after it bit twice) ───────
 # The 401/404 route probe CANNOT see a client-only feature. The MFL night badge
