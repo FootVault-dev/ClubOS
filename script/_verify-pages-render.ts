@@ -68,6 +68,7 @@ try {
     ["/admin/task-tracker", "Task Tracker"],
     ["/admin/qr-codes", "QR Code Generator"],
     ["/admin/club-events", "Events (club dinner)"],
+    ["/admin/store", "Store (CUFC shop)"],
   ];
 
   browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox"] });

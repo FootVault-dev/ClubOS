@@ -120,6 +120,26 @@ if [ -f .last-deployed-sha ]; then
       git log --oneline --format="   %h %an  %s" "$_LAST..HEAD" | head -20
       echo ""
     fi
+    # ── The OTHER direction: what this tree would REMOVE ────────────────────
+    # preflight-deploy.ts probes ROUTES. It cannot see a script, a migration, a
+    # seed or a static asset that exists only as a file, so a tree one commit
+    # behind prod passes the guard honestly and silently drops that file from
+    # the image. Between two sessions the only reliable test is ancestry, and
+    # it costs nothing. (Near-miss 2026-09-09: a parallel session's tree was
+    # exactly one commit behind and would have dropped a CLI helper.)
+    _BEHIND=$(git rev-list --count "HEAD..$_LAST" 2>/dev/null || echo 0)
+    if [ "$_BEHIND" -gt 0 ]; then
+      echo "🔴 THIS TREE IS $_BEHIND COMMIT(S) BEHIND WHAT WAS LAST DEPLOYED."
+      echo "   Deploying it REMOVES the following from production:"
+      git log --oneline --format="   %h %an  %s" "HEAD..$_LAST" | head -20
+      echo ""
+      echo "   The canary guard cannot catch this: it probes routes, not files."
+      echo "   Merge the deployed sha first —  git merge $_LAST  — then redeploy."
+      echo "   Deliberate removal? ALLOW_BEHIND_PROD=1 ./deploy.sh"
+      [ "${ALLOW_BEHIND_PROD:-0}" = "1" ] || exit 1
+      echo "   ⚠️  ALLOW_BEHIND_PROD=1 set — proceeding with the removal."
+      echo ""
+    fi
   fi
 fi
 _DIRTY=$(git status --porcelain 2>/dev/null | grep -vE '^\?\? ' | head -10)
