@@ -191,9 +191,6 @@ const campsNav = [
   { tab: "contacts", title: "Contacts", url: "/admin/contacts", icon: Users },
   { tab: "volunteers", title: "Volunteers", url: "/admin/volunteers", icon: HeartHandshake },
   { tab: "mailer", title: "Mailer", url: "/admin/mailer", icon: Mail },
-  // CUFC newsletter mailer (tabs.ts slug "cufc-mailer") — titled "Newsletters"
-  // here so it doesn't collide with the camps "Mailer" item (nav keys by title).
-  { tab: "cufc-mailer", title: "Newsletters", url: "/admin/cufc-mailer", icon: Send },
   { tab: "predictor", title: "Play Predictor", url: "/admin/predictor", icon: Trophy },
   // 10 years of Friendly Manager registrations + payments (imported 2026-07-14).
   { tab: "fm-history", title: "History", url: "/admin/fm-history", icon: HistoryIcon },

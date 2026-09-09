@@ -58,10 +58,13 @@ const campsTabs: TabDef[] = [
   { slug: "registrations", title: "Registrations", url: "/admin/registrations" },
   { slug: "contacts", title: "Contacts", url: "/admin/contacts" },
   { slug: "volunteers", title: "Volunteers", url: "/admin/volunteers" },
+  // ONE mailer in this workspace (Daniel, 2026-09-09). A second sender lived
+  // here as slug "cufc-mailer" / sidebar "Newsletters" (Play Predictor entrants
+  // + guardian contacts) and had sent nothing in two months, while this one had
+  // sent every real campaign — including the 3,830-recipient cancellation
+  // notice. Two boxes that both say "send an email to families" is a way to
+  // send the wrong one. Page + API remain in git history.
   { slug: "mailer", title: "Mailer", url: "/admin/mailer" },
-  // CUFC newsletter mailer (Play Predictor entrants + guardian contacts) —
-  // distinct from the camps-segment "mailer" wizard above.
-  { slug: "cufc-mailer", title: "Mailer", url: "/admin/cufc-mailer" },
   // Play Predictor — first-team score predictions, leaderboards + prizes.
   { slug: "predictor", title: "Play Predictor", url: "/admin/predictor" },
   // 10 years of Friendly Manager registrations + payments, imported 2026-07-14.

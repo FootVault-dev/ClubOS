@@ -20,7 +20,6 @@ import AdminRegistrations from "@/pages/admin-registrations";
 import AdminContacts from "@/pages/admin-contacts";
 import AdminPersonDetail from "@/pages/admin-person-detail";
 import AdminMailer from "@/pages/admin-mailer";
-import CufcMailer from "@/pages/cufc-mailer";
 import Predictor from "@/pages/predictor";
 import FootballInstitute from "@/pages/football-institute";
 import AdminSettings from "@/pages/admin-settings";
@@ -652,7 +651,6 @@ function AdminRouter() {
         {(params: any) => <Redirect to={`/admin/people/child-${params.id}${window.location.search}`} />}
       </Route>
       <Route path="/admin/mailer" component={AdminMailer} />
-      <Route path="/admin/cufc-mailer" component={CufcMailer} />
       <Route path="/admin/predictor" component={Predictor} />
       {/* Friendly Manager History — CUFC's 10-year archive (default/camps
           workspace Switch: CUFC has no is* flag, it lands here). */}
