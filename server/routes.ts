@@ -252,6 +252,18 @@ export async function registerRoutes(
   // context) and the brand-root list (so it can decorate cross-root outbound links).
   // Scripts load without CORS, but we reflect a known origin for good measure. Cached
   // for an hour. Registered before the SPA catch-all so it wins on all domains.
+  // What commit is production actually running? Deliberately public and
+  // unauthenticated: `deploy.sh` has to ask this BEFORE it holds any session,
+  // and a commit sha is not a secret. It exists because `.last-deployed-sha` is
+  // gitignored — every worktree keeps its own copy, they drift, and a guard that
+  // reads a stale copy clears a deploy that removes a live feature. Asking prod
+  // is the only answer that cannot go stale. Empty until an image is built with
+  // --build-arg GIT_SHA, and the guard treats empty as "cannot tell".
+  app.get("/api/version", (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ sha: process.env.BUILD_SHA || null });
+  });
+
   app.get("/t.js", (req, res) => {
     try {
       const proto = Boolean(req.secure) || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";

@@ -15,6 +15,12 @@ ARG VITE_STRIPE_PUBLISHABLE_KEY
 ARG VITE_META_PIXEL_ID
 ENV VITE_STRIPE_PUBLISHABLE_KEY=$VITE_STRIPE_PUBLISHABLE_KEY
 ENV VITE_META_PIXEL_ID=$VITE_META_PIXEL_ID
+# The commit this image was built from, so production can be ASKED what it runs
+# instead of a local file being trusted to remember. `.last-deployed-sha` is
+# gitignored, so every worktree carries its own copy and they drift apart — which
+# is how a deploy from one worktree silently removed POS on 2026-09-09.
+ARG GIT_SHA
+ENV BUILD_SHA=$GIT_SHA
 
 COPY . .
 RUN npm run build

@@ -64,6 +64,17 @@
 set -e
 cd "$(dirname "$0")"
 
+# Strip our own flags out of "$@" before the rest is passed through to flyctl.
+_ALLOW_BEHIND=0
+_ARGS=()
+for _a in "$@"; do
+  case "$_a" in
+    --allow-behind-prod) _ALLOW_BEHIND=1 ;;
+    *) _ARGS+=("$_a") ;;
+  esac
+done
+set -- "${_ARGS[@]}"
+
 [ -f .env ] || { echo "❌ no .env in $(pwd)"; exit 1; }
 VITE_STRIPE_PUBLISHABLE_KEY=$(grep -E '^VITE_STRIPE_PUBLISHABLE_KEY=' .env | cut -d= -f2- | tr -d '\r')
 VITE_META_PIXEL_ID=$(grep -E '^VITE_META_PIXEL_ID=' .env | cut -d= -f2- | tr -d '\r')
@@ -121,6 +132,19 @@ if [ -f .last-deployed-sha ]; then
       echo ""
     fi
     # ── The OTHER direction: what this tree would REMOVE ────────────────────
+    # Prefer what PRODUCTION says it runs over what this file remembers. The
+    # file is gitignored, so every worktree keeps its own copy and they drift:
+    # on 2026-09-09 the main checkout said 396d7d6 while a worktree still said
+    # b3f654e, and a deploy from that worktree measured against the wrong
+    # baseline and silently removed POS. Asking prod cannot go stale.
+    _PROD_SHA=$(curl -s -m 10 https://app.usg.co.nz/api/version 2>/dev/null \
+      | sed -n 's/.*"sha":"\([0-9a-f]\{7,40\}\)".*/\1/p')
+    if [ -n "$_PROD_SHA" ] && git cat-file -e "${_PROD_SHA}^{commit}" 2>/dev/null; then
+      if [ "$_PROD_SHA" != "$_LAST" ]; then
+        echo "ℹ️  production reports ${_PROD_SHA:0:7}; the local stamp says ${_LAST:0:7} — trusting production."
+      fi
+      _LAST="$_PROD_SHA"
+    fi
     # preflight-deploy.ts probes ROUTES. It cannot see a script, a migration, a
     # seed or a static asset that exists only as a file, so a tree one commit
     # behind prod passes the guard honestly and silently drops that file from
@@ -135,9 +159,13 @@ if [ -f .last-deployed-sha ]; then
       echo ""
       echo "   The canary guard cannot catch this: it probes routes, not files."
       echo "   Merge the deployed sha first —  git merge $_LAST  — then redeploy."
-      echo "   Deliberate removal? ALLOW_BEHIND_PROD=1 ./deploy.sh"
-      [ "${ALLOW_BEHIND_PROD:-0}" = "1" ] || exit 1
-      echo "   ⚠️  ALLOW_BEHIND_PROD=1 set — proceeding with the removal."
+      echo "   Deliberate removal? ./deploy.sh --allow-behind-prod"
+      # Deliberately read from ARGV, never the environment: an exported variable
+      # survives a whole shell session, so one deliberate override an hour ago
+      # would silently disarm every deploy after it. A flag applies to exactly
+      # the invocation a human typed it on.
+      [ "${_ALLOW_BEHIND:-0}" = "1" ] || exit 1
+      echo "   ⚠️  --allow-behind-prod passed — proceeding with the removal."
       echo ""
     fi
   fi
@@ -211,6 +239,7 @@ _deploy_rc=0
 flyctl deploy -a clubos \
   --build-arg VITE_STRIPE_PUBLISHABLE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY" \
   --build-arg VITE_META_PIXEL_ID="$VITE_META_PIXEL_ID" \
+  --build-arg GIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
   "$@" || _deploy_rc=$?
 
 # ── POST-DEPLOY: did a working checkout actually reach production? ───────────
