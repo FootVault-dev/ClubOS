@@ -39,6 +39,7 @@ import {
   type ShopVariant, type ShopShippingOption, type ShopDiscountCode,
   type ShopOrder, type ShopOrderItem, type ShopOrderShare,
   type ShopKitCustomisation, type ShopSponsorSlot, type ShopUnitPersonalisation,
+  type ShopPrintOptions, type ShopPrintChoice,
 } from "@shared/schema";
 // T13 — WMS reservation on payment-confirm (dark-launched, see finalizeShopOrderPaid).
 import { runReserveStock, runReleaseReservationsForRef } from "./warehouse";
@@ -112,6 +113,21 @@ const SHOP_BRANDS: Record<string, ShopBrand> = {
     // storefront that doesn't exist yet.
     // TODO cutover → replace with the real CUFC storefront once it's built.
     storefrontBase: "https://cufcshop.com",
+  },
+  siu: {
+    brandKey: "siu",
+    orgId: 2,
+    storeName: "South Island United Store",
+    orderPrefix: "SIU",
+    assetBase: "https://join.southislandunited.com",
+    currency: "NZD",
+    adminEmail: "info@southislandunited.com",
+    allowedOrigins: [
+      /^https:\/\/(www\.)?southislandunited\.com$/,
+      /^https:\/\/shop\.southislandunited\.com$/,
+      /^https:\/\/siu-shop\.vercel\.app$/,
+    ],
+    storefrontBase: "https://shop.southislandunited.com",
   },
 };
 
@@ -236,8 +252,10 @@ function parseKitCustomisation(raw: any): ShopKitCustomisation | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-/** Shirt name ≤ 14 chars; number = 1–2 digits (kept as a string). */
-function parseUnitPersonalisation(raw: any): ShopUnitPersonalisation {
+/** Shirt name ≤ 14 chars; number = 1–2 digits (kept as a string). `choice` —
+ *  when the product carries print_options — enforces that choice's own
+ *  needsName/needsNumber requirement. */
+function parseUnitPersonalisation(raw: any, choice?: ShopPrintChoice | null): ShopUnitPersonalisation {
   const unit: ShopUnitPersonalisation = {};
   const name = sanitizeText(raw?.name, 14);
   if (name) unit.name = name;
@@ -246,16 +264,133 @@ function parseUnitPersonalisation(raw: any): ShopUnitPersonalisation {
     if (!SHIRT_NUMBER_RX.test(number)) throw new ShopError("Shirt numbers must be 1–2 digits.");
     unit.number = number;
   }
+  if (choice?.needsName && !unit.name) throw new ShopError(`"${choice.label}" printing needs a name.`);
+  if (choice?.needsNumber && !unit.number) throw new ShopError(`"${choice.label}" printing needs a number.`);
   return unit;
 }
 
-/** Per-shirt personalisation list — when present, length MUST equal qty. */
-function parseUnits(raw: any, qty: number): ShopUnitPersonalisation[] | null {
-  if (raw == null) return null;
+/** Resolve one unit's printing choice against a product's print_options —
+ *  `null` printOptions (every MFL/CIC/CUFC product today) accepts only an
+ *  absent/"none" key and always prices at 0, so this is a no-op for them. */
+function resolvePrintChoice(
+  printOptions: ShopPrintOptions | null | undefined,
+  rawKey: any,
+): { key: string; priceCents: number; choice: ShopPrintChoice | null } {
+  const key = rawKey != null && String(rawKey).trim() !== ""
+    ? String(rawKey).trim()
+    : (printOptions?.defaultChoice ?? "none");
+  if (!printOptions) {
+    if (key !== "none") throw new ShopError("This item does not support printing.");
+    return { key: "none", priceCents: 0, choice: null };
+  }
+  const choice = printOptions.choices.find((c) => c.key === key);
+  if (!choice) throw new ShopError(`Unknown printing option "${key}".`);
+  return { key, priceCents: Math.round(choice.priceDollars * 100), choice };
+}
+
+/** One unit (one shirt) — sanitised personalisation + its printing choice.
+ *  `unit.print` is stored ONLY when it differs from the product's own
+ *  defaultChoice, so a product with no print_options (or a unit that just
+ *  takes the default) produces byte-identical output to the pre-printing
+ *  ShopUnitPersonalisation shape. */
+function parseUnitWithPrint(
+  raw: any,
+  printOptions: ShopPrintOptions | null | undefined,
+): { unit: ShopUnitPersonalisation; printCents: number } {
+  const { key, priceCents, choice } = resolvePrintChoice(printOptions, raw?.print);
+  const unit = parseUnitPersonalisation(raw, choice);
+  if (printOptions && key !== printOptions.defaultChoice) unit.print = key;
+  return { unit, printCents: priceCents };
+}
+
+/** Per-shirt personalisation + printing list — when present, length MUST
+ *  equal qty. Printing is priced SERVER-SIDE here, from print_options; the
+ *  browser only ever sends a choice key. */
+function parseUnitsWithPrint(
+  raw: any,
+  qty: number,
+  printOptions: ShopPrintOptions | null | undefined,
+): { units: ShopUnitPersonalisation[] | null; printCents: number } {
+  if (raw == null) {
+    // No per-shirt data at all — every unit takes the default choice
+    // (price 0 for every product today, but resolved properly regardless).
+    const { priceCents } = resolvePrintChoice(printOptions, undefined);
+    return { units: null, printCents: priceCents * qty };
+  }
   if (!Array.isArray(raw)) throw new ShopError("Shirt personalisation is invalid.");
   if (raw.length !== qty) throw new ShopError("Add a name/number entry for every shirt in the line.");
-  const units = raw.map(parseUnitPersonalisation);
-  return units.some((u) => u.name || u.number) ? units : null;
+  let printCents = 0;
+  const units = raw.map((u) => {
+    const parsed = parseUnitWithPrint(u, printOptions);
+    printCents += parsed.printCents;
+    return parsed.unit;
+  });
+  const anyPersonalised = units.some((u) => u.name || u.number || u.print);
+  return { units: anyPersonalised ? units : null, printCents };
+}
+
+/** Admin: validate a product's print_options before it's stored — this shape
+ *  is trusted everywhere else in the engine (pricing, catalog, checkout), so
+ *  it's checked once here rather than defensively at every read site. */
+function parsePrintOptionsInput(raw: any): ShopPrintOptions | null {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new ShopError("Printing options are invalid.");
+  const key = sanitizeText(raw.key, 40) || "printing";
+  const label = sanitizeText(raw.label, 60) || "Printing";
+  if (!Array.isArray(raw.choices) || raw.choices.length === 0) {
+    throw new ShopError("Printing options need at least one choice.");
+  }
+  const choices: ShopPrintChoice[] = raw.choices.map((c: any) => {
+    const choiceKey = sanitizeText(c?.key, 40);
+    if (!choiceKey) throw new ShopError("Every printing choice needs a key.");
+    const priceDollars = Number(c?.priceDollars);
+    if (!Number.isFinite(priceDollars) || priceDollars < 0) {
+      throw new ShopError(`Printing choice "${choiceKey}" needs a valid, non-negative price.`);
+    }
+    return {
+      key: choiceKey,
+      label: sanitizeText(c?.label, 60) || choiceKey,
+      priceDollars,
+      needsName: !!c?.needsName,
+      needsNumber: !!c?.needsNumber,
+      ...(c?.fromSquad ? { fromSquad: true } : {}),
+    };
+  });
+  const defaultChoice = sanitizeText(raw.defaultChoice, 40) || choices[0].key;
+  if (!choices.some((c) => c.key === defaultChoice)) {
+    throw new ShopError("defaultChoice must match one of the printing choices.");
+  }
+  return { key, label, defaultChoice, choices };
+}
+
+/** Resolve each unit's `print` key to a human label (e.g. "Squad player") for
+ *  the admin order-notification "print spec" — so whoever presses the heat
+ *  press sees "Player · MEYN #29", not just "MEYN #29". A unit with no
+ *  `print` key, or a product with no print_options at all (every MFL/CIC/CUFC
+ *  product today), passes through unchanged — `printLabel` is simply absent. */
+function labelPrintUnits(
+  units: ShopUnitPersonalisation[] | null | undefined,
+  printOptions: ShopPrintOptions | null | undefined,
+): { name?: string; number?: string; printLabel?: string }[] | undefined {
+  if (!units || units.length === 0) return undefined;
+  if (!printOptions) return units;
+  return units.map((u) => {
+    if (!u.print) return u;
+    const choice = printOptions.choices.find((c) => c.key === u.print);
+    return choice ? { ...u, printLabel: choice.label } : u;
+  });
+}
+
+/** Batch-fetch print_options for the products behind a set of order items,
+ *  keyed by productId — feeds labelPrintUnits() for the order emails. */
+async function printOptionsByProductForItems(
+  items: { productId: number | null }[],
+): Promise<Map<number, ShopPrintOptions | null>> {
+  const productIds = Array.from(new Set(items.map((i) => i.productId).filter((id): id is number => id != null)));
+  if (productIds.length === 0) return new Map();
+  const rows = await db.select({ id: shopProducts.id, printOptions: shopProducts.printOptions })
+    .from(shopProducts).where(inArray(shopProducts.id, productIds));
+  return new Map(rows.map((r) => [r.id, (r.printOptions as ShopPrintOptions | null) ?? null]));
 }
 
 /** Print-spec sponsor rows for the READY TO PRINT email. */
@@ -282,8 +417,14 @@ interface PricedLine {
   variant: ShopVariant;
   qty: number;
   unitCents: number;
-  lineCents: number;
+  /** Printing add-on total for this line (all units), priced server-side
+   *  from the product's print_options. 0 for every product without one. */
+  printCents: number;
+  lineCents: number; // unitCents × qty + printCents
   imageUrl: string | null; // relative or absolute, as stored
+  /** Parsed per-shirt personalisation + printing choice, or null when none
+   *  was supplied / needed. Same shape persisted onto shop_order_items.units. */
+  units: ShopUnitPersonalisation[] | null;
 }
 
 interface PricedCart {
@@ -346,7 +487,7 @@ async function priceCart(
   // sneak past a stock check line-by-line.
   const demand = new Map<number, number>();
 
-  const lines: PricedLine[] = items.map((it) => {
+  const lines: PricedLine[] = items.map((it, idx) => {
     const product = products.find((p) => p.id === it.productId);
     if (!product) throw new ShopError("An item in your cart is no longer available.");
     const colour = colours.find((c) => c.id === it.colourId && c.productId === product.id && c.active);
@@ -361,10 +502,17 @@ async function priceCart(
     // Per-variant price wins when set (gift-card denominations); otherwise the
     // product price (all standard products, incl. every MFL kit).
     const unitCents = variant.priceCents ?? product.priceCents;
+    // Printing add-on, priced server-side from the product's own
+    // print_options — rawItems[idx] is index-aligned with `items` (built by
+    // a straight .map above). A product with no print_options (every
+    // MFL/CIC/CUFC product today) always prices printCents at 0.
+    const printOptions = (product.printOptions as ShopPrintOptions | null) ?? null;
+    const { units, printCents } = parseUnitsWithPrint(rawItems[idx]?.units, it.qty, printOptions);
     return {
       product, colour, variant, qty: it.qty,
-      unitCents, lineCents: unitCents * it.qty,
+      unitCents, printCents, lineCents: unitCents * it.qty + printCents,
       imageUrl: image?.url || null,
+      units,
     };
   });
 
@@ -501,9 +649,10 @@ export async function finalizeShopOrderPaid(orderId: number, paymentIntentId: st
     }
   }
 
+  const printOptionsByProduct = await printOptionsByProductForItems(items);
   const emailLines: ShopOrderEmailLine[] = items.map((i) => ({
     title: i.title, colourName: i.colourName, size: i.size, qty: i.qty, lineCents: i.lineCents,
-    units: i.units || undefined,
+    units: labelPrintUnits(i.units, i.productId != null ? printOptionsByProduct.get(i.productId) : undefined),
   }));
   const requiresAddress = !!order.addressLine1;
   const addressSummary = requiresAddress
@@ -870,6 +1019,10 @@ export function registerShopRoutes(app: Express) {
             type: p.type,
             priceDollars: toDollars(p.priceCents),
             compareAtDollars: p.compareAtCents != null ? toDollars(p.compareAtCents) : undefined,
+            // Printing as a priced add-on (SIU, 2026-09) — stored directly in
+            // dollars (the same shape the storefront renders), null for every
+            // product without one (every MFL/CIC/CUFC product today).
+            printOptions: (p.printOptions as ShopPrintOptions | null) ?? null,
             images: productImages.map((im) => ({ url: absUrl(brand, im.url), alt: im.alt || p.title })),
             colours: productColours.map((c) => ({
               id: c.id,
@@ -915,7 +1068,8 @@ export function registerShopRoutes(app: Express) {
           colourName: l.colour.name,
           image: absUrl(brand, l.imageUrl),
           unitDollars: toDollars(l.unitCents),
-          lineDollars: toDollars(l.lineCents),
+          printDollars: toDollars(l.printCents),
+          lineDollars: toDollars(l.lineCents), // unit×qty + printDollars
         })),
         subtotalDollars: toDollars(cart.subtotalCents),
         discountDollars: toDollars(cart.discountCents),
@@ -945,14 +1099,15 @@ export function registerShopRoutes(app: Express) {
 
       const cart = await priceCart(brand, req.body?.items, req.body?.discountCode, req.body?.shippingOptionId);
 
-      // Kit customisation + per-shirt personalisation. Personalisation is
-      // included in the price ($0 — NO price impact); it's a print spec, not a
-      // priced add-on. rawItems and cart.lines are index-aligned (priceCart
-      // maps items 1:1 in order).
+      // Kit customisation (sponsor slots) is a print spec, not a priced
+      // add-on — parsed separately here. Per-shirt personalisation AND its
+      // printing choice (l.units / l.printCents) were already parsed and
+      // priced inside priceCart, so they aren't re-parsed here — one place
+      // decides what a unit costs. rawItems and cart.lines are index-aligned
+      // (priceCart maps items 1:1 in order).
       const rawItems: any[] = Array.isArray(req.body?.items) ? req.body.items : [];
       const itemExtras = cart.lines.map((l, idx) => ({
         customisation: parseKitCustomisation(rawItems[idx]?.customisation),
-        units: parseUnits(rawItems[idx]?.units, l.qty),
       }));
 
       // Address — required only when the chosen option ships.
@@ -1027,11 +1182,12 @@ export function registerShopRoutes(app: Express) {
         size: l.variant.size,
         imageUrl: l.imageUrl,
         unitCents: l.unitCents,
+        printCents: l.printCents,
         qty: l.qty,
         lineCents: l.lineCents,
         costUsdSnapshot: l.product.costUsd, // reference only — never calculated with
         customisation: itemExtras[idx].customisation,
-        units: itemExtras[idx].units,
+        units: l.units,
       })));
 
       // Embedded PaymentElement flow — our own on-brand card form, no hosted
@@ -1103,6 +1259,7 @@ export function registerShopRoutes(app: Express) {
             qty: i.qty,
             image: absUrl(brand, i.imageUrl),
             unitDollars: toDollars(i.unitCents),
+            printDollars: toDollars(i.printCents),
             lineDollars: toDollars(i.lineCents),
           })),
           totalDollars: toDollars(order.totalCents),
@@ -1757,6 +1914,7 @@ export function registerShopRoutes(app: Express) {
         badge: String(req.body?.badge || "").trim() || null,
         status: ["draft", "active", "archived"].includes(req.body?.status) ? req.body.status : "draft",
         sortOrder: parseInt(String(req.body?.sortOrder)) || 0,
+        printOptions: parsePrintOptionsInput(req.body?.printOptions),
       }).returning();
       res.status(201).json(created);
     } catch (e: any) {
@@ -1781,6 +1939,10 @@ export function registerShopRoutes(app: Express) {
       if (b.badge !== undefined) patch.badge = String(b.badge).trim() || null;
       if (b.status !== undefined && ["draft", "active", "archived"].includes(b.status)) patch.status = b.status;
       if (b.sortOrder !== undefined) patch.sortOrder = parseInt(String(b.sortOrder)) || 0;
+      // Printing as a priced add-on (SIU, 2026-09) — null clears it (no
+      // printing offered), an object is validated before it's ever trusted
+      // by pricing/catalog/checkout.
+      if (b.printOptions !== undefined) patch.printOptions = parsePrintOptionsInput(b.printOptions);
       const [updated] = await db.update(shopProducts).set(patch).where(eq(shopProducts.id, id)).returning();
       if (!updated) return res.status(404).json({ message: "Product not found" });
       res.json(updated);
@@ -2059,11 +2221,15 @@ export function registerShopRoutes(app: Express) {
       const items = await db.select().from(shopOrderItems).where(eq(shopOrderItems.orderId, order.id));
       const requiresAddress = !!order.addressLine1;
       const brand = shopBrandByOrgId(order.organizationId);
+      const printOptionsByProduct = await printOptionsByProductForItems(items);
       const ok = await sendShopOrderConfirmation({
         to: order.email,
         firstName: order.firstName,
         orderNumber: order.orderNumber || `#${order.id}`,
-        lines: items.map((i) => ({ title: i.title, colourName: i.colourName, size: i.size, qty: i.qty, lineCents: i.lineCents, units: i.units || undefined })),
+        lines: items.map((i) => ({
+          title: i.title, colourName: i.colourName, size: i.size, qty: i.qty, lineCents: i.lineCents,
+          units: labelPrintUnits(i.units, i.productId != null ? printOptionsByProduct.get(i.productId) : undefined),
+        })),
         subtotalCents: order.subtotalCents,
         discountCents: order.discountCents,
         discountCode: order.discountCode,

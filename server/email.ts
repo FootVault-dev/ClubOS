@@ -238,15 +238,22 @@ const MFL_FROM = "Mini Football Leagues <noreply@minifootball.co.nz>";
 const MFL_REPLY_TO = "minifootball@cufc.co.nz";
 const MFL_LOGO_URL = "https://join.minifootball.co.nz/logos/mini-football-leagues.png";
 
-// Shop emails are shared across every shop_* brand (MFL/CIC/CUFC…) — the
+// Shop emails are shared across every shop_* brand (MFL/CIC/CUFC/SIU…) — the
 // functions below default to the MFL identity above (byte-identical output
-// for every existing caller that doesn't pass a brandKey), and switch to the
-// club's own identity only when brandKey === "cufc". CIC orders still send
-// on the MFL identity today; that's pre-existing behaviour, not something
-// this change alters.
+// for every existing caller that doesn't pass a brandKey), and switch to a
+// brand's own identity only when brandKey matches one of the shells defined
+// here. CIC orders still send on the MFL identity today; that's pre-existing
+// behaviour, not something this change alters.
 const CUFC_SHOP_FROM = "Christchurch United <noreply@cufc.co.nz>";
 const CUFC_SHOP_REPLY_TO = "info@cufc.co.nz";
 const CUFC_SHOP_LOGO_URL = "https://join.cufc.co.nz/logos/christchurch-united.png";
+
+// South Island United (2026-09-09) — sends on southislandunited.com, the
+// verified domain the club's own membership emails already use (see
+// sendMembershipWelcomeEmail below), never join.cufc.co.nz.
+const SIU_SHOP_FROM = "South Island United <noreply@southislandunited.com>";
+const SIU_SHOP_REPLY_TO = "info@southislandunited.com";
+const SIU_SHOP_LOGO_URL = "https://join.southislandunited.com/logos/south-island-united.png";
 
 function mflShell(opts: { heading: string; bodyHtml: string }): string {
   return `
@@ -293,12 +300,40 @@ function cufcShopShell(opts: { heading: string; bodyHtml: string }): string {
   </div>`;
 }
 
-/** Picks the shop email identity by brand. Anything other than "cufc" keeps
- *  the existing MFL identity — including "cic" and undefined, so no existing
- *  caller's output changes. */
+// South Island United's own shell — the club's Pupila brand (Unity Black,
+// Ambition Gold, Leader Green, bone), used ONLY for shop emails where
+// brandKey === "siu". Same structure as mflShell/cufcShopShell so the
+// mflRow() table rows underneath still read correctly against it.
+function siuShopShell(opts: { heading: string; bodyHtml: string }): string {
+  return `
+  <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:linear-gradient(135deg,#000000,#1B3D24); padding:36px 16px;">
+    <div style="max-width: 560px; margin: 0 auto;">
+      <div style="text-align:center; padding:4px 0 26px;">
+        <img src="${SIU_SHOP_LOGO_URL}" alt="South Island United" width="84" height="84" style="display:inline-block; width:84px; height:84px; margin:0 0 18px;" />
+        <h1 style="color:#F4F1EA; margin:0; font-size:22px; font-weight:700; letter-spacing:-0.2px; text-transform:uppercase;">${opts.heading}</h1>
+      </div>
+      <div style="background:#0A0A09; border:1px solid #1f1f1f; border-radius:18px; padding:28px; color:#F4F1EA;">
+        ${opts.bodyHtml}
+        <p style="color:#8c8c8c; font-size:13px; line-height:1.55; margin:26px 0 0; border-top:1px solid #1f1f1f; padding-top:18px;">
+          Questions? Just reply to this email and we'll sort you out.
+        </p>
+      </div>
+      <p style="text-align:center; color:#F4F1EA; opacity:0.6; font-size:11px; line-height:1.7; margin:22px 0 0;">
+        South Island United — Uniting the South
+      </p>
+    </div>
+  </div>`;
+}
+
+/** Picks the shop email identity by brand. Anything other than "cufc"/"siu"
+ *  keeps the existing MFL identity — including "cic" and undefined, so no
+ *  existing caller's output changes. */
 function shopEmailIdentity(brandKey?: string) {
   if (brandKey === "cufc") {
     return { from: CUFC_SHOP_FROM, replyTo: CUFC_SHOP_REPLY_TO, shell: cufcShopShell, workspaceLabel: "Christchurch United" };
+  }
+  if (brandKey === "siu") {
+    return { from: SIU_SHOP_FROM, replyTo: SIU_SHOP_REPLY_TO, shell: siuShopShell, workspaceLabel: "South Island United" };
   }
   return { from: MFL_FROM, replyTo: MFL_REPLY_TO, shell: mflShell, workspaceLabel: "Mini Football" };
 }
@@ -996,14 +1031,23 @@ export interface ShopOrderEmailLine {
   size?: string | null;
   qty: number;
   lineCents: number;
-  /** Per-shirt personalisation (name/number) — rendered as a "Printing" sub-row. */
-  units?: { name?: string; number?: string }[] | null;
+  /** Per-shirt personalisation (name/number) — rendered as a "Printing" sub-row.
+   *  `printLabel` (e.g. "Squad player") is resolved server-side from the
+   *  product's print_options before this is built — absent for every product
+   *  without one (every MFL/CIC/CUFC product today), which keeps this row
+   *  byte-identical to its pre-printing output for them. */
+  units?: { name?: string; number?: string; printLabel?: string }[] | null;
 }
 
-/** "Printing: SMITH #9 · JONES #10" sub-row under a personalised line. */
-function shopUnitsRow(units: { name?: string; number?: string }[]): string {
+/** "Printing: Player · SMITH #9 · Custom · JONES #10" sub-row under a
+ *  personalised line — so whoever presses the heat press sees the choice,
+ *  not just the name/number. */
+function shopUnitsRow(units: { name?: string; number?: string; printLabel?: string }[]): string {
   const spec = units
-    .map((u) => [u.name, u.number ? `#${u.number}` : null].filter(Boolean).join(" "))
+    .map((u) => {
+      const nameNumber = [u.name, u.number ? `#${u.number}` : null].filter(Boolean).join(" ");
+      return [u.printLabel, nameNumber].filter(Boolean).join(" · ");
+    })
     .filter(Boolean)
     .join(" · ");
   if (!spec) return "";

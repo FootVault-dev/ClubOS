@@ -5357,6 +5357,13 @@ export const shopProducts = pgTable("shop_products", {
   badge: text("badge"),
   status: text("status").notNull().default("draft"),    // 'draft' | 'active' | 'archived'
   sortOrder: integer("sort_order").notNull().default(0),
+  // Printing as a priced add-on (2026-09, SIU). NULL = no printing offered on
+  // this product (every MFL/CIC/CUFC product today) — the engine's own model,
+  // not Shopify's "Printing: None/Player/Custom" third option axis, which
+  // splits ONE physical shirt's stock across three variants. Shape:
+  // ShopPrintOptions below; priced server-side in priceCart, never trusted
+  // from the browser.
+  printOptions: jsonb("print_options").$type<ShopPrintOptions | null>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
@@ -5454,7 +5461,35 @@ export interface ShopKitCustomisation {
   backTopSponsor?: ShopSponsorSlot;
   backBottomSponsor?: ShopSponsorSlot;
 }
-export interface ShopUnitPersonalisation { name?: string; number?: string } // number = 1–2 digits
+export interface ShopUnitPersonalisation {
+  name?: string;
+  number?: string; // 1–2 digits
+  /** Printing choice key for this one shirt (e.g. "player" | "custom") —
+   *  only present when it differs from the product's print_options
+   *  defaultChoice. Absent entirely for every product with no print_options
+   *  (every MFL/CIC/CUFC unit today). */
+  print?: string;
+}
+
+// Printing as a priced add-on (shop_products.print_options). One choice —
+// picked per shirt on ShopUnitPersonalisation.print — adds a flat amount on
+// top of the product's own unit price. Priced server-side from THIS record;
+// the browser only ever sends a `key`.
+export interface ShopPrintChoice {
+  key: string;             // e.g. "none" | "player" | "custom"
+  label: string;           // e.g. "No printing" | "Squad player"
+  priceDollars: number;    // added per shirt choosing this option
+  needsName: boolean;      // this choice requires a shirt name
+  needsNumber: boolean;    // this choice requires a shirt number
+  /** UI hint only (e.g. prefill from the squad roster) — never read server-side. */
+  fromSquad?: boolean;
+}
+export interface ShopPrintOptions {
+  key: string;              // e.g. "printing" — the option axis name
+  label: string;            // e.g. "Printing"
+  defaultChoice: string;    // must match one choice's `key`
+  choices: ShopPrintChoice[];
+}
 
 // Totals are GST-INCLUSIVE; gstCents = NZ GST content = round(total * 3 / 23).
 // orderToken = public status-lookup key; orderNumber = human "MFL-1001".
@@ -5525,10 +5560,16 @@ export const shopOrderItems = pgTable("shop_order_items", {
   lineCents: integer("line_cents").notNull().default(0),
   costUsdSnapshot: decimal("cost_usd_snapshot", { precision: 10, scale: 2 }),
   // Kit customisation (sponsor slots) + per-shirt personalisation. When units
-  // is present its length === qty. Personalisation is included in the price
-  // ($0 — no price impact).
+  // is present its length === qty. Personalisation itself is included in the
+  // price ($0 — no price impact); printing (units[].print) is NOT — its cost
+  // for the whole line is snapshotted below.
   customisation: jsonb("customisation").$type<ShopKitCustomisation | null>(),
   units: jsonb("units").$type<ShopUnitPersonalisation[] | null>(),
+  // Printing add-on total for this line (all units), snapshotted at checkout
+  // from the product's print_options — never recomputed at read time. 0 for
+  // every line on a product with no print_options (every MFL/CIC/CUFC order
+  // today).
+  printCents: integer("print_cents").notNull().default(0),
 });
 export const insertShopOrderItemSchema = createInsertSchema(shopOrderItems).omit({ id: true });
 export type InsertShopOrderItem = z.infer<typeof insertShopOrderItemSchema>;
