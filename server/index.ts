@@ -438,6 +438,11 @@ app.use(attributionCookieMiddleware);
   const { startLeagueBalanceCron } = await import("./league-balance-cron");
   startLeagueBalanceCron();
 
+  // Stripe payouts → Xero, already split by what was actually sold.
+  // No-ops unless XERO_PAYOUT_AUTOPOST=1.
+  const { startXeroPayoutCron } = await import("./xero-payout-cron");
+  startXeroPayoutCron();
+
   // Mailer: dispatch scheduled newsletter sends when their time arrives.
   const { startMflMailerScheduler } = await import("./routes");
   startMflMailerScheduler();

@@ -1,0 +1,188 @@
+<title>Stripe Payouts, Coded</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Oswald:wght@500;600&display=swap">
+<style>
+:root{
+  --navy:#0C1640; --navy-2:#1C2450; --ink:#151A2E; --body:#3E445C; --mute:#727892;
+  --gold:#D4AF37; --gold-deep:#9A7B18; --paper:#FFFFFF; --ground:#F4F5F9; --rule:#DFE2EC;
+  --good:#1B7A54; --good-soft:#E7F3ED; --warn:#8A5312; --warn-soft:#FAF0E0;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --navy:#0A1030; --navy-2:#151C42; --ink:#EEF0F8; --body:#B9BFD6; --mute:#8A91AC;
+  --gold:#E5C765; --gold-deep:#D4AF37; --paper:#131834; --ground:#0A0E24; --rule:#252C4E;
+  --good:#63C79C; --good-soft:#122A22; --warn:#D9A75E; --warn-soft:#2A2015;
+}}
+:root[data-theme="dark"]{
+  --navy:#0A1030; --navy-2:#151C42; --ink:#EEF0F8; --body:#B9BFD6; --mute:#8A91AC;
+  --gold:#E5C765; --gold-deep:#D4AF37; --paper:#131834; --ground:#0A0E24; --rule:#252C4E;
+  --good:#63C79C; --good-soft:#122A22; --warn:#D9A75E; --warn-soft:#2A2015;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--body);
+  font-family:Inter,system-ui,-apple-system,sans-serif;font-size:16px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:830px;margin:0 auto;padding:0 22px 88px}
+
+header.band{background:var(--navy);color:#fff;padding:38px 0 34px;margin-bottom:38px;
+  border-bottom:3px solid var(--gold)}
+header.band .wrap{padding-bottom:0}
+.club{display:flex;align-items:center;gap:11px;margin-bottom:20px}
+.crest{width:26px;height:26px;flex:none}
+.clubname{font-family:Oswald,Impact,sans-serif;font-weight:500;font-size:12.5px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--gold)}
+h1{font-family:Oswald,Impact,sans-serif;font-weight:600;font-size:clamp(29px,5vw,42px);line-height:1.12;
+  margin:0;color:#fff;letter-spacing:.004em;text-wrap:balance}
+.lede{margin:15px 0 0;color:#C6CCE6;font-size:17px;max-width:60ch}
+.stamp{margin:20px 0 0;font-size:12.5px;letter-spacing:.09em;text-transform:uppercase;color:#8892BC;
+  font-family:"IBM Plex Mono",monospace}
+
+h2{font-family:Oswald,Impact,sans-serif;font-weight:500;font-size:13px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--gold-deep);margin:44px 0 14px}
+p{margin:0 0 15px;max-width:66ch}
+strong{color:var(--ink);font-weight:600}
+
+/* the demonstration */
+.demo{display:grid;grid-template-columns:1fr;gap:2px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.panel{background:var(--paper);padding:20px 22px}
+.plabel{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--mute);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.plabel i{font-style:normal;width:17px;height:17px;border-radius:50%;display:grid;place-items:center;
+  font-size:10px;font-weight:700;background:var(--ground);color:var(--mute)}
+.panel.out .plabel i{background:var(--good-soft);color:var(--good)}
+.bankline{font-family:"IBM Plex Mono",monospace;font-size:14px;color:var(--ink);line-height:1.75}
+.bankline .amt{float:right;font-weight:600}
+.aside{margin:11px 0 0;font-size:13.5px;color:var(--mute)}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:8px 0;text-align:left;vertical-align:top}
+th{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--mute);font-weight:400;border-bottom:1px solid var(--rule)}
+td.n{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;
+  white-space:nowrap;color:var(--ink)}
+td.code{font-family:"IBM Plex Mono",monospace;color:var(--ink);white-space:nowrap;padding-right:14px}
+tr.sum td{border-top:1px solid var(--rule);font-weight:600;color:var(--ink);padding-top:10px}
+tr.fee td{color:var(--mute)}
+.tw{overflow-x:auto}
+
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:3px;overflow:hidden;margin:6px 0 0}
+.fact{background:var(--paper);padding:16px 18px}
+.fact dt{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+.fact dd{margin:5px 0 0;font-family:Oswald,sans-serif;font-size:25px;color:var(--ink);font-weight:500}
+.fact dd.ok{color:var(--good)}
+
+ul{margin:0 0 15px;padding-left:20px;max-width:66ch}
+li{margin-bottom:9px}
+
+.note{border-left:2px solid var(--gold);background:var(--paper);padding:16px 20px;border-radius:0 3px 3px 0;
+  margin:8px 0 0}
+.note p:last-child{margin-bottom:0}
+.ask{background:var(--navy);color:#D3D9F2;border-radius:3px;padding:24px 26px;margin-top:10px}
+.ask h3{font-family:Oswald,sans-serif;font-weight:500;font-size:15px;letter-spacing:.05em;color:#fff;margin:0 0 10px;text-transform:uppercase}
+.ask p{color:#B9C1E4;max-width:62ch}
+.ask a{color:var(--gold);text-decoration:none;border-bottom:1px solid rgba(212,175,55,.45)}
+.ask a:hover{border-bottom-color:var(--gold)}
+.ask p:last-child{margin-bottom:0}
+
+footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--rule);font-size:13px;color:var(--mute)}
+@media(min-width:720px){.demo{grid-template-columns:1fr 1fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<header class="band">
+  <div class="wrap">
+    <div class="club">
+      <svg class="crest" viewBox="0 0 24 28" aria-hidden="true">
+        <path d="M12 1 22 4v10c0 6-4.4 10.7-10 13C6.4 24.7 2 20 2 14V4z" fill="none" stroke="#D4AF37" stroke-width="1.6"/>
+        <path d="M12 7v11M7.5 10.5h9" stroke="#D4AF37" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <span class="clubname">Christchurch United Football Club</span>
+    </div>
+    <h1>Stripe payouts now arrive in Xero<br>already coded</h1>
+    <p class="lede">Every card payment the club takes is settled by Stripe as one lump deposit. Splitting that
+    deposit back into what was actually sold has been done by hand, every day. It no longer has to be.</p>
+    <p class="stamp">Live since 9 September 2026 · ANZ Business Premium 01-0635-0374823-00</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+<h2>The problem, in one line</h2>
+<p>A Stripe deposit lands in the bank with a reference like <span class="mono">TRF HQKTQZ7G STRIPE</span>.
+That is everything the bank tells us. It does not say which programme, how many families, or how much of it
+was Stripe's fee. Someone has to know, and then type it in.</p>
+
+<h2>9 September, as an example</h2>
+<div class="demo">
+  <div class="panel">
+    <p class="plabel"><i>1</i> What the bank statement says</p>
+    <p class="bankline">9 Sep 2026<span class="amt">492.17</span><br>
+      Stripe Payments<br>TRF HQKTQZ7G STRIPE</p>
+    <p class="aside">One number. No breakdown, no GST split, no indication that six different families paid for
+    three different things.</p>
+  </div>
+  <div class="panel out">
+    <p class="plabel"><i>&#10003;</i> What ClubOS knew, and posted</p>
+    <div class="tw"><table>
+      <tr><th>Account</th><th>Detail</th><th style="text-align:right">NZD</th></tr>
+      <tr><td class="code">203</td><td>Holiday camps — 4 payments</td><td class="n">420.00</td></tr>
+      <tr><td class="code">203/02</td><td>Mini Football Leagues — 2 payments</td><td class="n">92.50</td></tr>
+      <tr class="fee"><td class="code">484/01</td><td>Stripe fee</td><td class="n">-20.33</td></tr>
+      <tr class="sum"><td class="code"></td><td>Total, GST inclusive</td><td class="n">492.17</td></tr>
+    </table></div>
+    <p class="aside">Prepared as a Receive Money against the same bank line, with GST on each row. It reconciles
+    to the cent.</p>
+  </div>
+</div>
+
+<h2>Checked before it was switched on</h2>
+<dl class="facts">
+  <div class="fact"><dt>Payouts read</dt><dd>55</dd></div>
+  <div class="fact"><dt>Card payments</dt><dd>489</dd></div>
+  <div class="fact"><dt>Failed to balance</dt><dd class="ok">0</dd></div>
+  <div class="fact"><dt>Unidentified</dt><dd>$5.34</dd></div>
+</dl>
+<p style="margin-top:14px">Every payout from 15 April to 9 September was read back and re-split. All 55
+reconciled to the cent. The $5.34 that could not be identified was thirteen one-dollar card tests.</p>
+
+<div class="note">
+  <p><strong>The coding is not new, and it is not ours.</strong> It was read out of 25 payouts Olga and
+  Natalia had already coded by hand, so the accounts match what they have been doing all year: FUNiño to
+  200/05, holiday camps to 203, Mini Football to 203/02, Technification to 200/07, facility hire to 301, the
+  Stripe fee to 484/01.</p>
+  <p style="margin-top:11px">On one payout they had already completed, the automatic split agreed to within
+  <strong>32 cents on $725.39</strong>. The difference is a Stripe account charge they netted against income
+  and this treats as a fee.</p>
+</div>
+
+<h2>What has not changed</h2>
+<ul>
+  <li><strong>Nothing is reconciled automatically.</strong> The entry is prepared and left unreconciled. Olga
+  or Natalia still open the bank line and click OK, and either can delete it.</li>
+  <li><strong>Nothing is invented.</strong> If a payment cannot be identified, or an account has not been
+  agreed, the payout is not posted at all rather than filed somewhere plausible.</li>
+  <li><strong>Xero still owns the ledger.</strong> No rule, report or existing transaction was altered.</li>
+</ul>
+
+<h2>Two things for you, Victor</h2>
+<div class="ask">
+  <h3>Confirm the accounts</h3>
+  <p>The mapping above reproduces current practice. It has not been reviewed by an accountant, and current
+  practice is not the same as agreed practice. Two we would particularly like your view on:</p>
+  <p style="margin-top:11px">Field hire income is coded to <span class="mono">301 Field Hire</span>, which is
+  an expense account tagged GST on Expenses. <span class="mono">275 Field Hire Income</span> exists. Roughly
+  $975 has gone through it since April.</p>
+  <p style="margin-top:11px">Card-paid invoices post to <span class="mono">200/11 Event Revenue</span>. Where
+  an invoice already exists in Xero, the payment should clear that invoice instead. Say the word and those are
+  handled separately.</p>
+  <p style="margin-top:16px">Five categories are deliberately left blank until you set them: tournament
+  entries, club events, memberships, United Prints and gymnastics. Any payout containing one of those will
+  simply not post.</p>
+</div>
+
+<footer>
+  Prepared by Daniel Meyn · Business Development Manager · Christchurch United Football Club Incorporated<br>
+  Figures read from the club's live Stripe account and Xero organisation on 9 September 2026.
+</footer>
+</div>

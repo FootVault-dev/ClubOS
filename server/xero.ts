@@ -136,6 +136,65 @@ export async function handleCallback(callbackUrl: string, state: string): Promis
 
 // Returns an authenticated Xero client for the given org, refreshing the
 // access token if it's about to expire. Throws if no connection exists.
+/**
+ * Swap the refresh token for a new access token.
+ *
+ * 🔴 Deliberately NOT `xero.refreshToken()`. The SDK builds its OpenID client
+ * lazily and that method throws "Cannot read properties of undefined (reading
+ * 'refresh')" on a client that was only given a token set — which is every
+ * client this file makes. The refresh path in this codebase had therefore never
+ * once worked; it was simply never reached until a call landed more than 30
+ * minutes after connecting. A plain POST to the token endpoint has no such
+ * dependency.
+ */
+async function refreshAndStore(xero: XeroClient, connId: number, fallbackRefresh: string) {
+  const res = await fetch("https://identity.xero.com/connect/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${process.env.XERO_CLIENT_ID}:${process.env.XERO_CLIENT_SECRET}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: fallbackRefresh }),
+  });
+  const t: any = await res.json();
+  if (!t.access_token) throw new Error(`Xero refused to refresh the token: ${JSON.stringify(t).slice(0, 300)}`);
+  // 🔴 Store the ROTATED refresh token before anything else can fail. Xero
+  // invalidates the old one immediately, so losing this write costs the whole
+  // connection and needs a human back at the consent screen.
+  await db.update(orgIntegrations)
+    .set({
+      accessToken: t.access_token,
+      refreshToken: t.refresh_token ?? fallbackRefresh,
+      tokenExpiresAt: new Date(Date.now() + (t.expires_in ?? 1800) * 1000),
+      updatedAt: new Date(),
+    })
+    .where(eq(orgIntegrations.id, connId));
+  // The SDK holds its own copy; without this the refreshed token is stored but
+  // the very next call still goes out with the dead one.
+  await xero.setTokenSet({ access_token: t.access_token, refresh_token: t.refresh_token, token_type: "Bearer", expires_at: Math.floor(Date.now() / 1000) + (t.expires_in ?? 1800) });
+  return t;
+}
+
+/**
+ * Run a Xero call, refreshing once if the token turns out to be dead.
+ *
+ * 🔴 Wrap every Xero API call in this. Checking an expiry before the call is a
+ * guess about a clock; a 401 is the answer from Xero itself.
+ */
+export async function withXero<T>(orgId: number, fn: (xero: XeroClient, tenantId: string) => Promise<T>): Promise<T> {
+  const { xero, tenantId } = await getXeroForOrg(orgId);
+  try {
+    return await fn(xero, tenantId);
+  } catch (e: any) {
+    if (e?.response?.statusCode !== 401) throw e;
+    const [conn] = await db.select().from(orgIntegrations)
+      .where(and(eq(orgIntegrations.organizationId, orgId), eq(orgIntegrations.provider, "xero"), eq(orgIntegrations.isActive, true)));
+    if (!conn) throw e;
+    await refreshAndStore(xero, conn.id, conn.refreshToken!);
+    return await fn(xero, tenantId);
+  }
+}
+
 export async function getXeroForOrg(orgId: number): Promise<{ xero: XeroClient; tenantId: string }> {
   const [conn] = await db.select().from(orgIntegrations)
     .where(and(eq(orgIntegrations.organizationId, orgId), eq(orgIntegrations.provider, "xero"), eq(orgIntegrations.isActive, true)));
@@ -151,19 +210,20 @@ export async function getXeroForOrg(orgId: number): Promise<{ xero: XeroClient; 
     expires_at: conn.tokenExpiresAt ? Math.floor(conn.tokenExpiresAt.getTime() / 1000) : undefined,
   });
 
-  // Refresh if expiring within 5 minutes
+  // Refresh if expiring within 5 minutes.
+  //
+  // 🔴 `token_expires_at` is `timestamptz` for a reason. It was `timestamp`
+  // WITHOUT a zone, so a JS Date round-tripped through New Zealand's offset and
+  // this read "expires in 11.8 hours" for a token that had died 13 minutes
+  // earlier — the refresh never fired and every call 401'd. A comparison against
+  // a stored instant is only as good as that column's type.
+  //
+  // 🔴 And the clock is not trusted on its own: a token can be dead for reasons
+  // this arithmetic cannot see (revoked, rotated elsewhere, a wrong server
+  // clock), so `withXero` below retries once on a 401. Belt and braces, because
+  // the failure is silent and only shows up as a broken post.
   const expiresIn = conn.tokenExpiresAt ? conn.tokenExpiresAt.getTime() - Date.now() : 0;
-  if (expiresIn < 5 * 60 * 1000) {
-    const newTokenSet = await xero.refreshToken();
-    await db.update(orgIntegrations)
-      .set({
-        accessToken: newTokenSet.access_token,
-        refreshToken: newTokenSet.refresh_token ?? conn.refreshToken,
-        tokenExpiresAt: new Date(Date.now() + (newTokenSet.expires_in ?? 1800) * 1000),
-        updatedAt: new Date(),
-      })
-      .where(eq(orgIntegrations.id, conn.id));
-  }
+  if (expiresIn < 5 * 60 * 1000) await refreshAndStore(xero, conn.id, conn.refreshToken);
 
   return { xero, tenantId: conn.externalId };
 }
