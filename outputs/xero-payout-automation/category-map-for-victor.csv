@@ -1,0 +1,9 @@
+category,label,charges,gross_nzd,xero_account_code,xero_tax_type,tracking_option,notes
+academy_term,"Academy — term programmes",148,25466.00,,,,
+league_team,"Mini Football Leagues — team entry",36,9980.00,,,,
+academy_camp,"Holiday camps",114,9933.50,,,,
+league_player,"Mini Football Leagues — player share",153,6668.76,,,,
+facility_hire,"Facility hire",8,1388.47,,,,
+shop,"Merchandise / shop",16,200.00,,,,
+invoice,"Invoices (sponsorship, rebates)",1,108.40,,,,
+unallocated,"Stripe — uncoded",13,5.34,,,,
