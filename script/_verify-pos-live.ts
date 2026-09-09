@@ -38,7 +38,7 @@ async function mkUser(globalRole: string, tabs: string[] | null, canRefund: bool
   const org = await pool.query(`select id from organizations where slug = $1`, [WS]);
   await pool.query(
     `insert into user_organizations (user_id, organization_id, role, tabs) values ($1,$2,'team_member',$3)`,
-    [id, org.rows[0].id, tabs]);
+    [id, org.rows[0].id, tabs === null ? null : JSON.stringify(tabs)]);
   return { id, email, password };
 }
 
@@ -154,7 +154,11 @@ async function main() {
   ok("the receipt carries the club's legal name and GST number", recBody?.seller?.gstNumber === "020-252-642" && /Incorporated/.test(recBody?.seller?.legalName ?? ""));
   ok("the receipt shows both brands' lines", (recBody?.lines ?? []).length === 2);
   ok("the receipt states the GST content", recBody?.gstCents === Math.round((12000 * 3) / 23), `gst ${recBody?.gstCents}`);
-  ok("an under-$1,000 receipt does not print the buyer's name", recBody?.customerName == null && recBody?.tier === "to_1000");
+  // $120 is IRD's lightest tier: seller, date, description, amount — the buyer's
+  // name is only required over $1,000. (The tier boundaries themselves are
+  // exercised in shared/pos.ts's own checks; this proves the receipt honours them.)
+  ok("a small receipt is the light tier and withholds the buyer's name",
+    recBody?.customerName == null && recBody?.tier === "under_200", `tier ${recBody?.tier}`);
   const badToken = await fetch(`${BASE}/api/public/pos/receipt/00000000-0000-0000-0000-000000000000`);
   ok("an unknown receipt token is a 404, never a guess", badToken.status === 404);
 
