@@ -273,7 +273,9 @@ export default function AdminMailer() {
             {i > 0 && <ChevronRight className="w-4 h-4 text-white/20" />}
             <button
               onClick={() => i <= step ? setStep(i) : undefined}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              // min-h-11 on a phone: these three pills are how you move between
+              // steps, and 38px is under the size a thumb hits reliably.
+              className={`flex items-center gap-2 px-4 py-2 min-h-11 md:min-h-0 rounded-xl text-sm font-medium transition-all ${
                 i === step
                   ? "bg-blue-500/15 text-blue-400 border border-blue-500/25"
                   : i < step
@@ -464,7 +466,7 @@ export default function AdminMailer() {
               <Button
                 onClick={() => setStep(1)}
                 disabled={!canProceedSetup}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="h-11 md:h-9 bg-blue-600 hover:bg-blue-700 text-white"
                 data-testid="button-next-content"
               >
                 Next: Content
@@ -650,7 +652,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => setStep(0)}
               variant="outline"
-              className="border-white/10 text-white/60 hover:bg-white/5"
+              className="h-11 md:h-9 border-white/10 text-white/60 hover:bg-white/5"
               data-testid="button-back-setup"
             >
               <ChevronLeft className="w-4 h-4 mr-2" />
@@ -659,7 +661,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => setStep(2)}
               disabled={!canSend}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className="h-11 md:h-9 bg-blue-600 hover:bg-blue-700 text-white"
               data-testid="button-next-send"
             >
               Next: Review & Send
@@ -736,7 +738,7 @@ export default function AdminMailer() {
                 variant="outline"
                 onClick={() => testMutation.mutate()}
                 disabled={!testEmail.includes("@") || !bodyHtml.trim() || testMutation.isPending}
-                className="border-white/10 text-white/70 hover:bg-white/5"
+                className="h-11 md:h-9 border-white/10 text-white/70 hover:bg-white/5"
                 data-testid="button-send-test"
               >
                 {testMutation.isPending ? (
@@ -752,7 +754,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => setStep(1)}
               variant="outline"
-              className="border-white/10 text-white/60 hover:bg-white/5"
+              className="h-11 md:h-9 border-white/10 text-white/60 hover:bg-white/5"
               data-testid="button-back-content"
             >
               <ChevronLeft className="w-4 h-4 mr-2" />
@@ -761,7 +763,7 @@ export default function AdminMailer() {
             <Button
               onClick={() => sendMutation.mutate()}
               disabled={sendMutation.isPending}
-              className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white px-6"
+              className="h-11 md:h-9 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white px-6"
               data-testid="button-send-campaign"
             >
               {sendMutation.isPending ? (
