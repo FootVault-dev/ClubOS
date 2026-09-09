@@ -88,6 +88,7 @@ import {
   validateIdentityDeferral,
 } from "@shared/nzf-identity";
 import { isOfficePaymentMethod } from "@shared/payments";
+import { renderForRecipient, visibleTextLength } from "./mailer-render";
 import { shapeAnalyticsEvent, shapeAnalyticsEvents, detectBot, CANONICAL_CHANNELS, normalizeHdyhauAnswer } from "@shared/attribution";
 import { behaviorEventsToInsert } from "@shared/behavior";
 import { isAllowedDestination, buildRedirectUrl, clickIdFromBytes, ipHashSeed, mainSiteForHost, isValidLinkKey, linkKeyFromBytes, CLUB_ROOT_DOMAINS, rootDomainForHost, isOurOrigin } from "@shared/short-links";
@@ -5511,8 +5512,22 @@ export async function registerRoutes(
       const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
       if (!RESEND_API_KEY) return res.status(500).json({ message: "RESEND_API_KEY not configured" });
 
-      const { to, from: fromAddr } = req.body;
-      const senderEmail = fromAddr || "CUFC Camps <onboarding@resend.dev>";
+      // 🔴 A test must be the REAL email. This used to post a canned "Test Email
+      // from ClubOS" sample, so the one step that exists to catch a broken
+      // design before 3,800 people see it proved only that Resend was up. It now
+      // sends the actual subject and body, through the same renderer as the
+      // live send — merge tags resolved, unsubscribe footer attached — so what
+      // lands in your inbox is what lands in theirs.
+      const { to, from: fromAddr, subject, body, replyTo } = req.body;
+      const senderEmail = fromAddr || "CUFC Camps <noreply@cufc.co.nz>";
+      const dest = String(to || "").trim();
+      if (!dest.includes("@")) return res.status(400).json({ message: "A test address is required" });
+
+      const orgId = await predictorOrgId();
+      const hasCampaign = typeof body === "string" && body.trim().length > 0;
+      const html = hasCampaign
+        ? renderForRecipient(body, { email: dest, unsubscribeUrl: cufcUnsubUrl(orgId, dest) })
+        : `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;"><h2 style="color:#22399B;">Test Email from ClubOS</h2><p>Delivery is working. Compose your email and send a test again to see the real thing.</p></div>`;
 
       const apiRes = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -5522,9 +5537,10 @@ export async function registerRoutes(
         },
         body: JSON.stringify({
           from: senderEmail,
-          to: [to || "daniel@cufc.co.nz"],
-          subject: "CUFC ClubOS — Test Email",
-          html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;"><h2 style="color:#22399B;">Test Email from ClubOS</h2><p>If you're reading this, email delivery is working correctly.</p><p style="color:#666;font-size:13px;">Sent at: ${new Date().toISOString()}</p></div>`,
+          to: [dest],
+          reply_to: replyTo || undefined,
+          subject: hasCampaign ? `[TEST] ${String(subject || "(no subject)").trim()}` : "CUFC ClubOS — Test Email",
+          html,
         }),
       });
       const result = await apiRes.json();
@@ -5537,9 +5553,12 @@ export async function registerRoutes(
 
   app.post("/api/admin/mailer/send", requireAuth, async (req, res) => {
     try {
-      const { subject, body, fromEmail, replyTo, segmentType, segmentConfig, manualEmails } = req.body;
+      const { subject, body, bodyDoc, fromEmail, replyTo, segmentType, segmentConfig, manualEmails } = req.body;
       if (!subject || typeof subject !== 'string' || subject.length > 500) return res.status(400).json({ message: "Valid subject required (max 500 chars)" });
       if (!body || typeof body !== 'string') return res.status(400).json({ message: "Email body is required" });
+      // A document can be structurally valid and say nothing — a stray spacer,
+      // or a design cleared but not retyped. Refuse before it reaches a list.
+      if (visibleTextLength(body) < 3) return res.status(400).json({ message: "This email has no visible content — add some text before sending." });
       const validSegments = ["all", "camp", "day", "session", "custom"];
       if (!segmentType || !validSegments.includes(segmentType)) return res.status(400).json({ message: "Invalid segment type" });
 
@@ -5552,10 +5571,39 @@ export async function registerRoutes(
 
       if (manualEmails && manualEmails.length > 0 && segmentType !== 'custom') {
         const manual = manualEmails.filter((e: string) => e && e.includes('@'));
-        emails = [...new Set([...emails, ...manual])];
+        emails = Array.from(new Set([...emails, ...manual]));
       }
 
+      // 🔴 Honour the opt-out list. Every other mailer in ClubOS does; this one
+      // never has, so anyone who unsubscribed kept receiving camp campaigns.
+      const orgId = await predictorOrgId();
+      const unsubscribed = await getUnsubscribedEmails(orgId);
+      const requested = emails.length;
+      emails = emails.filter((e) => !unsubscribed.has(e.trim().toLowerCase()));
+      const suppressed = requested - emails.length;
+
       if (emails.length === 0) return res.status(400).json({ message: "No recipients found for this segment" });
+
+      // First names for {{first_name}} — one query, not one per recipient. An
+      // address with no contact row keeps the neutral fallback in the renderer.
+      const nameByEmail = new Map<string, string>();
+      try {
+        const wanted = new Set(emails.map((e) => e.trim().toLowerCase()));
+        const rows = await db
+          .select({ email: contacts.email, firstName: contacts.firstName })
+          .from(contacts)
+          .where(sql`${contacts.email} IS NOT NULL AND ${contacts.email} <> ''`);
+        for (const r of rows) {
+          const key = (r.email || "").trim().toLowerCase();
+          if (key && wanted.has(key) && r.firstName && !nameByEmail.has(key)) {
+            nameByEmail.set(key, r.firstName);
+          }
+        }
+      } catch (e) {
+        // Personalisation is a nicety; the send is not. Fall back to the
+        // renderer's neutral greeting rather than failing the campaign.
+        console.error("[Camps mailer] first-name lookup failed; sending without personalisation:", e);
+      }
 
       const senderEmail = fromEmail || "CUFC Camps <noreply@cufc.co.nz>";
       const replyAddress = replyTo || "info@cufc.co.nz";
@@ -5563,6 +5611,9 @@ export async function registerRoutes(
       const campaign = await storage.createEmailCampaign({
         subject,
         body,
+        // The editable design behind the HTML, so this campaign can be reopened
+        // and next month's starts from it instead of a blank canvas.
+        bodyDoc: bodyDoc ?? null,
         fromEmail: senderEmail,
         replyTo: replyAddress,
         segmentType,
@@ -5608,7 +5659,13 @@ export async function registerRoutes(
             from: senderEmail,
             replyTo: replyAddress,
             subject,
-            html: body,
+            // Per recipient: merge tags resolved, and an unsubscribe link
+            // guaranteed even when the design forgot one.
+            html: renderForRecipient(body, {
+              email,
+              firstName: nameByEmail.get(email.trim().toLowerCase()) ?? null,
+              unsubscribeUrl: cufcUnsubUrl(orgId, email),
+            }),
           });
           return ok;
         },
@@ -5617,6 +5674,9 @@ export async function registerRoutes(
       res.json({
         campaignId: campaign.id,
         recipientCount: emails.length,
+        // Surfaced so the confirmation can say "12 people who unsubscribed were
+        // skipped" rather than silently sending to a smaller list than promised.
+        suppressedCount: suppressed,
         queued: true,
         status: "sending",
       });
