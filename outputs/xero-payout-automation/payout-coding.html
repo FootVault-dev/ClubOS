@@ -1,0 +1,551 @@
+<title>Stripe Payout Coding</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+<style>
+:root {
+  --ground:#EEF0EC; --paper:#FBFCFA; --ink:#161A17; --ink-2:#5C635C; --ink-3:#868D86;
+  --accent:#1D5C48; --accent-soft:#E2EDE7; --amber:#8A5312; --amber-soft:#F6EBDC;
+  --rule:#D7DBD5; --rule-2:#E6E9E4; --shadow:rgba(22,26,23,.07);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:#101310; --paper:#181C18; --ink:#E7EBE6; --ink-2:#A2AAA1; --ink-3:#798178;
+    --accent:#79C4A6; --accent-soft:#1B2A23; --amber:#D6A163; --amber-soft:#2A2118;
+    --rule:#2A302A; --rule-2:#222722; --shadow:rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"] {
+  --ground:#101310; --paper:#181C18; --ink:#E7EBE6; --ink-2:#A2AAA1; --ink-3:#798178;
+  --accent:#79C4A6; --accent-soft:#1B2A23; --amber:#D6A163; --amber-soft:#2A2118;
+  --rule:#2A302A; --rule-2:#222722; --shadow:rgba(0,0,0,.4);
+}
+*,*::before,*::after { box-sizing:border-box; }
+body { margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif; font-size:15px; line-height:1.55;
+  -webkit-font-smoothing:antialiased; }
+.mono { font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
+.wrap { max-width:1080px; margin:0 auto; padding:32px 20px 96px; }
+
+header.top { display:flex; flex-direction:column; gap:6px; margin-bottom:26px; }
+.eyebrow { font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--accent); font-weight:500; }
+h1 { font-family:"IBM Plex Serif",Georgia,serif; font-weight:600; font-size:clamp(26px,4vw,36px);
+  margin:0; letter-spacing:-.015em; text-wrap:balance; }
+.sub { color:var(--ink-2); max-width:62ch; margin:2px 0 0; }
+
+.proof { background:var(--paper); border:1px solid var(--rule); border-radius:3px;
+  padding:18px 20px; margin:22px 0 30px; display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:18px 26px; }
+.proof dt { font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3);
+  font-family:"IBM Plex Mono",monospace; }
+.proof dd { margin:3px 0 0; font-size:19px; font-weight:600;
+  font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; }
+.proof .good { color:var(--accent); }
+.proof-note { grid-column:1/-1; font-size:13px; color:var(--ink-2); border-top:1px solid var(--rule-2);
+  padding-top:13px; margin:0; }
+
+h2.sec { font-family:"IBM Plex Serif",Georgia,serif; font-size:17px; font-weight:600; margin:34px 0 4px;
+  letter-spacing:-.01em; }
+p.seclead { color:var(--ink-2); margin:0 0 14px; font-size:14px; max-width:66ch; }
+
+.setup { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px;
+  background:var(--paper); border:1px solid var(--rule); border-radius:3px; padding:18px 20px; }
+
+ul.rows { list-style:none; margin:0; padding:0; background:var(--paper);
+  border:1px solid var(--rule); border-radius:3px; }
+li.row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,300px); gap:18px 26px;
+  padding:20px; border-bottom:1px solid var(--rule-2); }
+li.row:last-child { border-bottom:0; }
+li.row[data-done="1"] { background:linear-gradient(90deg,var(--accent-soft) 0 3px,transparent 3px); }
+.rowhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.row h3 { font-family:"IBM Plex Serif",Georgia,serif; font-size:16px; font-weight:600; margin:0;
+  letter-spacing:-.005em; }
+.status { font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.07em;
+  text-transform:uppercase; padding:2px 7px; border-radius:2px;
+  background:var(--amber-soft); color:var(--amber); white-space:nowrap; }
+.status[data-ok="1"] { background:var(--accent-soft); color:var(--accent); }
+.what { color:var(--ink-2); font-size:13.5px; margin:5px 0 10px; max-width:56ch; }
+.vol { display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+.money { font-size:15px; font-weight:600; }
+.charges { font-size:12px; color:var(--ink-3); font-family:"IBM Plex Mono",monospace; }
+.bar { flex:1; min-width:70px; height:3px; background:var(--rule-2); border-radius:2px; overflow:hidden; }
+.bar i { display:block; height:100%; background:var(--accent); opacity:.55; }
+.hint { font-size:12.5px; color:var(--ink-3); margin:11px 0 0; line-height:1.5; }
+.use { font:inherit; font-size:12.5px; background:none; border:0; border-bottom:1px dashed var(--accent);
+  color:var(--accent); cursor:pointer; padding:0 0 1px; }
+.use:hover { border-bottom-style:solid; }
+.use .mono { font-weight:600; }
+.why { color:var(--ink-3); }
+
+.rhs { display:flex; flex-direction:column; gap:9px; }
+label { display:flex; flex-direction:column; gap:4px; font-size:11px; letter-spacing:.07em;
+  text-transform:uppercase; color:var(--ink-3); font-family:"IBM Plex Mono",monospace; }
+select { font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:13.5px; color:var(--ink);
+  background:var(--ground); border:1px solid var(--rule); border-radius:2px; padding:7px 9px;
+  text-transform:none; letter-spacing:0; width:100%; }
+select:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+
+.footer { margin-top:30px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+.count { font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--ink-2); }
+.save { font:inherit; font-weight:500; font-size:14px; background:var(--accent); color:var(--ground);
+  border:0; border-radius:2px; padding:9px 20px; cursor:pointer; }
+.save[disabled] { opacity:.4; cursor:default; }
+.saved { font-size:13px; color:var(--accent); }
+.who { font-family:"IBM Plex Sans",sans-serif; font-size:13.5px; padding:7px 9px; border-radius:2px;
+  border:1px solid var(--rule); background:var(--ground); color:var(--ink); min-width:180px; }
+
+.notes { margin-top:34px; border-top:1px solid var(--rule); padding-top:20px; }
+.notes h2 { font-family:"IBM Plex Serif",Georgia,serif; font-size:15px; margin:0 0 10px; }
+.notes ul { margin:0; padding-left:19px; color:var(--ink-2); font-size:13.5px; }
+.notes li { margin-bottom:9px; max-width:74ch; }
+.notes strong { color:var(--ink); font-weight:600; }
+@media (max-width:720px) { li.row { grid-template-columns:1fr; } }
+@media (prefers-reduced-motion:reduce) { * { transition:none!important; animation:none!important; } }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <span class="eyebrow">Christchurch United FC · Stripe → Xero</span>
+  <h1>How each Stripe payout should be coded</h1>
+  <p class="sub">ClubOS can already break every Stripe payout into what was actually sold. It will not post
+  anything to Xero until someone says which account each kind of income belongs to. That is this page.</p>
+</header>
+
+<dl class="proof">
+  <div><dt>Payouts walked</dt><dd>55</dd></div>
+  <div><dt>Charges resolved</dt><dd>489</dd></div>
+  <div><dt>Failed to balance</dt><dd class="good">0</dd></div>
+  <div><dt>Uncoded</dt><dd>$5.34</dd></div>
+  <div><dt>Banked</dt><dd>$53,750.47</dd></div>
+  <p class="proof-note">15 April to 9 September 2026, read from the live Stripe account. Every payout
+  reconciled to the cent. The $5.34 was thirteen $1 card tests.</p>
+</dl>
+
+<h2 class="sec">Two settings first</h2>
+<p class="seclead">Both of these were read out of Xero rather than guessed: 48 Stripe payouts over the last
+four months all landed in one account, and their fees all went to one other. Confirm or change them.</p>
+<div class="setup">
+  <label>Bank account the Stripe payout arrives in
+    <select id="bank">
+      <option value="">— choose —</option>
+      <option value="110">110 — CUFC - Everyday</option><option value="120">120 — CUFC - Savings</option><option value="130">130 — CUFC - ASB Cheque</option><option value="135">135 — CUFC - ASB Savings</option><option value="140">140 — CUFC - ASB Call</option><option value="141">141 — Residency Account</option><option value="142">142 — Football Trust Account</option><option value="144">144 — United Prints</option><option value="145">145 — ASB Visa</option><option value="146">146 — CUFC - ASB Credit Card</option><option value="147">147 — ANZ - Business Premium</option><option value="148">148 — ANZ - OFC League</option><option value="149">149 — ANZ - Grants & Sponsorship</option>
+    </select>
+  </label>
+  <label>Account for Stripe&rsquo;s fees
+    <select id="fee">
+      <option value="">— choose —</option>
+      <option value="484/01">484/01 — Stripe/Ezidebit Fee</option><option value="404">404 — Bank Fees</option><option value="277">277 — Shopify Fees</option>
+    </select>
+  </label>
+</div>
+
+<h2 class="sec">Eight kinds of income</h2>
+<p class="seclead">Ordered by how much money actually came through each one. The suggestion under each is
+where that money lands in Xero today — it is a starting point, not an answer.</p>
+<ul class="rows">
+    <li class="row" data-k="academy_term">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Academy — term programmes</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">U4–U8, Pre-Academy, Academy, Technification. One term, paid up front or on a weekly plan.</p>
+        <div class="vol">
+          <span class="money mono">$25,466.00</span>
+          <span class="charges">148 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:47.4%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="academy_term" data-code="200/05" data-tax="OUTPUT2"><span class="mono">200/05</span> Registration - Football School U-8</button> <span class="why">— $11,168 of Stripe money went here across 15 lines, and $3,370 more to 200 Registration Fees — Academy. Pick one, or say if U4–U8 should stay separate.</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="academy_term">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="academy_term">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="academy_term">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li>
+    <li class="row" data-k="league_team">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Mini Football Leagues — team entry</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">A captain buys a team into a term of 5v5 or 7v7.</p>
+        <div class="vol">
+          <span class="money mono">$9,980.00</span>
+          <span class="charges">36 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:18.6%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="league_team" data-code="203/02" data-tax="OUTPUT2"><span class="mono">203/02</span> Leagues</button> <span class="why">— the biggest single destination — $13,114 across 36 lines</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="league_team">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="league_team">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="league_team">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li>
+    <li class="row" data-k="academy_camp">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Holiday camps</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">FUNdamentals and World Cup camps, sold by the day or the week.</p>
+        <div class="vol">
+          <span class="money mono">$9,933.50</span>
+          <span class="charges">114 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:18.5%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="academy_camp" data-code="203" data-tax="OUTPUT2"><span class="mono">203</span> Holiday Program - Academy</button> <span class="why">— $810 across 3 lines</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="academy_camp">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="academy_camp">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="academy_camp">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li>
+    <li class="row" data-k="league_player">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Mini Football Leagues — player share</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">One player paying their share of a team entry, often weekly on a saved card.</p>
+        <div class="vol">
+          <span class="money mono">$6,668.76</span>
+          <span class="charges">153 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:12.4%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="league_player" data-code="203/02" data-tax="OUTPUT2"><span class="mono">203/02</span> Leagues</button> <span class="why">— same money as a team entry, split across players — same account unless you want them apart</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="league_player">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="league_player">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="league_player">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li>
+    <li class="row" data-k="facility_hire">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Facility hire</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">Pitches, cage courts and rooms hired by the hour.</p>
+        <div class="vol">
+          <span class="money mono">$1,388.47</span>
+          <span class="charges">8 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:2.6%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="facility_hire" data-code="275" data-tax="OUTPUT2"><span class="mono">275</span> Field Hire Income</button> <span class="why">— ⚠️ $921 of this is currently going to 301 Field Hire, which is an EXPENSE account, tagged 15% GST on Expenses. 275 Field Hire Income looks right — please confirm</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="facility_hire">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="facility_hire">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="facility_hire">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li>
+    <li class="row" data-k="shop">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Merchandise, shop and CIC photos</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">MFL and CIC stores, plus the CIC photo marketplace.</p>
+        <div class="vol">
+          <span class="money mono">$200.00</span>
+          <span class="charges">16 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:0.4%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="shop" data-code="202" data-tax="OUTPUT2"><span class="mono">202</span> Uniform Sales</button> <span class="why">— no Stripe money has been coded to a merchandise account yet; 202 Uniform Sales or 230 OFC Merchandise</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="shop">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="shop">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="shop">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li>
+    <li class="row" data-k="invoice">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Invoices paid by card</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">Sponsorship and rebate invoices settled on the invoice pages.</p>
+        <div class="vol">
+          <span class="money mono">$108.40</span>
+          <span class="charges">1 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:0.2%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="invoice" data-code="217" data-tax="OUTPUT2"><span class="mono">217</span> Sponsorship</button> <span class="why">— but if the invoice already exists in Xero its payment should clear it, not post as new income</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="invoice">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="invoice">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="invoice">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li>
+    <li class="row" data-k="unallocated">
+      <div class="lhs">
+        <div class="rowhead">
+          <h3>Uncoded</h3>
+          <span class="status" data-status>Not set</span>
+        </div>
+        <p class="what">Anything ClubOS cannot identify. Over 489 real charges this was 13 card tests worth $5.34.</p>
+        <div class="vol">
+          <span class="money mono">$5.34</span>
+          <span class="charges">13 charges</span>
+          <span class="bar" aria-hidden="true"><i style="width:0.0%"></i></span>
+        </div>
+        <p class="hint">Closest existing account: <button class="use" type="button" data-k="unallocated" data-code="266" data-tax="OUTPUT2"><span class="mono">266</span> Unallocated Subs Receipts</button> <span class="why">— Unallocated Subs Receipts already exists for exactly this</span></p>
+      </div>
+      <div class="rhs">
+        <label>Xero account
+          <select data-f="account" data-k="unallocated">
+            <option value="">— choose —</option>
+            <option value="102-01-01" data-tax="OUTPUT2">102-01-01 — CIC - U9 registration income (16 teams)</option><option value="102-01-02" data-tax="OUTPUT2">102-01-02 — CIC - U10 registration income (20 teams)</option><option value="102-01-03" data-tax="OUTPUT2">102-01-03 — CIC - U11 registration income (20 teams)</option><option value="102-01-04" data-tax="OUTPUT2">102-01-04 — CIC - U12 registration income (20 teams)</option><option value="102-01-05" data-tax="OUTPUT2">102-01-05 — CIC - U13 registration income (20 teams)</option><option value="102-01-06" data-tax="OUTPUT2">102-01-06 — CIC - U14 registration income (16 teams)</option><option value="102-01-07" data-tax="OUTPUT2">102-01-07 — CIC - U15 registration income (16 teams)</option><option value="102-02-01" data-tax="OUTPUT2">102-02-01 — CIC 7s - Competitive Competition (12 teams)</option><option value="102-02-02" data-tax="OUTPUT2">102-02-02 — Social Competition (12 teams)</option><option value="102-02-03" data-tax="OUTPUT2">102-02-03 — Ethnic Tournament (24 registrations)</option><option value="200" data-tax="OUTPUT2">200 — Registration Fees - Academy</option><option value="200/01" data-tax="OUTPUT2">200/01 — Morning Session</option><option value="200/04" data-tax="OUTPUT2">200/04 — Registration Fees - Spreydon</option><option value="200/05" data-tax="OUTPUT2">200/05 — Registration - Football School U-8</option><option value="200/06" data-tax="OUTPUT2">200/06 — Registration Fees - Prebbleton</option><option value="200/07" data-tax="OUTPUT2">200/07 — Other Programmes</option><option value="200/08" data-tax="OUTPUT2">200/08 — Registration- Women</option><option value="200/09" data-tax="OUTPUT2">200/09 — Women's League</option><option value="200/10" data-tax="OUTPUT2">200/10 — Football Institute</option><option value="200/11" data-tax="OUTPUT2">200/11 — Event Revenue</option><option value="200/2" data-tax="OUTPUT2">200/2 — Transporting children</option><option value="200/3" data-tax="OUTPUT2">200/3 — Gym</option><option value="200/9" data-tax="OUTPUT2">200/9 — Registration Fee - Winter</option><option value="202" data-tax="OUTPUT2">202 — Uniform Sales</option><option value="202/01" data-tax="OUTPUT2">202/01 — Spiideo - sales collected</option><option value="202/02" data-tax="OUTPUT2">202/02 — MF Levies collected</option><option value="202/03" data-tax="OUTPUT2">202/03 — SIT tournaments amount collected</option><option value="202/04" data-tax="OUTPUT2">202/04 — Exchange tournaments amount collected</option><option value="202/05" data-tax="OUTPUT2">202/05 — Name & Number Print</option><option value="202/06" data-tax="OUTPUT2">202/06 — Waimak Tournament</option><option value="202/07" data-tax="OUTPUT2">202/07 — Auckland U17 Tournament</option><option value="202/08" data-tax="OUTPUT2">202/08 — Tournament Fee</option><option value="202/10" data-tax="OUTPUT2">202/10 — Auckland U13 Western Springs</option><option value="202/11" data-tax="OUTPUT2">202/11 — Sanitising&Disinfecting products</option><option value="202/12" data-tax="OUTPUT2">202/12 — Cafe / foodtruck Sale</option><option value="203" data-tax="OUTPUT2">203 — Holiday Program - Academy</option><option value="203/01" data-tax="OUTPUT2">203/01 — Football festivals</option><option value="203/02" data-tax="OUTPUT2">203/02 — Leagues</option><option value="203/03" data-tax="OUTPUT2">203/03 — Leagues 5-Aside</option><option value="203/04" data-tax="OUTPUT2">203/04 — Leagues 7-Aside</option><option value="203/05" data-tax="OUTPUT2">203/05 — Leagues 9-Aside</option><option value="203/06" data-tax="OUTPUT2">203/06 — Shopify-Stripe integration</option><option value="204" data-tax="NONE">204 — Donations</option><option value="217" data-tax="OUTPUT2">217 — Sponsorship</option><option value="218" data-tax="OUTPUT2">218 — Events entry (CIC)</option><option value="218/01" data-tax="OUTPUT2">218/01 — CIC 7's entries received</option><option value="220" data-tax="OUTPUT2">220 — Residency - Income</option><option value="221/11" data-tax="OUTPUT2">221/11 — Residency - Camp</option><option value="225" data-tax="NONE">225 — Football Trust - Donations Received</option><option value="230" data-tax="OUTPUT2">230 — OFC Merchandise Sale</option><option value="230/01" data-tax="NONE">230/01 — OFC - Donations Received</option><option value="230/02" data-tax="OUTPUT2">230/02 — OFC - Prize Money</option><option value="250" data-tax="OUTPUT2">250 — Fundraising</option><option value="255" data-tax="NONE">255 — Funding Agencies</option><option value="265" data-tax="OUTPUT2">265 — Other Income (FIFA)</option><option value="265/01" data-tax="OUTPUT2">265/01 — Reimbursements</option><option value="266" data-tax="OUTPUT2">266 — Unallocated Subs Receipts</option><option value="270" data-tax="NONE">270 — Interest Income</option><option value="275" data-tax="OUTPUT2">275 — Field Hire Income</option><option value="330/3" data-tax="OUTPUT2">330/3 — United Print Sales</option><option value="465/01" data-tax="OUTPUT2">465/01 — Rent -Reimbursement</option>
+          </select>
+        </label>
+        <label>GST
+          <select data-f="tax" data-k="unallocated">
+            <option value="">— choose —</option>
+            <option value="OUTPUT2">15% GST on Income</option><option value="NONE">No GST</option><option value="ZERORATED">Zero Rated</option><option value="TAX001">GST (15.00%)</option><option value="OUTPUT">12.5% GST on Income</option>
+          </select>
+        </label>
+        <label>Funding tag
+          <select data-f="track" data-k="unallocated">
+            <option value="(none)">(none)</option><option value="Academy">Academy</option><option value="CU Football Trust">CU Football Trust</option><option value="Management">Management</option><option value="OFC">OFC</option><option value="Residency">Residency</option><option value="Sponsorship">Sponsorship</option>
+          </select>
+        </label>
+      </div>
+    </li></ul>
+
+<div class="footer">
+  <input class="who" id="who" placeholder="Your name" autocomplete="name">
+  <button class="save" id="save" disabled>Save</button>
+  <span class="count" id="count"></span>
+  <span class="saved" id="saved" hidden>Saved</span>
+</div>
+
+<div class="notes">
+  <h2>What your own ledger already shows</h2>
+  <ul>
+    <li><strong>The payouts land in 147 ANZ &mdash; Business Premium.</strong> 18 of the last 40 payout
+    amounts appear there against a contact called &ldquo;Stripe Payments&rdquo;. No other bank account
+    carries any of them.</li>
+    <li><strong>Fees already go to 484/01 Stripe/Ezidebit Fee</strong> &mdash; 20 lines, &minus;$842.49,
+    tagged 15% GST on Expenses. That is the account this will keep using.</li>
+    <li><strong>Someone is already doing this by hand, and doing it well.</strong> Across 48 Stripe
+    payouts the money was split into ten accounts &mdash; leagues, U4&ndash;U8, other programmes, academy
+    fees, CIC 7s, field hire, holiday programme, events. That is the work this replaces, and the
+    suggestions above are simply what was picked most often.</li>
+    <li><strong>One thing worth a look:</strong> $921 of field hire income is coded to 301 Field Hire,
+    which is an expense account carrying GST on Expenses. 275 Field Hire Income exists. Not our call, but
+    it will keep happening until someone changes it.</li>
+  </ul>
+  <h2 style="margin-top:22px">Before you fill this in</h2>
+  <ul>
+    <li><strong>Nothing here changes Xero.</strong> Saving records the decision. ClubOS then posts one
+    Receive Money per payout, with a line per category, and the accounts team clicks the match on the
+    bank line. Xero does not let any software reconcile a bank line itself.</li>
+    <li><strong>Every payout balances or none of it posts.</strong> Gross, less Stripe&rsquo;s fees, plus
+    any returned payout, must equal the payout to the cent. A split that half-matches is worse than one
+    that does not match at all, because it looks finished.</li>
+    <li><strong>A blank is better than a guess.</strong> A wrong account still balances perfectly, so
+    nobody would ever notice it. ClubOS refuses to post a category nobody has confirmed.</li>
+    <li><strong>Splitting later is cheap.</strong> If team entries and player shares should share one
+    account now and separate ones later, that is a row in a table, not a change to the software.</li>
+  </ul>
+</div>
+</div>
+
+<script type="application/json" id="state">{"cats": {}, "bank": "147", "fee": "484/01", "who": "", "savedBy": "", "savedAt": ""}</script>
+<script>
+(function () {
+  var CATS = ["academy_term", "league_team", "academy_camp", "league_player", "facility_hire", "shop", "invoice", "unallocated"];
+  var state = JSON.parse(document.getElementById("state").textContent);
+  var artifact = null, dirty = false;
+
+  function paint() {
+    var done = 0;
+    CATS.forEach(function (k) {
+      var s = state.cats[k] || {};
+      var li = document.querySelector('li.row[data-k="' + k + '"]');
+      var badge = li.querySelector("[data-status]");
+      var ok = !!(s.account && s.tax);
+      if (ok) done++;
+      li.dataset.done = ok ? "1" : "";
+      badge.dataset.ok = ok ? "1" : "";
+      badge.textContent = ok ? "Set" : "Not set";
+      li.querySelector('[data-f="account"]').value = s.account || "";
+      li.querySelector('[data-f="tax"]').value = s.tax || "";
+      li.querySelector('[data-f="track"]').value = s.track || "(none)";
+    });
+    document.getElementById("bank").value = state.bank || "";
+    document.getElementById("fee").value = state.fee || "";
+    document.getElementById("who").value = state.who || "";
+    var total = CATS.length;
+    document.getElementById("count").textContent =
+      done + " of " + total + " coded" + (state.savedBy ? " · last saved by " + state.savedBy : "");
+    document.getElementById("save").disabled = !dirty || !artifact;
+  }
+
+  function set(k, f, v) {
+    state.cats[k] = state.cats[k] || {};
+    state.cats[k][f] = v;
+    dirty = true;
+    document.getElementById("saved").hidden = true;
+    paint();
+  }
+
+  document.querySelectorAll("select[data-f]").forEach(function (el) {
+    el.addEventListener("change", function () {
+      set(el.dataset.k, el.dataset.f, el.value);
+      // Picking an account fills the GST it already carries in Xero, rather than
+      // leaving a second blank to guess at. Still changeable.
+      if (el.dataset.f === "account" && el.value) {
+        var o = el.selectedOptions[0];
+        var cur = state.cats[el.dataset.k].tax;
+        if (o && o.dataset.tax && !cur) set(el.dataset.k, "tax", o.dataset.tax);
+      }
+    });
+  });
+  document.querySelectorAll("button.use").forEach(function (b) {
+    b.addEventListener("click", function () {
+      set(b.dataset.k, "account", b.dataset.code);
+      if (!state.cats[b.dataset.k].tax) set(b.dataset.k, "tax", b.dataset.tax);
+    });
+  });
+  ["bank", "fee"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", function (e) {
+      state[id] = e.target.value; dirty = true;
+      document.getElementById("saved").hidden = true; paint();
+    });
+  });
+  document.getElementById("who").addEventListener("input", function (e) {
+    state.who = e.target.value; dirty = true; paint();
+  });
+
+  document.getElementById("save").addEventListener("click", async function () {
+    if (!artifact) return;
+    var btn = document.getElementById("save");
+    btn.disabled = true; btn.textContent = "Saving…";
+    state.savedBy = (state.who || "").trim() || "someone";
+    state.savedAt = new Date().toISOString();
+    var doc = document.documentElement.outerHTML.replace(
+      /(<script type="application\/json" id="state">)[\s\S]*?(<\/script>)/,
+      "$1" + JSON.stringify(state).replace(/</g, "\\u003c") + "$2");
+    try {
+      await artifact.publish("<!doctype html>\n" + doc);
+    } catch (e) {
+      btn.textContent = "Save"; btn.disabled = false;
+      if (e && e.code === "conflict") return;
+      alert("Could not save: " + ((e && e.message) || e));
+    }
+  });
+
+  paint();
+  if (window.claude && window.claude.use) {
+    window.claude.use("artifact").then(function (a) {
+      artifact = a; paint();
+      if (!a) document.getElementById("save").title = "Saving is not available in this view";
+    });
+  }
+})();
+</script>

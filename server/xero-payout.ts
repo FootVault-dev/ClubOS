@@ -39,48 +39,48 @@ export async function resolvePaymentIntents(ids: string[]): Promise<Map<string, 
     WITH ids(pi) AS (SELECT unnest(${sql.raw(`ARRAY[${ids.map(i => `'${i.replace(/'/g, "")}'`).join(",")}]::text[]`)}))
     SELECT * FROM (
       SELECT i.pi, 'registrations' AS source, r.id::text AS record_id, p.organization_id,
-             p.type AS program_type, p.schedule_type, NULL::text AS competition_kind, p.name AS descr
+             p.type AS program_type, p.schedule_type, NULL::text AS competition_kind, p.name AS descr, p.id AS program_id
         FROM ids i JOIN registrations r ON r.stripe_payment_intent_id = i.pi
         LEFT JOIN programs p ON p.id = r.program_id
       UNION ALL
-      SELECT i.pi, 'split_members', m.id::text, NULL::int, NULL, NULL, NULL, m.name
+      SELECT i.pi, 'split_members', m.id::text, NULL::int, NULL, NULL, NULL, m.name, NULL::int
         FROM ids i JOIN split_members m ON m.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'payshare_participants', pp.id::text, NULL::int, NULL, NULL, NULL, NULL
+      SELECT i.pi, 'payshare_participants', pp.id::text, NULL::int, NULL, NULL, NULL, NULL, NULL::int
         FROM ids i JOIN payshare_participants pp ON pp.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'teampay_players', tp.id::text, c.organization_id, NULL, NULL, c.kind, c.name
+      SELECT i.pi, 'teampay_players', tp.id::text, c.organization_id, NULL, NULL, c.kind, c.name, NULL::int
         FROM ids i JOIN teampay_players tp ON tp.stripe_payment_intent_id = i.pi
         LEFT JOIN teampay_entries te ON te.id = tp.entry_id
         LEFT JOIN teampay_competitions c ON c.id = te.competition_id
       UNION ALL
-      SELECT i.pi, 'teampay_entries', te.id::text, c.organization_id, NULL, NULL, c.kind, c.name
+      SELECT i.pi, 'teampay_entries', te.id::text, c.organization_id, NULL, NULL, c.kind, c.name, NULL::int
         FROM ids i JOIN teampay_entries te ON te.team_stripe_payment_intent_id = i.pi
         LEFT JOIN teampay_competitions c ON c.id = te.competition_id
       UNION ALL
-      SELECT i.pi, 'club_event_orders', o.id::text, e.organization_id, NULL, NULL, NULL, e.name
+      SELECT i.pi, 'club_event_orders', o.id::text, e.organization_id, NULL, NULL, NULL, e.name, NULL::int
         FROM ids i JOIN club_event_orders o ON o.stripe_payment_intent_id = i.pi
         LEFT JOIN club_events e ON e.id = o.event_id
       UNION ALL
-      SELECT i.pi, 'members', mb.id::text, mb.organization_id, NULL, NULL, NULL, mb.tier_name
+      SELECT i.pi, 'members', mb.id::text, mb.organization_id, NULL, NULL, NULL, mb.tier_name, NULL::int
         FROM ids i JOIN members mb ON mb.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'facility_bookings', fb.id::text, fb.organization_id, NULL, NULL, NULL, fb.customer_name
+      SELECT i.pi, 'facility_bookings', fb.id::text, fb.organization_id, NULL, NULL, NULL, fb.customer_name, NULL::int
         FROM ids i JOIN facility_bookings fb ON fb.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'shop_orders', so.id::text, so.organization_id, NULL, NULL, NULL, so.order_number
+      SELECT i.pi, 'shop_orders', so.id::text, so.organization_id, NULL, NULL, NULL, so.order_number, NULL::int
         FROM ids i JOIN shop_orders so ON so.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'shop_order_shares', ss.id::text, NULL::int, NULL, NULL, NULL, ss.player_name
+      SELECT i.pi, 'shop_order_shares', ss.id::text, NULL::int, NULL, NULL, NULL, ss.player_name, NULL::int
         FROM ids i JOIN shop_order_shares ss ON ss.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'print_orders', po.id::text, po.organization_id, NULL, NULL, NULL, po.customer_name
+      SELECT i.pi, 'print_orders', po.id::text, po.organization_id, NULL, NULL, NULL, po.customer_name, NULL::int
         FROM ids i JOIN print_orders po ON po.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'usg_invoices', ui.id::text, ui.organization_id, NULL, NULL, NULL, ui.recipient_name
+      SELECT i.pi, 'usg_invoices', ui.id::text, ui.organization_id, NULL, NULL, NULL, ui.recipient_name, NULL::int
         FROM ids i JOIN usg_invoices ui ON ui.stripe_payment_intent_id = i.pi
       UNION ALL
-      SELECT i.pi, 'cugc_registrations', cr.id::text, cr.organization_id, NULL, NULL, NULL, cr.program_name
+      SELECT i.pi, 'cugc_registrations', cr.id::text, cr.organization_id, NULL, NULL, NULL, cr.program_name, NULL::int
         FROM ids i JOIN cugc_registrations cr ON cr.stripe_payment_intent = i.pi
     ) hits
   `);
@@ -96,6 +96,7 @@ export async function resolvePaymentIntents(ids: string[]): Promise<Map<string, 
       source: r.source, recordId: r.record_id, organizationId: r.organization_id ?? null,
       programType: r.program_type, scheduleType: r.schedule_type,
       competitionKind: r.competition_kind, description: r.descr,
+      programId: r.program_id ?? null,
     });
   }
   return out;

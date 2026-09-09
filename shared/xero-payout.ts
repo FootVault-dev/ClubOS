@@ -52,6 +52,8 @@ export interface ResolvedPayment {
   description?: string | null;
   /** True when the payer bought one share of a team entry, not the whole team. */
   isPlayerShare?: boolean;
+  /** The programme that was sold, when there is one — the level they code at. */
+  programId?: number | null;
   /** Set when the charge was found through a subscription rather than directly. */
   viaSubscription?: string | null;
 }
