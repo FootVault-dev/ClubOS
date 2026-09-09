@@ -129,50 +129,56 @@ _GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
 # This does not block anything. It PRINTS the commits going out and any
 # uncommitted files, so the operator sees a name they do not recognise before
 # the 20-minute build rather than after.
-if [ -f .last-deployed-sha ]; then
-  _LAST=$(cat .last-deployed-sha)
-  if git cat-file -e "$_LAST^{commit}" 2>/dev/null; then
+# 🔴 ASK PRODUCTION FIRST, UNCONDITIONALLY. This block used to be wrapped in
+# `if [ -f .last-deployed-sha ]`, which meant the production probe — the whole
+# point of the endpoint — only ran when the stale local file it was designed to
+# REPLACE happened to exist. .last-deployed-sha is gitignored, so a fresh clone
+# or a fresh worktree has none... and "deploy from a clean detached worktree" is
+# exactly what the deploy doctrine tells you to do. The recommended practice
+# disabled the guard. Proven on 2026-09-09: a throwaway worktree five commits
+# behind prod, missing the entire Register, passed --check-only with exit 0.
+_PROD_SHA=$(curl -s -m 10 https://app.usg.co.nz/api/version 2>/dev/null \
+  | sed -n 's/.*"sha":"\([0-9a-f]\{7,40\}\)".*/\1/p')
+_LAST=""
+[ -f .last-deployed-sha ] && _LAST=$(cat .last-deployed-sha)
+
+if [ -n "$_PROD_SHA" ] && ! git cat-file -e "${_PROD_SHA}^{commit}" 2>/dev/null; then
+  # Prod answered with a commit this clone has never seen — someone deployed
+  # from a tree that is not here. Refusing beats guessing.
+  echo "🔴 production reports ${_PROD_SHA:0:7}, a commit this checkout does not have."
+  echo "    Somebody deployed from a tree you cannot see. Fetch it before shipping."
+  exit 1
+elif [ -n "$_PROD_SHA" ]; then
+  [ -n "$_LAST" ] && [ "$_PROD_SHA" != "$_LAST" ] && \
+    echo "ℹ️  production reports ${_PROD_SHA:0:7}; the local stamp says ${_LAST:0:7} — trusting production."
+  _LAST="$_PROD_SHA"
+elif [ -n "$_LAST" ]; then
+  echo "⚠️  COULD NOT ASK PRODUCTION WHAT IT RUNS (/api/version gave no sha)."
+  echo "    Falling back to .last-deployed-sha (${_LAST:0:7}), which is GITIGNORED —"
+  echo "    every worktree keeps its own copy and they drift, so it may be stale."
+  echo "    Either prod predates the endpoint, or something is wrong. Confirm by hand:"
+  echo "      git merge-base --is-ancestor <the sha prod really runs> HEAD"
+  echo ""
+else
+  # No endpoint AND no stamp: this deploy is completely unguarded against
+  # removing live work. Say so in the loudest terms rather than proceeding
+  # quietly, which is what a fresh worktree used to do.
+  echo "🔴 CANNOT DETERMINE WHAT PRODUCTION RUNS — no /api/version, no local stamp."
+  echo "    This deploy is UNGUARDED: it may silently remove live features."
+  echo "    Check by hand before continuing:"
+  echo "      curl -s https://app.usg.co.nz/api/version"
+  echo "      git merge-base --is-ancestor <that sha> HEAD"
+  echo ""
+fi
+
+if [ -n "$_LAST" ] && git cat-file -e "$_LAST^{commit}" 2>/dev/null; then
     _N=$(git rev-list --count "$_LAST..HEAD" 2>/dev/null || echo 0)
     if [ "$_N" -gt 0 ]; then
-      echo "── Shipping $_N commit(s) since the last deploy from this machine ──"
+      echo "── Shipping $_N commit(s) since the last deploy ──"
       git log --oneline --format="   %h %an  %s" "$_LAST..HEAD" | head -20
       echo ""
     fi
     # ── The OTHER direction: what this tree would REMOVE ────────────────────
-    # Prefer what PRODUCTION says it runs over what this file remembers. The
-    # file is gitignored, so every worktree keeps its own copy and they drift:
-    # on 2026-09-09 the main checkout said 396d7d6 while a worktree still said
-    # b3f654e, and a deploy from that worktree measured against the wrong
-    # baseline and silently removed POS. Asking prod cannot go stale.
-    #
-    # 🔴 THREE states, and only the first two are safe. A guard that cannot tell
-    # "checked and fine" from "could not check" is not a guard — that is exactly
-    # how preflight-deploy.ts once printed "safe to deploy" while reaching none
-    # of its canaries. So the degraded state is LOUD, never a silent fallback.
-    _PROD_SHA=$(curl -s -m 10 https://app.usg.co.nz/api/version 2>/dev/null \
-      | sed -n 's/.*"sha":"\([0-9a-f]\{7,40\}\)".*/\1/p')
-    if [ -z "$_PROD_SHA" ]; then
-      # (3) Could not check. Do not block — an older prod legitimately has no
-      # endpoint — but never let this pass for a clean check.
-      echo "⚠️  COULD NOT ASK PRODUCTION WHAT IT RUNS (/api/version gave no sha)."
-      echo "    Falling back to .last-deployed-sha (${_LAST:0:7}), which is GITIGNORED —"
-      echo "    every worktree keeps its own copy and they drift, so it may be stale."
-      echo "    Either prod predates the endpoint, or something is wrong. Confirm by hand:"
-      echo "      git merge-base --is-ancestor <the sha prod really runs> HEAD"
-      echo ""
-    elif ! git cat-file -e "${_PROD_SHA}^{commit}" 2>/dev/null; then
-      # Prod answered with a commit this clone has never seen — someone deployed
-      # from a tree that is not here. Refusing beats guessing.
-      echo "🔴 production reports ${_PROD_SHA:0:7}, a commit this checkout does not have."
-      echo "    Somebody deployed from a tree you cannot see. Fetch it before shipping."
-      exit 1
-    else
-      # (1)/(2) Prod answered and we know the commit — this is the real baseline.
-      if [ "$_PROD_SHA" != "$_LAST" ]; then
-        echo "ℹ️  production reports ${_PROD_SHA:0:7}; the local stamp says ${_LAST:0:7} — trusting production."
-      fi
-      _LAST="$_PROD_SHA"
-    fi
     # preflight-deploy.ts probes ROUTES. It cannot see a script, a migration, a
     # seed or a static asset that exists only as a file, so a tree one commit
     # behind prod passes the guard honestly and silently drops that file from
@@ -196,7 +202,6 @@ if [ -f .last-deployed-sha ]; then
       echo "   ⚠️  --allow-behind-prod passed — proceeding with the removal."
       echo ""
     fi
-  fi
 fi
 _DIRTY=$(git status --porcelain 2>/dev/null | grep -vE '^\?\? ' | head -10)
 if [ -n "$_DIRTY" ]; then
