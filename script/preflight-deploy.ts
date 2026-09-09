@@ -49,6 +49,9 @@ const CANARIES: Canary[] = [
   // prod: this line will print "+ new in this branch" (not a removal) until
   // the deploy that carries it lands, then behaves like the MFL/CIC canaries.
   { feature: "shop (CUFC)",         path: "/api/public/shop/cufc/catalog",        expect: [200] },
+  // SIU — the fourth brand on the shop_* engine, added 2026-09-09. Same "not
+  // yet on prod" note as the CUFC canary above.
+  { feature: "shop (SIU)",          path: "/api/public/shop/siu/catalog",         expect: [200] },
   { feature: "attribution /t.js",   path: "/t.js",                                expect: [200] },
   { feature: "CUGC mailer",         path: "/api/admin/cugc/mailer/contacts",      expect: [401] },
   // unitedprints.co.nz reads its whole price list from here. If a deploy drops
@@ -153,6 +156,7 @@ const SOURCE: Record<string, { file: string; needle: string }> = {
   "/api/admin/proposals":                 { file: "server/routes.ts",              needle: "/api/admin/proposals" },
   "/api/public/shop/mfl/catalog":         { file: "server/shop-routes.ts",         needle: "catalog" },
   "/api/public/shop/cufc/catalog":         { file: "server/shop-routes.ts",         needle: "cufc" },
+  "/api/public/shop/siu/catalog":          { file: "server/shop-routes.ts",         needle: "siu" },
   "/t.js":                                { file: "server/routes.ts",              needle: '"/t.js"' },
   "/api/admin/cugc/mailer/contacts":      { file: "server/routes.ts",              needle: "/api/admin/cugc/mailer/contacts" },
   "/api/public/unitedprints/quote-materials": { file: "server/print-quote-routes.ts", needle: "quote-materials" },

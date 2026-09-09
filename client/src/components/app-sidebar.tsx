@@ -208,7 +208,8 @@ const campsNav = [
   { tab: "analytics", title: "Analytics", url: "/admin/analytics", icon: BarChart3 },
   { tab: "discounts", title: "Discounts", url: "/admin/discounts", icon: Tag },
   // Native retail shop (org 1) — the third brand on the shop_* engine after
-  // MFL and CIC. CUFC-only: filtered out of siuNav below.
+  // MFL and CIC. Also reaches SIU: siuNav spreads campsNav without filtering
+  // "store" out (SIU is the fourth brand, added 2026-09-09).
   { tab: "store", title: "Store", url: "/admin/store", icon: ShoppingCart },
   { tab: "marketing", title: "Marketing", url: "/admin/marketing", icon: Megaphone },
 ];
@@ -216,9 +217,11 @@ const campsNav = [
 // South Island United shares the camps workspace type with CUFC but adds its own
 // club-building tools (must NOT show for CUFC).
 const siuNav = [
-  // FM History + Open Trainings + Store are CUFC's (org 1) — keep them out of
-  // SIU's sidebar. SIU has no store on the shop_* engine.
-  ...campsNav.filter((t) => t.tab !== "fm-history" && t.tab !== "fm-competitions" && t.tab !== "open-trainings" && t.tab !== "store"),
+  // FM History + Open Trainings are CUFC's (org 1) — keep them out of SIU's
+  // sidebar. Store is NOT filtered here: SIU is the fourth brand on the
+  // shop_* engine (2026-09-09) and picks up the Store item straight off
+  // campsNav, same as CUFC does.
+  ...campsNav.filter((t) => t.tab !== "fm-history" && t.tab !== "fm-competitions" && t.tab !== "open-trainings"),
   { tab: "licensing", title: "OFC Licensing", url: "/admin/licensing", icon: Award },
   { tab: "declarations", title: "Declarations", url: "/admin/declarations", icon: FileSignature },
   { tab: "events", title: "Community Events", url: "/admin/events", icon: Calendar },

@@ -343,6 +343,10 @@ const siuExtraTabs: TabDef[] = [
   { slug: "declarations", title: "Declarations", url: "/admin/declarations" },
   { slug: "events", title: "Community Events", url: "/admin/events" },
   { slug: "membership", title: "Membership", url: "/admin/membership" },
+  // SIU's native retail shop (2026-09) — the fourth brand on the shop_*
+  // engine after MFL, CIC and CUFC. campsTabs itself carries no "store" slug
+  // (see cufcExtraTabs above for CUFC's own copy of this same tab).
+  { slug: "store", title: "Store", url: "/admin/store" },
 ];
 
 // CUFC's native retail shop (2026-09) — the third brand on the shop_* engine
