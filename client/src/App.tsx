@@ -68,6 +68,8 @@ import GroupHiring from "@/pages/group-hiring";
 import GroupVehicles from "@/pages/group-vehicles";
 import GroupEquipment from "@/pages/group-equipment";
 import GroupFines from "@/pages/group-fines";
+import PosRegister from "@/pages/pos-register";
+import PosReceipt from "@/pages/pos-receipt";
 import CodingBudget from "@/pages/coding-budget";
 import EquipmentHolder from "@/pages/equipment-holder";
 import GroupSponsors from "@/pages/group-sponsors";
@@ -385,6 +387,7 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={GroupDashboard} />
+        <Route path="/admin/pos" component={PosRegister} />
         <Route path="/admin/calendar" component={GroupCalendar} />
         <Route path="/admin/projects" component={GroupProjects} />
         <Route path="/admin/content" component={GroupContent} />
@@ -481,6 +484,7 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={TournamentDashboard} />
+        <Route path="/admin/pos" component={PosRegister} />
         <Route path="/admin/tournaments/:tournamentId/teams/:teamId" component={TournamentTeamDetail} />
         <Route path="/admin/tournaments/:id" component={TournamentDetail} />
         <Route path="/admin/tournaments" component={TournamentList} />
@@ -530,6 +534,7 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={LeagueDashboard} />
+        <Route path="/admin/pos" component={PosRegister} />
         <Route path="/admin/competitions/:id/divisions/:divisionId" component={LeagueDetail} />
         <Route path="/admin/competitions/:id" component={LeagueCompetitionDetail} />
         <Route path="/admin/competitions" component={LeagueCompetitions} />
@@ -584,6 +589,7 @@ function AdminRouter() {
     return (
       <Switch>
         <Route path="/admin" component={VenueDashboard} />
+        <Route path="/admin/pos" component={PosRegister} />
         <Route path="/admin/calendar" component={VenueCalendar} />
         <Route path="/admin/bookings" component={VenueBookings} />
         <Route path="/admin/booking-requests" component={VenueBookingRequests} />
@@ -619,6 +625,7 @@ function AdminRouter() {
   return (
     <Switch>
       <Route path="/admin" component={AdminDashboard} />
+      <Route path="/admin/pos" component={PosRegister} />
       <Route path="/admin/camps" component={AdminCamps} />
       <Route path="/admin/camps/:id/edit-page" component={AdminEditPage} />
       <Route path="/admin/camps/:id/session/:dateId/:sessionType" component={AdminSessionRoll} />
@@ -770,6 +777,8 @@ function App() {
           <WorkspaceProvider><AdminLayout /></WorkspaceProvider>
         ) : (
           <Switch>
+            {/* Register receipts — public by 128-bit token, any host. */}
+            <Route path="/receipt/:token" component={PosReceipt} />
             <Route path="/">
               {(() => {
                 // Hostname-based routing for the public root:

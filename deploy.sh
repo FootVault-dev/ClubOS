@@ -64,6 +64,24 @@
 set -e
 cd "$(dirname "$0")"
 
+# Strip our own flags out of "$@" before the rest is passed through to flyctl.
+_ALLOW_BEHIND=0
+_CHECK_ONLY=0
+_ARGS=()
+for _a in "$@"; do
+  case "$_a" in
+    --allow-behind-prod) _ALLOW_BEHIND=1 ;;
+    # Run every pre-build safety check and STOP. There was no way to exercise
+    # this script's guards without deploying, so verifying a change to them
+    # meant shipping one — which started two real builds of the wrong tree on
+    # 2026-09-09 before they were killed. A guard you cannot test safely is a
+    # guard nobody will test.
+    --check-only) _CHECK_ONLY=1 ;;
+    *) _ARGS+=("$_a") ;;
+  esac
+done
+set -- "${_ARGS[@]}"
+
 [ -f .env ] || { echo "❌ no .env in $(pwd)"; exit 1; }
 VITE_STRIPE_PUBLISHABLE_KEY=$(grep -E '^VITE_STRIPE_PUBLISHABLE_KEY=' .env | cut -d= -f2- | tr -d '\r')
 VITE_META_PIXEL_ID=$(grep -E '^VITE_META_PIXEL_ID=' .env | cut -d= -f2- | tr -d '\r')
@@ -111,12 +129,52 @@ _GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
 # This does not block anything. It PRINTS the commits going out and any
 # uncommitted files, so the operator sees a name they do not recognise before
 # the 20-minute build rather than after.
-if [ -f .last-deployed-sha ]; then
-  _LAST=$(cat .last-deployed-sha)
-  if git cat-file -e "$_LAST^{commit}" 2>/dev/null; then
+# 🔴 ASK PRODUCTION FIRST, UNCONDITIONALLY. This block used to be wrapped in
+# `if [ -f .last-deployed-sha ]`, which meant the production probe — the whole
+# point of the endpoint — only ran when the stale local file it was designed to
+# REPLACE happened to exist. .last-deployed-sha is gitignored, so a fresh clone
+# or a fresh worktree has none... and "deploy from a clean detached worktree" is
+# exactly what the deploy doctrine tells you to do. The recommended practice
+# disabled the guard. Proven on 2026-09-09: a throwaway worktree five commits
+# behind prod, missing the entire Register, passed --check-only with exit 0.
+_PROD_SHA=$(curl -s -m 10 https://app.usg.co.nz/api/version 2>/dev/null \
+  | sed -n 's/.*"sha":"\([0-9a-f]\{7,40\}\)".*/\1/p')
+_LAST=""
+[ -f .last-deployed-sha ] && _LAST=$(cat .last-deployed-sha)
+
+if [ -n "$_PROD_SHA" ] && ! git cat-file -e "${_PROD_SHA}^{commit}" 2>/dev/null; then
+  # Prod answered with a commit this clone has never seen — someone deployed
+  # from a tree that is not here. Refusing beats guessing.
+  echo "🔴 production reports ${_PROD_SHA:0:7}, a commit this checkout does not have."
+  echo "    Somebody deployed from a tree you cannot see. Fetch it before shipping."
+  exit 1
+elif [ -n "$_PROD_SHA" ]; then
+  [ -n "$_LAST" ] && [ "$_PROD_SHA" != "$_LAST" ] && \
+    echo "ℹ️  production reports ${_PROD_SHA:0:7}; the local stamp says ${_LAST:0:7} — trusting production."
+  _LAST="$_PROD_SHA"
+elif [ -n "$_LAST" ]; then
+  echo "⚠️  COULD NOT ASK PRODUCTION WHAT IT RUNS (/api/version gave no sha)."
+  echo "    Falling back to .last-deployed-sha (${_LAST:0:7}), which is GITIGNORED —"
+  echo "    every worktree keeps its own copy and they drift, so it may be stale."
+  echo "    Either prod predates the endpoint, or something is wrong. Confirm by hand:"
+  echo "      git merge-base --is-ancestor <the sha prod really runs> HEAD"
+  echo ""
+else
+  # No endpoint AND no stamp: this deploy is completely unguarded against
+  # removing live work. Say so in the loudest terms rather than proceeding
+  # quietly, which is what a fresh worktree used to do.
+  echo "🔴 CANNOT DETERMINE WHAT PRODUCTION RUNS — no /api/version, no local stamp."
+  echo "    This deploy is UNGUARDED: it may silently remove live features."
+  echo "    Check by hand before continuing:"
+  echo "      curl -s https://app.usg.co.nz/api/version"
+  echo "      git merge-base --is-ancestor <that sha> HEAD"
+  echo ""
+fi
+
+if [ -n "$_LAST" ] && git cat-file -e "$_LAST^{commit}" 2>/dev/null; then
     _N=$(git rev-list --count "$_LAST..HEAD" 2>/dev/null || echo 0)
     if [ "$_N" -gt 0 ]; then
-      echo "── Shipping $_N commit(s) since the last deploy from this machine ──"
+      echo "── Shipping $_N commit(s) since the last deploy ──"
       git log --oneline --format="   %h %an  %s" "$_LAST..HEAD" | head -20
       echo ""
     fi
@@ -135,12 +193,15 @@ if [ -f .last-deployed-sha ]; then
       echo ""
       echo "   The canary guard cannot catch this: it probes routes, not files."
       echo "   Merge the deployed sha first —  git merge $_LAST  — then redeploy."
-      echo "   Deliberate removal? ALLOW_BEHIND_PROD=1 ./deploy.sh"
-      [ "${ALLOW_BEHIND_PROD:-0}" = "1" ] || exit 1
-      echo "   ⚠️  ALLOW_BEHIND_PROD=1 set — proceeding with the removal."
+      echo "   Deliberate removal? ./deploy.sh --allow-behind-prod"
+      # Deliberately read from ARGV, never the environment: an exported variable
+      # survives a whole shell session, so one deliberate override an hour ago
+      # would silently disarm every deploy after it. A flag applies to exactly
+      # the invocation a human typed it on.
+      [ "${_ALLOW_BEHIND:-0}" = "1" ] || exit 1
+      echo "   ⚠️  --allow-behind-prod passed — proceeding with the removal."
       echo ""
     fi
-  fi
 fi
 _DIRTY=$(git status --porcelain 2>/dev/null | grep -vE '^\?\? ' | head -10)
 if [ -n "$_DIRTY" ]; then
@@ -157,6 +218,11 @@ echo "==============================================="
 echo "  ⚠️  Run any DB migration BEFORE this deploy if the schema changed."
 echo "  ⚠️  After deploy, smoke-test /t.js (must be application/javascript, not text/html)."
 echo ""
+
+if [ "$_CHECK_ONLY" = "1" ]; then
+  echo "✓ --check-only: every pre-build check passed. Nothing was built or deployed."
+  exit 0
+fi
 
 # ── CLIENT-ONLY REGRESSION GUARD (added 2026-07-27 after it bit twice) ───────
 # The 401/404 route probe CANNOT see a client-only feature. The MFL night badge
@@ -211,6 +277,7 @@ _deploy_rc=0
 flyctl deploy -a clubos \
   --build-arg VITE_STRIPE_PUBLISHABLE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY" \
   --build-arg VITE_META_PIXEL_ID="$VITE_META_PIXEL_ID" \
+  --build-arg GIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
   "$@" || _deploy_rc=$?
 
 # ── POST-DEPLOY: did a working checkout actually reach production? ───────────

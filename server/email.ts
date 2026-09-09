@@ -2924,3 +2924,54 @@ export async function sendMflRefereeApprovedEmail(params: {
     html: mflShell({ heading: "You're approved", bodyHtml: body }),
   });
 }
+
+// ─── POS receipt (2026-09-09) ────────────────────────────────────────────────
+// One neutral, printable shell for every brand: the club's legal name and GST
+// number, the sale number, the lines with their brand, the tenders, the GST
+// content, and a link to the web receipt. Sender follows the brand with the
+// biggest share of the sale so a family buying an SIU hoodie hears from SIU.
+// Fields follow IRD's taxable-supply-information tiers (shared/pos.ts).
+export async function sendPosReceiptEmail(params: { to: string; sale: import("./pos-routes").LoadedSale }): Promise<boolean> {
+  const { to, sale } = params;
+  const { POS_SELLER, receiptTier } = await import("@shared/pos");
+  const money = (c: number) => `$${(c / 100).toFixed(2)}`;
+  const byOrg = new Map<number, number>();
+  for (const l of sale.lines) byOrg.set(l.organizationId, (byOrg.get(l.organizationId) ?? 0) + l.lineCents);
+  const primaryOrg = Array.from(byOrg.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 1;
+  const brandName = sale.lines.find((l) => l.organizationId === primaryOrg)?.brand || "Christchurch United";
+  const tier = receiptTier(sale.totalCents);
+  const when = sale.paidAt ? new Date(sale.paidAt).toLocaleString("en-NZ", { timeZone: "Pacific/Auckland", dateStyle: "medium", timeStyle: "short" }) : "";
+  const esc = (s: string | null | undefined) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+  const rows = sale.lines.map((l) => `
+    <tr>
+      <td style="padding:8px 0;border-bottom:1px solid #eee;color:#161616;font-size:14px;">${esc(l.title)}${l.detail ? `<div style="color:#6b6b6b;font-size:12px;">${esc(l.detail)}</div>` : ""}<div style="color:#9a9a9a;font-size:11px;">${esc(l.brand)}</div></td>
+      <td style="padding:8px 0;border-bottom:1px solid #eee;color:#6b6b6b;font-size:13px;text-align:center;white-space:nowrap;">${l.qty} × ${money(l.unitCents)}</td>
+      <td style="padding:8px 0;border-bottom:1px solid #eee;color:#161616;font-size:14px;text-align:right;white-space:nowrap;">${money(l.lineCents)}</td>
+    </tr>`).join("");
+  const tot = (label: string, cents: number, strong = false) => `
+    <tr><td colspan="2" style="padding:4px 0;color:${strong ? "#161616" : "#6b6b6b"};font-size:${strong ? 15 : 13}px;text-align:right;${strong ? "font-weight:700;" : ""}">${label}</td>
+        <td style="padding:4px 0;color:#161616;font-size:${strong ? 15 : 13}px;text-align:right;white-space:nowrap;${strong ? "font-weight:700;" : ""}">${money(cents)}</td></tr>`;
+  const pays = sale.payments.filter((p) => p.status === "succeeded").map((p) => tot(`Paid by ${esc(p.label)}${p.reference && p.method !== "card_present" ? ` (${esc(p.reference)})` : ""}`, p.amountCents)).join("");
+  const refunds = sale.refunds.map((r) => tot("Refunded", -r.amountCents)).join("");
+  const html = `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#ededed;padding:32px 16px;">
+    <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:16px;padding:28px;color:#161616;">
+      <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b6b6b;">Receipt</div>
+      <h1 style="margin:4px 0 2px;font-size:22px;">${esc(brandName)}</h1>
+      <div style="color:#6b6b6b;font-size:13px;">${esc(POS_SELLER.legalName)} · GST ${POS_SELLER.gstNumber}</div>
+      <div style="color:#6b6b6b;font-size:13px;margin-top:10px;">${esc(sale.saleNumber)} · ${esc(when)}${sale.servedByName ? ` · served by ${esc(sale.servedByName)}` : ""}</div>
+      ${tier === "over_1000" && sale.customerName ? `<div style="color:#6b6b6b;font-size:13px;">Customer: ${esc(sale.customerName)}</div>` : ""}
+      <table style="width:100%;border-collapse:collapse;margin-top:18px;">${rows}
+        ${tot("Subtotal", sale.subtotalCents)}
+        ${sale.discountCents ? tot(`Discount${sale.discountReason ? ` — ${esc(sale.discountReason)}` : ""}`, -sale.discountCents) : ""}
+        ${sale.roundingCents ? tot("Cash rounding", sale.roundingCents) : ""}
+        ${tot("Total (incl. GST)", sale.totalCents, true)}
+        ${tot("GST content included", sale.gstCents)}
+        ${pays}${refunds}
+      </table>
+      <p style="margin:20px 0 0;font-size:13px;"><a href="${sale.receiptUrl}" style="color:#1d4ed8;">View or print this receipt</a></p>
+      <p style="color:#9a9a9a;font-size:11px;line-height:1.6;margin:18px 0 0;">${esc(POS_SELLER.address)}. Keep this receipt as your proof of purchase. Your rights under the Consumer Guarantees Act are not affected by anything here.</p>
+    </div>
+  </div>`;
+  return sendEmail({ to, from: fromForOrg(primaryOrg), subject: `Receipt ${sale.saleNumber} — ${brandName}`, html });
+}

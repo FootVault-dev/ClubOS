@@ -15,11 +15,27 @@ ARG VITE_STRIPE_PUBLISHABLE_KEY
 ARG VITE_META_PIXEL_ID
 ENV VITE_STRIPE_PUBLISHABLE_KEY=$VITE_STRIPE_PUBLISHABLE_KEY
 ENV VITE_META_PIXEL_ID=$VITE_META_PIXEL_ID
+# The commit this image was built from, so production can be ASKED what it runs
+# instead of a local file being trusted to remember. `.last-deployed-sha` is
+# gitignored, so every worktree carries its own copy and they drift apart — which
+# is how a deploy from one worktree silently removed POS on 2026-09-09.
+ARG GIT_SHA
+ENV BUILD_SHA=$GIT_SHA
 
 COPY . .
 RUN npm run build
 
 FROM node:20-slim AS runner
+
+# 🔴 The commit this image was built from, read at RUNTIME by GET /api/version
+# so deploy.sh can ask PRODUCTION what it runs instead of trusting a local
+# .last-deployed-sha (which is gitignored, so every worktree carries its own
+# and they disagree — that is how a live feature was deleted on 2026-09-09).
+# It MUST be declared here as well as in the builder: an ENV set in one stage
+# does not cross into another, so the builder's copy never reaches the running
+# container and the endpoint answered {"sha":null}.
+ARG GIT_SHA
+ENV BUILD_SHA=$GIT_SHA
 WORKDIR /app
 ENV NODE_ENV=production
 

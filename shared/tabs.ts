@@ -49,6 +49,11 @@ export function workspaceTypeFor(orgSlug: string | undefined | null): WorkspaceT
 
 const campsTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  // Register (POS) — one register for every brand, every programme, every
+  // counter (2026-09-09). NOT super-admin-locked: selling is low blast radius;
+  // refunds keep their own per-person flag. Lives in the club, venue, league,
+  // tournament and group workspaces; the register sells every brand from any.
+  { slug: "pos", title: "Register", url: "/admin/pos" },
   { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "behavior", title: "Behavior", url: "/admin/behavior" },
@@ -95,6 +100,11 @@ const campsTabs: TabDef[] = [
 
 const venueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  // Register (POS) — one register for every brand, every programme, every
+  // counter (2026-09-09). NOT super-admin-locked: selling is low blast radius;
+  // refunds keep their own per-person flag. Lives in the club, venue, league,
+  // tournament and group workspaces; the register sells every brand from any.
+  { slug: "pos", title: "Register", url: "/admin/pos" },
   { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "behavior", title: "Behavior", url: "/admin/behavior" },
@@ -120,6 +130,11 @@ const venueTabs: TabDef[] = [
 
 const leagueTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  // Register (POS) — one register for every brand, every programme, every
+  // counter (2026-09-09). NOT super-admin-locked: selling is low blast radius;
+  // refunds keep their own per-person flag. Lives in the club, venue, league,
+  // tournament and group workspaces; the register sells every brand from any.
+  { slug: "pos", title: "Register", url: "/admin/pos" },
   { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "behavior", title: "Behavior", url: "/admin/behavior" },
@@ -160,6 +175,11 @@ const leagueTabs: TabDef[] = [
 
 const tournamentTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  // Register (POS) — one register for every brand, every programme, every
+  // counter (2026-09-09). NOT super-admin-locked: selling is low blast radius;
+  // refunds keep their own per-person flag. Lives in the club, venue, league,
+  // tournament and group workspaces; the register sells every brand from any.
+  { slug: "pos", title: "Register", url: "/admin/pos" },
   { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "behavior", title: "Behavior", url: "/admin/behavior" },
@@ -219,6 +239,11 @@ const gymnasticsTabs: TabDef[] = [
 
 const groupTabs: TabDef[] = [
   { slug: "dashboard", title: "Dashboard", url: "/admin" },
+  // Register (POS) — one register for every brand, every programme, every
+  // counter (2026-09-09). NOT super-admin-locked: selling is low blast radius;
+  // refunds keep their own per-person flag. Lives in the club, venue, league,
+  // tournament and group workspaces; the register sells every brand from any.
+  { slug: "pos", title: "Register", url: "/admin/pos" },
   { slug: "links", title: "Links", url: "/admin/links" },
   { slug: "attribution", title: "Attribution", url: "/admin/attribution" },
   { slug: "behavior", title: "Behavior", url: "/admin/behavior" },

@@ -84,6 +84,8 @@ const CANARIES: Canary[] = [
   // had no equipment line to notice it. Probe by hand for anything added since
   // the branch you are shipping was cut.
   { feature: "fines",               path: "/api/admin/fines",                       expect: [401] },
+  { feature: "pos register",        path: "/api/admin/pos/bootstrap",               expect: [401] },
+  { feature: "pos receipt (public)",path: "/api/public/pos/receipt/00000000-0000-0000-0000-000000000000", expect: [404] },
   { feature: "equipment holders",   path: "/api/public/equipment/me",               expect: [401] },
   // Coding Budget — the club's chart of accounts (882 codes) and the
   // transactions mapped to it. Canaried because the DATA survives a bad deploy

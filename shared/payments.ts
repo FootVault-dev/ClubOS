@@ -13,6 +13,10 @@
 export const OFFICE_PAYMENT_METHODS = [
   { value: "eftpos", label: "EFTPOS" },
   { value: "cash", label: "Cash" },
+  // A card taken through a Stripe reader or Tap to Pay at the ClubOS register
+  // (2026-09-09). Distinct from `eftpos` (the standalone bank terminal) because
+  // the two reconcile against different statements.
+  { value: "card_present", label: "Card (reader)" },
   { value: "bank_transfer", label: "Bank transfer" },
   { value: "other", label: "Other" },
 ] as const;
